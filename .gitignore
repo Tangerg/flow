@@ -1,0 +1,40 @@
+# Binaries and build output
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/dist/
+/bin/
+
+# Go workspace
+go.work
+go.work.sum
+
+# Test cache and coverage
+*.coverprofile
+coverage.out
+coverage.html
+
+# IDE - JetBrains / GoLand
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# IDE - VS Code
+.vscode/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
