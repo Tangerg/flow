@@ -6,29 +6,28 @@ import (
 	"fmt"
 )
 
-// LoopConfig defines the configuration for a loop node that repeatedly processes data
-// until a termination condition is met.
+// DefaultMaxIterations is the iteration cap applied when LoopConfig.MaxIterations
+// is left at zero. It prevents accidental infinite loops during development.
+const DefaultMaxIterations = 1024
+
+// LoopConfig holds the configuration for a Loop node.
 type LoopConfig[T any] struct {
-	// Processor is the function executed in each iteration.
-	// It receives the iteration index and current value, returning:
-	//   - output: the transformed value for the next iteration
-	//   - done: whether to terminate the loop
-	//   - err: any error that occurred during processing
+	// Processor is called on every iteration. It receives the current iteration
+	// index (zero-based) and the value produced by the previous iteration (or the
+	// initial input on the first call). It returns:
+	//   - output: the value to pass into the next iteration
+	//   - done:   true to stop the loop and return output
+	//   - err:    a non-nil error to abort immediately
 	Processor func(ctx context.Context, iteration int, input T) (output T, done bool, err error)
 
-	// MaxIterations limits the number of loop iterations.
-	//
-	// Values:
-	//   - 0: Uses DefaultMaxIterations (1024)
-	//   - Positive integer: Custom iteration limit
-	//   - Must not be negative
-	//
-	// The loop will return an error if this limit is reached without
-	// the processor returning done=true.
+	// MaxIterations caps the total number of iterations to prevent infinite loops.
+	//   -  0: uses DefaultMaxIterations (1024)
+	//   - >0: custom cap
+	//   - <0: invalid, returns an error
 	MaxIterations int
 }
 
-// validate checks if the loop configuration is valid.
+// validate checks the configuration and applies defaults.
 func (cfg *LoopConfig[T]) validate() error {
 	if cfg == nil {
 		return errors.New("loop config cannot be nil")
@@ -37,24 +36,28 @@ func (cfg *LoopConfig[T]) validate() error {
 	if cfg.Processor == nil {
 		return errors.New("loop processor cannot be nil")
 	}
+
 	if cfg.MaxIterations < 0 {
-		return errors.New("max iterations must be greater than zero")
+		return errors.New("max iterations must not be negative")
 	}
+
 	if cfg.MaxIterations == 0 {
-		cfg.MaxIterations = 1024
+		cfg.MaxIterations = DefaultMaxIterations
 	}
+
 	return nil
 }
 
 var _ Node[any, any] = (*Loop[any])(nil)
 
-// Loop represents a node that repeatedly processes data until a condition is met.
+// Loop repeatedly applies its processor to a value until the processor signals
+// completion or the iteration cap is reached.
 type Loop[T any] struct {
 	processor     func(context.Context, int, T) (T, bool, error)
 	maxIterations int
 }
 
-// NewLoop creates a new loop node with the provided configuration.
+// NewLoop creates a Loop node from the given configuration.
 // Returns an error if the configuration is invalid.
 func NewLoop[T any](cfg LoopConfig[T]) (*Loop[T], error) {
 	if err := cfg.validate(); err != nil {
@@ -67,11 +70,12 @@ func NewLoop[T any](cfg LoopConfig[T]) (*Loop[T], error) {
 	}, nil
 }
 
-// Run executes the loop, repeatedly applying the processor until completion or error.
+// Run executes the loop starting from the given input value.
+//
 // The loop terminates when:
-//   - The processor returns done=true
-//   - An error occurs
-//   - MaxIterations is reached (if set)
+//   - the processor returns done = true (normal completion)
+//   - the processor returns a non-nil error (immediate abort)
+//   - MaxIterations is reached without the processor returning done = true
 func (l *Loop[T]) Run(ctx context.Context, input T) (T, error) {
 	var (
 		iteration int
@@ -81,13 +85,11 @@ func (l *Loop[T]) Run(ctx context.Context, input T) (T, error) {
 	)
 
 	for iteration < l.maxIterations {
-		// Execute processor for current iteration
 		current, done, err = l.processor(ctx, iteration, current)
 		if err != nil {
 			return current, fmt.Errorf("loop failed at iteration %d: %w", iteration, err)
 		}
 
-		// Check termination condition
 		if done {
 			return current, nil
 		}
@@ -95,7 +97,6 @@ func (l *Loop[T]) Run(ctx context.Context, input T) (T, error) {
 		iteration++
 	}
 
-	// Exceeded max iterations
 	return current, fmt.Errorf(
 		"loop exceeded max iterations (%d): termination condition not met",
 		l.maxIterations,

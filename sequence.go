@@ -8,19 +8,18 @@ import (
 
 var _ Node[any, any] = (*Sequence)(nil)
 
-// Sequence represents a node that executes multiple processors in sequential order,
-// passing the output of each processor as input to the next one.
+// Sequence executes a list of processors one after another, feeding each
+// processor's output as the next processor's input.
 //
-// This node uses dynamic typing (any), which means type safety is not enforced at
-// compile time. For type-safe sequential processing, consider using Pipe2 through Pipe10.
+// All processors use dynamic typing (any). For compile-time type safety,
+// use Pipe2–Pipe10 instead.
 type Sequence struct {
 	processors []func(context.Context, any) (any, error)
 }
 
-// NewSequence creates a new sequence node with the provided processors.
-// The processors are executed in the order they are provided.
-//
-// Returns an error if no processors are provided.
+// NewSequence creates a Sequence from the given processors.
+// Processors are executed in the order provided.
+// Returns an error if no processors are given.
 func NewSequence(processors ...func(context.Context, any) (any, error)) (*Sequence, error) {
 	if len(processors) == 0 {
 		return nil, errors.New("at least one processor is required")
@@ -31,10 +30,8 @@ func NewSequence(processors ...func(context.Context, any) (any, error)) (*Sequen
 	}, nil
 }
 
-// Run executes all processors in sequence, where each processor's output becomes
-// the input for the next processor.
-//
-// Execution stops immediately if any processor returns an error.
+// Run passes the input through each processor in order.
+// Execution stops and the error is returned as soon as any processor fails.
 func (s *Sequence) Run(ctx context.Context, input any) (any, error) {
 	current := input
 

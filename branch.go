@@ -8,20 +8,18 @@ import (
 	"slices"
 )
 
-// BranchConfig defines the configuration for a branch node that routes execution
-// to different processing paths based on runtime conditions.
+// BranchConfig holds the configuration for a Branch node.
 type BranchConfig[I, O any] struct {
-	// Branches maps branch names to their corresponding processor functions.
-	// Each branch must accept the same input type and produce the same output type.
+	// Branches maps each branch name to its handler function.
+	// All handlers must share the same input and output types.
 	Branches map[string]func(context.Context, I) (O, error)
 
-	// BranchResolver determines which branch to execute based on the input.
-	// It returns the name of the branch to be executed.
-	// If nil and only one branch exists, that branch will be used by default.
+	// BranchResolver selects which branch to execute based on the input.
+	// If nil and exactly one branch is configured, that branch is used automatically.
 	BranchResolver func(context.Context, I) string
 }
 
-// validate checks if the branch configuration is valid and applies defaults.
+// validate checks the configuration and fills in safe defaults where possible.
 func (cfg *BranchConfig[I, O]) validate() error {
 	if cfg == nil {
 		return errors.New("branch config cannot be nil")
@@ -31,7 +29,7 @@ func (cfg *BranchConfig[I, O]) validate() error {
 		return errors.New("at least one branch is required")
 	}
 
-	// Optimization: if only one branch exists and not provide branch resolver, use it as default
+	// When only one branch exists and no resolver is provided, use that branch by default.
 	if len(cfg.Branches) == 1 && cfg.BranchResolver == nil {
 		var defaultBranch string
 		for defaultBranch = range cfg.Branches {
@@ -51,14 +49,14 @@ func (cfg *BranchConfig[I, O]) validate() error {
 
 var _ Node[any, any] = (*Branch[any, any])(nil)
 
-// Branch represents a node that conditionally routes execution to different branches
-// based on input characteristics.
+// Branch routes each execution to one of several named handlers based on
+// the result of a resolver function evaluated at runtime.
 type Branch[I, O any] struct {
-	branches       map[string]func(context.Context, I) (O, error)
+	handlers       map[string]func(context.Context, I) (O, error)
 	branchResolver func(context.Context, I) string
 }
 
-// NewBranch creates a new branch node with the provided configuration.
+// NewBranch creates a Branch node from the given configuration.
 // Returns an error if the configuration is invalid.
 func NewBranch[I, O any](cfg BranchConfig[I, O]) (*Branch[I, O], error) {
 	if err := cfg.validate(); err != nil {
@@ -66,39 +64,35 @@ func NewBranch[I, O any](cfg BranchConfig[I, O]) (*Branch[I, O], error) {
 	}
 
 	return &Branch[I, O]{
-		branches:       maps.Clone(cfg.Branches),
+		handlers:       maps.Clone(cfg.Branches),
 		branchResolver: cfg.BranchResolver,
 	}, nil
 }
 
-// resolveBranch determines and retrieves the branch to execute based on the input.
-// Returns an error if the resolved branch name does not exist.
+// resolveBranch asks the resolver which branch to use, then looks up and
+// returns the corresponding handler. Returns an error if the resolved name
+// does not match any registered branch.
 func (b *Branch[I, O]) resolveBranch(ctx context.Context, input I) (func(context.Context, I) (O, error), error) {
-	branchName := b.branchResolver(ctx, input)
+	name := b.branchResolver(ctx, input)
 
-	branch, exists := b.branches[branchName]
-	if !exists {
-		availableBranches := slices.Collect(maps.Keys(b.branches))
-		return nil, fmt.Errorf(
-			"branch '%s' not found: available branches are %v",
-			branchName,
-			availableBranches,
-		)
+	handler, ok := b.handlers[name]
+	if !ok {
+		available := slices.Sorted(maps.Keys(b.handlers))
+		return nil, fmt.Errorf("branch '%s' not found: available branches are %v", name, available)
 	}
 
-	return branch, nil
+	return handler, nil
 }
 
-// Run executes the appropriate branch based on the input.
-// The branch is selected by the BranchResolver, then executed with the provided input.
+// Run resolves the target branch and executes its handler with the given input.
 func (b *Branch[I, O]) Run(ctx context.Context, input I) (O, error) {
-	branch, err := b.resolveBranch(ctx, input)
+	handler, err := b.resolveBranch(ctx, input)
 	if err != nil {
 		var zero O
-		return zero, fmt.Errorf("failed to resolve branch: %w", err)
+		return zero, err
 	}
 
-	result, err := branch(ctx, input)
+	result, err := handler(ctx, input)
 	if err != nil {
 		var zero O
 		return zero, fmt.Errorf("branch execution failed: %w", err)

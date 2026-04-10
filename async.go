@@ -7,54 +7,46 @@ import (
 	"time"
 )
 
-// Future represents an asynchronous computation result that may not be immediately available.
-// It provides multiple methods to retrieve the result with different blocking strategies.
+// Future represents the result of an asynchronous computation that may not yet
+// be available. It supports several retrieval strategies to suit different
+// call-site requirements.
 //
-// Note: This package does not provide a default Future implementation.
-// Users must implement this interface according to their specific needs.
+// Implementations are provided by the caller; this package does not include a
+// default implementation, leaving concurrency strategy up to the user.
 type Future[V any] interface {
-	// Get blocks until the result is available or an error occurs.
+	// Get blocks until the result is ready or an error occurs.
 	Get() (V, error)
 
-	// GetWithTimeout blocks until the result is available, the timeout expires,
-	// or an error occurs. Returns an error if the timeout is exceeded.
+	// GetWithTimeout blocks until the result is ready, the timeout elapses,
+	// or an error occurs.
 	GetWithTimeout(timeout time.Duration) (V, error)
 
-	// GetWithContext blocks until the result is available, the context is cancelled,
-	// or an error occurs. Returns an error if the context is cancelled.
+	// GetWithContext blocks until the result is ready, the context is cancelled,
+	// or an error occurs.
 	GetWithContext(ctx context.Context) (V, error)
 
-	// TryGet attempts to retrieve the result without blocking.
-	// Returns:
-	//   - value: the result if available
-	//   - error: any error that occurred during computation
-	//   - ready: true if the result is ready, false otherwise
+	// TryGet returns the result immediately without blocking.
+	// ready is false when the computation has not yet completed.
 	TryGet() (value V, err error, ready bool)
 }
 
 var _ Node[any, Future[any]] = (*Async[any, any, Future[any]])(nil)
 
-// Async represents a node that executes asynchronous operations and returns a Future
-// for deferred result retrieval.
+// Async wraps a processor that starts a background computation and returns a
+// Future for deferred result retrieval. The node itself returns immediately
+// after launching the operation.
 //
-// This node is useful for:
-//   - Long-running operations that shouldn't block the workflow
-//   - Operations that can be executed in the background
-//   - Computations where results are needed at a later time
-//
-// The actual Future implementation must be provided by the user, allowing flexibility
-// in choosing or implementing different asynchronous execution strategies.
+// Typical use cases:
+//   - Long-running operations that should not block the main workflow
+//   - Fan-out scenarios where multiple results are awaited later
+//   - Computations whose output is needed only at a later pipeline stage
 type Async[I, O any, F Future[O]] struct {
 	processor func(context.Context, I) (F, error)
 }
 
-// NewAsync creates a new async node with the provided processor function.
-//
-// The processor should:
-//   - Accept an input and return a Future that will eventually contain the output
-//   - Handle its own asynchronous execution logic
-//   - Return an error if the async operation cannot be started
-//
+// NewAsync creates an Async node with the given processor.
+// The processor is responsible for starting the async work and returning a
+// Future that eventually resolves to the result.
 // Returns an error if the processor is nil.
 func NewAsync[I, O any, F Future[O]](processor func(context.Context, I) (F, error)) (*Async[I, O, F], error) {
 	if processor == nil {
@@ -66,14 +58,9 @@ func NewAsync[I, O any, F Future[O]](processor func(context.Context, I) (F, erro
 	}, nil
 }
 
-// Run executes the async processor and returns a Future for the result.
-//
-// The returned Future allows the caller to retrieve the result at a later time
-// using one of the Future's retrieval methods (Get, GetWithTimeout, etc.).
-//
-// Note: This method returns immediately after starting the async operation.
-// The actual computation happens asynchronously, and results are obtained
-// through the returned Future.
+// Run starts the asynchronous operation and returns a Future.
+// The caller can retrieve the result at any later point using the Future's
+// Get, GetWithTimeout, GetWithContext, or TryGet methods.
 func (a *Async[I, O, F]) Run(ctx context.Context, input I) (F, error) {
 	future, err := a.processor(ctx, input)
 	if err != nil {

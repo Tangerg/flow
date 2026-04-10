@@ -13,7 +13,6 @@ import (
 )
 
 // TestParallelConfig_validate tests the validation logic for ParallelConfig.
-// Type: ParallelConfig[int, int] - validates configuration rules for parallel execution
 func TestParallelConfig_validate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -113,7 +112,6 @@ func TestParallelConfig_validate(t *testing.T) {
 }
 
 // TestNewParallel tests the constructor for Parallel.
-// Type: Parallel[int, int] - verifies proper initialization of parallel processor
 func TestNewParallel(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -162,9 +160,8 @@ func TestNewParallel(t *testing.T) {
 	}
 }
 
-// TestParallel_calcConcurrencyLimit tests concurrency limit calculation.
-// Type: Parallel[int, int] - validates dynamic concurrency adjustment based on processor count
-func TestParallel_calcConcurrencyLimit(t *testing.T) {
+// TestParallel_effectiveConcurrency tests concurrency limit calculation.
+func TestParallel_effectiveConcurrency(t *testing.T) {
 	tests := []struct {
 		name             string
 		concurrencyLimit int
@@ -205,7 +202,6 @@ func TestParallel_calcConcurrencyLimit(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Type: []func(context.Context, int) (int, error) - slice of processors
 			processors := make([]func(context.Context, int) (int, error), tt.numProcessors)
 			for i := range processors {
 				processors[i] = func(ctx context.Context, input int) (int, error) {
@@ -218,16 +214,15 @@ func TestParallel_calcConcurrencyLimit(t *testing.T) {
 				concurrencyLimit: tt.concurrencyLimit,
 			}
 
-			got := p.calcConcurrencyLimit()
+			got := p.effectiveConcurrency()
 			if got != tt.want {
-				t.Errorf("calcConcurrencyLimit() = %v, want %v", got, tt.want)
+				t.Errorf("effectiveConcurrency() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
 // TestParallel_Run tests basic parallel execution.
-// Type: Parallel[int, int] - validates concurrent execution of multiple processors on same input
 func TestParallel_Run(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -346,7 +341,6 @@ func TestParallel_Run(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			// Type: []Result[int] - slice of results from parallel execution
 			results, err := parallel.Run(ctx, tt.input)
 
 			if tt.wantErr {
@@ -380,17 +374,13 @@ func TestParallel_Run(t *testing.T) {
 }
 
 // TestParallel_ConcurrencyVerification verifies actual concurrent execution.
-// Type: Parallel[int, int] - validates goroutine concurrency limits using atomic counters
 func TestParallel_ConcurrencyVerification(t *testing.T) {
 	t.Run("verify concurrent execution", func(t *testing.T) {
-		// Type: atomic counters tracking concurrent goroutines
 		var activeCount int32
 		var maxConcurrent int32
 
-		// Type: []func(context.Context, int) (int, error) - slice of 5 processors
 		processors := make([]func(context.Context, int) (int, error), 5)
 		for i := range processors {
-			idx := i
 			processors[i] = func(ctx context.Context, input int) (int, error) {
 				active := atomic.AddInt32(&activeCount, 1)
 
@@ -404,7 +394,7 @@ func TestParallel_ConcurrencyVerification(t *testing.T) {
 
 				time.Sleep(20 * time.Millisecond)
 				atomic.AddInt32(&activeCount, -1)
-				return input * idx, nil
+				return input * i, nil
 			}
 		}
 
@@ -430,14 +420,11 @@ func TestParallel_ConcurrencyVerification(t *testing.T) {
 	})
 
 	t.Run("verify concurrency limit", func(t *testing.T) {
-		// Type: atomic counters verifying max 3 concurrent goroutines
 		var activeCount int32
 		var maxConcurrent int32
 
-		// Type: []func(context.Context, int) (int, error) - 10 processors limited to 3 concurrent
 		processors := make([]func(context.Context, int) (int, error), 10)
 		for i := range processors {
-			idx := i
 			processors[i] = func(ctx context.Context, input int) (int, error) {
 				active := atomic.AddInt32(&activeCount, 1)
 
@@ -450,7 +437,7 @@ func TestParallel_ConcurrencyVerification(t *testing.T) {
 
 				time.Sleep(20 * time.Millisecond)
 				atomic.AddInt32(&activeCount, -1)
-				return input * idx, nil
+				return input * i, nil
 			}
 		}
 
@@ -477,15 +464,12 @@ func TestParallel_ConcurrencyVerification(t *testing.T) {
 }
 
 // TestParallel_RunWithContext tests context handling in parallel execution.
-// Type: Parallel[int, int] - validates context propagation and cancellation
 func TestParallel_RunWithContext(t *testing.T) {
 	t.Run("context cancellation stops all", func(t *testing.T) {
-		// Type: Parallel[int, int] with mid-execution cancellation
 		ctx, cancel := context.WithCancel(context.Background())
 
 		var started int32
 
-		// Type: []func(context.Context, int) (int, error) - processors with cancellation
 		processors := []func(context.Context, int) (int, error){
 			func(ctx context.Context, i int) (int, error) {
 				atomic.AddInt32(&started, 1)
@@ -526,11 +510,9 @@ func TestParallel_RunWithContext(t *testing.T) {
 	})
 
 	t.Run("context timeout", func(t *testing.T) {
-		// Type: Parallel[int, int] with timeout during execution
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 		defer cancel()
 
-		// Type: []func(context.Context, int) (int, error) - slow processors exceeding timeout
 		processors := []func(context.Context, int) (int, error){
 			func(ctx context.Context, i int) (int, error) {
 				select {
@@ -567,11 +549,9 @@ func TestParallel_RunWithContext(t *testing.T) {
 	})
 
 	t.Run("context value access", func(t *testing.T) {
-		// Type: Parallel[int, int] with context value propagation
 		type contextKey string
 		key := contextKey("multiplier")
 
-		// Type: []func(context.Context, int) (int, error) - processors accessing context values
 		processors := []func(context.Context, int) (int, error){
 			func(ctx context.Context, i int) (int, error) {
 				mult := ctx.Value(key).(int)
@@ -608,10 +588,8 @@ func TestParallel_RunWithContext(t *testing.T) {
 }
 
 // TestParallelBuilder tests the builder pattern for parallel construction.
-// Type: ParallelBuilder[any, any] - validates fluent API for dynamic typing
 func TestParallelBuilder(t *testing.T) {
 	t.Run("complete builder chain", func(t *testing.T) {
-		// Type: []func(context.Context, any) (any, error) - dynamic processors
 		processors := []func(context.Context, any) (any, error){
 			func(ctx context.Context, input any) (any, error) {
 				return input.(int) * 2, nil
@@ -621,7 +599,6 @@ func TestParallelBuilder(t *testing.T) {
 			},
 		}
 
-		// Type: ParallelBuilder[any, any] -> Parallel[any, any]
 		parallel, err := NewParallelBuilder[any, any]().
 			WithProcessors(processors).
 			WithConcurrencyLimit(2).
@@ -651,7 +628,6 @@ func TestParallelBuilder(t *testing.T) {
 	})
 
 	t.Run("builder without processors", func(t *testing.T) {
-		// Type: ParallelBuilder[any, any] - missing processors validation
 		_, err := NewParallelBuilder[any, any]().
 			WithConcurrencyLimit(2).
 			Build()
@@ -662,7 +638,6 @@ func TestParallelBuilder(t *testing.T) {
 	})
 
 	t.Run("builder with type conversion", func(t *testing.T) {
-		// Type: []func(context.Context, any) (any, error) with int -> string conversion
 		processors := []func(context.Context, any) (any, error){
 			func(ctx context.Context, input any) (any, error) {
 				return strconv.Itoa(input.(int)), nil
@@ -698,13 +673,11 @@ func TestParallelBuilder(t *testing.T) {
 // TestParallel_ComplexScenarios tests real-world usage patterns.
 func TestParallel_ComplexScenarios(t *testing.T) {
 	t.Run("multiple API calls with same input", func(t *testing.T) {
-		// Type: Parallel[string, APIResponse] - simulates parallel API calls
 		type APIResponse struct {
 			Source string
 			Data   string
 		}
 
-		// Type: []func(context.Context, string) (APIResponse, error) - API simulators
 		processors := []func(context.Context, string) (APIResponse, error){
 			func(ctx context.Context, query string) (APIResponse, error) {
 				time.Sleep(10 * time.Millisecond)
@@ -758,7 +731,6 @@ func TestParallel_ComplexScenarios(t *testing.T) {
 	})
 
 	t.Run("data enrichment from multiple sources", func(t *testing.T) {
-		// Type: Parallel[int, string] - parallel data enrichment pattern
 		type UserData struct {
 			ID      int
 			Profile string
@@ -766,7 +738,6 @@ func TestParallel_ComplexScenarios(t *testing.T) {
 			Reviews string
 		}
 
-		// Type: []func(context.Context, int) (string, error) - data source processors
 		processors := []func(context.Context, int) (string, error){
 			// Get profile
 			func(ctx context.Context, userID int) (string, error) {
@@ -796,7 +767,6 @@ func TestParallel_ComplexScenarios(t *testing.T) {
 			t.Errorf("Run() error = %v", err)
 		}
 
-		// Type: UserData - aggregated result from parallel processors
 		userData := UserData{
 			ID:      123,
 			Profile: results[0].Value,
@@ -816,10 +786,8 @@ func TestParallel_ComplexScenarios(t *testing.T) {
 	})
 
 	t.Run("partial failure with continue on error", func(t *testing.T) {
-		// Type: Parallel[int, int] with partial failure handling
 		var callCount int32
 
-		// Type: []func(context.Context, int) (int, error) - processors with one failing
 		processors := []func(context.Context, int) (int, error){
 			func(ctx context.Context, i int) (int, error) {
 				atomic.AddInt32(&callCount, 1)
@@ -875,8 +843,6 @@ func TestParallel_ComplexScenarios(t *testing.T) {
 	})
 
 	t.Run("aggregation pattern", func(t *testing.T) {
-		// Type: Parallel[[]int, int] - parallel statistical aggregation
-		// Type: []func(context.Context, []int) (int, error) - statistical processors
 		processors := []func(context.Context, []int) (int, error){
 			// Sum
 			func(ctx context.Context, nums []int) (int, error) {
@@ -948,13 +914,11 @@ func TestParallel_ComplexScenarios(t *testing.T) {
 	})
 
 	t.Run("validation from multiple validators", func(t *testing.T) {
-		// Type: Parallel[string, ValidationResult] - parallel validation pipeline
 		type ValidationResult struct {
 			Valid   bool
 			Message string
 		}
 
-		// Type: []func(context.Context, string) (ValidationResult, error) - validator processors
 		processors := []func(context.Context, string) (ValidationResult, error){
 			// Length validator
 			func(ctx context.Context, input string) (ValidationResult, error) {
@@ -1023,10 +987,8 @@ func TestParallel_ComplexScenarios(t *testing.T) {
 }
 
 // TestParallel_EdgeCases tests edge cases and boundary conditions.
-// Type: Various Parallel[T, U] configurations - validates robustness
 func TestParallel_EdgeCases(t *testing.T) {
 	t.Run("single processor", func(t *testing.T) {
-		// Type: Parallel[int, int] with single processor (no true parallelism)
 		config := ParallelConfig[int, int]{
 			Processors: []func(context.Context, int) (int, error){
 				func(ctx context.Context, i int) (int, error) {
@@ -1054,7 +1016,6 @@ func TestParallel_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("all processors fail", func(t *testing.T) {
-		// Type: Parallel[int, int] with universal failure handling
 		processors := []func(context.Context, int) (int, error){
 			func(ctx context.Context, i int) (int, error) {
 				return 0, errors.New("error 1")
@@ -1087,7 +1048,6 @@ func TestParallel_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("zero value input", func(t *testing.T) {
-		// Type: Parallel[int, int] with zero value processing
 		processors := []func(context.Context, int) (int, error){
 			func(ctx context.Context, i int) (int, error) {
 				return i * 2, nil
@@ -1120,14 +1080,11 @@ func TestParallel_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("many processors", func(t *testing.T) {
-		// Type: Parallel[int, int] with 100 processors - scalability test
 		numProcessors := 100
-		// Type: []func(context.Context, int) (int, error) - large processor slice
 		processors := make([]func(context.Context, int) (int, error), numProcessors)
 		for i := range processors {
-			idx := i
 			processors[i] = func(ctx context.Context, input int) (int, error) {
-				return input + idx, nil
+				return input + i, nil
 			}
 		}
 
@@ -1162,13 +1119,11 @@ func TestParallel_EdgeCases(t *testing.T) {
 // TestParallel_DifferentTypes tests various type combinations.
 func TestParallel_DifferentTypes(t *testing.T) {
 	t.Run("int to different outputs", func(t *testing.T) {
-		// Type: Parallel[int, Output] - single input to multiple output formats
 		type Output struct {
 			Type  string
 			Value string
 		}
 
-		// Type: []func(context.Context, int) (Output, error) - format converters
 		processors := []func(context.Context, int) (Output, error){
 			func(ctx context.Context, i int) (Output, error) {
 				return Output{Type: "string", Value: strconv.Itoa(i)}, nil
@@ -1207,13 +1162,11 @@ func TestParallel_DifferentTypes(t *testing.T) {
 	})
 
 	t.Run("struct input to various outputs", func(t *testing.T) {
-		// Type: Parallel[User, string] - struct transformation to multiple string formats
 		type User struct {
 			Name string
 			Age  int
 		}
 
-		// Type: []func(context.Context, User) (string, error) - string transformers
 		processors := []func(context.Context, User) (string, error){
 			func(ctx context.Context, u User) (string, error) {
 				return strings.ToUpper(u.Name), nil
@@ -1254,19 +1207,15 @@ func TestParallel_DifferentTypes(t *testing.T) {
 }
 
 // TestParallel_ProcessorIsolation verifies processors don't affect each other.
-// Type: Parallel[MutableData, []int] - validates input isolation between concurrent processors
 func TestParallel_ProcessorIsolation(t *testing.T) {
 	t.Run("modifications to input don't affect other processors", func(t *testing.T) {
-		// Type: MutableData - potentially mutable input structure
 		type MutableData struct {
 			Values []int
 		}
 
 		var mu sync.Mutex
-		// Type: [][]int - collected results from each processor
 		results := make([][]int, 3)
 
-		// Type: []func(context.Context, MutableData) ([]int, error) - processors with timing
 		processors := []func(context.Context, MutableData) ([]int, error){
 			func(ctx context.Context, data MutableData) ([]int, error) {
 				time.Sleep(5 * time.Millisecond)

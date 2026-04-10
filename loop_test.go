@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -42,7 +43,7 @@ func TestLoopConfig_validate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "valid config with zero max iterations",
+			name: "valid config with large max iterations",
 			config: &LoopConfig[int]{
 				Processor: func(ctx context.Context, i int, val int) (int, bool, error) {
 					return val, false, nil
@@ -225,7 +226,7 @@ func TestLoop_Run(t *testing.T) {
 				if err == nil {
 					t.Errorf("Run() expected error but got nil")
 				} else if tt.errSubstr != "" {
-					if !contains(err.Error(), tt.errSubstr) {
+					if !strings.Contains(err.Error(), tt.errSubstr) {
 						t.Errorf("Run() error = %v, want substring %v", err.Error(), tt.errSubstr)
 					}
 				}
@@ -275,7 +276,7 @@ func TestLoop_RunWithContext(t *testing.T) {
 		if err == nil {
 			t.Errorf("Run() expected context cancellation error")
 		}
-		if !errors.Is(err, context.Canceled) && !contains(err.Error(), "context canceled") {
+		if !errors.Is(err, context.Canceled) && !strings.Contains(err.Error(), "context canceled") {
 			t.Errorf("Run() error should be context.Canceled, got %v", err)
 		}
 	})
@@ -482,15 +483,3 @@ func TestLoop_ComplexScenarios(t *testing.T) {
 	})
 }
 
-// Helper function to check if a string contains a substring
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		func() bool {
-			for i := 0; i <= len(s)-len(substr); i++ {
-				if s[i:i+len(substr)] == substr {
-					return true
-				}
-			}
-			return false
-		}())
-}

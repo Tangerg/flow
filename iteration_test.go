@@ -13,7 +13,6 @@ import (
 )
 
 // TestIterationConfig_validate tests the validation logic for IterationConfig.
-// Type: IterationConfig[int, int] - validates configuration rules
 func TestIterationConfig_validate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -102,7 +101,6 @@ func TestIterationConfig_validate(t *testing.T) {
 }
 
 // TestNewIteration tests the constructor for Iteration.
-// Type: Iteration[int, int] - verifies proper initialization
 func TestNewIteration(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -151,9 +149,8 @@ func TestNewIteration(t *testing.T) {
 	}
 }
 
-// TestIteration_calcConcurrencyLimit tests concurrency limit calculation.
-// Type: Iteration[int, int] - validates dynamic concurrency adjustment
-func TestIteration_calcConcurrencyLimit(t *testing.T) {
+// TestIteration_effectiveConcurrency tests concurrency limit calculation.
+func TestIteration_effectiveConcurrency(t *testing.T) {
 	tests := []struct {
 		name             string
 		concurrencyLimit int
@@ -204,16 +201,15 @@ func TestIteration_calcConcurrencyLimit(t *testing.T) {
 				concurrencyLimit: tt.concurrencyLimit,
 			}
 			input := make([]int, tt.inputSize)
-			got := iter.calcConcurrencyLimit(input)
+			got := iter.effectiveConcurrency(input)
 			if got != tt.want {
-				t.Errorf("calcConcurrencyLimit() = %v, want %v", got, tt.want)
+				t.Errorf("effectiveConcurrency() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
 // TestIteration_RunSequential tests sequential processing behavior.
-// Type: Iteration[int, int] - validates sequential execution and error handling
 func TestIteration_RunSequential(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -339,7 +335,6 @@ func TestIteration_RunSequential(t *testing.T) {
 }
 
 // TestIteration_RunConcurrent tests concurrent processing behavior.
-// Type: Iteration[int, int] - validates parallel execution with goroutines
 func TestIteration_RunConcurrent(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -466,10 +461,8 @@ func TestIteration_RunConcurrent(t *testing.T) {
 }
 
 // TestIteration_ConcurrencyVerification verifies actual concurrent execution.
-// Type: Iteration[int, int] - validates goroutine concurrency limits using atomic counters
 func TestIteration_ConcurrencyVerification(t *testing.T) {
 	t.Run("verify concurrent execution", func(t *testing.T) {
-		// Type: atomic counters tracking concurrent goroutines
 		var activeCount int32
 		var maxConcurrent int32
 
@@ -510,7 +503,6 @@ func TestIteration_ConcurrencyVerification(t *testing.T) {
 	})
 
 	t.Run("sequential execution - no concurrency", func(t *testing.T) {
-		// Type: atomic counters verifying sequential execution (max=1)
 		var activeCount int32
 		var maxConcurrent int32
 
@@ -551,10 +543,8 @@ func TestIteration_ConcurrencyVerification(t *testing.T) {
 }
 
 // TestIteration_RunWithContext tests context handling in iteration execution.
-// Type: Iteration[int, int] - validates context propagation and cancellation
 func TestIteration_RunWithContext(t *testing.T) {
 	t.Run("context cancellation in sequential", func(t *testing.T) {
-		// Type: Iteration[int, int] with context cancellation during processing
 		ctx, cancel := context.WithCancel(context.Background())
 
 		config := IterationConfig[int, int]{
@@ -585,7 +575,6 @@ func TestIteration_RunWithContext(t *testing.T) {
 	})
 
 	t.Run("context cancellation in concurrent", func(t *testing.T) {
-		// Type: Iteration[int, int] with timeout during concurrent processing
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
 
@@ -614,7 +603,6 @@ func TestIteration_RunWithContext(t *testing.T) {
 	})
 
 	t.Run("context value access", func(t *testing.T) {
-		// Type: Iteration[int, int] with context value propagation
 		type contextKey string
 		key := contextKey("multiplier")
 
@@ -647,10 +635,8 @@ func TestIteration_RunWithContext(t *testing.T) {
 }
 
 // TestIterationBuilder tests the builder pattern for iteration construction.
-// Type: IterationBuilder[any, any] - validates fluent API for dynamic typing
 func TestIterationBuilder(t *testing.T) {
 	t.Run("complete builder chain", func(t *testing.T) {
-		// Type: IterationBuilder[any, any] -> Iteration[any, any]
 		iter, err := NewIterationBuilder[any, any]().
 			WithProcessor(func(ctx context.Context, i int, input any) (any, error) {
 				return input.(int) * 2, nil
@@ -678,7 +664,6 @@ func TestIterationBuilder(t *testing.T) {
 	})
 
 	t.Run("builder without processor", func(t *testing.T) {
-		// Type: IterationBuilder[any, any] - missing processor validation
 		_, err := NewIterationBuilder[any, any]().
 			WithConcurrencyLimit(3).
 			Build()
@@ -689,7 +674,6 @@ func TestIterationBuilder(t *testing.T) {
 	})
 
 	t.Run("builder with type conversion", func(t *testing.T) {
-		// Type: IterationBuilder[any, any] with int -> string conversion
 		iter, err := NewIterationBuilder[any, any]().
 			WithProcessor(func(ctx context.Context, i int, input any) (any, error) {
 				return strconv.Itoa(input.(int)), nil
@@ -719,7 +703,6 @@ func TestIterationBuilder(t *testing.T) {
 // TestIteration_ComplexScenarios tests real-world usage patterns.
 func TestIteration_ComplexScenarios(t *testing.T) {
 	t.Run("data validation pipeline", func(t *testing.T) {
-		// Type: Iteration[User, User] - domain model validation and transformation
 		type User struct {
 			ID   int
 			Name string
@@ -773,7 +756,6 @@ func TestIteration_ComplexScenarios(t *testing.T) {
 	})
 
 	t.Run("concurrent API calls simulation", func(t *testing.T) {
-		// Type: Iteration[int, string] - simulates parallel HTTP requests
 		var callCount int32
 		var mu sync.Mutex
 		callOrder := []int{}
@@ -816,7 +798,6 @@ func TestIteration_ComplexScenarios(t *testing.T) {
 	})
 
 	t.Run("batch processing with retry logic", func(t *testing.T) {
-		// Type: Iteration[int, int] - failure simulation with retry tracking
 		failedAttempts := make(map[int]int)
 		var mu sync.Mutex
 
@@ -867,7 +848,6 @@ func TestIteration_ComplexScenarios(t *testing.T) {
 	})
 
 	t.Run("filter and transform", func(t *testing.T) {
-		// Type: Iteration[int, string] - filtering with error propagation
 		config := IterationConfig[int, string]{
 			Processor: func(ctx context.Context, i int, val int) (string, error) {
 				if val%2 == 0 {
@@ -911,7 +891,6 @@ func TestIteration_ComplexScenarios(t *testing.T) {
 	})
 
 	t.Run("aggregation with concurrent processing", func(t *testing.T) {
-		// Type: Iteration[int, int] with shared state aggregation using mutex
 		type Stats struct {
 			Sum   int
 			Count int
@@ -962,10 +941,8 @@ func TestIteration_ComplexScenarios(t *testing.T) {
 }
 
 // TestIteration_EdgeCases tests edge cases and boundary conditions.
-// Type: Various Iteration[T, U] configurations - validates robustness
 func TestIteration_EdgeCases(t *testing.T) {
 	t.Run("empty slice", func(t *testing.T) {
-		// Type: Iteration[int, int] with empty input
 		config := IterationConfig[int, int]{
 			Processor: func(ctx context.Context, i int, val int) (int, error) {
 				return val * 2, nil
@@ -988,7 +965,6 @@ func TestIteration_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("single element", func(t *testing.T) {
-		// Type: Iteration[int, int] with single item processing
 		config := IterationConfig[int, int]{
 			Processor: func(ctx context.Context, i int, val int) (int, error) {
 				return val * 2, nil
@@ -1014,7 +990,6 @@ func TestIteration_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("large input", func(t *testing.T) {
-		// Type: Iteration[int, int] with 1000 elements - scalability test
 		config := IterationConfig[int, int]{
 			Processor: func(ctx context.Context, i int, val int) (int, error) {
 				return val * 2, nil
@@ -1048,7 +1023,6 @@ func TestIteration_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("all processors fail", func(t *testing.T) {
-		// Type: Iteration[int, int] with universal failure handling
 		config := IterationConfig[int, int]{
 			Processor: func(ctx context.Context, i int, val int) (int, error) {
 				return 0, errors.New("always fails")
@@ -1075,7 +1049,6 @@ func TestIteration_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("zero value results", func(t *testing.T) {
-		// Type: Iteration[int, int] with zero value outputs
 		config := IterationConfig[int, int]{
 			Processor: func(ctx context.Context, i int, val int) (int, error) {
 				return 0, nil
@@ -1107,7 +1080,6 @@ func TestIteration_EdgeCases(t *testing.T) {
 // TestIteration_DifferentTypes tests various type combinations.
 func TestIteration_DifferentTypes(t *testing.T) {
 	t.Run("string to int", func(t *testing.T) {
-		// Type: Iteration[string, int] - string length calculation
 		config := IterationConfig[string, int]{
 			Processor: func(ctx context.Context, i int, val string) (int, error) {
 				return len(val), nil
@@ -1135,7 +1107,6 @@ func TestIteration_DifferentTypes(t *testing.T) {
 	})
 
 	t.Run("struct transformation", func(t *testing.T) {
-		// Type: Iteration[Input, Output] - domain model transformation
 		type Input struct {
 			ID   int
 			Name string
@@ -1180,7 +1151,6 @@ func TestIteration_DifferentTypes(t *testing.T) {
 	})
 
 	t.Run("slice to slice element", func(t *testing.T) {
-		// Type: Iteration[[]int, int] - slice reduction/aggregation
 		config := IterationConfig[[]int, int]{
 			Processor: func(ctx context.Context, i int, val []int) (int, error) {
 				sum := 0
@@ -1217,7 +1187,6 @@ func TestIteration_DifferentTypes(t *testing.T) {
 	})
 
 	t.Run("pointer types", func(t *testing.T) {
-		// Type: Iteration[*Data, *Data] - pointer-based transformation
 		type Data struct {
 			Value int
 		}
@@ -1255,7 +1224,6 @@ func TestIteration_DifferentTypes(t *testing.T) {
 }
 
 // TestIteration_SequentialVsConcurrent compares sequential and concurrent performance.
-// Type: Iteration[int, int] - performance benchmarking with different concurrency levels
 func TestIteration_SequentialVsConcurrent(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping performance comparison in short mode")
@@ -1272,7 +1240,6 @@ func TestIteration_SequentialVsConcurrent(t *testing.T) {
 	}
 
 	t.Run("sequential", func(t *testing.T) {
-		// Type: Iteration[int, int] with sequential execution (concurrency=1)
 		config := IterationConfig[int, int]{
 			Processor:        processor,
 			ConcurrencyLimit: 1,
@@ -1290,7 +1257,6 @@ func TestIteration_SequentialVsConcurrent(t *testing.T) {
 	})
 
 	t.Run("concurrent with limit 10", func(t *testing.T) {
-		// Type: Iteration[int, int] with concurrent execution (concurrency=10)
 		config := IterationConfig[int, int]{
 			Processor:        processor,
 			ConcurrencyLimit: 10,

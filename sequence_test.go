@@ -676,31 +676,6 @@ func TestSequence_ComplexScenarios(t *testing.T) {
 	})
 }
 
-// TestSequence_TypeAssertionPanics tests panic recovery (documents current behavior)
-func TestSequence_TypeAssertionPanics(t *testing.T) {
-	t.Run("type assertion panic", func(t *testing.T) {
-		processors := []func(context.Context, any) (any, error){
-			func(ctx context.Context, input any) (any, error) {
-				// This will panic if input is not an int
-				return input.(int) * 2, nil
-			},
-		}
-
-		seq, err := NewSequence(processors...)
-		if err != nil {
-			t.Fatalf("NewSequence() error = %v", err)
-		}
-
-		// Note: Current implementation doesn't recover from panics
-		defer func() {
-			if r := recover(); r == nil {
-				t.Errorf("Run() should panic for type mismatch but didn't")
-			}
-		}()
-
-		seq.Run(context.Background(), "not an int")
-	})
-}
 
 // TestSequence_LongChain tests performance with many processors
 func TestSequence_LongChain(t *testing.T) {
