@@ -9,7 +9,6 @@ import (
 )
 
 // TestBranchConfig_validate tests the validation logic for BranchConfig.
-// Type: BranchConfig[int, string] - validates configuration rules for branches
 func TestBranchConfig_validate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -103,7 +102,6 @@ func TestBranchConfig_validate(t *testing.T) {
 }
 
 // TestNewBranch tests the constructor for Branch.
-// Type: Branch[int, string] - verifies proper initialization and error handling
 func TestNewBranch(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -170,9 +168,9 @@ func TestNewBranch(t *testing.T) {
 					t.Errorf("NewBranch() returned nil branch")
 				}
 				// Verify branches were cloned
-				if len(branch.branches) != len(tt.config.Branches) {
+				if len(branch.handlers) != len(tt.config.Branches) {
 					t.Errorf("NewBranch() branches count = %v, want %v",
-						len(branch.branches), len(tt.config.Branches))
+						len(branch.handlers), len(tt.config.Branches))
 				}
 			}
 		})
@@ -180,7 +178,6 @@ func TestNewBranch(t *testing.T) {
 }
 
 // TestBranch_Run tests the main execution logic.
-// Type: Branch[int, string] - validates branch resolution and execution
 func TestBranch_Run(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -326,10 +323,8 @@ func TestBranch_Run(t *testing.T) {
 }
 
 // TestBranch_resolveBranch tests the branch resolution logic.
-// Type: Branch[string, string] - validates resolver function and error handling
 func TestBranch_resolveBranch(t *testing.T) {
 	t.Run("successful resolution", func(t *testing.T) {
-		// Type: Branch[string, string]
 		branch, err := NewBranch(BranchConfig[string, string]{
 			Branches: map[string]func(context.Context, string) (string, error){
 				"route_a": func(ctx context.Context, s string) (string, error) {
@@ -358,7 +353,6 @@ func TestBranch_resolveBranch(t *testing.T) {
 	})
 
 	t.Run("branch not found with available branches in error", func(t *testing.T) {
-		// Type: Branch[string, string]
 		branch, err := NewBranch(BranchConfig[string, string]{
 			Branches: map[string]func(context.Context, string) (string, error){
 				"branch_x": func(ctx context.Context, s string) (string, error) {
@@ -393,10 +387,8 @@ func TestBranch_resolveBranch(t *testing.T) {
 }
 
 // TestBranch_RunWithContext tests context handling in branch execution.
-// Type: Branch[int, string] - validates context propagation and cancellation
 func TestBranch_RunWithContext(t *testing.T) {
 	t.Run("context passed to resolver", func(t *testing.T) {
-		// Type: Branch[int, string] with context value propagation
 		type contextKey string
 		key := contextKey("test_key")
 
@@ -428,7 +420,6 @@ func TestBranch_RunWithContext(t *testing.T) {
 	})
 
 	t.Run("context passed to branch function", func(t *testing.T) {
-		// Type: Branch[int, string] with context data retrieval
 		type contextKey string
 		key := contextKey("data")
 
@@ -461,7 +452,6 @@ func TestBranch_RunWithContext(t *testing.T) {
 	})
 
 	t.Run("context cancellation", func(t *testing.T) {
-		// Type: Branch[int, string] with context cancellation handling
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel() // Cancel immediately
 
@@ -495,10 +485,8 @@ func TestBranch_RunWithContext(t *testing.T) {
 }
 
 // TestBranchBuilder tests the builder pattern for branch construction.
-// Type: BranchBuilder[any, any] - validates fluent API and error accumulation
 func TestBranchBuilder(t *testing.T) {
 	t.Run("complete builder chain", func(t *testing.T) {
-		// Type: BranchBuilder[any, any] -> Branch[any, any]
 		branch, err := NewBranchBuilder[any, any]().
 			WithBranches(map[string]func(context.Context, any) (any, error){
 				"upper": func(ctx context.Context, input any) (any, error) {
@@ -532,7 +520,6 @@ func TestBranchBuilder(t *testing.T) {
 	})
 
 	t.Run("builder without branches", func(t *testing.T) {
-		// Type: BranchBuilder[any, any] - missing branches validation
 		_, err := NewBranchBuilder[any, any]().
 			WithBranchResolver(func(ctx context.Context, input any) string {
 				return "x"
@@ -545,7 +532,6 @@ func TestBranchBuilder(t *testing.T) {
 	})
 
 	t.Run("builder without resolver", func(t *testing.T) {
-		// Type: BranchBuilder[any, any] - single branch auto-resolver
 		_, err := NewBranchBuilder[any, any]().
 			WithBranches(map[string]func(context.Context, any) (any, error){
 				"branch": func(ctx context.Context, input any) (any, error) {
@@ -560,7 +546,6 @@ func TestBranchBuilder(t *testing.T) {
 	})
 
 	t.Run("builder with type assertions", func(t *testing.T) {
-		// Type: BranchBuilder[any, any] with runtime type checking
 		branch, err := NewBranchBuilder[any, any]().
 			WithBranches(map[string]func(context.Context, any) (any, error){
 				"int": func(ctx context.Context, input any) (any, error) {
@@ -611,7 +596,6 @@ func TestBranchBuilder(t *testing.T) {
 // TestBranch_ComplexScenarios tests real-world use cases with domain models.
 func TestBranch_ComplexScenarios(t *testing.T) {
 	t.Run("user role routing", func(t *testing.T) {
-		// Type: Branch[User, Response] - role-based access control
 		type User struct {
 			ID   int
 			Role string
@@ -682,7 +666,6 @@ func TestBranch_ComplexScenarios(t *testing.T) {
 	})
 
 	t.Run("A/B testing", func(t *testing.T) {
-		// Type: Branch[int, string] - user segmentation for experiments
 		branch, err := NewBranch(BranchConfig[int, string]{
 			Branches: map[string]func(context.Context, int) (string, error){
 				"variant_a": func(ctx context.Context, userID int) (string, error) {
@@ -718,7 +701,6 @@ func TestBranch_ComplexScenarios(t *testing.T) {
 	})
 
 	t.Run("multi-region routing", func(t *testing.T) {
-		// Type: Branch[Request, string] - geographic request routing
 		type Request struct {
 			Region string
 			Data   string
@@ -755,7 +737,6 @@ func TestBranch_ComplexScenarios(t *testing.T) {
 	})
 
 	t.Run("content type routing", func(t *testing.T) {
-		// Type: Branch[File, string] - file type processing dispatch
 		type File struct {
 			Name string
 			Type string
@@ -793,7 +774,6 @@ func TestBranch_ComplexScenarios(t *testing.T) {
 }
 
 // TestBranch_MapCloning tests that branch maps are properly cloned.
-// Type: Branch[int, string] - validates immutability and isolation
 func TestBranch_MapCloning(t *testing.T) {
 	originalBranches := map[string]func(context.Context, int) (string, error){
 		"branch_a": func(ctx context.Context, i int) (string, error) {
@@ -819,11 +799,11 @@ func TestBranch_MapCloning(t *testing.T) {
 	}
 
 	// Branch should still only have branch_a
-	if len(branch.branches) != 1 {
-		t.Errorf("Branch map was not properly cloned, got %d branches, want 1", len(branch.branches))
+	if len(branch.handlers) != 1 {
+		t.Errorf("Branch map was not properly cloned, got %d branches, want 1", len(branch.handlers))
 	}
 
-	if _, exists := branch.branches["branch_b"]; exists {
+	if _, exists := branch.handlers["branch_b"]; exists {
 		t.Errorf("Branch map was affected by external modification")
 	}
 }

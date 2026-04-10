@@ -9,9 +9,7 @@ import (
 	"time"
 )
 
-// ========================================
 // Mock Future Implementation for Testing
-// ========================================
 
 // mockFuture is a simple Future implementation for testing purposes
 type mockFuture[V any] struct {
@@ -87,9 +85,7 @@ func (f *mockFuture[V]) TryGet() (value V, err error, ready bool) {
 	return f.value, f.err, f.ready
 }
 
-// ========================================
 // Helper function to create async processor
-// ========================================
 
 func createAsyncProcessor[I, O any](fn func(I) (O, error),
 	delay time.Duration,
@@ -109,9 +105,6 @@ func createAsyncProcessor[I, O any](fn func(I) (O, error),
 	}
 }
 
-// ========================================
-// Async Node Tests
-// ========================================
 
 // TestNewAsync tests the constructor for Async
 func TestNewAsync(t *testing.T) {

@@ -10,10 +10,7 @@ import (
 	"time"
 )
 
-// ========================================
-// Flow Constructor Tests
-// ========================================
-
+// TestNewFlow tests that NewFlow returns an empty, non-nil flow.
 func TestNewFlow(t *testing.T) {
 	flow := NewFlow()
 	if flow == nil {
@@ -27,10 +24,7 @@ func TestNewFlow(t *testing.T) {
 	}
 }
 
-// ========================================
-// Flow.Then Tests
-// ========================================
-
+// TestFlow_Then tests that Then appends nodes and ignores nil nodes.
 func TestFlow_Then(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -118,6 +112,7 @@ func TestFlow_Then(t *testing.T) {
 	}
 }
 
+// TestFlow_Then_Chaining tests that Then returns the same flow instance.
 func TestFlow_Then_Chaining(t *testing.T) {
 	flow := NewFlow()
 	result := flow.Then(Func[any, any](func(ctx context.Context, input any) (any, error) {
@@ -129,10 +124,7 @@ func TestFlow_Then_Chaining(t *testing.T) {
 	}
 }
 
-// ========================================
-// Flow.Loop Tests
-// ========================================
-
+// TestFlow_Loop tests adding a Loop node via the Flow builder.
 func TestFlow_Loop(t *testing.T) {
 	t.Run("valid loop configuration", func(t *testing.T) {
 		flow := NewFlow().
@@ -193,10 +185,7 @@ func TestFlow_Loop(t *testing.T) {
 	})
 }
 
-// ========================================
-// Flow.Branch Tests
-// ========================================
-
+// TestFlow_Branch tests adding a Branch node via the Flow builder.
 func TestFlow_Branch(t *testing.T) {
 	t.Run("valid branch configuration", func(t *testing.T) {
 		flow := NewFlow().
@@ -291,10 +280,7 @@ func TestFlow_Branch(t *testing.T) {
 	})
 }
 
-// ========================================
-// Flow.Iteration Tests
-// ========================================
-
+// TestFlow_Iteration tests adding an Iteration node via the Flow builder.
 func TestFlow_Iteration(t *testing.T) {
 	t.Run("valid iteration configuration", func(t *testing.T) {
 		flow := NewFlow().
@@ -383,10 +369,7 @@ func TestFlow_Iteration(t *testing.T) {
 	})
 }
 
-// ========================================
-// Flow.Parallel Tests
-// ========================================
-
+// TestFlow_Parallel tests adding a Parallel node via the Flow builder.
 func TestFlow_Parallel(t *testing.T) {
 	t.Run("valid parallel configuration", func(t *testing.T) {
 		flow := NewFlow().
@@ -450,10 +433,7 @@ func TestFlow_Parallel(t *testing.T) {
 	})
 }
 
-// ========================================
-// Flow.validate Tests
-// ========================================
-
+// TestFlow_validate tests flow validation: empty flows and accumulated configuration errors.
 func TestFlow_validate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -532,10 +512,7 @@ func TestFlow_validate(t *testing.T) {
 	}
 }
 
-// ========================================
-// Flow.Build Tests
-// ========================================
-
+// TestFlow_Build tests that Build assembles the pipeline or returns accumulated errors.
 func TestFlow_Build(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -649,10 +626,7 @@ func TestFlow_Build(t *testing.T) {
 	}
 }
 
-// ========================================
-// Flow Execution Tests
-// ========================================
-
+// TestFlow_ExecuteSimple tests end-to-end execution of simple Func-based pipelines.
 func TestFlow_ExecuteSimple(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -746,6 +720,7 @@ func TestFlow_ExecuteSimple(t *testing.T) {
 	}
 }
 
+// TestFlow_ExecuteWithLoop tests end-to-end execution of flows containing Loop nodes.
 func TestFlow_ExecuteWithLoop(t *testing.T) {
 	t.Run("simple loop", func(t *testing.T) {
 		flow := NewFlow().
@@ -816,6 +791,7 @@ func TestFlow_ExecuteWithLoop(t *testing.T) {
 	})
 }
 
+// TestFlow_ExecuteWithBranch tests end-to-end execution of flows containing Branch nodes.
 func TestFlow_ExecuteWithBranch(t *testing.T) {
 	t.Run("branch with different paths", func(t *testing.T) {
 		flow := NewFlow().
@@ -892,6 +868,7 @@ func TestFlow_ExecuteWithBranch(t *testing.T) {
 	})
 }
 
+// TestFlow_ExecuteWithIteration tests end-to-end execution of flows containing Iteration nodes.
 func TestFlow_ExecuteWithIteration(t *testing.T) {
 	t.Run("simple iteration", func(t *testing.T) {
 		flow := NewFlow().
@@ -952,6 +929,7 @@ func TestFlow_ExecuteWithIteration(t *testing.T) {
 	})
 }
 
+// TestFlow_ExecuteWithParallel tests end-to-end execution of flows containing Parallel nodes.
 func TestFlow_ExecuteWithParallel(t *testing.T) {
 	t.Run("simple parallel", func(t *testing.T) {
 		flow := NewFlow().
@@ -1028,10 +1006,7 @@ func TestFlow_ExecuteWithParallel(t *testing.T) {
 	})
 }
 
-// ========================================
-// Flow Complex Scenarios
-// ========================================
-
+// TestFlow_ComplexScenarios tests real-world pipelines mixing multiple node types.
 func TestFlow_ComplexScenarios(t *testing.T) {
 	t.Run("mixed control flow", func(t *testing.T) {
 		flow := NewFlow().
@@ -1152,10 +1127,7 @@ func TestFlow_ComplexScenarios(t *testing.T) {
 	})
 }
 
-// ========================================
-// Error Handling Tests
-// ========================================
-
+// TestFlow_ErrorPropagation tests that errors stop pipeline execution and are surfaced correctly.
 func TestFlow_ErrorPropagation(t *testing.T) {
 	t.Run("error stops execution", func(t *testing.T) {
 		var callCount int32
@@ -1268,10 +1240,7 @@ func TestFlow_ErrorPropagation(t *testing.T) {
 	})
 }
 
-// ========================================
-// Context Handling Tests
-// ========================================
-
+// TestFlow_ContextHandling tests that context cancellation and values are propagated through the pipeline.
 func TestFlow_ContextHandling(t *testing.T) {
 	t.Run("context cancellation", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
@@ -1322,10 +1291,7 @@ func TestFlow_ContextHandling(t *testing.T) {
 	})
 }
 
-// ========================================
-// Flow Method Chaining Tests
-// ========================================
-
+// TestFlow_MethodChaining tests that all Flow builder methods return the same instance for chaining.
 func TestFlow_MethodChaining(t *testing.T) {
 	t.Run("complete fluent chain", func(t *testing.T) {
 		pipeline, err := NewFlow().

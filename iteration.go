@@ -8,26 +8,26 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// IterationConfig defines the configuration for an iteration node that applies
-// a processor function to each element in a collection.
+// IterationConfig holds the configuration for an Iteration node.
 type IterationConfig[I, O any] struct {
-	// Processor is the function applied to each element.
-	// It receives the element's index and value, returning the transformed output.
+	// Processor is applied to every element in the input slice.
+	// It receives the element's zero-based index and its value.
 	Processor func(context.Context, int, I) (O, error)
 
-	// ContinueOnError determines whether to continue processing remaining elements
-	// when an error occurs. If false, the iteration stops at the first error.
+	// ContinueOnError controls behaviour when an element's processor fails.
+	// If false (default), the first error stops all further processing.
+	// If true, all elements are processed and errors are stored per-result.
 	ContinueOnError bool
 
-	// ConcurrencyLimit controls the maximum number of concurrent processors.
-	// - 0: sequential processing (default if not set)
-	// - 1: sequential processing
-	// - >1: concurrent processing with specified limit
-	// - <0: unlimited concurrency (equal to slice length)
+	// ConcurrencyLimit controls how many elements are processed at once.
+	//   -  0: sequential (default when not set)
+	//   -  1: sequential
+	//   - >1: concurrent with this many workers
+	//   - <0: unlimited concurrency (one goroutine per element)
 	ConcurrencyLimit int
 }
 
-// validate checks if the iteration configuration is valid and applies defaults.
+// validate checks the configuration and applies defaults.
 func (cfg *IterationConfig[I, O]) validate() error {
 	if cfg == nil {
 		return errors.New("iteration config cannot be nil")
@@ -37,7 +37,7 @@ func (cfg *IterationConfig[I, O]) validate() error {
 		return errors.New("processor cannot be nil")
 	}
 
-	// Set default concurrency limit to sequential processing
+	// Default to sequential processing.
 	if cfg.ConcurrencyLimit == 0 {
 		cfg.ConcurrencyLimit = 1
 	}
@@ -47,15 +47,18 @@ func (cfg *IterationConfig[I, O]) validate() error {
 
 var _ Node[[]any, []Result[any]] = (*Iteration[any, any])(nil)
 
-// Iteration represents a node that applies a processor function to each element
-// in a collection, either sequentially or concurrently.
+// Iteration applies a processor to every element of an input slice, either
+// sequentially or concurrently depending on ConcurrencyLimit.
+//
+// The output is a slice of Result values, one per input element, in the same
+// order as the input regardless of processing order.
 type Iteration[I, O any] struct {
 	processor        func(context.Context, int, I) (O, error)
 	continueOnError  bool
 	concurrencyLimit int
 }
 
-// NewIteration creates a new iteration node with the provided configuration.
+// NewIteration creates an Iteration node from the given configuration.
 // Returns an error if the configuration is invalid.
 func NewIteration[I, O any](cfg IterationConfig[I, O]) (*Iteration[I, O], error) {
 	if err := cfg.validate(); err != nil {
@@ -69,9 +72,9 @@ func NewIteration[I, O any](cfg IterationConfig[I, O]) (*Iteration[I, O], error)
 	}, nil
 }
 
-// calcConcurrencyLimit determines the actual concurrency level based on configuration
-// and input size.
-func (it *Iteration[I, O]) calcConcurrencyLimit(elements []I) int {
+// effectiveConcurrency returns the actual number of concurrent workers to use,
+// bounded by the number of elements to avoid spinning up unnecessary goroutines.
+func (it *Iteration[I, O]) effectiveConcurrency(elements []I) int {
 	if it.concurrencyLimit < 0 {
 		return len(elements)
 	}
@@ -83,19 +86,17 @@ func (it *Iteration[I, O]) calcConcurrencyLimit(elements []I) int {
 	return min(it.concurrencyLimit, len(elements))
 }
 
-// runSequential processes elements one by one in order.
+// runSequential processes elements one at a time in index order.
 func (it *Iteration[I, O]) runSequential(ctx context.Context, elements []I) ([]Result[O], error) {
 	results := make([]Result[O], len(elements))
 
 	for index, element := range elements {
 		result, err := it.processor(ctx, index, element)
 
-		// Stop processing if error occurs and continueOnError is false
 		if err != nil && !it.continueOnError {
 			return nil, fmt.Errorf("iteration failed at index %d: %w", index, err)
 		}
 
-		// Store result (with or without error)
 		results[index] = Result[O]{
 			Value: result,
 			Error: err,
@@ -105,7 +106,7 @@ func (it *Iteration[I, O]) runSequential(ctx context.Context, elements []I) ([]R
 	return results, nil
 }
 
-// runConcurrent processes elements concurrently with specified concurrency limit.
+// runConcurrent processes elements concurrently up to the given worker limit.
 func (it *Iteration[I, O]) runConcurrent(ctx context.Context, elements []I, concurrency int) ([]Result[O], error) {
 	results := make([]Result[O], len(elements))
 
@@ -113,20 +114,14 @@ func (it *Iteration[I, O]) runConcurrent(ctx context.Context, elements []I, conc
 	group.SetLimit(concurrency)
 
 	for index, element := range elements {
-		// Capture loop variables for goroutine
-		idx := index
-		elem := element
-
 		group.Go(func() error {
-			result, err := it.processor(groupCtx, idx, elem)
+			result, err := it.processor(groupCtx, index, element)
 
-			// Stop all processing if error occurs and continueOnError is false
 			if err != nil && !it.continueOnError {
-				return fmt.Errorf("iteration failed at index %d: %w", idx, err)
+				return fmt.Errorf("iteration failed at index %d: %w", index, err)
 			}
 
-			// Store result (with or without error)
-			results[idx] = Result[O]{
+			results[index] = Result[O]{
 				Value: result,
 				Error: err,
 			}
@@ -142,13 +137,12 @@ func (it *Iteration[I, O]) runConcurrent(ctx context.Context, elements []I, conc
 	return results, nil
 }
 
-// Run executes the iteration, processing each element in the input slice.
-// Returns a slice of results corresponding to each input element.
+// Run processes every element in the input slice and returns a result for each.
 //
-// The execution strategy (sequential vs concurrent) is determined by the
-// ConcurrencyLimit configuration.
+// Sequential or concurrent execution is chosen automatically based on
+// ConcurrencyLimit. Results are returned in input order.
 func (it *Iteration[I, O]) Run(ctx context.Context, input []I) ([]Result[O], error) {
-	concurrency := it.calcConcurrencyLimit(input)
+	concurrency := it.effectiveConcurrency(input)
 
 	if concurrency == 1 {
 		return it.runSequential(ctx, input)

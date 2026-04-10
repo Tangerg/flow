@@ -8,35 +8,32 @@ import (
 	"slices"
 )
 
-// BranchBuilder provides a fluent interface for constructing branch nodes.
-// It allows dynamic configuration of branches and their resolution logic.
-// For type-safe branches with compile-time guarantees, use NewBranch directly with BranchConfig.
+// BranchBuilder constructs a Branch node through a fluent interface.
 type BranchBuilder[I, O any] struct {
 	config BranchConfig[I, O]
 }
 
-// NewBranchBuilder creates a new builder for constructing branch nodes.
+// NewBranchBuilder creates an empty BranchBuilder.
 func NewBranchBuilder[I, O any]() *BranchBuilder[I, O] {
 	return &BranchBuilder[I, O]{
 		config: BranchConfig[I, O]{},
 	}
 }
 
-// WithBranches sets the available branches for the node.
-// Each branch is identified by a unique name (map key) and associated with a processor function.
+// WithBranches sets the named handlers available for routing.
+// The map is cloned so later mutations do not affect the builder.
 func (b *BranchBuilder[I, O]) WithBranches(branches map[string]func(context.Context, I) (O, error)) *BranchBuilder[I, O] {
 	b.config.Branches = maps.Clone(branches)
 	return b
 }
 
-// WithBranchResolver sets the function that determines which branch to execute based on input.
-func (b *BranchBuilder[I, O]) WithBranchResolver(branchResolver func(context.Context, I) string) *BranchBuilder[I, O] {
-	b.config.BranchResolver = branchResolver
+// WithBranchResolver sets the function that picks a branch name at runtime.
+func (b *BranchBuilder[I, O]) WithBranchResolver(resolver func(context.Context, I) string) *BranchBuilder[I, O] {
+	b.config.BranchResolver = resolver
 	return b
 }
 
-// Build constructs the branch node from the configured settings.
-// Returns an error if the configuration is invalid (e.g., missing branches or resolver).
+// Build validates the configuration and returns the Branch node.
 func (b *BranchBuilder[I, O]) Build() (*Branch[I, O], error) {
 	branch, err := NewBranch[I, O](b.config)
 	if err != nil {
@@ -46,43 +43,40 @@ func (b *BranchBuilder[I, O]) Build() (*Branch[I, O], error) {
 	return branch, nil
 }
 
-// IterationBuilder provides a fluent interface for constructing iteration nodes.
-// It enables processing of collections with configurable concurrency and error handling.
-// For type-safe iterations with compile-time guarantees, use NewIteration directly with IterationConfig.
+// IterationBuilder constructs an Iteration node through a fluent interface.
 type IterationBuilder[I, O any] struct {
 	config IterationConfig[I, O]
 }
 
-// NewIterationBuilder creates a new builder for constructing iteration nodes.
+// NewIterationBuilder creates an empty IterationBuilder.
 func NewIterationBuilder[I, O any]() *IterationBuilder[I, O] {
 	return &IterationBuilder[I, O]{
 		config: IterationConfig[I, O]{},
 	}
 }
 
-// WithProcessor sets the processing function that will be applied to each element.
-// The processor receives the element index and value, returning the transformed output.
+// WithProcessor sets the function applied to each element.
+// It receives the element's zero-based index and its value.
 func (b *IterationBuilder[I, O]) WithProcessor(processor func(context.Context, int, I) (output O, err error)) *IterationBuilder[I, O] {
 	b.config.Processor = processor
 	return b
 }
 
-// WithContinueOnError determines whether to continue processing remaining elements after an error.
-// If false (default), the iteration stops at the first error.
+// WithContinueOnError controls whether processing continues after an element fails.
+// If false (default), the first error stops the iteration.
 func (b *IterationBuilder[I, O]) WithContinueOnError(continueOnError bool) *IterationBuilder[I, O] {
 	b.config.ContinueOnError = continueOnError
 	return b
 }
 
-// WithConcurrencyLimit sets the maximum number of elements to process concurrently.
-// Use 0 or negative value for unlimited concurrency (not recommended for large collections).
-func (b *IterationBuilder[I, O]) WithConcurrencyLimit(concurrencyLimit int) *IterationBuilder[I, O] {
-	b.config.ConcurrencyLimit = concurrencyLimit
+// WithConcurrencyLimit sets the maximum number of elements processed concurrently.
+// Use 0 or a negative value for sequential processing (the default).
+func (b *IterationBuilder[I, O]) WithConcurrencyLimit(limit int) *IterationBuilder[I, O] {
+	b.config.ConcurrencyLimit = limit
 	return b
 }
 
-// Build constructs the iteration node from the configured settings.
-// Returns an error if the configuration is invalid (e.g., missing processor).
+// Build validates the configuration and returns the Iteration node.
 func (b *IterationBuilder[I, O]) Build() (*Iteration[I, O], error) {
 	iteration, err := NewIteration(b.config)
 	if err != nil {
@@ -92,32 +86,29 @@ func (b *IterationBuilder[I, O]) Build() (*Iteration[I, O], error) {
 	return iteration, nil
 }
 
-// LoopBuilder provides a fluent interface for constructing loop nodes.
-// It enables repeated processing until a termination condition is met or max iterations reached.
-// For type-safe loops with compile-time guarantees, use NewLoop directly with LoopConfig.
+// LoopBuilder constructs a Loop node through a fluent interface.
 type LoopBuilder[T any] struct {
 	config LoopConfig[T]
 }
 
-// NewLoopBuilder creates a new builder for constructing loop nodes.
+// NewLoopBuilder creates an empty LoopBuilder.
 func NewLoopBuilder[T any]() *LoopBuilder[T] {
 	return &LoopBuilder[T]{
 		config: LoopConfig[T]{},
 	}
 }
 
-// WithMaxIterations sets the maximum number of iterations to prevent infinite loops.
-// The loop will terminate after this many iterations even if the done condition is not met.
+// WithMaxIterations sets the maximum number of iterations.
+// Defaults to DefaultMaxIterations when left at zero.
 func (b *LoopBuilder[T]) WithMaxIterations(maxIterations int) *LoopBuilder[T] {
 	b.config.MaxIterations = maxIterations
 	return b
 }
 
-// WithProcessor sets the processing function executed in each iteration.
-// The processor receives the current iteration count and input, returning:
-//   - output: the transformed value passed to the next iteration
-//   - done: whether to terminate the loop
-//   - err: any error that occurred
+// WithProcessor sets the function executed on each iteration.
+// It receives the current iteration index and the previous output (or the
+// initial input on the first call), and returns the next value, a done flag,
+// and any error.
 func (b *LoopBuilder[T]) WithProcessor(
 	processor func(ctx context.Context, iteration int, input T) (output T, done bool, err error),
 ) *LoopBuilder[T] {
@@ -125,8 +116,7 @@ func (b *LoopBuilder[T]) WithProcessor(
 	return b
 }
 
-// Build constructs the loop node from the configured settings.
-// Returns an error if the configuration is invalid (e.g., missing processor or invalid max iterations).
+// Build validates the configuration and returns the Loop node.
 func (b *LoopBuilder[T]) Build() (*Loop[T], error) {
 	loop, err := NewLoop(b.config)
 	if err != nil {
@@ -136,43 +126,40 @@ func (b *LoopBuilder[T]) Build() (*Loop[T], error) {
 	return loop, nil
 }
 
-// ParallelBuilder provides a fluent interface for constructing parallel nodes.
-// It enables concurrent execution of multiple processors with the same input.
-// For type-safe parallel processing with compile-time guarantees, use NewParallel directly with ParallelConfig.
+// ParallelBuilder constructs a Parallel node through a fluent interface.
 type ParallelBuilder[I, O any] struct {
 	config ParallelConfig[I, O]
 }
 
-// NewParallelBuilder creates a new builder for constructing parallel nodes.
+// NewParallelBuilder creates an empty ParallelBuilder.
 func NewParallelBuilder[I, O any]() *ParallelBuilder[I, O] {
 	return &ParallelBuilder[I, O]{
 		config: ParallelConfig[I, O]{},
 	}
 }
 
-// WithProcessors sets the processors to execute concurrently.
-// Each processor receives the same input and operates independently.
+// WithProcessors sets the processors to run concurrently.
+// The slice is cloned so later mutations do not affect the builder.
 func (b *ParallelBuilder[I, O]) WithProcessors(processors []func(context.Context, I) (O, error)) *ParallelBuilder[I, O] {
 	b.config.Processors = slices.Clone(processors)
 	return b
 }
 
-// WithConcurrencyLimit sets the maximum number of processors to run concurrently.
-// Use 0 or negative value for unlimited concurrency (executes all processors at once).
-func (b *ParallelBuilder[I, O]) WithConcurrencyLimit(concurrencyLimit int) *ParallelBuilder[I, O] {
-	b.config.ConcurrencyLimit = concurrencyLimit
+// WithConcurrencyLimit sets the maximum number of processors running at once.
+// Use 0 or a negative value for unlimited concurrency (all start simultaneously).
+func (b *ParallelBuilder[I, O]) WithConcurrencyLimit(limit int) *ParallelBuilder[I, O] {
+	b.config.ConcurrencyLimit = limit
 	return b
 }
 
-// WithContinueOnError determines whether to continue executing remaining processors after an error.
-// If false (default), the parallel execution stops at the first error.
+// WithContinueOnError controls whether remaining processors continue after a failure.
+// If false (default), the first error cancels all remaining processors.
 func (b *ParallelBuilder[I, O]) WithContinueOnError(continueOnError bool) *ParallelBuilder[I, O] {
 	b.config.ContinueOnError = continueOnError
 	return b
 }
 
-// Build constructs the parallel node from the configured settings.
-// Returns an error if the configuration is invalid (e.g., no processors defined).
+// Build validates the configuration and returns the Parallel node.
 func (b *ParallelBuilder[I, O]) Build() (*Parallel[I, O], error) {
 	parallel, err := NewParallel(b.config)
 	if err != nil {
@@ -182,35 +169,33 @@ func (b *ParallelBuilder[I, O]) Build() (*Parallel[I, O], error) {
 	return parallel, nil
 }
 
-// Flow provides a fluent interface for building complex workflows by chaining nodes together.
-// It accumulates nodes and any configuration errors during the build process,
-// validating everything before constructing the final pipeline.
+// Flow is a dynamic-typed workflow builder that accumulates nodes and
+// configuration errors, then assembles everything into a pipeline on Build.
 //
-// Flow uses dynamic typing (any) for maximum flexibility. For type-safe pipelines
-// with compile-time type checking, use Pipe2-Pipe10 directly.
+// For compile-time type safety use Pipe2–Pipe10 directly. Flow trades that
+// safety for the ability to compose heterogeneous node types at runtime.
 //
 // Example:
 //
-//	flow := NewFlow().
-//		Loop(func(b *LoopBuilder[any]) {
-//			b.WithMaxIterations(10).WithProcessor(...)
-//		}).
-//		Branch(func(b *BranchBuilder[any, any]) {
-//			b.WithBranches(...).WithBranchResolver(...)
-//		})
-//	node, err := flow.Build()
+//	node, err := NewFlow().
+//	    Loop(func(b *LoopBuilder[any]) {
+//	        b.WithMaxIterations(10).WithProcessor(...)
+//	    }).
+//	    Branch(func(b *BranchBuilder[any, any]) {
+//	        b.WithBranches(...).WithBranchResolver(...)
+//	    }).
+//	    Build()
 type Flow struct {
 	errors []error
 	nodes  []Node[any, any]
 }
 
-// NewFlow creates a new empty flow builder.
+// NewFlow creates an empty Flow builder.
 func NewFlow() *Flow {
 	return &Flow{}
 }
 
-// append adds a node to the flow, accumulating any errors that occur during node creation.
-// This is an internal helper method used by the public builder methods.
+// append adds a node to the flow, or records the error if node creation failed.
 func (f *Flow) append(node Node[any, any], err error) *Flow {
 	if err != nil {
 		f.errors = append(f.errors, err)
@@ -226,8 +211,8 @@ func (f *Flow) append(node Node[any, any], err error) *Flow {
 	return f
 }
 
-// Then adds a custom node to the flow.
-// Nil nodes are silently ignored without generating errors.
+// Then appends an already-constructed node to the flow.
+// Nil nodes are silently ignored.
 func (f *Flow) Then(node Node[any, any]) *Flow {
 	if node != nil {
 		f.nodes = append(f.nodes, node)
@@ -235,59 +220,59 @@ func (f *Flow) Then(node Node[any, any]) *Flow {
 	return f
 }
 
-// Loop adds a loop node to the flow using a builder configuration function.
-// Configuration errors are accumulated and reported during Build().
+// Loop adds a Loop node configured by the given function.
+// Any configuration error is deferred until Build is called.
 //
 // Example:
 //
 //	flow.Loop(func(b *LoopBuilder[any]) {
-//		b.WithMaxIterations(5).WithProcessor(func(ctx context.Context, i int, v any) (any, bool, error) {
-//			// process and return (result, shouldStop, error)
-//		})
+//	    b.WithMaxIterations(5).WithProcessor(func(ctx context.Context, i int, v any) (any, bool, error) {
+//	        // return result, shouldStop, error
+//	    })
 //	})
-func (f *Flow) Loop(config func(*LoopBuilder[any])) *Flow {
+func (f *Flow) Loop(configure func(*LoopBuilder[any])) *Flow {
 	builder := NewLoopBuilder[any]()
-	config(builder)
+	configure(builder)
 
 	loop, err := builder.Build()
 	return f.append(loop, err)
 }
 
-// Branch adds a branch node to the flow using a builder configuration function.
-// Configuration errors are accumulated and reported during Build().
+// Branch adds a Branch node configured by the given function.
+// Any configuration error is deferred until Build is called.
 //
 // Example:
 //
 //	flow.Branch(func(b *BranchBuilder[any, any]) {
-//		b.WithBranches(map[string]func(context.Context, any) (any, error){
-//			"path1": processor1,
-//			"path2": processor2,
-//		}).WithBranchResolver(func(ctx context.Context, input any) string {
-//			// return branch name based on input
-//		})
+//	    b.WithBranches(map[string]func(context.Context, any) (any, error){
+//	        "pathA": processorA,
+//	        "pathB": processorB,
+//	    }).WithBranchResolver(func(ctx context.Context, input any) string {
+//	        // return branch name
+//	    })
 //	})
-func (f *Flow) Branch(config func(*BranchBuilder[any, any])) *Flow {
+func (f *Flow) Branch(configure func(*BranchBuilder[any, any])) *Flow {
 	builder := NewBranchBuilder[any, any]()
-	config(builder)
+	configure(builder)
 
 	branch, err := builder.Build()
 	return f.append(branch, err)
 }
 
-// Iteration adds an iteration node to the flow using a builder configuration function.
-// The node expects input to be a slice ([]any) and returns a slice of processed results.
-// Configuration errors are accumulated and reported during Build().
+// Iteration adds an Iteration node configured by the given function.
+// The node expects its input to be a []any slice at runtime.
+// Any configuration error is deferred until Build is called.
 //
 // Example:
 //
 //	flow.Iteration(func(b *IterationBuilder[any, any]) {
-//		b.WithProcessor(func(ctx context.Context, idx int, item any) (any, error) {
-//			// process each item
-//		}).WithConcurrencyLimit(10)
+//	    b.WithProcessor(func(ctx context.Context, idx int, item any) (any, error) {
+//	        // process each element
+//	    }).WithConcurrencyLimit(10)
 //	})
-func (f *Flow) Iteration(config func(*IterationBuilder[any, any])) *Flow {
+func (f *Flow) Iteration(configure func(*IterationBuilder[any, any])) *Flow {
 	builder := NewIterationBuilder[any, any]()
-	config(builder)
+	configure(builder)
 
 	iteration, err := builder.Build()
 
@@ -306,21 +291,20 @@ func (f *Flow) Iteration(config func(*IterationBuilder[any, any])) *Flow {
 	return f.append(node, err)
 }
 
-// Parallel adds a parallel node to the flow using a builder configuration function.
-// The node executes multiple processors concurrently, each receiving the same input.
-// Configuration errors are accumulated and reported during Build().
+// Parallel adds a Parallel node configured by the given function.
+// Any configuration error is deferred until Build is called.
 //
 // Example:
 //
 //	flow.Parallel(func(b *ParallelBuilder[any, any]) {
-//		b.WithProcessors([]func(context.Context, any) (any, error){
-//			processor1,
-//			processor2,
-//		}).WithConcurrencyLimit(2)
+//	    b.WithProcessors([]func(context.Context, any) (any, error){
+//	        processorA,
+//	        processorB,
+//	    }).WithConcurrencyLimit(2)
 //	})
-func (f *Flow) Parallel(config func(*ParallelBuilder[any, any])) *Flow {
+func (f *Flow) Parallel(configure func(*ParallelBuilder[any, any])) *Flow {
 	builder := NewParallelBuilder[any, any]()
-	config(builder)
+	configure(builder)
 
 	parallel, err := builder.Build()
 
@@ -334,17 +318,12 @@ func (f *Flow) Parallel(config func(*ParallelBuilder[any, any])) *Flow {
 	return f.append(node, err)
 }
 
-// validate checks if the flow is valid and ready to be built.
-// It verifies that:
-//   - No configuration errors occurred during node creation
-//   - At least one node exists in the flow
+// validate ensures the flow is ready to be built.
 func (f *Flow) validate() error {
-	// Check for accumulated configuration errors
 	if len(f.errors) > 0 {
 		return fmt.Errorf("flow configuration failed: %w", errors.Join(f.errors...))
 	}
 
-	// Ensure flow contains at least one node
 	if len(f.nodes) == 0 {
 		return errors.New("flow must contain at least one node")
 	}
@@ -352,13 +331,8 @@ func (f *Flow) validate() error {
 	return nil
 }
 
-// Build validates the flow and constructs the final pipeline node.
-// Returns an error if:
-//   - Any node configuration failed during the build process
-//   - The flow contains no nodes
-//   - The pipeline construction fails
-//
-// The resulting node can be executed with Run(ctx, input).
+// Build validates the accumulated configuration and assembles the final pipeline.
+// Returns an error if any node configuration failed, or if no nodes were added.
 func (f *Flow) Build() (Node[any, any], error) {
 	if err := f.validate(); err != nil {
 		return nil, err

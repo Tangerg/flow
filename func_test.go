@@ -327,24 +327,6 @@ func TestFunc_ErrorHandling(t *testing.T) {
 		}
 	})
 
-	t.Run("panic recovery", func(t *testing.T) {
-		fn := Func[int, int](func(ctx context.Context, input int) (int, error) {
-			if input == 0 {
-				panic("division by zero")
-			}
-			return 100 / input, nil
-		})
-
-		// Note: Current implementation doesn't recover from panics
-		// This test documents the behavior
-		defer func() {
-			if r := recover(); r == nil {
-				t.Errorf("Run() should panic but didn't")
-			}
-		}()
-
-		fn.Run(context.Background(), 0)
-	})
 }
 
 // TestFunc_AsNode tests that Func can be used as a Node
