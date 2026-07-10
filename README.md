@@ -8,6 +8,7 @@ optional dynamic layer for building workflows from config or a visual editor.
 | Package | What it is | Types |
 | --- | --- | --- |
 | [`core`](./core) | The minimal, atomic composition primitives. Compile-time typed, zero third-party dependencies. | `Node[I, O]` |
+| [`flowx`](./flowx) | Derived combinators (`FanOut`, `Race`, …) and decorators (`Retry`, `Timeout`, `Trace`, …) built on `core`. | `Node[I, O]` |
 | [`workflow`](./workflow) | The dynamic layer: a variable pool (`Store`) threaded through nodes addressed by ID, plus config-driven construction. | `Node[Store, Store]` |
 
 ## Install
@@ -46,7 +47,24 @@ out, _ := pipe.Run(ctx, 10) // 21
 These form a category: `Then` is associative and closed over `Node`, so any
 composition is itself a `Node` you can `Run`. Convenience shapes (fan-out,
 collect-all, heterogeneous fan-in, race, retry, timeout) are derivable from these
-and are intentionally kept out of the core.
+and live in `flowx`, not the core.
+
+## flowx — derived combinators and decorators
+
+Everything deliberately kept out of `core` lives here, built on top of it:
+`FanOut`, `FanOutAll`, `MapAll`, `Combine2` (heterogeneous fan-in), `Race` (first
+success wins), `Identity`, and `Chain`.
+
+Decorators are type-preserving and compose fluently — the last applied is the
+outermost at run time:
+
+```go
+node := flowx.Wrap(callAPI).
+    Retry(flowx.WithAttempts(3), flowx.WithBackoff(flowx.ExponentialBackoff(50*time.Millisecond))).
+    Timeout(2 * time.Second).
+    Fallback(serveFromCache).
+    Node()
+```
 
 ## workflow — the dynamic layer
 
@@ -76,6 +94,9 @@ Highlights:
   scopes each element.
 - **Config-driven.** A nested `Spec` or a flat, arbitrarily wired `Graph`
   (topologically layered, cycle-checked) compiles to a runnable `Step`.
+- **Validation.** `Registry.Validate` checks a `Graph` — unique IDs, known types,
+  no cycles, and type-compatible edges via registered `Schema`s — without running
+  it, for a visual editor's live feedback.
 - **Observability.** Attach a `Sink` with `WithSink` to receive per-node
   start/complete/fail events.
 

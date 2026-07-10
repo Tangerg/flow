@@ -1,0 +1,192 @@
+package flowx
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/Tangerg/flow/core"
+)
+
+// --- Retry ---
+
+type retryConfig struct {
+	attempts  int
+	backoff   func(attempt int) time.Duration
+	retryable func(error) bool
+}
+
+// RetryOption configures [Retry].
+type RetryOption func(*retryConfig)
+
+// WithAttempts sets the maximum number of attempts (must be > 0).
+func WithAttempts(n int) RetryOption {
+	return func(c *retryConfig) {
+		if n > 0 {
+			c.attempts = n
+		}
+	}
+}
+
+// WithBackoff sets the delay before attempt N+1 (attempt is 1-based). Use
+// [ConstantBackoff] or [ExponentialBackoff] for the common cases.
+func WithBackoff(fn func(attempt int) time.Duration) RetryOption {
+	return func(c *retryConfig) { c.backoff = fn }
+}
+
+// WithRetryable sets the predicate deciding whether an error should be retried.
+// The default retries any error that is not a context cancellation/deadline.
+func WithRetryable(fn func(error) bool) RetryOption {
+	return func(c *retryConfig) { c.retryable = fn }
+}
+
+// ConstantBackoff waits a fixed duration between attempts.
+func ConstantBackoff(d time.Duration) func(int) time.Duration {
+	return func(int) time.Duration { return d }
+}
+
+// ExponentialBackoff waits base, 2*base, 4*base, ... between attempts.
+func ExponentialBackoff(base time.Duration) func(int) time.Duration {
+	return func(attempt int) time.Duration { return base << (attempt - 1) }
+}
+
+func defaultRetryable(err error) bool {
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
+// Retry runs node up to a number of attempts (default 3), retrying while the
+// error is retryable (default: any non-context error) and ctx is live. It
+// re-runs with the same input, so node should be idempotent. Backoff, if set,
+// waits between attempts and respects ctx.
+func Retry[I, O any](node core.Node[I, O], opts ...RetryOption) core.Node[I, O] {
+	cfg := retryConfig{attempts: 3, retryable: defaultRetryable}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return core.Func[I, O](func(ctx context.Context, in I) (O, error) {
+		var out O
+		if node == nil {
+			return out, core.ErrNilNode
+		}
+		var err error
+		for attempt := 1; attempt <= cfg.attempts; attempt++ {
+			if attempt > 1 && cfg.backoff != nil {
+				if d := cfg.backoff(attempt - 1); d > 0 {
+					timer := time.NewTimer(d)
+					select {
+					case <-ctx.Done():
+						timer.Stop()
+						return out, ctx.Err()
+					case <-timer.C:
+					}
+				}
+			}
+			out, err = node.Run(ctx, in)
+			if err == nil {
+				return out, nil
+			}
+			if ctx.Err() != nil || !cfg.retryable(err) {
+				return out, err
+			}
+		}
+		return out, err
+	})
+}
+
+// --- Timeout ---
+
+// Timeout runs node with a context cancelled after d. It is cooperative: node
+// must honor ctx for the timeout to take effect promptly.
+func Timeout[I, O any](node core.Node[I, O], d time.Duration) core.Node[I, O] {
+	return core.Func[I, O](func(ctx context.Context, in I) (O, error) {
+		var out O
+		if node == nil {
+			return out, core.ErrNilNode
+		}
+		ctx, cancel := context.WithTimeout(ctx, d)
+		defer cancel()
+		return node.Run(ctx, in)
+	})
+}
+
+// --- Trace ---
+
+// TraceHooks observe a node's execution. Either hook may be nil.
+type TraceHooks struct {
+	Before func(ctx context.Context, name string)
+	After  func(ctx context.Context, name string, elapsed time.Duration, err error)
+}
+
+// Trace instruments node, invoking hooks around each run with the elapsed time.
+func Trace[I, O any](node core.Node[I, O], name string, hooks TraceHooks) core.Node[I, O] {
+	return core.Func[I, O](func(ctx context.Context, in I) (O, error) {
+		var out O
+		if node == nil {
+			return out, core.ErrNilNode
+		}
+		if hooks.Before != nil {
+			hooks.Before(ctx, name)
+		}
+		start := time.Now()
+		out, err := node.Run(ctx, in)
+		if hooks.After != nil {
+			hooks.After(ctx, name, time.Since(start), err)
+		}
+		return out, err
+	})
+}
+
+// --- Fallback ---
+
+// Fallback runs primary; if it fails for any reason other than context
+// cancellation, it runs alternate with the same input.
+func Fallback[I, O any](primary, alternate core.Node[I, O]) core.Node[I, O] {
+	return core.Func[I, O](func(ctx context.Context, in I) (O, error) {
+		var out O
+		if primary == nil {
+			return out, core.ErrNilNode
+		}
+		out, err := primary.Run(ctx, in)
+		if err == nil || ctx.Err() != nil {
+			return out, err
+		}
+		if alternate == nil {
+			return out, err
+		}
+		return alternate.Run(ctx, in)
+	})
+}
+
+// --- Wrap (fluent, type-preserving) ---
+
+// Builder applies type-preserving decorators to a node in a readable, top-down
+// order. The last decorator applied is the outermost at run time.
+//
+//	node := flowx.Wrap(base).Retry(flowx.WithAttempts(3)).Timeout(2 * time.Second).Node()
+type Builder[I, O any] struct{ node core.Node[I, O] }
+
+// Wrap starts a decorator chain around node.
+func Wrap[I, O any](node core.Node[I, O]) Builder[I, O] { return Builder[I, O]{node} }
+
+// Retry wraps the current node with [Retry].
+func (b Builder[I, O]) Retry(opts ...RetryOption) Builder[I, O] {
+	return Builder[I, O]{Retry(b.node, opts...)}
+}
+
+// Timeout wraps the current node with [Timeout].
+func (b Builder[I, O]) Timeout(d time.Duration) Builder[I, O] {
+	return Builder[I, O]{Timeout(b.node, d)}
+}
+
+// Trace wraps the current node with [Trace].
+func (b Builder[I, O]) Trace(name string, hooks TraceHooks) Builder[I, O] {
+	return Builder[I, O]{Trace(b.node, name, hooks)}
+}
+
+// Fallback wraps the current node with [Fallback].
+func (b Builder[I, O]) Fallback(alt core.Node[I, O]) Builder[I, O] {
+	return Builder[I, O]{Fallback(b.node, alt)}
+}
+
+// Node returns the decorated node.
+func (b Builder[I, O]) Node() core.Node[I, O] { return b.node }
