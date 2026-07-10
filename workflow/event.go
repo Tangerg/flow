@@ -26,9 +26,10 @@ func (NodeStarted) isEvent()   {}
 func (NodeCompleted) isEvent() {}
 func (NodeFailed) isEvent()    {}
 
-// Sink receives events. It may be called from several goroutines at once, since
-// steps run concurrently in [Parallel] and [Iteration], so it must be safe for
-// concurrent use.
+// Sink receives events synchronously. It may be called from several goroutines
+// at once, since steps run concurrently in [Parallel] and [Iteration], so it
+// must be concurrency-safe, return promptly, and not panic. A slow Sink delays
+// the node emitting the event.
 type Sink func(Event)
 
 type sinkKey struct{}

@@ -19,7 +19,8 @@ type retryConfig struct {
 // RetryOption configures [Retry].
 type RetryOption func(*retryConfig)
 
-// WithAttempts sets the maximum number of attempts (must be > 0).
+// WithAttempts sets the maximum number of attempts. Non-positive values leave
+// the default unchanged.
 func WithAttempts(n int) RetryOption {
 	return func(c *retryConfig) {
 		if n > 0 {
@@ -37,7 +38,11 @@ func WithBackoff(fn func(attempt int) time.Duration) RetryOption {
 // WithRetryable sets the predicate deciding whether an error should be retried.
 // The default retries any error that is not a context cancellation/deadline.
 func WithRetryable(fn func(error) bool) RetryOption {
-	return func(c *retryConfig) { c.retryable = fn }
+	return func(c *retryConfig) {
+		if fn != nil {
+			c.retryable = fn
+		}
+	}
 }
 
 // ConstantBackoff waits a fixed duration between attempts.
@@ -47,7 +52,20 @@ func ConstantBackoff(d time.Duration) func(int) time.Duration {
 
 // ExponentialBackoff waits base, 2*base, 4*base, ... between attempts.
 func ExponentialBackoff(base time.Duration) func(int) time.Duration {
-	return func(attempt int) time.Duration { return base << (attempt - 1) }
+	return func(attempt int) time.Duration {
+		if base <= 0 || attempt <= 0 {
+			return 0
+		}
+		const maxDuration = time.Duration(1<<63 - 1)
+		d := base
+		for range attempt - 1 {
+			if d > maxDuration/2 {
+				return maxDuration
+			}
+			d *= 2
+		}
+		return d
+	}
 }
 
 func defaultRetryable(err error) bool {
@@ -61,7 +79,9 @@ func defaultRetryable(err error) bool {
 func Retry[I, O any](node core.Node[I, O], opts ...RetryOption) core.Node[I, O] {
 	cfg := retryConfig{attempts: 3, retryable: defaultRetryable}
 	for _, o := range opts {
-		o(&cfg)
+		if o != nil {
+			o(&cfg)
+		}
 	}
 	return core.Func[I, O](func(ctx context.Context, in I) (O, error) {
 		var out O
@@ -70,6 +90,9 @@ func Retry[I, O any](node core.Node[I, O], opts ...RetryOption) core.Node[I, O] 
 		}
 		var err error
 		for attempt := 1; attempt <= cfg.attempts; attempt++ {
+			if err := ctx.Err(); err != nil {
+				return out, err
+			}
 			if attempt > 1 && cfg.backoff != nil {
 				if d := cfg.backoff(attempt - 1); d > 0 {
 					timer := time.NewTimer(d)
@@ -85,7 +108,10 @@ func Retry[I, O any](node core.Node[I, O], opts ...RetryOption) core.Node[I, O] 
 			if err == nil {
 				return out, nil
 			}
-			if ctx.Err() != nil || !cfg.retryable(err) {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return out, ctxErr
+			}
+			if !cfg.retryable(err) {
 				return out, err
 			}
 		}
@@ -111,7 +137,8 @@ func Timeout[I, O any](node core.Node[I, O], d time.Duration) core.Node[I, O] {
 
 // --- Trace ---
 
-// TraceHooks observe a node's execution. Either hook may be nil.
+// TraceHooks observe a node's execution. Either hook may be nil. When the
+// decorated node is run concurrently, hooks may also be called concurrently.
 type TraceHooks struct {
 	Before func(ctx context.Context, name string)
 	After  func(ctx context.Context, name string, elapsed time.Duration, err error)
@@ -138,20 +165,22 @@ func Trace[I, O any](node core.Node[I, O], name string, hooks TraceHooks) core.N
 
 // --- Fallback ---
 
-// Fallback runs primary; if it fails for any reason other than context
-// cancellation, it runs alternate with the same input.
+// Fallback runs primary; if it fails while the parent context remains live, it
+// runs alternate with the same input. A timeout applied inside primary may
+// therefore trigger the fallback, while cancellation of the outer operation
+// does not.
 func Fallback[I, O any](primary, alternate core.Node[I, O]) core.Node[I, O] {
 	return core.Func[I, O](func(ctx context.Context, in I) (O, error) {
 		var out O
-		if primary == nil {
+		if primary == nil || alternate == nil {
 			return out, core.ErrNilNode
 		}
 		out, err := primary.Run(ctx, in)
-		if err == nil || ctx.Err() != nil {
+		if err == nil {
 			return out, err
 		}
-		if alternate == nil {
-			return out, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return out, ctxErr
 		}
 		return alternate.Run(ctx, in)
 	})
@@ -188,5 +217,11 @@ func (b Builder[I, O]) Fallback(alt core.Node[I, O]) Builder[I, O] {
 	return Builder[I, O]{Fallback(b.node, alt)}
 }
 
-// Node returns the decorated node.
-func (b Builder[I, O]) Node() core.Node[I, O] { return b.node }
+// Node returns the decorated node. The zero Builder and Wrap(nil) return a nil
+// Func that reports [core.ErrNilNode] when Run.
+func (b Builder[I, O]) Node() core.Node[I, O] {
+	if b.node == nil {
+		return core.Func[I, O](nil)
+	}
+	return b.node
+}

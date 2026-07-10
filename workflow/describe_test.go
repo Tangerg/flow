@@ -59,3 +59,29 @@ func TestMermaid(t *testing.T) {
 		t.Fatalf("mermaid output incomplete:\n%s", out)
 	}
 }
+
+func TestBranchDescriptionPreservesIDAndCaseLabel(t *testing.T) {
+	step := workflow.Branch(
+		func(context.Context, workflow.Store) (string, error) { return "yes", nil },
+		map[string]workflow.Step{"yes": leafStep("actual-id")},
+	)
+	d := workflow.Describe(step)
+	if len(d.Children) != 1 || d.Children[0].ID != "actual-id" || d.Children[0].Label != "yes" {
+		t.Fatalf("branch child = %+v", d.Children)
+	}
+}
+
+func TestMermaidGraphRendersDependencies(t *testing.T) {
+	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+		{ID: "a", Type: "source"},
+		{ID: "b", Type: "work", Input: &workflow.Ref{NodeID: "a", Path: workflow.OutputKey}},
+		{ID: "c", Type: "work", DependsOn: []string{"a"}},
+		{ID: "d", Type: "sink", DependsOn: []string{"b", "c"}},
+	}}
+	out := workflow.MermaidGraph(g)
+	for _, edge := range []string{"n1 --> n2", "n1 --> n3", "n2 --> n4", "n3 --> n4"} {
+		if !strings.Contains(out, edge) {
+			t.Fatalf("missing edge %q:\n%s", edge, out)
+		}
+	}
+}

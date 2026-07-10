@@ -2,6 +2,7 @@ package core_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/Tangerg/flow/core"
@@ -24,6 +25,21 @@ func ExampleMap() {
 	out, _ := core.Map(square).Run(context.Background(), []int{1, 2, 3, 4})
 	fmt.Println(out)
 	// Output: [1 4 9 16]
+}
+
+func ExampleIndexError() {
+	boom := errors.New("boom")
+	node := core.Func[int, int](func(_ context.Context, in int) (int, error) {
+		if in == 2 {
+			return 0, boom
+		}
+		return in, nil
+	})
+
+	_, err := core.Map(node, core.WithConcurrency(1)).Run(context.Background(), []int{1, 2, 3})
+	var indexed *core.IndexError
+	fmt.Println(errors.As(err, &indexed), indexed.Index, errors.Is(err, boom))
+	// Output: true 1 true
 }
 
 func ExampleLoop() {

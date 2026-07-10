@@ -102,3 +102,50 @@ func TestCompileJSON(t *testing.T) {
 		t.Fatalf("b = %v; want 5", v)
 	}
 }
+
+func TestCompileJSON_rejectsUnknownAndTrailingData(t *testing.T) {
+	reg := workflow.NewRegistry().RegisterLeaf("addN", addN())
+	for _, data := range []string{
+		`{"nodes":[],"unknown":true}`,
+		`{"nodes":[]} {"nodes":[]}`,
+	} {
+		if _, err := reg.CompileJSON([]byte(data)); err == nil {
+			t.Fatalf("CompileJSON(%q) unexpectedly succeeded", data)
+		}
+	}
+}
+
+func TestCompile_rejectsSelfDependency(t *testing.T) {
+	reg := workflow.NewRegistry().RegisterLeaf("addN", addN())
+	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+		{ID: "a", Type: "addN", DependsOn: []string{"a"}},
+	}}
+	if _, err := reg.Compile(g); err == nil {
+		t.Fatal("expected self-dependency error")
+	}
+}
+
+func TestCompile_rejectsUnknownExplicitDependency(t *testing.T) {
+	reg := workflow.NewRegistry().RegisterLeaf("addN", addN())
+	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+		{ID: "a", Type: "addN", DependsOn: []string{"typo"}},
+	}}
+	if _, err := reg.Compile(g); err == nil {
+		t.Fatal("expected unknown dependency error")
+	}
+}
+
+func TestCompile_runsSchemaValidation(t *testing.T) {
+	reg := workflow.NewRegistry().
+		RegisterLeaf("addN", addN()).
+		RegisterSchema("addN", workflow.Schema{Input: workflow.TypeNumber, Output: workflow.TypeNumber}).
+		RegisterLeaf("stringNode", addN()).
+		RegisterSchema("stringNode", workflow.Schema{Input: workflow.TypeString, Output: workflow.TypeString})
+	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+		{ID: "a", Type: "addN"},
+		{ID: "b", Type: "stringNode", Input: &workflow.Ref{NodeID: "a", Path: workflow.OutputKey}},
+	}}
+	if _, err := reg.Compile(g); err == nil {
+		t.Fatal("expected incompatible schema error")
+	}
+}

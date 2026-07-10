@@ -69,3 +69,10 @@ func TestValidate_unregisteredSchemaIsAny(t *testing.T) {
 		t.Fatalf("Validate with no schemas should pass: %v", err)
 	}
 }
+
+func TestRegisterSchema_rejectsInvalidType(t *testing.T) {
+	reg := workflow.NewRegistry().RegisterSchema("bad", workflow.Schema{Input: workflow.ValueType("wat")})
+	if reg.Err() == nil {
+		t.Fatal("expected invalid schema type error")
+	}
+}

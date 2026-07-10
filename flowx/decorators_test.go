@@ -118,3 +118,115 @@ func TestWrap_fluent(t *testing.T) {
 		t.Fatalf("got %d, want 42", got)
 	}
 }
+
+func TestRetry_nilOptionAndPredicateUseDefaults(t *testing.T) {
+	boom := errors.New("boom")
+	calls := 0
+	node := core.Func[int, int](func(_ context.Context, in int) (int, error) {
+		calls++
+		if calls == 1 {
+			return 0, boom
+		}
+		return in, nil
+	})
+
+	got, err := flowx.Retry(node, nil, flowx.WithRetryable(nil)).Run(context.Background(), 7)
+	if err != nil || got != 7 || calls != 2 {
+		t.Fatalf("Retry = %d, %v after %d calls", got, err, calls)
+	}
+}
+
+func TestExponentialBackoffSaturates(t *testing.T) {
+	backoff := flowx.ExponentialBackoff(time.Hour)
+	if got := backoff(1000); got <= 0 {
+		t.Fatalf("overflowed backoff = %v", got)
+	}
+}
+
+func TestRetry_backoffRespectsContext(t *testing.T) {
+	boom := errors.New("boom")
+	node := core.Func[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom })
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+
+	_, err := flowx.Retry(node,
+		flowx.WithAttempts(3),
+		flowx.WithBackoff(flowx.ConstantBackoff(time.Hour)),
+	).Run(ctx, 0)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v; want DeadlineExceeded", err)
+	}
+}
+
+func TestTraceAndFluentFallback(t *testing.T) {
+	boom := errors.New("boom")
+	primary := core.Func[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom })
+	alternate := core.Func[int, int](func(_ context.Context, in int) (int, error) { return in + 1, nil })
+	var before, after bool
+	node := flowx.Wrap(primary).
+		Trace("primary", flowx.TraceHooks{
+			Before: func(context.Context, string) { before = true },
+			After: func(_ context.Context, _ string, _ time.Duration, err error) {
+				after = errors.Is(err, boom)
+			},
+		}).
+		Fallback(alternate).
+		Node()
+
+	got, err := node.Run(context.Background(), 4)
+	if err != nil || got != 5 || !before || !after {
+		t.Fatalf("Trace/Fallback = %d, %v, before=%v after=%v", got, err, before, after)
+	}
+}
+
+func TestTimeout_nilNode(t *testing.T) {
+	_, err := flowx.Timeout[int, int](nil, time.Second).Run(context.Background(), 0)
+	if !errors.Is(err, core.ErrNilNode) {
+		t.Fatalf("err = %v; want ErrNilNode", err)
+	}
+}
+
+func TestFallback_rejectsNilAlternate(t *testing.T) {
+	primary := core.Func[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
+	_, err := flowx.Fallback[int, int](primary, nil).Run(context.Background(), 1)
+	if !errors.Is(err, core.ErrNilNode) {
+		t.Fatalf("err = %v; want ErrNilNode", err)
+	}
+}
+
+func TestBuilder_zeroValueIsUsable(t *testing.T) {
+	var builder flowx.Builder[int, int]
+	_, err := builder.Node().Run(context.Background(), 1)
+	if !errors.Is(err, core.ErrNilNode) {
+		t.Fatalf("err = %v; want ErrNilNode", err)
+	}
+}
+
+func TestRetryAndFallbackPreferParentCancellation(t *testing.T) {
+	boom := errors.New("boom")
+	alternate := core.Func[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
+
+	t.Run("retry", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		node := core.Func[int, int](func(_ context.Context, _ int) (int, error) {
+			cancel()
+			return 0, boom
+		})
+		if _, err := flowx.Retry(node).Run(ctx, 0); !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v; want context.Canceled", err)
+		}
+	})
+
+	t.Run("fallback", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		node := core.Func[int, int](func(_ context.Context, _ int) (int, error) {
+			cancel()
+			return 0, boom
+		})
+		if _, err := flowx.Fallback(node, alternate).Run(ctx, 0); !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v; want context.Canceled", err)
+		}
+	})
+}

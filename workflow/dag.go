@@ -7,9 +7,8 @@ import (
 
 // NodeSpec describes one node in a flat [Graph]: a leaf built by the registry
 // plus the edges into it. Dependencies are inferred from Input (when it points
-// at another graph node) and from DependsOn; a reference to a node not in the
-// graph is treated as an external input (for example the seed Store) and is not
-// an edge.
+// at another graph node) and from DependsOn. Input may reference an external
+// seed Store value; every explicit DependsOn entry must name a graph node.
 type NodeSpec struct {
 	ID        string          `json:"id"`
 	Type      string          `json:"type"`
@@ -26,9 +25,14 @@ type Graph struct {
 	Nodes []NodeSpec `json:"nodes"`
 }
 
-// Compile turns a flat Graph into a Step. It detects duplicate IDs and cycles,
-// then runs each topological layer's nodes concurrently.
+// Compile validates a flat Graph, builds its leaves, and returns a Step. It
+// rejects invalid registrations, duplicate IDs, missing dependencies, cycles,
+// unknown node types, and incompatible registered schemas, then runs each
+// topological layer's nodes concurrently.
 func (r *Registry) Compile(g Graph) (Step, error) {
+	if err := r.Validate(g); err != nil {
+		return nil, err
+	}
 	layers, byID, err := r.plan(g)
 	if err != nil {
 		return nil, err
@@ -56,7 +60,7 @@ func (r *Registry) Compile(g Graph) (Step, error) {
 // CompileJSON unmarshals data into a [Graph] and compiles it.
 func (r *Registry) CompileJSON(data []byte) (Step, error) {
 	var g Graph
-	if err := json.Unmarshal(data, &g); err != nil {
+	if err := decodeStrict(data, &g); err != nil {
 		return nil, fmt.Errorf("workflow: invalid graph: %w", err)
 	}
 	return r.Compile(g)
@@ -74,6 +78,11 @@ func (r *Registry) plan(g Graph) (layers [][]string, byID map[string]NodeSpec, e
 		if _, dup := byID[n.ID]; dup {
 			return nil, nil, fmt.Errorf("workflow: duplicate node ID %q", n.ID)
 		}
+		if n.Input != nil {
+			if err := validateRef(*n.Input, fmt.Sprintf("node %q input", n.ID)); err != nil {
+				return nil, nil, err
+			}
+		}
 		byID[n.ID] = n
 	}
 
@@ -81,22 +90,33 @@ func (r *Registry) plan(g Graph) (layers [][]string, byID map[string]NodeSpec, e
 	dependents := make(map[string][]string, len(g.Nodes))
 	for _, n := range g.Nodes {
 		seen := map[string]bool{}
-		addDep := func(dep string) {
-			if dep == "" || dep == n.ID || seen[dep] {
-				return
+		addDep := func(dep string, allowExternal bool) error {
+			if dep == "" || seen[dep] {
+				return nil
+			}
+			if dep == n.ID {
+				return fmt.Errorf("workflow: node %q depends on itself", n.ID)
 			}
 			if _, ok := byID[dep]; !ok {
-				return // external input (e.g. the seed Store), not an in-graph edge
+				if allowExternal {
+					return nil
+				}
+				return fmt.Errorf("workflow: node %q depends on unknown node %q", n.ID, dep)
 			}
 			seen[dep] = true
 			indegree[n.ID]++
 			dependents[dep] = append(dependents[dep], n.ID)
+			return nil
 		}
 		if n.Input != nil {
-			addDep(n.Input.NodeID)
+			if err := addDep(n.Input.NodeID, true); err != nil {
+				return nil, nil, err
+			}
 		}
 		for _, d := range n.DependsOn {
-			addDep(d)
+			if err := addDep(d, false); err != nil {
+				return nil, nil, err
+			}
 		}
 	}
 

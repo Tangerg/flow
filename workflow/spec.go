@@ -3,6 +3,8 @@ package workflow
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/Tangerg/flow/core"
 )
@@ -56,6 +58,16 @@ type Spec struct {
 
 // Build compiles a Spec into a Step using the registered building blocks.
 func (r *Registry) Build(spec Spec) (Step, error) {
+	if err := r.Err(); err != nil {
+		return nil, err
+	}
+	if err := r.validateSpec(spec); err != nil {
+		return nil, err
+	}
+	return r.build(spec)
+}
+
+func (r *Registry) build(spec Spec) (Step, error) {
 	switch spec.Kind {
 	case KindLeaf:
 		return r.buildLeaf(spec)
@@ -85,7 +97,7 @@ func (r *Registry) Build(spec Spec) (Step, error) {
 // BuildJSON unmarshals data into a Spec and compiles it.
 func (r *Registry) BuildJSON(data []byte) (Step, error) {
 	var spec Spec
-	if err := json.Unmarshal(data, &spec); err != nil {
+	if err := decodeStrict(data, &spec); err != nil {
 		return nil, fmt.Errorf("workflow: invalid spec: %w", err)
 	}
 	return r.Build(spec)
@@ -94,7 +106,7 @@ func (r *Registry) BuildJSON(data []byte) (Step, error) {
 func (r *Registry) buildAll(specs []Spec) ([]Step, error) {
 	steps := make([]Step, len(specs))
 	for i, sp := range specs {
-		step, err := r.Build(sp)
+		step, err := r.build(sp)
 		if err != nil {
 			return nil, err
 		}
@@ -104,7 +116,7 @@ func (r *Registry) buildAll(specs []Spec) ([]Step, error) {
 }
 
 func (r *Registry) buildLeaf(spec Spec) (Step, error) {
-	f, ok := r.leaves[spec.Type]
+	f, ok := r.leafFactory(spec.Type)
 	if !ok {
 		return nil, fmt.Errorf("workflow: unknown leaf type %q", spec.Type)
 	}
@@ -120,13 +132,13 @@ func (r *Registry) buildLeaf(spec Spec) (Step, error) {
 }
 
 func (r *Registry) buildBranch(spec Spec) (Step, error) {
-	resolve, ok := r.resolvers[spec.Resolver]
+	resolve, ok := r.resolver(spec.Resolver)
 	if !ok {
 		return nil, fmt.Errorf("workflow: unknown resolver %q", spec.Resolver)
 	}
 	cases := make(map[string]Step, len(spec.Cases))
-	for name, sp := range spec.Cases {
-		step, err := r.Build(sp)
+	for _, name := range slices.Sorted(maps.Keys(spec.Cases)) {
+		step, err := r.build(spec.Cases[name])
 		if err != nil {
 			return nil, err
 		}
@@ -139,11 +151,11 @@ func (r *Registry) buildLoop(spec Spec) (Step, error) {
 	if spec.Body == nil {
 		return nil, fmt.Errorf("workflow: loop requires a body")
 	}
-	cond, ok := r.conditions[spec.Condition]
+	cond, ok := r.condition(spec.Condition)
 	if !ok {
 		return nil, fmt.Errorf("workflow: unknown condition %q", spec.Condition)
 	}
-	body, err := r.Build(*spec.Body)
+	body, err := r.build(*spec.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +173,7 @@ func (r *Registry) buildIteration(spec Spec) (Step, error) {
 	if spec.Input == nil || spec.BodyOutput == nil {
 		return nil, fmt.Errorf("workflow: iteration requires input and bodyOutput")
 	}
-	body, err := r.Build(*spec.Body)
+	body, err := r.build(*spec.Body)
 	if err != nil {
 		return nil, err
 	}

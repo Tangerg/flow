@@ -3,6 +3,8 @@ package workflow
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"slices"
 
 	"github.com/Tangerg/flow/core"
 )
@@ -35,9 +37,18 @@ func FromRef[I any](ref Ref) func(Store) (I, error) {
 		if !ok {
 			return zero, fmt.Errorf("input %s.%s not found", ref.NodeID, ref.Path)
 		}
+		if raw == nil {
+			target := reflect.TypeFor[I]()
+			switch target.Kind() {
+			case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+				return zero, nil
+			default:
+				return zero, fmt.Errorf("input %s.%s: type mismatch: got <nil>, want %s", ref.NodeID, ref.Path, target)
+			}
+		}
 		v, ok := raw.(I)
 		if !ok {
-			return zero, fmt.Errorf("input %s.%s: type mismatch: got %T, want %T", ref.NodeID, ref.Path, raw, zero)
+			return zero, fmt.Errorf("input %s.%s: type mismatch: got %T, want %s", ref.NodeID, ref.Path, raw, reflect.TypeFor[I]())
 		}
 		return v, nil
 	}
@@ -64,22 +75,28 @@ type leaf[I, O any] struct {
 
 func (l leaf[I, O]) Run(ctx context.Context, s Store) (Store, error) {
 	emit(ctx, NodeStarted{ID: l.id})
-	fail := func(err error) (Store, error) {
-		err = fmt.Errorf("workflow: step %q: %w", l.id, err)
+	fail := func(op string, err error) (Store, error) {
+		err = &StepError{ID: l.id, Op: op, Err: err}
 		emit(ctx, NodeFailed{ID: l.id, Err: err})
 		return s, err
 	}
 
+	if l.id == "" {
+		return fail("validate", ErrInvalidStepID)
+	}
+	if l.bind == nil {
+		return fail("bind", core.ErrNilFunc)
+	}
 	in, err := l.bind(s)
 	if err != nil {
-		return fail(err)
+		return fail("bind", err)
 	}
 	if l.node == nil {
-		return fail(core.ErrNilNode)
+		return fail("run", core.ErrNilNode)
 	}
 	out, err := l.node.Run(ctx, in)
 	if err != nil {
-		return fail(err)
+		return fail("run", err)
 	}
 
 	emit(ctx, NodeCompleted{ID: l.id})
@@ -93,6 +110,7 @@ func (l leaf[I, O]) Describe() Description {
 // Sequence runs steps in order, threading the Store through each. It composes
 // them with core.Then.
 func Sequence(steps ...Step) Step {
+	steps = slices.Clone(steps)
 	s := sequence{steps: steps}
 	switch len(steps) {
 	case 0:
@@ -117,7 +135,7 @@ type sequence struct {
 }
 
 func (s sequence) Run(ctx context.Context, st Store) (Store, error) {
-	return s.composed.Run(ctx, st)
+	return runStep(ctx, s.composed, st)
 }
 
 func (s sequence) Describe() Description {

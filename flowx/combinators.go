@@ -3,6 +3,7 @@ package flowx
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"github.com/Tangerg/flow/core"
 )
@@ -11,6 +12,7 @@ import (
 // outputs in node order. The first failure cancels the rest. It is core.Map
 // applied to the nodes as data.
 func FanOut[I, O any](nodes []core.Node[I, O], opts ...core.MapOption) core.Node[I, []O] {
+	nodes = slices.Clone(nodes)
 	return core.Func[I, []O](func(ctx context.Context, in I) ([]O, error) {
 		apply := core.Func[core.Node[I, O], O](func(ctx context.Context, n core.Node[I, O]) (O, error) {
 			var zero O
@@ -26,6 +28,7 @@ func FanOut[I, O any](nodes []core.Node[I, O], opts ...core.MapOption) core.Node
 // FanOutAll runs every node on the same input concurrently and collects a
 // [Result] per node. The returned error is non-nil only on context cancellation.
 func FanOutAll[I, O any](nodes []core.Node[I, O], opts ...core.MapOption) core.Node[I, []Result[O]] {
+	nodes = slices.Clone(nodes)
 	return core.Func[I, []Result[O]](func(ctx context.Context, in I) ([]Result[O], error) {
 		apply := core.Func[core.Node[I, O], Result[O]](func(ctx context.Context, n core.Node[I, O]) (Result[O], error) {
 			var out O
@@ -35,7 +38,7 @@ func FanOutAll[I, O any](nodes []core.Node[I, O], opts ...core.MapOption) core.N
 			} else {
 				out, err = n.Run(ctx, in)
 			}
-			return Result[O]{Value: out, Error: err}, nil
+			return Result[O]{Value: out, Err: err}, nil
 		})
 		return core.Map(apply, opts...).Run(ctx, nodes)
 	})
@@ -53,40 +56,41 @@ func MapAll[I, O any](node core.Node[I, O], opts ...core.MapOption) core.Node[[]
 		} else {
 			out, err = node.Run(ctx, in)
 		}
-		return Result[O]{Value: out, Error: err}, nil
+		return Result[O]{Value: out, Err: err}, nil
 	})
 	return core.Map(wrapped, opts...)
 }
 
 // Combine2 runs two differently typed nodes concurrently on the same input and
-// merges their outputs. This is the heterogeneous fan-in that core.Map cannot
-// express; it boxes internally but keeps a fully typed signature.
+// merges their outputs. The implementation uses core.Map as the concurrency
+// primitive while keeping both intermediate values statically typed.
 func Combine2[I, A, B, O any](a core.Node[I, A], b core.Node[I, B], merge func(ctx context.Context, a A, b B) (O, error)) core.Node[I, O] {
 	return core.Func[I, O](func(ctx context.Context, in I) (O, error) {
 		var zero O
 		if merge == nil {
 			return zero, core.ErrNilFunc
 		}
-		boxed := []core.Node[I, any]{
-			core.Func[I, any](func(ctx context.Context, in I) (any, error) {
+		var av A
+		var bv B
+		tasks := core.Func[int, struct{}](func(ctx context.Context, task int) (struct{}, error) {
+			var err error
+			switch task {
+			case 0:
 				if a == nil {
-					return nil, core.ErrNilNode
+					return struct{}{}, core.ErrNilNode
 				}
-				return a.Run(ctx, in)
-			}),
-			core.Func[I, any](func(ctx context.Context, in I) (any, error) {
+				av, err = a.Run(ctx, in)
+			case 1:
 				if b == nil {
-					return nil, core.ErrNilNode
+					return struct{}{}, core.ErrNilNode
 				}
-				return b.Run(ctx, in)
-			}),
-		}
-		outs, err := FanOut(boxed).Run(ctx, in)
-		if err != nil {
+				bv, err = b.Run(ctx, in)
+			}
+			return struct{}{}, err
+		})
+		if _, err := core.Map(tasks).Run(ctx, []int{0, 1}); err != nil {
 			return zero, err
 		}
-		av, _ := outs[0].(A)
-		bv, _ := outs[1].(B)
 		return merge(ctx, av, bv)
 	})
 }
@@ -96,25 +100,32 @@ var ErrNoNodes = errors.New("flowx: no nodes")
 
 // Race runs all nodes concurrently on the same input and returns the first
 // successful result, cancelling the rest. If every node fails, it returns their
-// joined errors. Race cannot be derived from core.Map (which waits for all), so
-// it uses its own goroutines.
+// joined errors in input order. Cancellation is cooperative; losing nodes must
+// honor their context. Race cannot be derived from core.Map (which waits for
+// all), so it uses its own goroutines.
 func Race[I, O any](nodes []core.Node[I, O]) core.Node[I, O] {
+	nodes = slices.Clone(nodes)
 	return core.Func[I, O](func(ctx context.Context, in I) (O, error) {
 		var zero O
 		if len(nodes) == 0 {
 			return zero, ErrNoNodes
 		}
-		ctx, cancel := context.WithCancel(ctx)
+		if err := ctx.Err(); err != nil {
+			return zero, err
+		}
+		parent := ctx
+		ctx, cancel := context.WithCancel(parent)
 		defer cancel()
 
 		type result struct {
-			val O
-			err error
+			index int
+			val   O
+			err   error
 		}
 		ch := make(chan result, len(nodes))
-		for _, n := range nodes {
+		for i, n := range nodes {
 			go func() {
-				var r result
+				r := result{index: i}
 				if n == nil {
 					r.err = core.ErrNilNode
 				} else {
@@ -124,13 +135,21 @@ func Race[I, O any](nodes []core.Node[I, O]) core.Node[I, O] {
 			}()
 		}
 
-		var errs []error
+		errs := make([]error, len(nodes))
 		for range nodes {
-			r := <-ch
+			var r result
+			select {
+			case <-parent.Done():
+				return zero, parent.Err()
+			case r = <-ch:
+			}
+			if err := parent.Err(); err != nil {
+				return zero, err
+			}
 			if r.err == nil {
 				return r.val, nil // cancel() (deferred) stops the losers
 			}
-			errs = append(errs, r.err)
+			errs[r.index] = &core.IndexError{Index: r.index, Err: r.err}
 		}
 		return zero, errors.Join(errs...)
 	})
@@ -149,6 +168,9 @@ func Chain[T any](nodes ...core.Node[T, T]) core.Node[T, T] {
 	case 0:
 		return Identity[T]()
 	case 1:
+		if nodes[0] == nil {
+			return core.Func[T, T](nil)
+		}
 		return nodes[0]
 	}
 	n := nodes[0]

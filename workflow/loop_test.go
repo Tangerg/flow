@@ -2,6 +2,7 @@ package workflow_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/Tangerg/flow/core"
@@ -19,9 +20,9 @@ func TestLoop_untilDone(t *testing.T) {
 	}
 	body := workflow.Adapt("step", bind, core.Func[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil }))
 
-	done := func(_ context.Context, _ int, s workflow.Store) bool {
+	done := func(_ context.Context, _ int, s workflow.Store) (bool, error) {
 		v, _ := s.Get("step", workflow.OutputKey)
-		return v.(int) >= 3
+		return v.(int) >= 3, nil
 	}
 
 	loop := workflow.Loop(body, done, core.WithMaxIterations(10))
@@ -42,8 +43,8 @@ func TestLoop_nilCondition(t *testing.T) {
 	)
 
 	_, err := workflow.Loop(body, nil).Run(context.Background(), workflow.NewStore().With("start", "output", 1))
-	if err == nil {
-		t.Fatal("expected error for nil loop condition")
+	if !errors.Is(err, core.ErrNilFunc) {
+		t.Fatalf("err = %v; want ErrNilFunc", err)
 	}
 }
 
@@ -52,10 +53,24 @@ func TestLoop_maxIterations(t *testing.T) {
 		func(workflow.Store) (int, error) { return 0, nil },
 		core.Func[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
-	done := func(context.Context, int, workflow.Store) bool { return false } // never done
+	done := func(context.Context, int, workflow.Store) (bool, error) { return false, nil } // never done
 
 	_, err := workflow.Loop(body, done, core.WithMaxIterations(3)).Run(context.Background(), workflow.NewStore())
-	if err == nil {
-		t.Fatal("expected ErrMaxIterations")
+	if !errors.Is(err, core.ErrMaxIterations) {
+		t.Fatalf("err = %v; want ErrMaxIterations", err)
+	}
+}
+
+func TestLoop_conditionError(t *testing.T) {
+	boom := errors.New("condition failed")
+	body := workflow.Adapt("x",
+		func(workflow.Store) (int, error) { return 0, nil },
+		core.Func[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
+	)
+	done := func(context.Context, int, workflow.Store) (bool, error) { return false, boom }
+
+	_, err := workflow.Loop(body, done).Run(context.Background(), workflow.NewStore())
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v; want condition error", err)
 	}
 }

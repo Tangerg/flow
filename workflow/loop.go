@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"context"
-	"errors"
 
 	"github.com/Tangerg/flow/core"
 )
@@ -12,11 +11,11 @@ import (
 // cap is reached (see core.WithMaxIterations, core.ErrMaxIterations). done
 // receives the zero-based iteration index and the Store produced by that
 // iteration. It composes with core.Loop.
-func Loop(body Step, done func(ctx context.Context, iter int, s Store) bool, opts ...core.LoopOption) Step {
+func Loop(body Step, done func(ctx context.Context, iter int, s Store) (bool, error), opts ...core.LoopOption) Step {
 	l := loop{body: body}
 	if done == nil {
 		l.node = core.Func[Store, Store](func(_ context.Context, s Store) (Store, error) {
-			return s, errors.New("workflow: nil loop condition")
+			return s, core.ErrNilFunc
 		})
 		return l
 	}
@@ -25,7 +24,8 @@ func Loop(body Step, done func(ctx context.Context, iter int, s Store) bool, opt
 		if err != nil {
 			return s, false, err
 		}
-		return next, done(ctx, iter, next), nil
+		stop, err := done(ctx, iter, next)
+		return next, stop, err
 	}, opts...)
 	return l
 }

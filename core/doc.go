@@ -16,6 +16,10 @@
 // to the nodes as data, and a collect-all Map is Map over a node wrapped to fold
 // its error into the result.
 //
+// Errors preserve their causes. Concurrent collection operations report item
+// positions with [IndexError], allowing callers to use errors.Is and errors.As
+// instead of matching strings.
+//
 // The package has no third-party dependencies. Durability, distribution, and
 // deterministic replay are out of scope; for those use a workflow engine such as
 // Temporal.

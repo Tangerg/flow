@@ -3,6 +3,7 @@ package workflow_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/Tangerg/flow/core"
@@ -17,7 +18,9 @@ func ExampleRegistry_Compile() {
 			var cfg struct {
 				N int `json:"n"`
 			}
-			_ = json.Unmarshal(config, &cfg)
+			if err := json.Unmarshal(config, &cfg); err != nil {
+				return nil, err
+			}
 			leaf := core.Func[int, int](func(_ context.Context, x int) (int, error) { return x + cfg.N, nil })
 			return workflow.Adapt(id, workflow.FromRef[int](input), leaf), nil
 		},
@@ -41,4 +44,30 @@ func ExampleRegistry_Compile() {
 	v, _ := out.Get("b", workflow.OutputKey)
 	fmt.Println(v) // 1 + 10 + 5
 	// Output: 16
+}
+
+func ExampleStore_json() {
+	store := workflow.NewStore().With("step", workflow.OutputKey, "ok")
+	data, err := json.Marshal(store)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(string(data))
+
+	// Output:
+	// {"step":{"output":"ok"}}
+}
+
+func ExampleStepError() {
+	boom := errors.New("boom")
+	step := workflow.Adapt("charge",
+		func(workflow.Store) (int, error) { return 1, nil },
+		core.Func[int, int](func(context.Context, int) (int, error) { return 0, boom }),
+	)
+
+	_, err := step.Run(context.Background(), workflow.NewStore())
+	var stepErr *workflow.StepError
+	fmt.Println(errors.As(err, &stepErr), stepErr.ID, stepErr.Op, errors.Is(err, boom))
+	// Output: true charge run true
 }
