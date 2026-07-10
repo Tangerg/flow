@@ -26,7 +26,8 @@ const (
 // The value at inputRef must be a []any. The first element to fail cancels the
 // rest; bound the concurrency with core.WithConcurrency.
 func Iteration(id string, inputRef Ref, body Step, bodyOutput Ref, opts ...core.MapOption) Step {
-	return core.Func[Store, Store](func(ctx context.Context, s Store) (Store, error) {
+	it := iteration{id: id, body: body}
+	it.node = core.Func[Store, Store](func(ctx context.Context, s Store) (Store, error) {
 		raw, ok := s.Get(inputRef.NodeID, inputRef.Path)
 		if !ok {
 			return s, fmt.Errorf("workflow: iteration %q: input %s.%s not found", id, inputRef.NodeID, inputRef.Path)
@@ -62,4 +63,18 @@ func Iteration(id string, inputRef Ref, body Step, bodyOutput Ref, opts ...core.
 
 		return s.With(id, OutputKey, outputs), nil
 	})
+	return it
+}
+
+// iteration is the [Step] produced by [Iteration].
+type iteration struct {
+	id   string
+	body Step
+	node Step
+}
+
+func (it iteration) Run(ctx context.Context, s Store) (Store, error) { return it.node.Run(ctx, s) }
+
+func (it iteration) Describe() Description {
+	return Description{ID: it.id, Kind: "iteration", Children: []Description{Describe(it.body)}}
 }

@@ -1,0 +1,61 @@
+package workflow_test
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/Tangerg/flow/core"
+	"github.com/Tangerg/flow/workflow"
+)
+
+func leafStep(id string) workflow.Step {
+	return workflow.Adapt(id,
+		workflow.FromRef[int](workflow.Ref{NodeID: "start", Path: "output"}),
+		core.Func[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
+	)
+}
+
+func TestDescribe_tree(t *testing.T) {
+	step := workflow.Sequence(
+		leafStep("a"),
+		workflow.Parallel([]workflow.Step{leafStep("b"), leafStep("c")}),
+	)
+
+	d := workflow.Describe(step)
+	if d.Kind != "sequence" || len(d.Children) != 2 {
+		t.Fatalf("root = %+v; want sequence with 2 children", d)
+	}
+	if d.Children[0].Kind != "leaf" || d.Children[0].ID != "a" {
+		t.Fatalf("child 0 = %+v; want leaf:a", d.Children[0])
+	}
+	par := d.Children[1]
+	if par.Kind != "parallel" || len(par.Children) != 2 {
+		t.Fatalf("child 1 = %+v; want parallel with 2 children", par)
+	}
+	if par.Children[0].ID != "b" || par.Children[1].ID != "c" {
+		t.Fatalf("parallel children = %+v; want leaf:b, leaf:c", par.Children)
+	}
+}
+
+func TestDescribe_opaque(t *testing.T) {
+	// A bare core.Func is not a Describer.
+	bare := core.Func[workflow.Store, workflow.Store](func(_ context.Context, s workflow.Store) (workflow.Store, error) {
+		return s, nil
+	})
+	if d := workflow.Describe(bare); d.Kind != "opaque" {
+		t.Fatalf("Describe(bare) = %+v; want opaque", d)
+	}
+}
+
+func TestMermaid(t *testing.T) {
+	step := workflow.Sequence(leafStep("a"), leafStep("b"))
+
+	out := workflow.Mermaid(step)
+	if !strings.HasPrefix(out, "flowchart TD") {
+		t.Fatalf("missing flowchart header:\n%s", out)
+	}
+	if !strings.Contains(out, "sequence") || !strings.Contains(out, "leaf:a") || !strings.Contains(out, "-->") {
+		t.Fatalf("mermaid output incomplete:\n%s", out)
+	}
+}
