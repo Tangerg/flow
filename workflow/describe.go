@@ -10,6 +10,7 @@ import (
 // or rendered for visualization.
 type Description struct {
 	ID       string        `json:"id,omitempty"`
+	Label    string        `json:"label,omitempty"`
 	Kind     string        `json:"kind"`
 	Children []Description `json:"children,omitempty"`
 }
@@ -56,10 +57,50 @@ func Mermaid(step Step) string {
 		fmt.Fprintf(&b, "  %s[%q]\n", id, label)
 		for _, child := range d.Children {
 			cid := walk(child)
-			fmt.Fprintf(&b, "  %s --> %s\n", id, cid)
+			if child.Label != "" {
+				fmt.Fprintf(&b, "  %s -->|%q| %s\n", id, child.Label, cid)
+			} else {
+				fmt.Fprintf(&b, "  %s --> %s\n", id, cid)
+			}
 		}
 		return id
 	}
 	walk(Describe(step))
+	return b.String()
+}
+
+// MermaidGraph renders the actual dependency edges of a flat Graph. Use
+// Mermaid for a compiled Step's composite execution tree and MermaidGraph when
+// the original DAG topology matters.
+func MermaidGraph(g Graph) string {
+	var b strings.Builder
+	b.WriteString("flowchart TD\n")
+
+	ids := make(map[string]string, len(g.Nodes))
+	for i, node := range g.Nodes {
+		mid := fmt.Sprintf("n%d", i+1)
+		ids[node.ID] = mid
+		label := node.Type + ":" + node.ID
+		fmt.Fprintf(&b, "  %s[%q]\n", mid, label)
+	}
+
+	for _, node := range g.Nodes {
+		to := ids[node.ID]
+		seen := make(map[string]bool)
+		writeEdge := func(dep string) {
+			from, ok := ids[dep]
+			if !ok || seen[dep] {
+				return
+			}
+			seen[dep] = true
+			fmt.Fprintf(&b, "  %s --> %s\n", from, to)
+		}
+		if node.Input != nil {
+			writeEdge(node.Input.NodeID)
+		}
+		for _, dep := range node.DependsOn {
+			writeEdge(dep)
+		}
+	}
 	return b.String()
 }

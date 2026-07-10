@@ -92,3 +92,82 @@ func TestMap_cancellation(t *testing.T) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
 }
+
+func TestMap_parentCancellationIsNotIndexWrapped(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	node := core.Func[int, int](func(ctx context.Context, in int) (int, error) {
+		cancel()
+		return 0, ctx.Err()
+	})
+
+	_, err := core.Map(node, core.WithConcurrency(2)).Run(ctx, []int{1, 2})
+	var indexErr *core.IndexError
+	if !errors.Is(err, context.Canceled) || errors.As(err, &indexErr) {
+		t.Fatalf("err = %v; want unwrapped parent cancellation", err)
+	}
+}
+
+func TestMap_singleItemReportsCancellationAfterRun(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	node := core.Func[int, int](func(_ context.Context, in int) (int, error) {
+		cancel()
+		return in, nil
+	})
+
+	_, err := core.Map(node).Run(ctx, []int{1})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v; want context.Canceled", err)
+	}
+}
+
+func TestMap_nilOptionIsIgnored(t *testing.T) {
+	node := core.Func[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
+	got, err := core.Map(node, nil).Run(context.Background(), []int{1})
+	if err != nil || len(got) != 1 || got[0] != 1 {
+		t.Fatalf("Map with nil option = %v, %v", got, err)
+	}
+}
+
+func TestMap_errorIncludesIndex(t *testing.T) {
+	boom := errors.New("boom")
+	node := core.Func[int, int](func(_ context.Context, in int) (int, error) {
+		if in == 2 {
+			return 0, boom
+		}
+		return in, nil
+	})
+
+	_, err := core.Map(node, core.WithConcurrency(1)).Run(context.Background(), []int{1, 2, 3})
+	var indexErr *core.IndexError
+	if !errors.As(err, &indexErr) || indexErr.Index != 1 || !errors.Is(err, boom) {
+		t.Fatalf("err = %v; want IndexError{Index:1, Err:boom}", err)
+	}
+}
+
+func TestMap_boundedFailureStopsScheduling(t *testing.T) {
+	boom := errors.New("boom")
+	secondStarted := make(chan struct{})
+	var started atomic.Int32
+	node := core.Func[int, int](func(ctx context.Context, in int) (int, error) {
+		started.Add(1)
+		switch in {
+		case 0:
+			<-secondStarted
+			return 0, boom
+		case 1:
+			close(secondStarted)
+			<-ctx.Done()
+			return 0, ctx.Err()
+		default:
+			return in, nil
+		}
+	})
+
+	_, err := core.Map(node, core.WithConcurrency(2)).Run(context.Background(), []int{0, 1, 2, 3, 4})
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v; want boom", err)
+	}
+	if got := started.Load(); got != 2 {
+		t.Fatalf("started %d nodes after failure; want exactly initial 2", got)
+	}
+}

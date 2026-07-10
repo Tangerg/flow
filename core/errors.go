@@ -1,14 +1,16 @@
 package core
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // Sentinel errors returned by the core combinators. Test for them with
 // [errors.Is].
 var (
 	// ErrNilNode is returned when a nil Node or nil Func is Run.
 	ErrNilNode = errors.New("flow: nil node")
-	// ErrNilFunc is returned when a required function argument (a resolver,
-	// merge, or loop body) is nil.
+	// ErrNilFunc is returned when a required function argument is nil.
 	ErrNilFunc = errors.New("flow: nil function")
 	// ErrNoCase is returned by Switch when the resolved key matches no case.
 	ErrNoCase = errors.New("flow: no matching case")
@@ -16,3 +18,19 @@ var (
 	// without the body reporting done.
 	ErrMaxIterations = errors.New("flow: max iterations exceeded")
 )
+
+// IndexError reports an error produced while processing one element of an
+// ordered collection. Map and higher-level concurrent combinators use it so
+// callers can recover the failing input position with [errors.As] while still
+// matching the underlying error with [errors.Is].
+type IndexError struct {
+	Index int
+	Err   error
+}
+
+func (e *IndexError) Error() string {
+	return fmt.Sprintf("flow: index %d: %v", e.Index, e.Err)
+}
+
+// Unwrap returns the underlying element error.
+func (e *IndexError) Unwrap() error { return e.Err }

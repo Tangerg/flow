@@ -1,6 +1,8 @@
 package workflow_test
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/Tangerg/flow/workflow"
@@ -63,5 +65,44 @@ func TestStore_missing(t *testing.T) {
 	}
 	if _, ok := s.Get("n", "output.deep"); ok {
 		t.Fatal("expected miss walking into a non-container")
+	}
+}
+
+func TestStore_JSONRoundTrip(t *testing.T) {
+	original := workflow.NewStore().
+		With("a", "output", map[string]any{"items": []any{"x", true}}).
+		With("b", "output", 42)
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var decoded workflow.Store
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got, ok := decoded.Get("a", "output.items.1"); !ok || got != true {
+		t.Fatalf("nested value = %v, %v", got, ok)
+	}
+	if got, ok := decoded.Get("b", "output"); !ok || got != float64(42) {
+		t.Fatalf("number = %T(%v), %v; want float64(42)", got, got, ok)
+	}
+}
+
+func TestStore_UnmarshalIsAtomic(t *testing.T) {
+	store := workflow.NewStore().With("old", "output", 1)
+	if err := json.Unmarshal([]byte(`{"new":{"output":1e10000}}`), &store); err == nil {
+		t.Fatal("expected value decode error")
+	}
+	if got, ok := store.Get("old", "output"); !ok || got != 1 {
+		t.Fatalf("store changed after failed decode: %v, %v", got, ok)
+	}
+}
+
+func TestStore_MarshalReportsCell(t *testing.T) {
+	store := workflow.NewStore().With("bad", "output", func() {})
+	_, err := json.Marshal(store)
+	if err == nil || !strings.Contains(err.Error(), "bad.output") {
+		t.Fatalf("err = %v; want cell path", err)
 	}
 }

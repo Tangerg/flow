@@ -3,6 +3,8 @@ package workflow_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/Tangerg/flow/core"
@@ -133,5 +135,66 @@ func TestRegistry_unknownKind(t *testing.T) {
 	_, err := reg.Build(workflow.Spec{Kind: "bogus"})
 	if err == nil {
 		t.Fatal("expected error for unknown kind")
+	}
+}
+
+func TestRegistry_reportsInvalidAndDuplicateRegistrations(t *testing.T) {
+	factory := addN()
+	reg := workflow.NewRegistry().
+		RegisterLeaf("", factory).
+		RegisterLeaf("addN", nil).
+		RegisterLeaf("addN", factory).
+		RegisterLeaf("addN", factory)
+
+	if reg.Err() == nil {
+		t.Fatal("expected accumulated registration errors")
+	}
+	if _, err := reg.Build(workflow.Spec{Kind: workflow.KindLeaf, ID: "a", Type: "addN"}); err == nil {
+		t.Fatal("Build must reject an invalid registry")
+	}
+}
+
+func TestRegistry_rejectsDuplicateIDsInNestedSpec(t *testing.T) {
+	reg := workflow.NewRegistry().RegisterLeaf("addN", addN())
+	spec := workflow.Spec{Kind: workflow.KindParallel, Steps: []workflow.Spec{
+		{Kind: workflow.KindLeaf, ID: "same", Type: "addN"},
+		{Kind: workflow.KindLeaf, ID: "same", Type: "addN"},
+	}}
+	if _, err := reg.Build(spec); err == nil {
+		t.Fatal("expected duplicate step ID error")
+	}
+}
+
+func TestRegistry_rejectsNegativeConcurrency(t *testing.T) {
+	reg := workflow.NewRegistry().RegisterLeaf("addN", addN())
+	spec := workflow.Spec{Kind: workflow.KindParallel, Concurrency: -1}
+	if _, err := reg.Build(spec); err == nil {
+		t.Fatal("expected negative concurrency error")
+	}
+}
+
+func TestRegistry_concurrentRegistrationIsRaceFree(t *testing.T) {
+	reg := workflow.NewRegistry()
+	var wg sync.WaitGroup
+	for i := range 32 {
+		wg.Go(func() {
+			reg.RegisterLeaf(fmt.Sprintf("leaf-%d", i), addN())
+			_ = reg.Err()
+		})
+	}
+	wg.Wait()
+	if err := reg.Err(); err != nil {
+		t.Fatalf("unexpected registry error: %v", err)
+	}
+}
+
+func TestRegistry_zeroValueIsUsable(t *testing.T) {
+	var reg workflow.Registry
+	reg.RegisterLeaf("addN", addN())
+	if reg.Err() != nil {
+		t.Fatalf("zero Registry: %v", reg.Err())
+	}
+	if _, err := reg.Build(workflow.Spec{Kind: workflow.KindLeaf, ID: "a", Type: "addN"}); err != nil {
+		t.Fatalf("zero Registry Build: %v", err)
 	}
 }

@@ -3,7 +3,7 @@
 A type-safe, composable, in-process control-flow toolkit for Go — with an
 optional dynamic layer for building workflows from config or a visual editor.
 
-`flow` is deliberately two layers:
+`flow` is deliberately split into three layers:
 
 | Package | What it is | Types |
 | --- | --- | --- |
@@ -16,6 +16,8 @@ optional dynamic layer for building workflows from config or a visual editor.
 ```sh
 go get github.com/Tangerg/flow
 ```
+
+The current implementation requires Go 1.25 or newer.
 
 ## core — typed composition
 
@@ -69,8 +71,8 @@ node := flowx.Wrap(callAPI).
 ## workflow — the dynamic layer
 
 When a graph must be assembled at runtime (from config, or a drag-and-drop
-editor), `workflow` threads an immutable variable pool through nodes addressed by
-ID.
+editor), `workflow` threads a persistent variable pool through nodes addressed
+by ID.
 
 ```go
 reg := workflow.NewRegistry().RegisterLeaf("addN", addNFactory)
@@ -87,8 +89,11 @@ v, _ := out.Get("b", workflow.OutputKey) // 16
 
 Highlights:
 
-- **Immutable `Store`.** Every write returns a new `Store`, so concurrent
-  branches are safe by construction and every intermediate state is a snapshot.
+- **Persistent `Store`.** Every write returns a new structural snapshot. Values
+  are shared as-is and must be treated as immutable after insertion.
+- **Serializable state.** `Store` implements `json.Marshaler` and
+  `json.Unmarshaler`; decoding is atomic and uses encoding/json's standard value
+  representation.
 - **Composites on core.** `Sequence`/`Branch`/`Loop`/`Parallel`/`Iteration` are
   built from the core primitives; `Parallel` merges branch stores, `Iteration`
   scopes each element.
@@ -100,7 +105,8 @@ Highlights:
 - **Observability.** Attach a `Sink` with `WithSink` to receive per-node
   start/complete/fail events.
 - **Introspection.** Every composite describes its own structure via `Describe`;
-  `Mermaid` renders a compiled workflow as a flowchart.
+  `Mermaid` renders a compiled workflow tree and `MermaidGraph` renders the
+  original DAG edges.
 
 ## Architecture
 
@@ -117,7 +123,7 @@ flowx ────┘
   concrete types (`then`, `mapNode`, …) behind the `Node` interface.
 - `flowx` adds derived combinators and cross-cutting decorators (interceptors);
   it is a utility layer, not a set of domain entities, so it stays functional.
-- `workflow` is the dynamic domain layer: an immutable `Store` value object,
+- `workflow` is the dynamic domain layer: a persistent `Store` value object,
   composite domain types (`Sequence`, `Branch`, `Loop`, `Parallel`, `Iteration`)
   that own their behavior and describe themselves, and a `Registry` that compiles
   serialized graphs into runnable steps.
@@ -129,7 +135,48 @@ flowx ────┘
 - **Type-safe.** Composition is checked at compile time; no reflection in `core`.
 - **Zero dependencies in `core`.** Bounded concurrency uses only the standard
   library.
-- **Immutable state in `workflow`.** Correctness by construction over locking.
+- **Persistent state in `workflow`.** Store structure is copy-on-write; inserted
+  values follow an explicit caller-owned immutability contract.
+
+## Execution model
+
+`workflow` compiles dynamic definitions into ordinary node composition before
+execution. It has no central runtime scheduler:
+
+```
+Spec / Graph -> validate -> compile -> Node[Store, Store] -> Run
+```
+
+A flat Graph is compiled into topological barriers using
+`Sequence(Parallel(layer)...)`. Nodes in a layer run concurrently; the next
+layer starts after the whole current layer finishes. This favors a small,
+deterministic in-process runtime over maximally eager DAG scheduling.
+
+## Errors
+
+Errors wrap their causes and are intended for `errors.Is` and `errors.As`, not
+string matching. In particular:
+
+- `core.IndexError` identifies the failing item in `Map`, `Race`, and collected
+  result errors.
+- `workflow.StepError` identifies the step ID and operation (`bind`, `run`, or
+  `validate`).
+- Sentinel errors such as `core.ErrNilNode`, `core.ErrNoCase`, and
+  `core.ErrMaxIterations` remain discoverable through wrapping.
+
+## Compatibility
+
+The project follows semantic versioning. Before a v1 release, minor versions may
+refine public APIs; release notes should call out migrations such as renamed
+fields or callback signatures. After v1, exported behavior and error contracts
+are compatibility commitments.
+
+Current rewrite migrations:
+
+- `flowx.Result.Error` is now `Result.Err`, following Go's conventional error
+  field naming.
+- `workflow.Condition` returns `(bool, error)` so condition evaluation failures
+  are not mistaken for “keep looping”.
 
 ## Non-goals
 

@@ -13,9 +13,16 @@ import (
 // resolve yields a name with no matching case, Run fails (see core.ErrNoCase).
 // It composes with core.Switch.
 func Branch(resolve func(ctx context.Context, s Store) (string, error), cases map[string]Step) Step {
+	cases = maps.Clone(cases)
+	resolver := core.Func[Store, string](resolve)
+	if resolve == nil {
+		resolver = func(context.Context, Store) (string, error) {
+			return "", core.ErrNilFunc
+		}
+	}
 	return branch{
 		cases: cases,
-		node:  core.Switch(core.Func[Store, string](resolve), cases),
+		node:  core.Switch(resolver, cases),
 	}
 }
 
@@ -31,7 +38,7 @@ func (b branch) Describe() Description {
 	children := make([]Description, 0, len(b.cases))
 	for _, name := range slices.Sorted(maps.Keys(b.cases)) {
 		d := Describe(b.cases[name])
-		d.ID = name
+		d.Label = name
 		children = append(children, d)
 	}
 	return Description{Kind: "branch", Children: children}

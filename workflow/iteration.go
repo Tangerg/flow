@@ -47,11 +47,11 @@ func Iteration(id string, inputRef Ref, body Step, bodyOutput Ref, opts ...core.
 				scoped := s.With(id, ItemKey, items[i]).With(id, IndexKey, i)
 				result, err := runStep(ctx, body, scoped)
 				if err != nil {
-					return nil, fmt.Errorf("index %d: %w", i, err)
+					return nil, err
 				}
 				out, ok := result.Get(bodyOutput.NodeID, bodyOutput.Path)
 				if !ok {
-					return nil, fmt.Errorf("index %d: body output %s.%s not found", i, bodyOutput.NodeID, bodyOutput.Path)
+					return nil, fmt.Errorf("body output %s.%s not found", bodyOutput.NodeID, bodyOutput.Path)
 				}
 				return out, nil
 			}),

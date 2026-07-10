@@ -49,6 +49,37 @@ func TestMapAll_collect(t *testing.T) {
 	}
 }
 
+func TestCollect_preservesPartialValuesAndIndexesErrors(t *testing.T) {
+	boom := errors.New("boom")
+	values, err := flowx.Collect([]flowx.Result[int]{
+		{Value: 10},
+		{Value: 20, Err: boom},
+	})
+	if len(values) != 2 || values[1] != 20 {
+		t.Fatalf("values = %v; partial result was lost", values)
+	}
+	var indexErr *core.IndexError
+	if !errors.As(err, &indexErr) || indexErr.Index != 1 || !errors.Is(err, boom) {
+		t.Fatalf("err = %v; want index 1", err)
+	}
+}
+
+func TestFanOutAll_collectsFailures(t *testing.T) {
+	boom := errors.New("boom")
+	nodes := []core.Node[int, int]{
+		core.Func[int, int](func(_ context.Context, in int) (int, error) { return in + 1, nil }),
+		core.Func[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom }),
+		nil,
+	}
+	results, err := flowx.FanOutAll(nodes).Run(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("FanOutAll: %v", err)
+	}
+	if len(results) != 3 || results[0].Value != 2 || !errors.Is(results[1].Err, boom) || !errors.Is(results[2].Err, core.ErrNilNode) {
+		t.Fatalf("results = %+v", results)
+	}
+}
+
 func TestCombine2(t *testing.T) {
 	length := core.Func[string, int](func(_ context.Context, s string) (int, error) { return len(s), nil })
 	upper := core.Func[string, string](func(_ context.Context, s string) (string, error) { return s + "!", nil })
@@ -111,5 +142,80 @@ func TestIdentity(t *testing.T) {
 	got, err := flowx.Identity[string]().Run(context.Background(), "x")
 	if err != nil || got != "x" {
 		t.Fatalf("Identity = %q, %v", got, err)
+	}
+}
+
+func TestChain_emptyAndSingle(t *testing.T) {
+	got, err := flowx.Chain[int]().Run(context.Background(), 4)
+	if err != nil || got != 4 {
+		t.Fatalf("empty Chain = %d, %v", got, err)
+	}
+	node := core.Func[int, int](func(_ context.Context, in int) (int, error) { return in + 1, nil })
+	got, err = flowx.Chain(node).Run(context.Background(), 4)
+	if err != nil || got != 5 {
+		t.Fatalf("single Chain = %d, %v", got, err)
+	}
+}
+
+func TestChain_singleNilReturnsError(t *testing.T) {
+	_, err := flowx.Chain[int](nil).Run(context.Background(), 0)
+	if !errors.Is(err, core.ErrNilNode) {
+		t.Fatalf("err = %v; want ErrNilNode", err)
+	}
+}
+
+func TestCombine2_rejectsNilInputs(t *testing.T) {
+	node := core.Func[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
+	if _, err := flowx.Combine2[int, int, int, int](node, node, nil).Run(context.Background(), 1); !errors.Is(err, core.ErrNilFunc) {
+		t.Fatalf("nil merge err = %v", err)
+	}
+	merge := func(_ context.Context, a, b int) (int, error) { return a + b, nil }
+	if _, err := flowx.Combine2[int, int, int, int](nil, node, merge).Run(context.Background(), 1); !errors.Is(err, core.ErrNilNode) {
+		t.Fatalf("nil node err = %v", err)
+	}
+}
+
+func TestRace_noNodes(t *testing.T) {
+	_, err := flowx.Race[int, int](nil).Run(context.Background(), 0)
+	if !errors.Is(err, flowx.ErrNoNodes) {
+		t.Fatalf("err = %v; want ErrNoNodes", err)
+	}
+}
+
+func TestFanOut_clonesNodes(t *testing.T) {
+	nodes := []core.Node[int, int]{
+		core.Func[int, int](func(_ context.Context, in int) (int, error) { return in + 1, nil }),
+	}
+	fan := flowx.FanOut(nodes)
+	nodes[0] = core.Func[int, int](func(_ context.Context, in int) (int, error) { return in + 100, nil })
+
+	got, err := fan.Run(context.Background(), 1)
+	if err != nil || len(got) != 1 || got[0] != 2 {
+		t.Fatalf("FanOut after source mutation = %v, %v", got, err)
+	}
+}
+
+func TestRace_cancelledBeforeRun(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	node := core.Func[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
+
+	_, err := flowx.Race([]core.Node[int, int]{node}).Run(ctx, 1)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v; want context.Canceled", err)
+	}
+}
+
+func TestRace_allFailErrorOrderIsStable(t *testing.T) {
+	e1, e2 := errors.New("first"), errors.New("second")
+	n1 := core.Func[int, int](func(_ context.Context, _ int) (int, error) {
+		time.Sleep(time.Millisecond)
+		return 0, e1
+	})
+	n2 := core.Func[int, int](func(_ context.Context, _ int) (int, error) { return 0, e2 })
+
+	_, err := flowx.Race([]core.Node[int, int]{n1, n2}).Run(context.Background(), 0)
+	if err == nil || err.Error() != "flow: index 0: first\nflow: index 1: second" {
+		t.Fatalf("joined error = %q; want input order", err)
 	}
 }

@@ -47,3 +47,11 @@ func TestBranch_noCase(t *testing.T) {
 		t.Fatalf("error = %v, want core.ErrNoCase", err)
 	}
 }
+
+func TestBranch_nilResolver(t *testing.T) {
+	_, err := workflow.Branch(nil, map[string]workflow.Step{"x": leafStep("x")}).
+		Run(context.Background(), workflow.NewStore())
+	if !errors.Is(err, core.ErrNilFunc) {
+		t.Fatalf("err = %v; want ErrNilFunc", err)
+	}
+}

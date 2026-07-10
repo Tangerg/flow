@@ -39,3 +39,40 @@ func TestParallel_failFast(t *testing.T) {
 		t.Fatalf("error = %v, want boom", err)
 	}
 }
+
+func TestParallel_mergesOnlyBranchWrites(t *testing.T) {
+	writeExisting := core.Func[workflow.Store, workflow.Store](func(_ context.Context, s workflow.Store) (workflow.Store, error) {
+		return s.With("existing", "value", 1), nil
+	})
+	writeOther := core.Func[workflow.Store, workflow.Store](func(_ context.Context, s workflow.Store) (workflow.Store, error) {
+		return s.With("other", "value", 2), nil
+	})
+	base := workflow.NewStore().With("existing", "value", 0)
+
+	out, err := workflow.Parallel([]workflow.Step{writeExisting, writeOther}).Run(context.Background(), base)
+	if err != nil {
+		t.Fatalf("Parallel: %v", err)
+	}
+	if got, _ := out.Get("existing", "value"); got != 1 {
+		t.Fatalf("existing value = %v; stale base snapshot overwrote branch write", got)
+	}
+	if got, _ := out.Get("other", "value"); got != 2 {
+		t.Fatalf("other value = %v; want 2", got)
+	}
+}
+
+func TestParallel_laterBranchWinsCellConflict(t *testing.T) {
+	write := func(value int) workflow.Step {
+		return core.Func[workflow.Store, workflow.Store](func(_ context.Context, s workflow.Store) (workflow.Store, error) {
+			return s.With("shared", "value", value), nil
+		})
+	}
+
+	out, err := workflow.Parallel([]workflow.Step{write(1), write(2)}).Run(context.Background(), workflow.NewStore())
+	if err != nil {
+		t.Fatalf("Parallel: %v", err)
+	}
+	if got, _ := out.Get("shared", "value"); got != 2 {
+		t.Fatalf("shared value = %v; want later branch value 2", got)
+	}
+}

@@ -28,8 +28,30 @@ type Schema struct {
 // for chaining. Node types without a schema are treated as accepting and
 // producing [TypeAny] (unchecked).
 func (r *Registry) RegisterSchema(nodeType string, schema Schema) *Registry {
-	r.schemas[nodeType] = schema
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.initLocked()
+	_, exists := r.schemas[nodeType]
+	switch {
+	case nodeType == "":
+		r.addProblemLocked("schema node type is empty")
+	case !validValueType(schema.Input) || !validValueType(schema.Output):
+		r.addProblemLocked("schema for %q contains an invalid value type", nodeType)
+	case exists:
+		r.addProblemLocked("schema for %q is already registered", nodeType)
+	default:
+		r.schemas[nodeType] = schema
+	}
 	return r
+}
+
+func validValueType(t ValueType) bool {
+	switch t {
+	case "", TypeAny, TypeString, TypeNumber, TypeBool, TypeArray, TypeObject:
+		return true
+	default:
+		return false
+	}
 }
 
 // compatible reports whether a value of type out can feed a port of type in.
@@ -42,13 +64,16 @@ func compatible(out, in ValueType) bool {
 // cycles, and — where schemas are registered — type-compatible Input edges. It is
 // intended to power a visual editor's live feedback.
 func (r *Registry) Validate(g Graph) error {
+	if err := r.Err(); err != nil {
+		return err
+	}
 	_, byID, err := r.plan(g) // duplicate IDs and cycles
 	if err != nil {
 		return err
 	}
 
 	for _, n := range g.Nodes {
-		if _, ok := r.leaves[n.Type]; !ok {
+		if _, ok := r.leafFactory(n.Type); !ok {
 			return fmt.Errorf("workflow: node %q: unknown type %q", n.ID, n.Type)
 		}
 		if n.Input == nil {
@@ -58,8 +83,8 @@ func (r *Registry) Validate(g Graph) error {
 		if !ok {
 			continue // external input (the seed Store); nothing to check
 		}
-		out := r.schemas[producer.Type].Output
-		in := r.schemas[n.Type].Input
+		out := r.schema(producer.Type).Output
+		in := r.schema(n.Type).Input
 		if !compatible(out, in) {
 			return fmt.Errorf("workflow: edge %s.output (%s) -> %s.input (%s): incompatible types",
 				producer.ID, out, n.ID, in)

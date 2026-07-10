@@ -11,5 +11,6 @@
 //
 // All combinators except Race are thin derivations of core.Map; Race needs its
 // own goroutines because "first to finish" cannot be expressed by a wait-for-all
-// map.
+// map. Collecting combinators return [Result] values whose Err field preserves
+// per-item failures and whose Value may contain a partial result.
 package flowx

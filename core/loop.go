@@ -23,7 +23,9 @@ func Loop[T any](
 ) Node[T, T] {
 	c := loopConfig{maxIterations: DefaultMaxIterations}
 	for _, opt := range opts {
-		opt(&c)
+		if opt != nil {
+			opt(&c)
+		}
 	}
 	return loopNode[T]{body: body, max: c.maxIterations}
 }
