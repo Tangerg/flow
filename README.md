@@ -99,6 +99,28 @@ Highlights:
   it, for a visual editor's live feedback.
 - **Observability.** Attach a `Sink` with `WithSink` to receive per-node
   start/complete/fail events.
+- **Introspection.** Every composite describes its own structure via `Describe`;
+  `Mermaid` renders a compiled workflow as a flowchart.
+
+## Architecture
+
+Dependencies point inward, toward the stable kernel — `core` imports nothing from
+the outer packages:
+
+```
+workflow ─┐
+          ├─► core   (zero dependencies)
+flowx ────┘
+```
+
+- `core` is the domain kernel: minimal, and already rich — behavior lives on
+  concrete types (`then`, `mapNode`, …) behind the `Node` interface.
+- `flowx` adds derived combinators and cross-cutting decorators (interceptors);
+  it is a utility layer, not a set of domain entities, so it stays functional.
+- `workflow` is the dynamic domain layer: an immutable `Store` value object,
+  composite domain types (`Sequence`, `Branch`, `Loop`, `Parallel`, `Iteration`)
+  that own their behavior and describe themselves, and a `Registry` that compiles
+  serialized graphs into runnable steps.
 
 ## Design principles
 

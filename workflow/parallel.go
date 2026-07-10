@@ -17,7 +17,8 @@ import (
 // branch's value wins. Parallel derives its fan-out from core.Map applied to the
 // branches as data.
 func Parallel(branches []Step, opts ...core.MapOption) Step {
-	return core.Func[Store, Store](func(ctx context.Context, s Store) (Store, error) {
+	p := parallel{branches: branches}
+	p.node = core.Func[Store, Store](func(ctx context.Context, s Store) (Store, error) {
 		results, err := core.Map(
 			core.Func[Step, Store](func(ctx context.Context, b Step) (Store, error) {
 				return runStep(ctx, b, s)
@@ -29,6 +30,19 @@ func Parallel(branches []Step, opts ...core.MapOption) Step {
 		}
 		return mergeStores(s, results...), nil
 	})
+	return p
+}
+
+// parallel is the [Step] produced by [Parallel].
+type parallel struct {
+	branches []Step
+	node     Step
+}
+
+func (p parallel) Run(ctx context.Context, s Store) (Store, error) { return p.node.Run(ctx, s) }
+
+func (p parallel) Describe() Description {
+	return Description{Kind: "parallel", Children: describeAll(p.branches)}
 }
 
 // mergeStores returns a new Store combining base and others. On a key collision

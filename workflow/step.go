@@ -8,13 +8,14 @@ import (
 )
 
 // Step is a workflow node: it reads its inputs from the [Store] and returns a
-// Store extended with its output. Steps compose with the core primitives, since
-// a Step is just a core.Node[Store, Store].
+// Store extended with its output. A Step is a core.Node[Store, Store], so it
+// composes with the core primitives; steps built by this package also implement
+// [Describer].
 type Step = core.Node[Store, Store]
 
-// Ref points at a value in the [Store]: a node ID plus a path under it. The
-// first path segment is the key written by that node; further segments index
-// into nested data.
+// Ref points at a value in the [Store]: a node ID plus a path under it. The first
+// path segment is the key written by that node; further segments index into
+// nested data.
 type Ref struct {
 	NodeID string `json:"nodeID"`
 	Path   string `json:"path"`
@@ -42,47 +43,89 @@ func FromRef[I any](ref Ref) func(Store) (I, error) {
 	}
 }
 
-// Adapt turns a statically typed leaf into a [Step]. On each run it binds the
-// leaf's input from the Store, runs the leaf, and writes the result under
-// (id, OutputKey). Errors are tagged with the step id for a readable path.
+// Adapt turns a statically typed node into a [Step]. On each run it binds the
+// node's input from the Store, runs it, and writes the result under
+// (id, OutputKey). Errors are tagged with the step id, and lifecycle events are
+// emitted (see [WithSink]).
 //
-// This is the prep/exec/post split: bind reads the pool, leaf computes, Adapt
-// writes back — the leaf itself stays free of any Store knowledge and is unit
+// This is the prep/exec/post split: bind reads the pool, node computes, the Step
+// writes back — the node itself stays free of any Store knowledge and is unit
 // testable on its own.
-func Adapt[I, O any](id string, bind func(Store) (I, error), leaf core.Node[I, O]) Step {
-	return core.Func[Store, Store](func(ctx context.Context, s Store) (Store, error) {
-		emit(ctx, NodeStarted{ID: id})
-		in, err := bind(s)
-		if err != nil {
-			err = fmt.Errorf("workflow: step %q: %w", id, err)
-			emit(ctx, NodeFailed{ID: id, Err: err})
-			return s, err
-		}
-		out, err := leaf.Run(ctx, in)
-		if err != nil {
-			err = fmt.Errorf("workflow: step %q: %w", id, err)
-			emit(ctx, NodeFailed{ID: id, Err: err})
-			return s, err
-		}
-		emit(ctx, NodeCompleted{ID: id})
-		return s.With(id, OutputKey, out), nil
-	})
+func Adapt[I, O any](id string, bind func(Store) (I, error), node core.Node[I, O]) Step {
+	return leaf[I, O]{id: id, bind: bind, node: node}
 }
 
-// Sequence runs steps in order, threading the Store through each. It is a thin
-// specialization of core.Then over Step.
+// leaf is the [Step] produced by [Adapt].
+type leaf[I, O any] struct {
+	id   string
+	bind func(Store) (I, error)
+	node core.Node[I, O]
+}
+
+func (l leaf[I, O]) Run(ctx context.Context, s Store) (Store, error) {
+	emit(ctx, NodeStarted{ID: l.id})
+	fail := func(err error) (Store, error) {
+		err = fmt.Errorf("workflow: step %q: %w", l.id, err)
+		emit(ctx, NodeFailed{ID: l.id, Err: err})
+		return s, err
+	}
+
+	in, err := l.bind(s)
+	if err != nil {
+		return fail(err)
+	}
+	if l.node == nil {
+		return fail(core.ErrNilNode)
+	}
+	out, err := l.node.Run(ctx, in)
+	if err != nil {
+		return fail(err)
+	}
+
+	emit(ctx, NodeCompleted{ID: l.id})
+	return s.With(l.id, OutputKey, out), nil
+}
+
+func (l leaf[I, O]) Describe() Description {
+	return Description{ID: l.id, Kind: "leaf"}
+}
+
+// Sequence runs steps in order, threading the Store through each. It composes
+// them with core.Then.
 func Sequence(steps ...Step) Step {
+	s := sequence{steps: steps}
 	switch len(steps) {
 	case 0:
-		return core.Func[Store, Store](func(_ context.Context, s Store) (Store, error) { return s, nil })
+		s.composed = passthrough()
 	case 1:
-		return steps[0]
+		s.composed = steps[0]
+	default:
+		node := steps[0]
+		for _, next := range steps[1:] {
+			node = core.Then(node, next)
+		}
+		s.composed = node
 	}
-	step := steps[0]
-	for _, next := range steps[1:] {
-		step = core.Then(step, next)
-	}
-	return step
+	return s
+}
+
+// sequence is the [Step] produced by [Sequence]; it retains its steps for
+// [Describe] and delegates execution to the core.Then chain built once.
+type sequence struct {
+	steps    []Step
+	composed Step
+}
+
+func (s sequence) Run(ctx context.Context, st Store) (Store, error) {
+	return s.composed.Run(ctx, st)
+}
+
+func (s sequence) Describe() Description {
+	return Description{Kind: "sequence", Children: describeAll(s.steps)}
+}
+
+func passthrough() Step {
+	return core.Func[Store, Store](func(_ context.Context, s Store) (Store, error) { return s, nil })
 }
 
 // runStep runs step, guarding against a nil Step so composites fail with
