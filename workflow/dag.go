@@ -29,13 +29,50 @@ type Graph struct {
 // Compile turns a flat Graph into a Step. It detects duplicate IDs and cycles,
 // then runs each topological layer's nodes concurrently.
 func (r *Registry) Compile(g Graph) (Step, error) {
-	byID := make(map[string]NodeSpec, len(g.Nodes))
+	layers, byID, err := r.plan(g)
+	if err != nil {
+		return nil, err
+	}
+
+	var steps []Step
+	for _, layer := range layers {
+		branch := make([]Step, 0, len(layer))
+		for _, id := range layer {
+			leaf, err := r.buildLeaf(nodeToSpec(byID[id]))
+			if err != nil {
+				return nil, err
+			}
+			branch = append(branch, leaf)
+		}
+		if len(branch) == 1 {
+			steps = append(steps, branch[0])
+		} else {
+			steps = append(steps, Parallel(branch))
+		}
+	}
+	return Sequence(steps...), nil
+}
+
+// CompileJSON unmarshals data into a [Graph] and compiles it.
+func (r *Registry) CompileJSON(data []byte) (Step, error) {
+	var g Graph
+	if err := json.Unmarshal(data, &g); err != nil {
+		return nil, fmt.Errorf("workflow: invalid graph: %w", err)
+	}
+	return r.Compile(g)
+}
+
+// plan validates the graph structurally (unique IDs, no cycles) and returns its
+// topological layers along with a lookup of nodes by ID. It is shared by Compile
+// and Validate.
+func (r *Registry) plan(g Graph) (layers [][]string, byID map[string]NodeSpec, err error) {
+	byID = make(map[string]NodeSpec, len(g.Nodes))
 	for _, n := range g.Nodes {
 		if n.ID == "" {
-			return nil, fmt.Errorf("workflow: graph node with empty ID")
+			return nil, nil, fmt.Errorf("workflow: graph node with empty ID")
 		}
 		if _, dup := byID[n.ID]; dup {
-			return nil, fmt.Errorf("workflow: duplicate node ID %q", n.ID)
+			return nil, nil, fmt.Errorf("workflow: duplicate node ID %q", n.ID)
 		}
 		byID[n.ID] = n
 	}
@@ -64,7 +101,6 @@ func (r *Registry) Compile(g Graph) (Step, error) {
 	}
 
 	processed := make(map[string]bool, len(g.Nodes))
-	var steps []Step
 	for len(processed) < len(g.Nodes) {
 		// Collect every node whose dependencies are all satisfied (in spec order
 		// for a stable layout).
@@ -75,16 +111,9 @@ func (r *Registry) Compile(g Graph) (Step, error) {
 			}
 		}
 		if len(layer) == 0 {
-			return nil, fmt.Errorf("workflow: graph has a cycle")
+			return nil, nil, fmt.Errorf("workflow: graph has a cycle")
 		}
-
-		branch := make([]Step, 0, len(layer))
 		for _, id := range layer {
-			leaf, err := r.buildLeaf(nodeToSpec(byID[id]))
-			if err != nil {
-				return nil, err
-			}
-			branch = append(branch, leaf)
 			processed[id] = true
 		}
 		// Release dependents only after the whole layer is collected (barrier).
@@ -93,24 +122,9 @@ func (r *Registry) Compile(g Graph) (Step, error) {
 				indegree[dep]--
 			}
 		}
-
-		if len(branch) == 1 {
-			steps = append(steps, branch[0])
-		} else {
-			steps = append(steps, Parallel(branch))
-		}
+		layers = append(layers, layer)
 	}
-
-	return Sequence(steps...), nil
-}
-
-// CompileJSON unmarshals data into a [Graph] and compiles it.
-func (r *Registry) CompileJSON(data []byte) (Step, error) {
-	var g Graph
-	if err := json.Unmarshal(data, &g); err != nil {
-		return nil, fmt.Errorf("workflow: invalid graph: %w", err)
-	}
-	return r.Compile(g)
+	return layers, byID, nil
 }
 
 func nodeToSpec(n NodeSpec) Spec {

@@ -26,6 +26,7 @@ type Registry struct {
 	leaves     map[string]LeafFactory
 	resolvers  map[string]Resolver
 	conditions map[string]Condition
+	schemas    map[string]Schema
 }
 
 // NewRegistry returns an empty Registry.
@@ -34,6 +35,7 @@ func NewRegistry() *Registry {
 		leaves:     map[string]LeafFactory{},
 		resolvers:  map[string]Resolver{},
 		conditions: map[string]Condition{},
+		schemas:    map[string]Schema{},
 	}
 }
 
