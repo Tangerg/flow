@@ -13,8 +13,8 @@ All notable changes to this project are documented here. The format follows
   values with stable sentinel errors for `errors.Is` and `errors.As`.
 - Strict Draft 2020-12 schemas for the nested Spec and flat Graph JSON DSLs,
   standalone JSON validation, and per-node config schema validation.
-- API compatibility, vulnerability, race, vet, lint, fuzz, and benchmark
-  coverage in the development workflow.
+- Vulnerability, race, vet, lint, fuzz, and benchmark coverage in the
+  development workflow.
 
 ### Changed
 
