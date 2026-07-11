@@ -25,7 +25,7 @@ func TestLoop_untilDone(t *testing.T) {
 		return v.(int) >= 3, nil
 	}
 
-	loop := workflow.LoopN(10, body, done)
+	loop := workflow.Loop(body, done, workflow.LoopConfig{MaxIterations: 10})
 
 	out, err := loop.Run(context.Background(), workflow.NewStore().WithOutput("start", 0))
 	if err != nil {
@@ -55,7 +55,7 @@ func TestLoop_maxIterations(t *testing.T) {
 	)
 	done := func(context.Context, int, workflow.Store) (bool, error) { return false, nil } // never done
 
-	_, err := workflow.LoopN(3, body, done).Run(context.Background(), workflow.NewStore())
+	_, err := workflow.Loop(body, done, workflow.LoopConfig{MaxIterations: 3}).Run(context.Background(), workflow.NewStore())
 	if !errors.Is(err, flow.ErrMaxIterations) {
 		t.Fatalf("err = %v; want ErrMaxIterations", err)
 	}

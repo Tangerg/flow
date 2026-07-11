@@ -44,6 +44,7 @@ func ExampleSequence() {
 	pipeline := workflow.Sequence(
 		add("load", "input", 1),
 		workflow.Parallel(
+			workflow.ParallelConfig{},
 			add("save", "load", 10),
 			add("audit", "load", 100),
 		),

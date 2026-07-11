@@ -35,8 +35,8 @@ type Node[I, O any] interface {
 | `NodeFunc` | adapt a plain function into a `Node` |
 | `Then` | sequence: run one node, feed its output to the next |
 | `Switch` | selection: route to a node chosen at runtime |
-| `Loop` / `LoopN` | iteration: repeat until done, optionally with an explicit limit |
-| `Map` / `MapN` | apply a node to a slice, optionally with bounded concurrency |
+| `Loop` | iteration: repeat until done, with an optional `LoopConfig` limit |
+| `Map` | apply a node to a slice, with an optional `MapConfig` concurrency bound |
 
 ```go
 double := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil })
@@ -250,10 +250,10 @@ Current rewrite migrations:
   import `github.com/Tangerg/flow` and use the package name `flow`.
 - The former `core.Func` is now `flow.NodeFunc`, following the `http.HandlerFunc` adapter
   convention.
-- Collection combinators accept variadic nodes directly. Bounded operations use
-  explicit `N` variants such as `flow.MapN`, `flow.LoopN`, `flowx.FanOutN`,
-  `workflow.ParallelN`, and `workflow.IterationN`; root Option types were
-  removed.
+- Bounded operations take a config struct, not `N` variants: `flow.Map` and
+  `flow.Loop` accept an optional trailing config; `flowx.FanOut` and
+  `workflow.Parallel` take a leading config; `workflow.Iteration` takes an
+  `IterationConfig`.
 - `flowx` decorators are ordinary composable functions; compose them by nesting.
 - `flowx.Retry` takes a `RetryConfig` struct instead of functional options.
 - `flowx.Result.Error` is now `Result.Err`, following Go's conventional error

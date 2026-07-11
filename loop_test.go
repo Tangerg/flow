@@ -25,8 +25,9 @@ func TestLoop_untilDone(t *testing.T) {
 }
 
 func TestLoop_maxIterations(t *testing.T) {
-	node := flow.LoopN(5,
+	node := flow.Loop(
 		func(_ context.Context, _ int, x int) (int, bool, error) { return x + 1, false, nil },
+		flow.LoopConfig{MaxIterations: 5},
 	)
 
 	got, err := node.Run(context.Background(), 0)
@@ -40,9 +41,9 @@ func TestLoop_maxIterations(t *testing.T) {
 
 func TestLoopN_nonPositiveUsesDefault(t *testing.T) {
 	for _, limit := range []int{0, -1} {
-		node := flow.LoopN(limit, func(_ context.Context, _ int, value int) (int, bool, error) {
+		node := flow.Loop(func(_ context.Context, _ int, value int) (int, bool, error) {
 			return value + 1, false, nil
-		})
+		}, flow.LoopConfig{MaxIterations: limit})
 		got, err := node.Run(context.Background(), 0)
 		if !errors.Is(err, flow.ErrMaxIterations) || got != flow.DefaultMaxIterations {
 			t.Fatalf("LoopN(%d) = %d, %v", limit, got, err)

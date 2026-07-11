@@ -72,7 +72,7 @@ func TestMapN_boundsConcurrency(t *testing.T) {
 	})
 
 	in := make([]int, 30)
-	_, err := flow.MapN(limit, node).Run(context.Background(), in)
+	_, err := flow.Map(node, flow.MapConfig{Concurrency: limit}).Run(context.Background(), in)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestMapN_nonPositiveIsUnbounded(t *testing.T) {
 		return value + 1, nil
 	})
 	for _, limit := range []int{0, -1} {
-		got, err := flow.MapN(limit, node).Run(context.Background(), []int{1, 2})
+		got, err := flow.Map(node, flow.MapConfig{Concurrency: limit}).Run(context.Background(), []int{1, 2})
 		if err != nil || len(got) != 2 || got[0] != 2 || got[1] != 3 {
 			t.Fatalf("MapN(%d) = %v, %v", limit, got, err)
 		}
@@ -112,7 +112,7 @@ func TestMap_parentCancellationIsNotIndexWrapped(t *testing.T) {
 		return 0, ctx.Err()
 	})
 
-	_, err := flow.MapN(2, node).Run(ctx, []int{1, 2})
+	_, err := flow.Map(node, flow.MapConfig{Concurrency: 2}).Run(ctx, []int{1, 2})
 	var indexErr *flow.IndexError
 	if !errors.Is(err, context.Canceled) || errors.As(err, &indexErr) {
 		t.Fatalf("err = %v; want unwrapped parent cancellation", err)
@@ -141,7 +141,7 @@ func TestMap_errorIncludesIndex(t *testing.T) {
 		return in, nil
 	})
 
-	_, err := flow.MapN(1, node).Run(context.Background(), []int{1, 2, 3})
+	_, err := flow.Map(node, flow.MapConfig{Concurrency: 1}).Run(context.Background(), []int{1, 2, 3})
 	var indexErr *flow.IndexError
 	if !errors.As(err, &indexErr) || indexErr.Index != 1 || !errors.Is(err, boom) {
 		t.Fatalf("err = %v; want IndexError{Index:1, Err:boom}", err)
@@ -167,7 +167,7 @@ func TestMap_boundedFailureStopsScheduling(t *testing.T) {
 		}
 	})
 
-	_, err := flow.MapN(2, node).Run(context.Background(), []int{0, 1, 2, 3, 4})
+	_, err := flow.Map(node, flow.MapConfig{Concurrency: 2}).Run(context.Background(), []int{0, 1, 2, 3, 4})
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v; want boom", err)
 	}

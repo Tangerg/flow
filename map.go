@@ -6,23 +6,29 @@ import (
 	"sync/atomic"
 )
 
-// Map applies node to every element of the input slice concurrently and returns
-// the outputs in input order. The first failure cancels the remaining calls and
-// is returned. Every element runs concurrently. Use [MapN] to bound
-// concurrency. Cancellation is cooperative: calls already running must honor
-// their context; Map waits for them to return.
-//
-// Map is the concurrency primitive. Fan-out over several nodes, collecting a
-// result per item, and heterogeneous fan-in are all derivable from it and live
-// in higher-level packages rather than in flow.
-func Map[I, O any](node Node[I, O]) Node[[]I, []O] {
-	return mapNode[I, O]{node: node}
+// MapConfig configures [Map]. Its zero value runs every element concurrently.
+type MapConfig struct {
+	// Concurrency caps the number of concurrent calls. A non-positive value is
+	// unbounded.
+	Concurrency int
 }
 
-// MapN is like [Map] but runs at most limit calls concurrently. A non-positive
-// limit is unbounded.
-func MapN[I, O any](limit int, node Node[I, O]) Node[[]I, []O] {
-	return mapNode[I, O]{node: node, limit: limit}
+// Map applies node to every element of the input slice concurrently and returns
+// the outputs in input order. The first failure cancels the remaining calls and
+// is returned. By default every element runs concurrently; pass a [MapConfig] to
+// bound it. Cancellation is cooperative: calls already running must honor their
+// context; Map waits for them to return.
+//
+// The optional cfg is a single configuration; if several are passed, the first
+// applies. Map is the concurrency primitive — fan-out, collecting a result per
+// item, and heterogeneous fan-in are derivable from it and live in higher-level
+// packages rather than in flow.
+func Map[I, O any](node Node[I, O], cfg ...MapConfig) Node[[]I, []O] {
+	m := mapNode[I, O]{node: node}
+	if len(cfg) > 0 {
+		m.limit = cfg[0].Concurrency
+	}
+	return m
 }
 
 type mapNode[I, O any] struct {
