@@ -1,10 +1,10 @@
-package core_test
+package flow_test
 
 import (
 	"context"
 	"testing"
 
-	"github.com/Tangerg/flow/core"
+	"github.com/Tangerg/flow"
 )
 
 func FuzzThenAssociative(f *testing.F) {
@@ -13,12 +13,12 @@ func FuzzThenAssociative(f *testing.F) {
 	f.Add(-7)
 
 	f.Fuzz(func(t *testing.T, input int) {
-		addOne := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in + 1, nil })
-		double := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in * 2, nil })
-		minusThree := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in - 3, nil })
+		addOne := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in + 1, nil })
+		double := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in * 2, nil })
+		minusThree := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in - 3, nil })
 
-		left := core.Then(core.Then(addOne, double), minusThree)
-		right := core.Then(addOne, core.Then(double, minusThree))
+		left := flow.Then(flow.Then(addOne, double), minusThree)
+		right := flow.Then(addOne, flow.Then(double, minusThree))
 		lv, lerr := left.Run(context.Background(), input)
 		rv, rerr := right.Run(context.Background(), input)
 		if lerr != nil || rerr != nil || lv != rv {
@@ -36,8 +36,8 @@ func FuzzMapPreservesOrder(f *testing.F) {
 			input = input[:256]
 		}
 		limit := int(rawLimit%8) + 1
-		node := core.NodeFunc[byte, byte](func(_ context.Context, in byte) (byte, error) { return in + 1, nil })
-		out, err := core.Map(node, core.WithConcurrency(limit)).Run(context.Background(), input)
+		node := flow.NodeFunc[byte, byte](func(_ context.Context, in byte) (byte, error) { return in + 1, nil })
+		out, err := flow.Map(node, flow.WithConcurrency(limit)).Run(context.Background(), input)
 		if err != nil {
 			t.Fatalf("Map: %v", err)
 		}

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/Tangerg/flow/core"
+	"github.com/Tangerg/flow"
 )
 
 // --- Retry ---
@@ -82,17 +82,17 @@ func defaultRetryable(err error) bool {
 // error is retryable (default: any non-context error) and ctx is live. It
 // re-runs with the same input, so node should be idempotent. Backoff, if set,
 // waits between attempts and respects ctx.
-func Retry[I, O any](node core.Node[I, O], opts ...RetryOption) core.Node[I, O] {
+func Retry[I, O any](node flow.Node[I, O], opts ...RetryOption) flow.Node[I, O] {
 	cfg := retryConfig{attempts: 3, retryable: defaultRetryable}
 	for _, o := range opts {
 		if o != nil {
 			o.applyRetry(&cfg)
 		}
 	}
-	return core.NodeFunc[I, O](func(ctx context.Context, in I) (O, error) {
+	return flow.NodeFunc[I, O](func(ctx context.Context, in I) (O, error) {
 		var out O
 		if node == nil {
-			return out, core.ErrNilNode
+			return out, flow.ErrNilNode
 		}
 		var err error
 		for attempt := 1; attempt <= cfg.attempts; attempt++ {
@@ -129,11 +129,11 @@ func Retry[I, O any](node core.Node[I, O], opts ...RetryOption) core.Node[I, O] 
 
 // Timeout runs node with a context cancelled after d. It is cooperative: node
 // must honor ctx for the timeout to take effect promptly.
-func Timeout[I, O any](node core.Node[I, O], d time.Duration) core.Node[I, O] {
-	return core.NodeFunc[I, O](func(ctx context.Context, in I) (O, error) {
+func Timeout[I, O any](node flow.Node[I, O], d time.Duration) flow.Node[I, O] {
+	return flow.NodeFunc[I, O](func(ctx context.Context, in I) (O, error) {
 		var out O
 		if node == nil {
-			return out, core.ErrNilNode
+			return out, flow.ErrNilNode
 		}
 		ctx, cancel := context.WithTimeout(ctx, d)
 		defer cancel()
@@ -151,11 +151,11 @@ type TraceHooks struct {
 }
 
 // Trace instruments node, invoking hooks around each run with the elapsed time.
-func Trace[I, O any](node core.Node[I, O], name string, hooks TraceHooks) core.Node[I, O] {
-	return core.NodeFunc[I, O](func(ctx context.Context, in I) (O, error) {
+func Trace[I, O any](node flow.Node[I, O], name string, hooks TraceHooks) flow.Node[I, O] {
+	return flow.NodeFunc[I, O](func(ctx context.Context, in I) (O, error) {
 		var out O
 		if node == nil {
-			return out, core.ErrNilNode
+			return out, flow.ErrNilNode
 		}
 		if hooks.Before != nil {
 			hooks.Before(ctx, name)
@@ -175,11 +175,11 @@ func Trace[I, O any](node core.Node[I, O], name string, hooks TraceHooks) core.N
 // runs alternate with the same input. A timeout applied inside primary may
 // therefore trigger the fallback, while cancellation of the outer operation
 // does not.
-func Fallback[I, O any](primary, alternate core.Node[I, O]) core.Node[I, O] {
-	return core.NodeFunc[I, O](func(ctx context.Context, in I) (O, error) {
+func Fallback[I, O any](primary, alternate flow.Node[I, O]) flow.Node[I, O] {
+	return flow.NodeFunc[I, O](func(ctx context.Context, in I) (O, error) {
 		var out O
 		if primary == nil || alternate == nil {
-			return out, core.ErrNilNode
+			return out, flow.ErrNilNode
 		}
 		out, err := primary.Run(ctx, in)
 		if err == nil {
@@ -198,12 +198,12 @@ func Fallback[I, O any](primary, alternate core.Node[I, O]) core.Node[I, O] {
 // order. The last decorator applied is the outermost at run time.
 //
 //	node := flowx.Wrap(base).Retry(flowx.WithAttempts(3)).Timeout(2 * time.Second)
-type Builder[I, O any] struct{ node core.Node[I, O] }
+type Builder[I, O any] struct{ node flow.Node[I, O] }
 
-var _ core.Node[any, any] = Builder[any, any]{}
+var _ flow.Node[any, any] = Builder[any, any]{}
 
 // Wrap starts a decorator chain around node.
-func Wrap[I, O any](node core.Node[I, O]) Builder[I, O] { return Builder[I, O]{node} }
+func Wrap[I, O any](node flow.Node[I, O]) Builder[I, O] { return Builder[I, O]{node} }
 
 // Retry wraps the current node with [Retry].
 func (b Builder[I, O]) Retry(opts ...RetryOption) Builder[I, O] {
@@ -221,16 +221,16 @@ func (b Builder[I, O]) Trace(name string, hooks TraceHooks) Builder[I, O] {
 }
 
 // Fallback wraps the current node with [Fallback].
-func (b Builder[I, O]) Fallback(alt core.Node[I, O]) Builder[I, O] {
+func (b Builder[I, O]) Fallback(alt flow.Node[I, O]) Builder[I, O] {
 	return Builder[I, O]{Fallback(b.node, alt)}
 }
 
 // Run executes the decorated node. The zero Builder and Wrap(nil) return
-// [core.ErrNilNode].
+// [flow.ErrNilNode].
 func (b Builder[I, O]) Run(ctx context.Context, in I) (O, error) {
 	if b.node == nil {
 		var zero O
-		return zero, core.ErrNilNode
+		return zero, flow.ErrNilNode
 	}
 	return b.node.Run(ctx, in)
 }

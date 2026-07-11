@@ -1,11 +1,11 @@
-package core
+package flow
 
 import (
 	"errors"
 	"fmt"
 )
 
-// Sentinel errors returned by the core combinators. Test for them with
+// Sentinel errors returned by the root combinators. Test for them with
 // [errors.Is].
 var (
 	// ErrNilNode is returned when a nil Node or nil NodeFunc is Run.

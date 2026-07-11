@@ -2,6 +2,7 @@ package workflow_test
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -46,6 +47,50 @@ func TestStore_sharesUntouchedNodes(t *testing.T) {
 	// Writing b must not disturb a.
 	if v, ok := s2.Lookup(workflow.At("a", "output")); !ok || v.(int) != 1 {
 		t.Fatalf("Get(a) after writing b = %v, %v; want 1, true", v, ok)
+	}
+}
+
+func TestStore_overlayCompactionPreservesSnapshots(t *testing.T) {
+	snapshots := make(map[int]workflow.Store)
+	store := workflow.NewStore()
+	for i := range 100 {
+		store = store.WithOutput("node-"+strconv.Itoa(i), i)
+		if i == 31 || i == 32 || i == 64 || i == 99 {
+			snapshots[i] = store
+		}
+	}
+
+	for last, snapshot := range snapshots {
+		t.Run(strconv.Itoa(last+1)+" writes", func(t *testing.T) {
+			for i := 0; i <= last; i++ {
+				got, ok := snapshot.Lookup(workflow.Output("node-" + strconv.Itoa(i)))
+				if !ok || got != i {
+					t.Fatalf("node-%d = %v, %v; want %d, true", i, got, ok, i)
+				}
+			}
+			if _, ok := snapshot.Lookup(workflow.Output("node-" + strconv.Itoa(last+1))); ok {
+				t.Fatalf("snapshot unexpectedly contains node-%d", last+1)
+			}
+		})
+	}
+}
+
+func TestStore_overwriteAcrossCompaction(t *testing.T) {
+	original := workflow.NewStore().WithOutput("shared", "old")
+	store := original
+	for i := range 40 {
+		store = store.WithOutput("node-"+strconv.Itoa(i), i)
+	}
+	updated := store.WithOutput("shared", "new")
+
+	if got, _ := original.Lookup(workflow.Output("shared")); got != "old" {
+		t.Fatalf("original shared = %v; want old", got)
+	}
+	if got, _ := store.Lookup(workflow.Output("shared")); got != "old" {
+		t.Fatalf("compacted shared = %v; want old", got)
+	}
+	if got, _ := updated.Lookup(workflow.Output("shared")); got != "new" {
+		t.Fatalf("updated shared = %v; want new", got)
 	}
 }
 
@@ -106,6 +151,16 @@ func TestStore_UnmarshalIsAtomic(t *testing.T) {
 	}
 	if got, ok := store.Lookup(workflow.At("old", "output")); !ok || got != 1 {
 		t.Fatalf("store changed after failed decode: %v, %v", got, ok)
+	}
+}
+
+func TestStore_UnmarshalEmptyReplacesStore(t *testing.T) {
+	store := workflow.NewStore().WithOutput("old", 1)
+	if err := json.Unmarshal([]byte(`{}`), &store); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if _, ok := store.Lookup(workflow.Output("old")); ok {
+		t.Fatal("empty JSON did not replace the previous Store")
 	}
 }
 

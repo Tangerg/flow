@@ -6,12 +6,12 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/Tangerg/flow/core"
+	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
 )
 
 func ExampleLeaf() {
-	double := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
+	double := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 		return in * 2, nil
 	})
 	step := workflow.Leaf("double", workflow.From[int](workflow.Output("input")), double)
@@ -30,21 +30,46 @@ func ExampleLeaf() {
 	// Output: 42
 }
 
+func ExamplePipe() {
+	add := func(id, input string, n int) workflow.Step {
+		return workflow.Leaf(
+			id,
+			workflow.From[int](workflow.Output(input)),
+			flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+				return value + n, nil
+			}),
+		)
+	}
+
+	pipeline := workflow.Pipe(add("load", "input", 1)).
+		Parallel(
+			add("save", "load", 10),
+			add("audit", "load", 100),
+		)
+
+	out, err := pipeline.Run(context.Background(), workflow.NewStore().WithOutput("input", 1))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	saved, _ := workflow.Get[int](out, workflow.Output("save"))
+	audited, _ := workflow.Get[int](out, workflow.Output("audit"))
+	fmt.Println(saved, audited)
+	// Output: 12 102
+}
+
 // This example compiles a workflow from a JSON graph and runs it. The "addN"
 // node type is registered once; the graph then wires two instances of it.
 func ExampleRegistry_CompileGraphJSON() {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN",
-		func(id string, input workflow.Ref, config json.RawMessage) (workflow.Step, error) {
-			var cfg struct {
-				N int `json:"n"`
-			}
-			if err := json.Unmarshal(config, &cfg); err != nil {
-				return nil, err
-			}
-			leaf := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + cfg.N, nil })
-			return workflow.Leaf(id, workflow.From[int](input), leaf), nil
-		},
-	)
+	type config struct {
+		N int `json:"n"`
+	}
+	addN := workflow.Factory(func(cfg config) (flow.Node[int, int], error) {
+		return flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
+			return x + cfg.N, nil
+		}), nil
+	})
+	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN)
 
 	graph := `{"nodes":[
 	  {"id":"a","type":"addN","input":{"nodeID":"start","path":"output"},"config":{"n":10}},
@@ -53,12 +78,14 @@ func ExampleRegistry_CompileGraphJSON() {
 
 	step, err := reg.CompileGraphJSON([]byte(graph))
 	if err != nil {
-		panic(err)
+		fmt.Println(err)
+		return
 	}
 
 	out, err := step.Run(context.Background(), workflow.NewStore().WithOutput("start", 1))
 	if err != nil {
-		panic(err)
+		fmt.Println(err)
+		return
 	}
 
 	v, _ := out.Lookup(workflow.Output("b"))
@@ -83,7 +110,7 @@ func ExampleStepError() {
 	boom := errors.New("boom")
 	step := workflow.Leaf("charge",
 		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
-		core.NodeFunc[int, int](func(context.Context, int) (int, error) { return 0, boom }),
+		flow.NodeFunc[int, int](func(context.Context, int) (int, error) { return 0, boom }),
 	)
 
 	_, err := step.Run(context.Background(), workflow.NewStore())

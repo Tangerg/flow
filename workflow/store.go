@@ -3,16 +3,15 @@ package workflow
 import (
 	"encoding/json"
 	"fmt"
-	"maps"
 	"strconv"
 	"strings"
 	"sync/atomic"
 )
 
 // Store is a persistent variable pool: a two-level map of nodeID -> key ->
-// value. Every write returns a new Store that shares untouched cells with the
-// original, so the Store structure is immutable and each intermediate state is
-// a cheap snapshot.
+// value. Every write returns a new Store that shares its base snapshot with the
+// original and records the change in a bounded overlay. The Store structure is
+// immutable; overlays are periodically compacted to keep lookups bounded.
 //
 // Values are held and returned as-is (any). Callers must treat mutable values
 // such as maps, slices, and pointers as immutable after insertion; mutating one
@@ -22,7 +21,26 @@ import (
 //
 // The zero Store is empty and ready to use; prefer [NewStore] for clarity.
 type Store struct {
-	data map[string]map[string]cell
+	snapshot *storeSnapshot
+	delta    *storeDelta
+	depth    int
+}
+
+const storeOverlayLimit = 64
+
+type storeSnapshot struct {
+	data map[storeKey]cell
+}
+
+type storeDelta struct {
+	parent *storeDelta
+	key    storeKey
+	cell   cell
+}
+
+type storeKey struct {
+	nodeID string
+	key    string
 }
 
 // revisionCounter gives each write an identity. Parallel uses it to distinguish
@@ -46,20 +64,34 @@ func NewStore() Store {
 }
 
 // With returns a copy of the Store with value written at (nodeID, key). The
-// receiver is not modified; untouched node maps are shared with the copy. Value
-// is not cloned and must not be mutated after insertion.
+// receiver is not modified. Most writes add a constant-size overlay; after a
+// bounded number of writes the overlays are compacted into a new snapshot.
+// Value is not cloned and must not be mutated after insertion.
 func (s Store) With(nodeID, key string, value any) Store {
-	outer := maps.Clone(s.data)
-	if outer == nil {
-		outer = make(map[string]map[string]cell, 1)
+	next := cell{value: value, revision: revisionCounter.Add(1)}
+	identity := storeKey{nodeID: nodeID, key: key}
+	if s.depth < storeOverlayLimit {
+		return s.withDelta(identity, next)
 	}
-	inner := maps.Clone(outer[nodeID])
-	if inner == nil {
-		inner = make(map[string]cell, 1)
+
+	data := s.materialize()
+	data[identity] = next
+	return Store{snapshot: &storeSnapshot{data: data}}
+}
+
+func (s Store) withDelta(key storeKey, value cell) Store {
+	return Store{
+		snapshot: s.snapshot,
+		delta:    &storeDelta{parent: s.delta, key: key, cell: value},
+		depth:    s.depth + 1,
 	}
-	inner[key] = cell{value: value, revision: revisionCounter.Add(1)}
-	outer[nodeID] = inner
-	return Store{data: outer}
+}
+
+func (s Store) compact() Store {
+	if s.delta == nil {
+		return s
+	}
+	return Store{snapshot: &storeSnapshot{data: s.materialize()}}
 }
 
 // WithOutput returns a copy of the Store with value written to the conventional
@@ -73,12 +105,8 @@ func (s Store) WithOutput(nodeID string, value any) Store {
 // bool reports whether the reference resolved. Returned mutable values are
 // borrowed views and must not be mutated.
 func (s Store) Lookup(ref Ref) (any, bool) {
-	inner, ok := s.data[ref.NodeID]
-	if !ok {
-		return nil, false
-	}
 	key, rest, _ := strings.Cut(ref.Path, ".")
-	c, ok := inner[key]
+	c, ok := s.lookupCell(ref.NodeID, key)
 	if !ok {
 		return nil, false
 	}
@@ -88,19 +116,83 @@ func (s Store) Lookup(ref Ref) (any, bool) {
 // MarshalJSON serializes the Store as nodeID -> key -> value. It reports the
 // cell containing a value that encoding/json cannot encode.
 func (s Store) MarshalJSON() ([]byte, error) {
-	raw := make(map[string]map[string]json.RawMessage, len(s.data))
-	for nodeID, inner := range s.data {
-		rawInner := make(map[string]json.RawMessage, len(inner))
-		for key, c := range inner {
-			data, err := json.Marshal(c.value)
-			if err != nil {
-				return nil, fmt.Errorf("workflow: marshal store %s.%s: %w", nodeID, key, err)
-			}
-			rawInner[key] = data
+	raw := make(map[string]map[string]any)
+	put := func(identity storeKey, c cell) {
+		inner := raw[identity.nodeID]
+		if inner == nil {
+			inner = make(map[string]any)
+			raw[identity.nodeID] = inner
 		}
-		raw[nodeID] = rawInner
+		inner[identity.key] = c.value
 	}
-	return json.Marshal(raw)
+	if s.snapshot != nil {
+		for identity, c := range s.snapshot.data {
+			put(identity, c)
+		}
+	}
+	for _, delta := range s.deltasOldestFirst() {
+		put(delta.key, delta.cell)
+	}
+
+	encoded, err := json.Marshal(raw)
+	if err == nil {
+		return encoded, nil
+	}
+
+	// Keep the successful path to one encoding pass. On failure, isolate the
+	// offending cell so callers retain the more useful Store path in the error.
+	for nodeID, inner := range raw {
+		for key, value := range inner {
+			if _, cellErr := json.Marshal(value); cellErr != nil {
+				return nil, fmt.Errorf("workflow: marshal store %s.%s: %w", nodeID, key, cellErr)
+			}
+		}
+	}
+	return nil, fmt.Errorf("workflow: marshal store: %w", err)
+}
+
+func (s Store) lookupCell(nodeID, key string) (cell, bool) {
+	identity := storeKey{nodeID: nodeID, key: key}
+	for delta := s.delta; delta != nil; delta = delta.parent {
+		if delta.key == identity {
+			return delta.cell, true
+		}
+	}
+	if s.snapshot == nil {
+		return cell{}, false
+	}
+	c, ok := s.snapshot.data[identity]
+	return c, ok
+}
+
+// materialize returns a mutable copy of the Store's complete flat cell map.
+func (s Store) materialize() map[storeKey]cell {
+	capacity := 0
+	if s.snapshot != nil {
+		capacity = len(s.snapshot.data)
+	}
+	data := make(map[storeKey]cell, capacity+s.depth)
+	if s.snapshot != nil {
+		for key, value := range s.snapshot.data {
+			data[key] = value
+		}
+	}
+
+	for _, write := range s.deltasOldestFirst() {
+		data[write.key] = write.cell
+	}
+	return data
+}
+
+func (s Store) deltasOldestFirst() []*storeDelta {
+	writes := make([]*storeDelta, 0, s.depth)
+	for delta := s.delta; delta != nil; delta = delta.parent {
+		writes = append(writes, delta)
+	}
+	for left, right := 0, len(writes)-1; left < right; left, right = left+1, right-1 {
+		writes[left], writes[right] = writes[right], writes[left]
+	}
+	return writes
 }
 
 // UnmarshalJSON atomically replaces the Store from nodeID -> key -> value JSON.
@@ -112,17 +204,28 @@ func (s *Store) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("workflow: unmarshal store: %w", err)
 	}
 
-	next := Store{}
+	size := 0
+	for _, inner := range raw {
+		size += len(inner)
+	}
+	nextData := make(map[storeKey]cell, size)
 	for nodeID, inner := range raw {
 		for key, encoded := range inner {
 			var value any
 			if err := json.Unmarshal(encoded, &value); err != nil {
 				return fmt.Errorf("workflow: unmarshal store %s.%s: %w", nodeID, key, err)
 			}
-			next = next.With(nodeID, key, value)
+			nextData[storeKey{nodeID: nodeID, key: key}] = cell{
+				value:    value,
+				revision: revisionCounter.Add(1),
+			}
 		}
 	}
-	*s = next
+	if len(nextData) == 0 {
+		*s = Store{}
+	} else {
+		*s = Store{snapshot: &storeSnapshot{data: nextData}}
+	}
 	return nil
 }
 

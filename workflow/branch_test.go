@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Tangerg/flow/core"
+	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
 )
 
@@ -13,7 +13,7 @@ func TestBranch_routes(t *testing.T) {
 	label := func(text string) workflow.Step {
 		return workflow.Leaf(text,
 			workflow.From[int](workflow.Ref{NodeID: "start", Path: "output"}),
-			core.NodeFunc[int, string](func(_ context.Context, _ int) (string, error) { return text, nil }),
+			flow.NodeFunc[int, string](func(_ context.Context, _ int) (string, error) { return text, nil }),
 		)
 	}
 	cases := map[string]workflow.Step{"pos": label("pos"), "neg": label("neg")}
@@ -43,15 +43,15 @@ func TestBranch_noCase(t *testing.T) {
 	resolve := func(_ context.Context, _ workflow.Store) (string, error) { return "missing", nil }
 
 	_, err := workflow.Branch(resolve, map[string]workflow.Step{}).Run(context.Background(), workflow.NewStore())
-	if !errors.Is(err, core.ErrNoCase) {
-		t.Fatalf("error = %v, want core.ErrNoCase", err)
+	if !errors.Is(err, flow.ErrNoCase) {
+		t.Fatalf("error = %v, want flow.ErrNoCase", err)
 	}
 }
 
 func TestBranch_nilResolver(t *testing.T) {
 	_, err := workflow.Branch(nil, map[string]workflow.Step{"x": leafStep("x")}).
 		Run(context.Background(), workflow.NewStore())
-	if !errors.Is(err, core.ErrNilFunc) {
+	if !errors.Is(err, flow.ErrNilFunc) {
 		t.Fatalf("err = %v; want ErrNilFunc", err)
 	}
 }

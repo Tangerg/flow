@@ -7,7 +7,7 @@ import (
 	"github.com/Tangerg/flow/workflow"
 )
 
-func FuzzStoreGetPath(f *testing.F) {
+func FuzzStoreLookupPath(f *testing.F) {
 	f.Add("output.items.0.name")
 	f.Add("")
 	f.Add("output.-1")
@@ -21,7 +21,7 @@ func FuzzStoreGetPath(f *testing.F) {
 	})
 }
 
-func FuzzCompileJSON(f *testing.F) {
+func FuzzCompileGraphJSON(f *testing.F) {
 	f.Add([]byte(`{"nodes":[]}`))
 	f.Add([]byte(`{"nodes":[{"id":"a","type":"addN"}]}`))
 	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())

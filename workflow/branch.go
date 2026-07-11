@@ -5,24 +5,24 @@ import (
 	"maps"
 	"slices"
 
-	"github.com/Tangerg/flow/core"
+	"github.com/Tangerg/flow"
 )
 
 // Branch routes the Store to one of several steps. It runs resolve to pick a
 // branch name from the Store, then runs the step registered under that name. If
-// resolve yields a name with no matching case, Run fails (see core.ErrNoCase).
-// It composes with core.Switch.
+// resolve yields a name with no matching case, Run fails (see flow.ErrNoCase).
+// It composes with flow.Switch.
 func Branch(resolve Resolver, cases map[string]Step) Step {
 	cases = maps.Clone(cases)
-	resolver := core.NodeFunc[Store, string](resolve)
+	resolver := flow.NodeFunc[Store, string](resolve)
 	if resolve == nil {
 		resolver = func(context.Context, Store) (string, error) {
-			return "", core.ErrNilFunc
+			return "", flow.ErrNilFunc
 		}
 	}
 	return branch{
 		cases: cases,
-		node:  core.Switch(resolver, cases),
+		node:  flow.Switch(resolver, cases),
 	}
 }
 

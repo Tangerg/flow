@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Tangerg/flow/core"
+	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/flowx"
 )
 
@@ -14,7 +14,7 @@ import (
 // Wrap builder. The node fails once, then succeeds on the retry.
 func ExampleWrap() {
 	attempts := 0
-	flaky := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
+	flaky := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
 		attempts++
 		if attempts == 1 {
 			return 0, errors.New("temporary failure")

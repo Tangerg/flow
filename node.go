@@ -1,4 +1,4 @@
-package core
+package flow
 
 import "context"
 
@@ -19,7 +19,7 @@ type Node[I, O any] interface {
 // NodeFunc adapts an ordinary function into a [Node], analogous to
 // net/http.HandlerFunc.
 //
-//	double := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
+//	double := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
 //		return x * 2, nil
 //	})
 //	out, err := double.Run(ctx, 21) // 42, nil

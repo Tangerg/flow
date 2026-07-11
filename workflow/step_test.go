@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Tangerg/flow/core"
+	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
 )
 
@@ -14,8 +14,8 @@ type staticBinder int
 func (b staticBinder) Bind(workflow.Store) (int, error) { return int(b), nil }
 
 func TestSequence_threadsStore(t *testing.T) {
-	double := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil })
-	inc := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil })
+	double := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil })
+	inc := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil })
 
 	step1 := workflow.Leaf("double", workflow.From[int](workflow.Ref{NodeID: "start", Path: "output"}), double)
 	step2 := workflow.Leaf("inc", workflow.From[int](workflow.Ref{NodeID: "double", Path: workflow.OutputKey}), inc)
@@ -38,7 +38,7 @@ func TestSequence_threadsStore(t *testing.T) {
 }
 
 func TestLeaf_missingInput(t *testing.T) {
-	leaf := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil })
+	leaf := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil })
 	step := workflow.Leaf("n", workflow.From[int](workflow.Ref{NodeID: "absent", Path: "output"}), leaf)
 
 	if _, err := step.Run(context.Background(), workflow.NewStore()); err == nil {
@@ -48,7 +48,7 @@ func TestLeaf_missingInput(t *testing.T) {
 
 func TestLeaf_propagatesLeafError(t *testing.T) {
 	boom := errors.New("boom")
-	leaf := core.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom })
+	leaf := flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom })
 	step := workflow.Leaf("n", workflow.From[int](workflow.Ref{NodeID: "start", Path: "output"}), leaf)
 
 	_, err := step.Run(context.Background(), workflow.NewStore().WithOutput("start", 1))
@@ -61,7 +61,7 @@ func TestLeaf_errorIncludesStepAndOperation(t *testing.T) {
 	boom := errors.New("boom")
 	step := workflow.Leaf("load",
 		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
-		core.NodeFunc[int, int](func(context.Context, int) (int, error) { return 0, boom }),
+		flow.NodeFunc[int, int](func(context.Context, int) (int, error) { return 0, boom }),
 	)
 
 	_, err := step.Run(context.Background(), workflow.NewStore())
@@ -91,24 +91,24 @@ func TestSequence_singleNilStep(t *testing.T) {
 }
 
 func TestLeaf_rejectsEmptyIDAndNilBinder(t *testing.T) {
-	node := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
+	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
 	if _, err := workflow.Leaf("", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }), node).
 		Run(context.Background(), workflow.NewStore()); !errors.Is(err, workflow.ErrInvalidStepID) {
 		t.Fatalf("empty ID err = %v", err)
 	}
 	if _, err := workflow.Leaf[int, int]("x", nil, node).
-		Run(context.Background(), workflow.NewStore()); !errors.Is(err, core.ErrNilFunc) {
+		Run(context.Background(), workflow.NewStore()); !errors.Is(err, flow.ErrNilFunc) {
 		t.Fatalf("nil binder err = %v", err)
 	}
 	var bind workflow.BindFunc[int]
 	if _, err := workflow.Leaf("x", bind, node).
-		Run(context.Background(), workflow.NewStore()); !errors.Is(err, core.ErrNilFunc) {
+		Run(context.Background(), workflow.NewStore()); !errors.Is(err, flow.ErrNilFunc) {
 		t.Fatalf("nil BindFunc err = %v", err)
 	}
 }
 
 func TestLeaf_acceptsCustomBinder(t *testing.T) {
-	node := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in * 2, nil })
+	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in * 2, nil })
 	out, err := workflow.Leaf("double", staticBinder(21), node).Run(context.Background(), workflow.NewStore())
 	if err != nil {
 		t.Fatalf("run: %v", err)

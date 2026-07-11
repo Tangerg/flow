@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/Tangerg/flow/core"
+	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
 )
 
@@ -24,7 +24,7 @@ func sum2() workflow.LeafFactory {
 			bv, _ := s.Lookup(cfg.B)
 			return [2]int{av.(int), bv.(int)}, nil
 		})
-		leaf := core.NodeFunc[[2]int, int](func(_ context.Context, p [2]int) (int, error) { return p[0] + p[1], nil })
+		leaf := flow.NodeFunc[[2]int, int](func(_ context.Context, p [2]int) (int, error) { return p[0] + p[1], nil })
 		return workflow.Leaf(id, bind, leaf), nil
 	}
 }
@@ -147,5 +147,35 @@ func TestCompileGraph_runsSchemaValidation(t *testing.T) {
 	}}
 	if _, err := reg.CompileGraph(g); err == nil {
 		t.Fatal("expected incompatible schema error")
+	}
+}
+
+func TestCompileGraph_preservesSpecOrderWithinLayer(t *testing.T) {
+	constant := func(id string, _ workflow.Ref, _ json.RawMessage) (workflow.Step, error) {
+		return workflow.Leaf(
+			id,
+			workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
+			flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) { return value, nil }),
+		), nil
+	}
+	reg := workflow.NewRegistry().MustRegisterLeaf("constant", constant)
+	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+		{ID: "parent-a", Type: "constant"},
+		{ID: "parent-b", Type: "constant"},
+		{ID: "child-b", Type: "constant", DependsOn: []string{"parent-b"}},
+		{ID: "child-a", Type: "constant", DependsOn: []string{"parent-a"}},
+	}}
+
+	step, err := reg.CompileGraph(g)
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+	description := workflow.Describe(step)
+	if len(description.Children) != 2 {
+		t.Fatalf("description = %+v; want two layers", description)
+	}
+	second := description.Children[1]
+	if len(second.Children) != 2 || second.Children[0].ID != "child-b" || second.Children[1].ID != "child-a" {
+		t.Fatalf("second layer = %+v; want child-b then child-a", second)
 	}
 }

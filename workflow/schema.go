@@ -33,11 +33,11 @@ func (r *Registry) RegisterSchema(nodeType string, schema Schema) error {
 	_, exists := r.schemas[nodeType]
 	switch {
 	case nodeType == "":
-		return fmt.Errorf("workflow: register schema: node type is empty")
+		return &RegistrationError{Kind: "schema", Err: fmt.Errorf("%w: empty node type", ErrInvalidRegistration)}
 	case !validValueType(schema.Input) || !validValueType(schema.Output):
-		return fmt.Errorf("workflow: register schema %q: invalid value type", nodeType)
+		return &RegistrationError{Kind: "schema", Name: nodeType, Err: fmt.Errorf("%w: invalid value type", ErrInvalidRegistration)}
 	case exists:
-		return fmt.Errorf("workflow: register schema %q: already registered", nodeType)
+		return &RegistrationError{Kind: "schema", Name: nodeType, Err: ErrDuplicateRegistration}
 	default:
 		r.schemas[nodeType] = schema
 	}
@@ -71,14 +71,19 @@ func compatible(out, in ValueType) bool {
 // cycles, and — where schemas are registered — type-compatible Input edges. It is
 // intended to power a visual editor's live feedback.
 func (r *Registry) ValidateGraph(g Graph) error {
-	_, byID, err := r.plan(g) // duplicate IDs and cycles
+	_, _, err := r.validateGraph(g)
+	return err
+}
+
+func (r *Registry) validateGraph(g Graph) ([][]string, map[string]NodeSpec, error) {
+	layers, byID, err := r.plan(g) // duplicate IDs and cycles
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	for _, n := range g.Nodes {
 		if _, ok := r.leafFactory(n.Type); !ok {
-			return fmt.Errorf("workflow: node %q: unknown type %q", n.ID, n.Type)
+			return nil, nil, &GraphError{NodeID: n.ID, Field: "type", Err: fmt.Errorf("%w %q", ErrUnknownNodeType, n.Type)}
 		}
 		if n.Input == nil {
 			continue
@@ -90,9 +95,13 @@ func (r *Registry) ValidateGraph(g Graph) error {
 		out := r.schema(producer.Type).Output
 		in := r.schema(n.Type).Input
 		if !compatible(out, in) {
-			return fmt.Errorf("workflow: edge %s.output (%s) -> %s.input (%s): incompatible types",
-				producer.ID, out, n.ID, in)
+			return nil, nil, &GraphError{
+				NodeID: n.ID,
+				Field:  "input",
+				Err: fmt.Errorf("%w: %s.output is %s, want %s",
+					ErrIncompatibleType, producer.ID, out, in),
+			}
 		}
 	}
-	return nil
+	return layers, byID, nil
 }

@@ -1,4 +1,4 @@
-package core
+package flow
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 //
 // Map is the concurrency primitive. Fan-out over several nodes, collecting a
 // result per item, and heterogeneous fan-in are all derivable from it and live
-// in higher-level packages rather than in core.
+// in higher-level packages rather than in flow.
 func Map[I, O any](node Node[I, O], opts ...MapOption) Node[[]I, []O] {
 	var c mapConfig
 	for _, opt := range opts {

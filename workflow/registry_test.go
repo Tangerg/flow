@@ -7,24 +7,18 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Tangerg/flow/core"
+	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
 )
 
 // addN is a reusable leaf factory that reads its int input and adds config "n".
 func addN() workflow.LeafFactory {
-	return func(id string, input workflow.Ref, config json.RawMessage) (workflow.Step, error) {
-		var cfg struct {
-			N int `json:"n"`
-		}
-		if len(config) > 0 {
-			if err := json.Unmarshal(config, &cfg); err != nil {
-				return nil, err
-			}
-		}
-		leaf := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + cfg.N, nil })
-		return workflow.Leaf(id, workflow.From[int](input), leaf), nil
+	type config struct {
+		N int `json:"n"`
 	}
+	return workflow.Factory(func(cfg config) (flow.Node[int, int], error) {
+		return flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + cfg.N, nil }), nil
+	})
 }
 
 func TestRegistry_compileSequenceJSON(t *testing.T) {

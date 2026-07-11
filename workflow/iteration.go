@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Tangerg/flow/core"
+	"github.com/Tangerg/flow"
 )
 
 // Keys under which [Iteration] scopes each element for the body to read.
@@ -37,14 +37,10 @@ func IterationN(limit int, id string, inputRef Ref, body Step, bodyOutput Ref) S
 
 func iterationN(limit int, id string, inputRef Ref, body Step, bodyOutput Ref) Step {
 	it := iteration{id: id, body: body}
-	it.node = core.NodeFunc[Store, Store](func(ctx context.Context, s Store) (Store, error) {
-		raw, ok := s.Lookup(inputRef)
-		if !ok {
-			return s, fmt.Errorf("workflow: iteration %q: input %s.%s not found", id, inputRef.NodeID, inputRef.Path)
-		}
-		items, ok := raw.([]any)
-		if !ok {
-			return s, fmt.Errorf("workflow: iteration %q: input is %T, want []any", id, raw)
+	it.node = flow.NodeFunc[Store, Store](func(ctx context.Context, s Store) (Store, error) {
+		items, err := Get[[]any](s, inputRef)
+		if err != nil {
+			return s, fmt.Errorf("workflow: iteration %q input: %w", id, err)
 		}
 
 		indexes := make([]int, len(items))
@@ -52,20 +48,16 @@ func iterationN(limit int, id string, inputRef Ref, body Step, bodyOutput Ref) S
 			indexes[i] = i
 		}
 
-		outputs, err := core.Map(
-			core.NodeFunc[int, any](func(ctx context.Context, i int) (any, error) {
+		outputs, err := flow.Map(
+			flow.NodeFunc[int, any](func(ctx context.Context, i int) (any, error) {
 				scoped := s.With(id, ItemKey, items[i]).With(id, IndexKey, i)
 				result, err := runStep(ctx, body, scoped)
 				if err != nil {
 					return nil, err
 				}
-				out, ok := result.Lookup(bodyOutput)
-				if !ok {
-					return nil, fmt.Errorf("body output %s.%s not found", bodyOutput.NodeID, bodyOutput.Path)
-				}
-				return out, nil
+				return Get[any](result, bodyOutput)
 			}),
-			core.WithConcurrency(limit),
+			flow.WithConcurrency(limit),
 		).Run(ctx, indexes)
 		if err != nil {
 			return s, fmt.Errorf("workflow: iteration %q: %w", id, err)

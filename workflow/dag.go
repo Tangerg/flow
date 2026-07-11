@@ -30,10 +30,7 @@ type Graph struct {
 // and incompatible registered schemas, then runs each topological layer's
 // nodes concurrently.
 func (r *Registry) CompileGraph(g Graph) (Step, error) {
-	if err := r.ValidateGraph(g); err != nil {
-		return nil, err
-	}
-	layers, byID, err := r.plan(g)
+	layers, byID, err := r.validateGraph(g)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +58,7 @@ func (r *Registry) CompileGraph(g Graph) (Step, error) {
 func (r *Registry) CompileGraphJSON(data []byte) (Step, error) {
 	var g Graph
 	if err := decodeStrict(data, &g); err != nil {
-		return nil, fmt.Errorf("workflow: invalid graph: %w", err)
+		return nil, &GraphError{Err: fmt.Errorf("%w: %v", ErrInvalidGraph, err)}
 	}
 	return r.CompileGraph(g)
 }
@@ -71,41 +68,44 @@ func (r *Registry) CompileGraphJSON(data []byte) (Step, error) {
 // and ValidateGraph.
 func (r *Registry) plan(g Graph) (layers [][]string, byID map[string]NodeSpec, err error) {
 	byID = make(map[string]NodeSpec, len(g.Nodes))
-	for _, n := range g.Nodes {
+	indexByID := make(map[string]int, len(g.Nodes))
+	for i, n := range g.Nodes {
 		if n.ID == "" {
-			return nil, nil, fmt.Errorf("workflow: graph node with empty ID")
+			return nil, nil, &GraphError{Field: "id", Err: fmt.Errorf("%w: empty", ErrInvalidGraph)}
 		}
 		if _, dup := byID[n.ID]; dup {
-			return nil, nil, fmt.Errorf("workflow: duplicate node ID %q", n.ID)
+			return nil, nil, &GraphError{NodeID: n.ID, Field: "id", Err: ErrDuplicateNode}
 		}
 		if n.Input != nil {
 			if err := validateRef(*n.Input, fmt.Sprintf("node %q input", n.ID)); err != nil {
-				return nil, nil, err
+				return nil, nil, &GraphError{NodeID: n.ID, Field: "input", Err: fmt.Errorf("%w: %v", ErrInvalidGraph, err)}
 			}
 		}
 		byID[n.ID] = n
+		indexByID[n.ID] = i
 	}
 
-	indegree := make(map[string]int, len(g.Nodes))
-	dependents := make(map[string][]string, len(g.Nodes))
-	for _, n := range g.Nodes {
+	indegree := make([]int, len(g.Nodes))
+	dependents := make([][]int, len(g.Nodes))
+	for i, n := range g.Nodes {
 		seen := map[string]bool{}
 		addDep := func(dep string, allowExternal bool) error {
 			if dep == "" || seen[dep] {
 				return nil
 			}
 			if dep == n.ID {
-				return fmt.Errorf("workflow: node %q depends on itself", n.ID)
+				return &GraphError{NodeID: n.ID, Field: "dependsOn", Err: fmt.Errorf("%w: self dependency", ErrCycle)}
 			}
-			if _, ok := byID[dep]; !ok {
+			depIndex, ok := indexByID[dep]
+			if !ok {
 				if allowExternal {
 					return nil
 				}
-				return fmt.Errorf("workflow: node %q depends on unknown node %q", n.ID, dep)
+				return &GraphError{NodeID: n.ID, Field: "dependsOn", Err: fmt.Errorf("%w %q", ErrUnknownNode, dep)}
 			}
 			seen[dep] = true
-			indegree[n.ID]++
-			dependents[dep] = append(dependents[dep], n.ID)
+			indegree[i]++
+			dependents[depIndex] = append(dependents[depIndex], i)
 			return nil
 		}
 		if n.Input != nil {
@@ -120,29 +120,46 @@ func (r *Registry) plan(g Graph) (layers [][]string, byID map[string]NodeSpec, e
 		}
 	}
 
-	processed := make(map[string]bool, len(g.Nodes))
-	for len(processed) < len(g.Nodes) {
-		// Collect every node whose dependencies are all satisfied (in spec order
-		// for a stable layout).
-		var layer []string
-		for _, n := range g.Nodes {
-			if !processed[n.ID] && indegree[n.ID] == 0 {
-				layer = append(layer, n.ID)
+	// Kahn's algorithm computes each node's barrier level in O(V+E). Levels are
+	// materialized in a final spec-order pass so independent nodes retain the
+	// deterministic order in which the caller declared them.
+	queue := make([]int, 0, len(g.Nodes))
+	for i, degree := range indegree {
+		if degree == 0 {
+			queue = append(queue, i)
+		}
+	}
+
+	levels := make([]int, len(g.Nodes))
+	processed := 0
+	maxLevel := 0
+	for head := 0; head < len(queue); head++ {
+		node := queue[head]
+		processed++
+		for _, dependent := range dependents[node] {
+			nextLevel := levels[node] + 1
+			if levels[dependent] < nextLevel {
+				levels[dependent] = nextLevel
+				if maxLevel < nextLevel {
+					maxLevel = nextLevel
+				}
+			}
+			indegree[dependent]--
+			if indegree[dependent] == 0 {
+				queue = append(queue, dependent)
 			}
 		}
-		if len(layer) == 0 {
-			return nil, nil, fmt.Errorf("workflow: graph has a cycle")
-		}
-		for _, id := range layer {
-			processed[id] = true
-		}
-		// Release dependents only after the whole layer is collected (barrier).
-		for _, id := range layer {
-			for _, dep := range dependents[id] {
-				indegree[dep]--
-			}
-		}
-		layers = append(layers, layer)
+	}
+	if processed != len(g.Nodes) {
+		return nil, nil, &GraphError{Err: ErrCycle}
+	}
+	if len(g.Nodes) == 0 {
+		return nil, byID, nil
+	}
+
+	layers = make([][]string, maxLevel+1)
+	for i, n := range g.Nodes {
+		layers[levels[i]] = append(layers[levels[i]], n.ID)
 	}
 	return layers, byID, nil
 }

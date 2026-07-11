@@ -1,6 +1,6 @@
-// Package workflow is the dynamic layer built on the core primitives.
+// Package workflow is the dynamic layer built on package flow's primitives.
 //
-// Where core composes statically typed nodes at compile time, workflow threads a
+// Where flow composes statically typed nodes at compile time, workflow threads a
 // heterogeneous variable pool — the [Store] — through nodes addressed by ID, so
 // graphs can be assembled at runtime (from config, a builder, or a visual
 // editor).
@@ -11,8 +11,15 @@
 // Store snapshots can be serialized with encoding/json; decoding replaces a
 // Store atomically.
 //
-// A workflow node is a [Step] — a core.Node[Store, Store] that reads its inputs
+// A workflow node is a [Step] — a flow.Node[Store, Store] that reads its inputs
 // from the Store and returns a Store extended with its output. Typed business
-// logic is bridged in with [Leaf], and composites ([Sequence], [Branch], [Loop],
-// [Parallel], [Iteration]) are built from the core primitives.
+// logic is bridged in with [Leaf]; [Factory] adapts the common case of a typed
+// node constructor with JSON config. Composites ([Sequence], [Branch], [Loop],
+// [Parallel], [Iteration]) are built from flow's primitives. [Pipe] provides a
+// fluent API for assembling the same composites; its [Pipeline] result is
+// itself a Step.
+//
+// Errors preserve their causes for errors.Is and errors.As. [RefError],
+// [RegistrationError], [GraphError], [SpecError], and [StepError] identify the
+// exact boundary that failed.
 package workflow
