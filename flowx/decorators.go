@@ -10,45 +10,19 @@ import (
 
 // --- Retry ---
 
-type retryConfig struct {
-	attempts  int
-	backoff   func(attempt int) time.Duration
-	retryable func(error) bool
-}
-
-// RetryOption configures [Retry]. Options are created by this package.
-type RetryOption interface {
-	applyRetry(*retryConfig)
-}
-
-type retryOptionFunc func(*retryConfig)
-
-func (f retryOptionFunc) applyRetry(c *retryConfig) { f(c) }
-
-// WithAttempts sets the maximum number of attempts. Non-positive values leave
-// the default unchanged.
-func WithAttempts(n int) RetryOption {
-	return retryOptionFunc(func(c *retryConfig) {
-		if n > 0 {
-			c.attempts = n
-		}
-	})
-}
-
-// WithBackoff sets the delay before attempt N+1 (attempt is 1-based). Use
-// [ConstantBackoff] or [ExponentialBackoff] for the common cases.
-func WithBackoff(fn func(attempt int) time.Duration) RetryOption {
-	return retryOptionFunc(func(c *retryConfig) { c.backoff = fn })
-}
-
-// WithRetryable sets the predicate deciding whether an error should be retried.
-// The default retries any error that is not a context cancellation/deadline.
-func WithRetryable(fn func(error) bool) RetryOption {
-	return retryOptionFunc(func(c *retryConfig) {
-		if fn != nil {
-			c.retryable = fn
-		}
-	})
+// RetryConfig configures [Retry]. The zero value applies the defaults: three
+// attempts, no backoff, and retrying every error except a context cancellation
+// or deadline.
+type RetryConfig struct {
+	// Attempts is the maximum number of tries. A value below 1 means 3.
+	Attempts int
+	// Backoff returns the delay before the try following the given 1-based
+	// attempt. A nil Backoff, or a non-positive delay, waits not at all. See
+	// [ConstantBackoff] and [ExponentialBackoff].
+	Backoff func(attempt int) time.Duration
+	// Retryable reports whether an error should be retried. A nil Retryable
+	// retries every error except a context cancellation or deadline.
+	Retryable func(error) bool
 }
 
 // ConstantBackoff waits a fixed duration between attempts.
@@ -82,12 +56,14 @@ func defaultRetryable(err error) bool {
 // error is retryable (default: any non-context error) and ctx is live. It
 // re-runs with the same input, so node should be idempotent. Backoff, if set,
 // waits between attempts and respects ctx.
-func Retry[I, O any](node flow.Node[I, O], opts ...RetryOption) flow.Node[I, O] {
-	cfg := retryConfig{attempts: 3, retryable: defaultRetryable}
-	for _, o := range opts {
-		if o != nil {
-			o.applyRetry(&cfg)
-		}
+func Retry[I, O any](node flow.Node[I, O], cfg RetryConfig) flow.Node[I, O] {
+	attempts := cfg.Attempts
+	if attempts < 1 {
+		attempts = 3
+	}
+	retryable := cfg.Retryable
+	if retryable == nil {
+		retryable = defaultRetryable
 	}
 	return flow.NodeFunc[I, O](func(ctx context.Context, in I) (O, error) {
 		var out O
@@ -95,12 +71,12 @@ func Retry[I, O any](node flow.Node[I, O], opts ...RetryOption) flow.Node[I, O] 
 			return out, flow.ErrNilNode
 		}
 		var err error
-		for attempt := 1; attempt <= cfg.attempts; attempt++ {
+		for attempt := 1; attempt <= attempts; attempt++ {
 			if err := ctx.Err(); err != nil {
 				return out, err
 			}
-			if attempt > 1 && cfg.backoff != nil {
-				if d := cfg.backoff(attempt - 1); d > 0 {
+			if attempt > 1 && cfg.Backoff != nil {
+				if d := cfg.Backoff(attempt - 1); d > 0 {
 					timer := time.NewTimer(d)
 					select {
 					case <-ctx.Done():
@@ -117,7 +93,7 @@ func Retry[I, O any](node flow.Node[I, O], opts ...RetryOption) flow.Node[I, O] 
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return out, ctxErr
 			}
-			if !cfg.retryable(err) {
+			if !retryable(err) {
 				return out, err
 			}
 		}

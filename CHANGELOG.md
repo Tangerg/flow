@@ -9,8 +9,6 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - Typed `workflow.Factory` adapter for common JSON-configured leaf nodes.
-- Immutable `workflow.Pipeline` fluent API with `Pipe`, `Then`, and `Parallel`;
-  a pipeline is directly runnable as a `Step` without a build call.
 - Structured `RefError`, `RegistrationError`, `GraphError`, and `SpecError`
   values with stable sentinel errors for `errors.Is` and `errors.As`.
 - Strict Draft 2020-12 schemas for the nested Spec and flat Graph JSON DSLs,
@@ -34,9 +32,11 @@ All notable changes to this project are documented here. The format follows
   constructs one immutable snapshot; Parallel specializes empty and single
   branches and compacts shared fan-out input at most once.
 - The public surface is smaller: bounded root operations use `MapN` and
-  `LoopN`, fluent composition is exclusive to `workflow.Pipeline`, conventional
-  Store refs use constructors instead of key constants, and diagram rendering
-  is left to callers.
+  `LoopN`, conventional Store refs use constructors instead of key constants,
+  and diagram rendering is left to callers.
+- One shape per purpose: `flowx.Retry` takes a `RetryConfig` struct instead of
+  sealed functional options, and a leaf binder is a `BindFunc`, dropping the
+  redundant `Binder` interface and the redundant `Pipeline` fluent builder.
 
 ### Breaking
 
@@ -44,8 +44,11 @@ All notable changes to this project are documented here. The format follows
   `github.com/Tangerg/flow`.
 - Replace root functional options with `MapN` and `LoopN`; use `workflow.LoopN`
   instead of `LoopLimit`.
-- Compose `flowx` decorators as functions. Fluent chaining remains only on the
-  deliberately small `workflow.Pipeline` surface.
+- Compose `flowx` decorators by nesting; `workflow.Pipeline` and `Pipe` were
+  removed. Build sequential and parallel stages with `Sequence` and `Parallel`.
+- `flowx.Retry` now takes a `RetryConfig`; replace `WithAttempts`, `WithBackoff`,
+  and `WithRetryable` with its fields. The `Binder` interface was removed; pass a
+  `BindFunc` to `Leaf`.
 - Use `Output`, `Item`, and `Index` instead of exported Store path constants;
   use `ObserverFunc` instead of the removed event collector.
 - Consume `workflow.Description` directly; Mermaid rendering is no longer part

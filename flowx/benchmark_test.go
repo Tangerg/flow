@@ -15,7 +15,7 @@ func BenchmarkDecoratorStack(b *testing.B) {
 		return in + 1, nil
 	})
 	node := flowx.Fallback(
-		flowx.Timeout(flowx.Retry(base, flowx.WithAttempts(3)), time.Minute),
+		flowx.Timeout(flowx.Retry(base, flowx.RetryConfig{Attempts: 3}), time.Minute),
 		base,
 	)
 

@@ -30,7 +30,7 @@ func ExampleLeaf() {
 	// Output: 42
 }
 
-func ExamplePipe() {
+func ExampleSequence() {
 	add := func(id, input string, n int) workflow.Step {
 		return workflow.Leaf(
 			id,
@@ -41,11 +41,13 @@ func ExamplePipe() {
 		)
 	}
 
-	pipeline := workflow.Pipe(add("load", "input", 1)).
-		Parallel(
+	pipeline := workflow.Sequence(
+		add("load", "input", 1),
+		workflow.Parallel(
 			add("save", "load", 10),
 			add("audit", "load", 100),
-		)
+		),
+	)
 
 	out, err := pipeline.Run(context.Background(), workflow.NewStore().WithOutput("input", 1))
 	if err != nil {
