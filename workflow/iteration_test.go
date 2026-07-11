@@ -15,13 +15,13 @@ func TestIteration_mapsAndCollects(t *testing.T) {
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil }),
 	)
 
-	iter := workflow.IterationN(
-		2,
-		"iter",
-		workflow.Ref{NodeID: "start", Path: "output"},
-		body,
-		workflow.Output("el"),
-	)
+	iter := workflow.Iteration(workflow.IterationConfig{
+		ID:          "iter",
+		Input:       workflow.Ref{NodeID: "start", Path: "output"},
+		Body:        body,
+		BodyOutput:  workflow.Output("el"),
+		Concurrency: 2,
+	})
 
 	in := workflow.NewStore().WithOutput("start", []any{1, 2, 3})
 	out, err := iter.Run(context.Background(), in)
@@ -52,12 +52,12 @@ func TestIteration_usesIndex(t *testing.T) {
 		flow.NodeFunc[int, int](func(_ context.Context, i int) (int, error) { return i, nil }),
 	)
 
-	iter := workflow.Iteration(
-		"iter",
-		workflow.Ref{NodeID: "start", Path: "output"},
-		body,
-		workflow.Output("el"),
-	)
+	iter := workflow.Iteration(workflow.IterationConfig{
+		ID:         "iter",
+		Input:      workflow.Ref{NodeID: "start", Path: "output"},
+		Body:       body,
+		BodyOutput: workflow.Output("el"),
+	})
 
 	in := workflow.NewStore().WithOutput("start", []any{"a", "b", "c"})
 	out, err := iter.Run(context.Background(), in)
@@ -77,7 +77,7 @@ func TestIteration_inputNotArray(t *testing.T) {
 		workflow.From[int](workflow.Item("iter")),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
-	iter := workflow.Iteration("iter", workflow.Output("start"), body, workflow.Output("el"))
+	iter := workflow.Iteration(workflow.IterationConfig{ID: "iter", Input: workflow.Output("start"), Body: body, BodyOutput: workflow.Output("el")})
 
 	_, err := iter.Run(context.Background(), workflow.NewStore().WithOutput("start", 42))
 	if err == nil {

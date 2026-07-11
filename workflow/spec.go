@@ -87,10 +87,7 @@ func (r *Registry) build(spec Spec) (Step, error) {
 		if err != nil {
 			return nil, err
 		}
-		if spec.Concurrency > 0 {
-			return ParallelN(spec.Concurrency, steps...), nil
-		}
-		return Parallel(steps...), nil
+		return Parallel(ParallelConfig{Concurrency: spec.Concurrency}, steps...), nil
 	case KindBranch:
 		return r.buildBranch(spec)
 	case KindLoop:
@@ -171,10 +168,7 @@ func (r *Registry) buildLoop(spec Spec) (Step, error) {
 	if err != nil {
 		return nil, err
 	}
-	if spec.MaxIterations > 0 {
-		return LoopN(spec.MaxIterations, body, cond), nil
-	}
-	return Loop(body, cond), nil
+	return Loop(body, cond, LoopConfig{MaxIterations: spec.MaxIterations}), nil
 }
 
 func (r *Registry) buildIteration(spec Spec) (Step, error) {
@@ -188,8 +182,11 @@ func (r *Registry) buildIteration(spec Spec) (Step, error) {
 	if err != nil {
 		return nil, err
 	}
-	if spec.Concurrency > 0 {
-		return IterationN(spec.Concurrency, spec.ID, *spec.Input, body, *spec.BodyOutput), nil
-	}
-	return Iteration(spec.ID, *spec.Input, body, *spec.BodyOutput), nil
+	return Iteration(IterationConfig{
+		ID:          spec.ID,
+		Input:       *spec.Input,
+		Body:        body,
+		BodyOutput:  *spec.BodyOutput,
+		Concurrency: spec.Concurrency,
+	}), nil
 }

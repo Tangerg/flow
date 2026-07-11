@@ -19,8 +19,8 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 
 - The minimal typed API now lives in the module root package `flow`.
-- Collection combinators accept variadic nodes and expose explicit bounded
-  variants such as `FanOutN`, `MapAllN`, and `ParallelN`.
+- Bounded concurrency is configured with structs (`flow.MapConfig`,
+  `workflow.ParallelConfig`, `IterationConfig`, ...); no `N` twin functions.
 - Workflow registration reports errors immediately; `MustRegister*` helpers are
   available for fail-fast startup code.
 - Store references, observers, options, and workflow compilation APIs have been
@@ -31,8 +31,8 @@ All notable changes to this project are documented here. The format follows
 - Store JSON encoding uses a single successful encoding pass and decoding
   constructs one immutable snapshot; Parallel specializes empty and single
   branches and compacts shared fan-out input at most once.
-- The public surface is smaller: bounded root operations use `MapN` and
-  `LoopN`, conventional Store refs use constructors instead of key constants,
+- The public surface is smaller: bounded operations take config structs (no `N`
+  twins), conventional Store refs use constructors instead of key constants,
   and diagram rendering is left to callers.
 - One shape per purpose: `flowx.Retry` takes a `RetryConfig` struct instead of
   sealed functional options, and a leaf binder is a `BindFunc`, dropping the
@@ -42,8 +42,9 @@ All notable changes to this project are documented here. The format follows
 
 - Replace imports of `github.com/Tangerg/flow/core` with
   `github.com/Tangerg/flow`.
-- Replace root functional options with `MapN` and `LoopN`; use `workflow.LoopN`
-  instead of `LoopLimit`.
+- Configure bounded operations with config structs (`flow.MapConfig`,
+  `flow.LoopConfig`, `workflow.ParallelConfig`, `workflow.IterationConfig`); the
+  `XxxN` variants were removed.
 - Compose `flowx` decorators by nesting; `workflow.Pipeline` and `Pipe` were
   removed. Build sequential and parallel stages with `Sequence` and `Parallel`.
 - `flowx.Retry` now takes a `RetryConfig`; replace `WithAttempts`, `WithBackoff`,

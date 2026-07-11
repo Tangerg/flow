@@ -17,18 +17,16 @@ import (
 // inherited from the input snapshot cannot overwrite another branch's work. On
 // a same-cell conflict a later branch's value wins. Parallel derives its fan-out
 // from flow.Map applied to the branches as data.
-func Parallel(branches ...Step) Step {
-	return parallelN(0, branches)
+// ParallelConfig configures [Parallel]. Its zero value runs every branch
+// concurrently.
+type ParallelConfig struct {
+	// Concurrency caps the number of branches running at once. A non-positive
+	// value is unbounded.
+	Concurrency int
 }
 
-// ParallelN is like [Parallel] but runs at most limit branches concurrently. A
-// non-positive limit is unbounded.
-func ParallelN(limit int, branches ...Step) Step {
-	return parallelN(limit, branches)
-}
-
-func parallelN(limit int, branches []Step) Step {
-	return parallel{branches: slices.Clone(branches), limit: limit}
+func Parallel(cfg ParallelConfig, branches ...Step) Step {
+	return parallel{branches: slices.Clone(branches), limit: cfg.Concurrency}
 }
 
 // parallel is the [Step] produced by [Parallel].
@@ -62,10 +60,7 @@ func (p parallel) Run(ctx context.Context, s Store) (Store, error) {
 	if branchInput.depth >= storeOverlayLimit {
 		branchInput = branchInput.compact()
 	}
-	mapper := flow.Map[Step, Store](branchRunner{input: branchInput})
-	if p.limit > 0 {
-		mapper = flow.MapN[Step, Store](p.limit, branchRunner{input: branchInput})
-	}
+	mapper := flow.Map[Step, Store](branchRunner{input: branchInput}, flow.MapConfig{Concurrency: p.limit})
 	results, err := mapper.Run(ctx, p.branches)
 	if err != nil {
 		return s, err
