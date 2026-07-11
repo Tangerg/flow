@@ -6,60 +6,69 @@ import (
 	"sync"
 )
 
-// Event is emitted as steps run, for observability. The concrete events are
-// [NodeStarted], [NodeCompleted], and [NodeFailed].
-type Event interface{ isEvent() }
+// EventKind identifies a step lifecycle event.
+type EventKind string
 
-// NodeStarted is emitted just before a step's leaf runs.
-type NodeStarted struct{ ID string }
+// Step lifecycle event kinds.
+const (
+	EventStarted   EventKind = "started"
+	EventCompleted EventKind = "completed"
+	EventFailed    EventKind = "failed"
+)
 
-// NodeCompleted is emitted after a step's leaf succeeds.
-type NodeCompleted struct{ ID string }
-
-// NodeFailed is emitted when a step's bind or leaf fails.
-type NodeFailed struct {
-	ID  string
-	Err error
+// Event describes one step lifecycle transition. Err is non-nil only for an
+// [EventFailed] event.
+type Event struct {
+	Kind EventKind
+	ID   string
+	Err  error
 }
 
-func (NodeStarted) isEvent()   {}
-func (NodeCompleted) isEvent() {}
-func (NodeFailed) isEvent()    {}
-
-// Sink receives events synchronously. It may be called from several goroutines
-// at once, since steps run concurrently in [Parallel] and [Iteration], so it
-// must be concurrency-safe, return promptly, and not panic. A slow Sink delays
-// the node emitting the event.
-type Sink func(Event)
-
-type sinkKey struct{}
-
-// WithSink returns a context carrying sink. Steps built with [Adapt] emit their
-// lifecycle events to it while running under that context.
-func WithSink(ctx context.Context, sink Sink) context.Context {
-	return context.WithValue(ctx, sinkKey{}, sink)
+// Observer receives workflow events synchronously. Observe may be called from
+// multiple goroutines and should return promptly. A slow Observer delays the
+// step emitting the event.
+type Observer interface {
+	Observe(context.Context, Event)
 }
 
-func emit(ctx context.Context, e Event) {
-	if sink, ok := ctx.Value(sinkKey{}).(Sink); ok && sink != nil {
-		sink(e)
+// ObserverFunc adapts a function into an [Observer].
+type ObserverFunc func(context.Context, Event)
+
+// Observe calls f. A nil ObserverFunc discards the event.
+func (f ObserverFunc) Observe(ctx context.Context, event Event) {
+	if f != nil {
+		f(ctx, event)
 	}
 }
 
-// Collector is a concurrency-safe [Sink] that records events in the order they
-// arrive.
+type observerKey struct{}
+
+// WithObserver returns a context carrying observer. Steps built with [Leaf]
+// report their lifecycle events to it while running under that context.
+func WithObserver(ctx context.Context, observer Observer) context.Context {
+	return context.WithValue(ctx, observerKey{}, observer)
+}
+
+func emit(ctx context.Context, event Event) {
+	if observer, ok := ctx.Value(observerKey{}).(Observer); ok && observer != nil {
+		observer.Observe(ctx, event)
+	}
+}
+
+// Collector is a concurrency-safe [Observer] that records events in arrival
+// order. Its zero value is ready to use.
 type Collector struct {
 	mu     sync.Mutex
 	events []Event
 }
 
-// Sink returns the collector's sink function.
-func (c *Collector) Sink() Sink {
-	return func(e Event) {
-		c.mu.Lock()
-		c.events = append(c.events, e)
-		c.mu.Unlock()
-	}
+var _ Observer = (*Collector)(nil)
+
+// Observe records event.
+func (c *Collector) Observe(_ context.Context, event Event) {
+	c.mu.Lock()
+	c.events = append(c.events, event)
+	c.mu.Unlock()
 }
 
 // Events returns a copy of the events collected so far.

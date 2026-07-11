@@ -5,25 +5,26 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-
-	"github.com/Tangerg/flow/core"
 )
+
+// SpecKind identifies the shape of a [Spec].
+type SpecKind string
 
 // Spec kinds.
 const (
-	KindLeaf      = "leaf"
-	KindSequence  = "sequence"
-	KindParallel  = "parallel"
-	KindBranch    = "branch"
-	KindLoop      = "loop"
-	KindIteration = "iteration"
+	KindLeaf      SpecKind = "leaf"
+	KindSequence  SpecKind = "sequence"
+	KindParallel  SpecKind = "parallel"
+	KindBranch    SpecKind = "branch"
+	KindLoop      SpecKind = "loop"
+	KindIteration SpecKind = "iteration"
 )
 
 // Spec is a serializable description of a workflow graph. Its Kind selects which
-// fields apply; [Registry.Build] compiles it into a [Step]. Behavior (leaf types,
+// fields apply; [Registry.CompileSpec] compiles it into a [Step]. Behavior (leaf types,
 // resolvers, conditions) is referenced by name and resolved through the Registry.
 type Spec struct {
-	Kind string `json:"kind"`
+	Kind SpecKind `json:"kind"`
 
 	// Leaf and iteration node ID.
 	ID string `json:"id,omitempty"`
@@ -56,11 +57,8 @@ type Spec struct {
 	Concurrency int `json:"concurrency,omitempty"`
 }
 
-// Build compiles a Spec into a Step using the registered building blocks.
-func (r *Registry) Build(spec Spec) (Step, error) {
-	if err := r.Err(); err != nil {
-		return nil, err
-	}
+// CompileSpec compiles a Spec into a Step using the registered building blocks.
+func (r *Registry) CompileSpec(spec Spec) (Step, error) {
 	if err := r.validateSpec(spec); err != nil {
 		return nil, err
 	}
@@ -82,7 +80,10 @@ func (r *Registry) build(spec Spec) (Step, error) {
 		if err != nil {
 			return nil, err
 		}
-		return Parallel(steps, mapOpts(spec)...), nil
+		if spec.Concurrency > 0 {
+			return ParallelN(spec.Concurrency, steps...), nil
+		}
+		return Parallel(steps...), nil
 	case KindBranch:
 		return r.buildBranch(spec)
 	case KindLoop:
@@ -94,13 +95,13 @@ func (r *Registry) build(spec Spec) (Step, error) {
 	}
 }
 
-// BuildJSON unmarshals data into a Spec and compiles it.
-func (r *Registry) BuildJSON(data []byte) (Step, error) {
+// CompileSpecJSON strictly unmarshals data into a Spec and compiles it.
+func (r *Registry) CompileSpecJSON(data []byte) (Step, error) {
 	var spec Spec
 	if err := decodeStrict(data, &spec); err != nil {
 		return nil, fmt.Errorf("workflow: invalid spec: %w", err)
 	}
-	return r.Build(spec)
+	return r.CompileSpec(spec)
 }
 
 func (r *Registry) buildAll(specs []Spec) ([]Step, error) {
@@ -159,11 +160,10 @@ func (r *Registry) buildLoop(spec Spec) (Step, error) {
 	if err != nil {
 		return nil, err
 	}
-	var opts []core.LoopOption
 	if spec.MaxIterations > 0 {
-		opts = append(opts, core.WithMaxIterations(spec.MaxIterations))
+		return LoopLimit(spec.MaxIterations, body, cond), nil
 	}
-	return Loop(body, cond, opts...), nil
+	return Loop(body, cond), nil
 }
 
 func (r *Registry) buildIteration(spec Spec) (Step, error) {
@@ -177,12 +177,8 @@ func (r *Registry) buildIteration(spec Spec) (Step, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Iteration(spec.ID, *spec.Input, body, *spec.BodyOutput, mapOpts(spec)...), nil
-}
-
-func mapOpts(spec Spec) []core.MapOption {
 	if spec.Concurrency > 0 {
-		return []core.MapOption{core.WithConcurrency(spec.Concurrency)}
+		return IterationN(spec.Concurrency, spec.ID, *spec.Input, body, *spec.BodyOutput), nil
 	}
-	return nil
+	return Iteration(spec.ID, *spec.Input, body, *spec.BodyOutput), nil
 }

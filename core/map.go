@@ -19,14 +19,20 @@ func Map[I, O any](node Node[I, O], opts ...MapOption) Node[[]I, []O] {
 	var c mapConfig
 	for _, opt := range opts {
 		if opt != nil {
-			opt(&c)
+			opt.applyMap(&c)
 		}
 	}
 	return mapNode[I, O]{node: node, limit: c.concurrency}
 }
 
-// MapOption configures a [Map].
-type MapOption func(*mapConfig)
+// MapOption configures a [Map]. Options are created by this package.
+type MapOption interface {
+	applyMap(*mapConfig)
+}
+
+type mapOptionFunc func(*mapConfig)
+
+func (f mapOptionFunc) applyMap(c *mapConfig) { f(c) }
 
 type mapConfig struct {
 	concurrency int // <= 0 means unbounded
@@ -37,7 +43,7 @@ type mapConfig struct {
 // limit uses a fixed set of workers, so goroutine count is bounded independently
 // of input size.
 func WithConcurrency(n int) MapOption {
-	return func(c *mapConfig) { c.concurrency = n }
+	return mapOptionFunc(func(c *mapConfig) { c.concurrency = n })
 }
 
 type mapNode[I, O any] struct {

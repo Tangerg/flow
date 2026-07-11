@@ -11,15 +11,15 @@ import (
 
 func TestBranch_routes(t *testing.T) {
 	label := func(text string) workflow.Step {
-		return workflow.Adapt(text,
-			workflow.FromRef[int](workflow.Ref{NodeID: "start", Path: "output"}),
-			core.Func[int, string](func(_ context.Context, _ int) (string, error) { return text, nil }),
+		return workflow.Leaf(text,
+			workflow.From[int](workflow.Ref{NodeID: "start", Path: "output"}),
+			core.NodeFunc[int, string](func(_ context.Context, _ int) (string, error) { return text, nil }),
 		)
 	}
 	cases := map[string]workflow.Step{"pos": label("pos"), "neg": label("neg")}
 
 	resolve := func(_ context.Context, s workflow.Store) (string, error) {
-		v, _ := s.Get("start", "output")
+		v, _ := s.Lookup(workflow.At("start", "output"))
 		if v.(int) >= 0 {
 			return "pos", nil
 		}
@@ -27,14 +27,14 @@ func TestBranch_routes(t *testing.T) {
 	}
 	b := workflow.Branch(resolve, cases)
 
-	out, err := b.Run(context.Background(), workflow.NewStore().With("start", "output", 5))
+	out, err := b.Run(context.Background(), workflow.NewStore().WithOutput("start", 5))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if v, ok := out.Get("pos", workflow.OutputKey); !ok || v.(string) != "pos" {
+	if v, ok := out.Lookup(workflow.Output("pos")); !ok || v.(string) != "pos" {
 		t.Fatalf("expected pos branch to run, got %v, %v", v, ok)
 	}
-	if _, ok := out.Get("neg", workflow.OutputKey); ok {
+	if _, ok := out.Lookup(workflow.Output("neg")); ok {
 		t.Fatal("neg branch should not have run")
 	}
 }

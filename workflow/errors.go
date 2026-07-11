@@ -13,11 +13,21 @@ var ErrNilStep = errors.New("workflow: nil step")
 // empty ID.
 var ErrInvalidStepID = errors.New("workflow: empty step ID")
 
+// StepOp identifies the phase of a [Leaf] that failed.
+type StepOp string
+
+// Leaf execution phases reported by [StepError].
+const (
+	OpValidate StepOp = "validate"
+	OpBind     StepOp = "bind"
+	OpRun      StepOp = "run"
+)
+
 // StepError identifies the workflow step and operation that failed. Use
 // [errors.As] to inspect ID and Op and [errors.Is] to match Err.
 type StepError struct {
 	ID  string
-	Op  string
+	Op  StepOp
 	Err error
 }
 

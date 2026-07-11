@@ -24,7 +24,7 @@ func Loop[T any](
 	c := loopConfig{maxIterations: DefaultMaxIterations}
 	for _, opt := range opts {
 		if opt != nil {
-			opt(&c)
+			opt.applyLoop(&c)
 		}
 	}
 	return loopNode[T]{body: body, max: c.maxIterations}
@@ -34,18 +34,24 @@ type loopConfig struct {
 	maxIterations int
 }
 
-// LoopOption configures a [Loop].
-type LoopOption func(*loopConfig)
+// LoopOption configures a [Loop]. Options are created by this package.
+type LoopOption interface {
+	applyLoop(*loopConfig)
+}
+
+type loopOptionFunc func(*loopConfig)
+
+func (f loopOptionFunc) applyLoop(c *loopConfig) { f(c) }
 
 // WithMaxIterations sets the maximum number of iterations. A value <= 0 restores
 // the default ([DefaultMaxIterations]).
 func WithMaxIterations(n int) LoopOption {
-	return func(c *loopConfig) {
+	return loopOptionFunc(func(c *loopConfig) {
 		if n <= 0 {
 			n = DefaultMaxIterations
 		}
 		c.maxIterations = n
-	}
+	})
 }
 
 type loopNode[T any] struct {

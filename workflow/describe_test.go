@@ -10,16 +10,16 @@ import (
 )
 
 func leafStep(id string) workflow.Step {
-	return workflow.Adapt(id,
-		workflow.FromRef[int](workflow.Ref{NodeID: "start", Path: "output"}),
-		core.Func[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
+	return workflow.Leaf(id,
+		workflow.From[int](workflow.Ref{NodeID: "start", Path: "output"}),
+		core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 }
 
 func TestDescribe_tree(t *testing.T) {
 	step := workflow.Sequence(
 		leafStep("a"),
-		workflow.Parallel([]workflow.Step{leafStep("b"), leafStep("c")}),
+		workflow.Parallel(leafStep("b"), leafStep("c")),
 	)
 
 	d := workflow.Describe(step)
@@ -39,8 +39,8 @@ func TestDescribe_tree(t *testing.T) {
 }
 
 func TestDescribe_opaque(t *testing.T) {
-	// A bare core.Func is not a Describer.
-	bare := core.Func[workflow.Store, workflow.Store](func(_ context.Context, s workflow.Store) (workflow.Store, error) {
+	// A bare core.NodeFunc is not a Describer.
+	bare := core.NodeFunc[workflow.Store, workflow.Store](func(_ context.Context, s workflow.Store) (workflow.Store, error) {
 		return s, nil
 	})
 	if d := workflow.Describe(bare); d.Kind != "opaque" {

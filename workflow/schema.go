@@ -3,7 +3,7 @@ package workflow
 import "fmt"
 
 // ValueType describes the shape of a value flowing between nodes. It is used only
-// for edit-time connection validation (see [Registry.Validate]); it is never
+// for edit-time connection validation (see [Registry.ValidateGraph]); it is never
 // consulted at run time.
 type ValueType string
 
@@ -24,23 +24,30 @@ type Schema struct {
 	Output ValueType `json:"output"`
 }
 
-// RegisterSchema associates a [Schema] with a node type. It returns the Registry
-// for chaining. Node types without a schema are treated as accepting and
-// producing [TypeAny] (unchecked).
-func (r *Registry) RegisterSchema(nodeType string, schema Schema) *Registry {
+// RegisterSchema associates a [Schema] with a node type. Node types without a
+// schema are treated as accepting and producing [TypeAny] (unchecked).
+func (r *Registry) RegisterSchema(nodeType string, schema Schema) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.initLocked()
 	_, exists := r.schemas[nodeType]
 	switch {
 	case nodeType == "":
-		r.addProblemLocked("schema node type is empty")
+		return fmt.Errorf("workflow: register schema: node type is empty")
 	case !validValueType(schema.Input) || !validValueType(schema.Output):
-		r.addProblemLocked("schema for %q contains an invalid value type", nodeType)
+		return fmt.Errorf("workflow: register schema %q: invalid value type", nodeType)
 	case exists:
-		r.addProblemLocked("schema for %q is already registered", nodeType)
+		return fmt.Errorf("workflow: register schema %q: already registered", nodeType)
 	default:
 		r.schemas[nodeType] = schema
+	}
+	return nil
+}
+
+// MustRegisterSchema is like [Registry.RegisterSchema] but panics on error.
+func (r *Registry) MustRegisterSchema(nodeType string, schema Schema) *Registry {
+	if err := r.RegisterSchema(nodeType, schema); err != nil {
+		panic(err)
 	}
 	return r
 }
@@ -60,13 +67,10 @@ func compatible(out, in ValueType) bool {
 	return out == in || out == "" || in == "" || out == TypeAny || in == TypeAny
 }
 
-// Validate checks a Graph without building it: unique IDs, known node types, no
+// ValidateGraph checks a Graph without compiling it: unique IDs, known node types, no
 // cycles, and — where schemas are registered — type-compatible Input edges. It is
 // intended to power a visual editor's live feedback.
-func (r *Registry) Validate(g Graph) error {
-	if err := r.Err(); err != nil {
-		return err
-	}
+func (r *Registry) ValidateGraph(g Graph) error {
 	_, byID, err := r.plan(g) // duplicate IDs and cycles
 	if err != nil {
 		return err

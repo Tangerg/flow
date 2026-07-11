@@ -13,6 +13,6 @@
 //
 // A workflow node is a [Step] — a core.Node[Store, Store] that reads its inputs
 // from the Store and returns a Store extended with its output. Typed business
-// logic is bridged in with [Adapt], and composites ([Sequence], [Branch], [Loop],
+// logic is bridged in with [Leaf], and composites ([Sequence], [Branch], [Loop],
 // [Parallel], [Iteration]) are built from the core primitives.
 package workflow

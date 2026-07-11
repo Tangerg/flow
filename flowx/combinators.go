@@ -9,12 +9,21 @@ import (
 )
 
 // FanOut runs every node on the same input concurrently and returns their
-// outputs in node order. The first failure cancels the rest. It is core.Map
-// applied to the nodes as data.
-func FanOut[I, O any](nodes []core.Node[I, O], opts ...core.MapOption) core.Node[I, []O] {
+// outputs in argument order. The first failure cancels the rest.
+func FanOut[I, O any](nodes ...core.Node[I, O]) core.Node[I, []O] {
+	return fanOut(nodes, nil)
+}
+
+// FanOutN is like [FanOut] but runs at most limit nodes concurrently. A
+// non-positive limit is unbounded.
+func FanOutN[I, O any](limit int, nodes ...core.Node[I, O]) core.Node[I, []O] {
+	return fanOut(nodes, []core.MapOption{core.WithConcurrency(limit)})
+}
+
+func fanOut[I, O any](nodes []core.Node[I, O], opts []core.MapOption) core.Node[I, []O] {
 	nodes = slices.Clone(nodes)
-	return core.Func[I, []O](func(ctx context.Context, in I) ([]O, error) {
-		apply := core.Func[core.Node[I, O], O](func(ctx context.Context, n core.Node[I, O]) (O, error) {
+	return core.NodeFunc[I, []O](func(ctx context.Context, in I) ([]O, error) {
+		apply := core.NodeFunc[core.Node[I, O], O](func(ctx context.Context, n core.Node[I, O]) (O, error) {
 			var zero O
 			if n == nil {
 				return zero, core.ErrNilNode
@@ -27,10 +36,20 @@ func FanOut[I, O any](nodes []core.Node[I, O], opts ...core.MapOption) core.Node
 
 // FanOutAll runs every node on the same input concurrently and collects a
 // [Result] per node. The returned error is non-nil only on context cancellation.
-func FanOutAll[I, O any](nodes []core.Node[I, O], opts ...core.MapOption) core.Node[I, []Result[O]] {
+func FanOutAll[I, O any](nodes ...core.Node[I, O]) core.Node[I, []Result[O]] {
+	return fanOutAll(nodes, nil)
+}
+
+// FanOutAllN is like [FanOutAll] but runs at most limit nodes concurrently. A
+// non-positive limit is unbounded.
+func FanOutAllN[I, O any](limit int, nodes ...core.Node[I, O]) core.Node[I, []Result[O]] {
+	return fanOutAll(nodes, []core.MapOption{core.WithConcurrency(limit)})
+}
+
+func fanOutAll[I, O any](nodes []core.Node[I, O], opts []core.MapOption) core.Node[I, []Result[O]] {
 	nodes = slices.Clone(nodes)
-	return core.Func[I, []Result[O]](func(ctx context.Context, in I) ([]Result[O], error) {
-		apply := core.Func[core.Node[I, O], Result[O]](func(ctx context.Context, n core.Node[I, O]) (Result[O], error) {
+	return core.NodeFunc[I, []Result[O]](func(ctx context.Context, in I) ([]Result[O], error) {
+		apply := core.NodeFunc[core.Node[I, O], Result[O]](func(ctx context.Context, n core.Node[I, O]) (Result[O], error) {
 			var out O
 			var err error
 			if n == nil {
@@ -44,11 +63,20 @@ func FanOutAll[I, O any](nodes []core.Node[I, O], opts ...core.MapOption) core.N
 	})
 }
 
-// MapAll applies node to every element and collects a [Result] per element. It is
-// core.Map with each error folded into the result, so the underlying map never
-// fails fast.
-func MapAll[I, O any](node core.Node[I, O], opts ...core.MapOption) core.Node[[]I, []Result[O]] {
-	wrapped := core.Func[I, Result[O]](func(ctx context.Context, in I) (Result[O], error) {
+// MapAll applies node to every element concurrently and collects a [Result] per
+// element. It does not fail fast.
+func MapAll[I, O any](node core.Node[I, O]) core.Node[[]I, []Result[O]] {
+	return mapAll(node, nil)
+}
+
+// MapAllN is like [MapAll] but processes at most limit elements concurrently. A
+// non-positive limit is unbounded.
+func MapAllN[I, O any](limit int, node core.Node[I, O]) core.Node[[]I, []Result[O]] {
+	return mapAll(node, []core.MapOption{core.WithConcurrency(limit)})
+}
+
+func mapAll[I, O any](node core.Node[I, O], opts []core.MapOption) core.Node[[]I, []Result[O]] {
+	wrapped := core.NodeFunc[I, Result[O]](func(ctx context.Context, in I) (Result[O], error) {
 		var out O
 		var err error
 		if node == nil {
@@ -65,14 +93,14 @@ func MapAll[I, O any](node core.Node[I, O], opts ...core.MapOption) core.Node[[]
 // merges their outputs. The implementation uses core.Map as the concurrency
 // primitive while keeping both intermediate values statically typed.
 func Combine2[I, A, B, O any](a core.Node[I, A], b core.Node[I, B], merge func(ctx context.Context, a A, b B) (O, error)) core.Node[I, O] {
-	return core.Func[I, O](func(ctx context.Context, in I) (O, error) {
+	return core.NodeFunc[I, O](func(ctx context.Context, in I) (O, error) {
 		var zero O
 		if merge == nil {
 			return zero, core.ErrNilFunc
 		}
 		var av A
 		var bv B
-		tasks := core.Func[int, struct{}](func(ctx context.Context, task int) (struct{}, error) {
+		tasks := core.NodeFunc[int, struct{}](func(ctx context.Context, task int) (struct{}, error) {
 			var err error
 			switch task {
 			case 0:
@@ -103,9 +131,9 @@ var ErrNoNodes = errors.New("flowx: no nodes")
 // joined errors in input order. Cancellation is cooperative; losing nodes must
 // honor their context. Race cannot be derived from core.Map (which waits for
 // all), so it uses its own goroutines.
-func Race[I, O any](nodes []core.Node[I, O]) core.Node[I, O] {
+func Race[I, O any](nodes ...core.Node[I, O]) core.Node[I, O] {
 	nodes = slices.Clone(nodes)
-	return core.Func[I, O](func(ctx context.Context, in I) (O, error) {
+	return core.NodeFunc[I, O](func(ctx context.Context, in I) (O, error) {
 		var zero O
 		if len(nodes) == 0 {
 			return zero, ErrNoNodes
@@ -158,7 +186,7 @@ func Race[I, O any](nodes []core.Node[I, O]) core.Node[I, O] {
 // Identity returns a node that returns its input unchanged — the neutral element
 // for core.Then.
 func Identity[T any]() core.Node[T, T] {
-	return core.Func[T, T](func(_ context.Context, in T) (T, error) { return in, nil })
+	return core.NodeFunc[T, T](func(_ context.Context, in T) (T, error) { return in, nil })
 }
 
 // Chain composes any number of same-type nodes in sequence via core.Then. With
@@ -169,7 +197,7 @@ func Chain[T any](nodes ...core.Node[T, T]) core.Node[T, T] {
 		return Identity[T]()
 	case 1:
 		if nodes[0] == nil {
-			return core.Func[T, T](nil)
+			return core.NodeFunc[T, T](nil)
 		}
 		return nodes[0]
 	}

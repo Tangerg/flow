@@ -13,7 +13,7 @@ import (
 func TestRetry_succeedsAfterFailures(t *testing.T) {
 	boom := errors.New("boom")
 	calls := 0
-	flaky := core.Func[int, int](func(_ context.Context, x int) (int, error) {
+	flaky := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
 		calls++
 		if calls < 3 {
 			return 0, boom
@@ -33,7 +33,7 @@ func TestRetry_succeedsAfterFailures(t *testing.T) {
 func TestRetry_exhausts(t *testing.T) {
 	boom := errors.New("boom")
 	calls := 0
-	always := core.Func[int, int](func(_ context.Context, _ int) (int, error) {
+	always := core.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) {
 		calls++
 		return 0, boom
 	})
@@ -50,7 +50,7 @@ func TestRetry_exhausts(t *testing.T) {
 func TestRetry_notRetryableStopsEarly(t *testing.T) {
 	fatal := errors.New("fatal")
 	calls := 0
-	node := core.Func[int, int](func(_ context.Context, _ int) (int, error) {
+	node := core.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) {
 		calls++
 		return 0, fatal
 	})
@@ -65,7 +65,7 @@ func TestRetry_notRetryableStopsEarly(t *testing.T) {
 }
 
 func TestTimeout(t *testing.T) {
-	slow := core.Func[int, int](func(ctx context.Context, _ int) (int, error) {
+	slow := core.NodeFunc[int, int](func(ctx context.Context, _ int) (int, error) {
 		select {
 		case <-ctx.Done():
 			return 0, ctx.Err()
@@ -82,8 +82,8 @@ func TestTimeout(t *testing.T) {
 
 func TestFallback(t *testing.T) {
 	boom := errors.New("boom")
-	primary := core.Func[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom })
-	alt := core.Func[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil })
+	primary := core.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom })
+	alt := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil })
 
 	got, err := flowx.Fallback(primary, alt).Run(context.Background(), 10)
 	if err != nil {
@@ -97,7 +97,7 @@ func TestFallback(t *testing.T) {
 func TestWrap_fluent(t *testing.T) {
 	calls := 0
 	boom := errors.New("boom")
-	flaky := core.Func[int, int](func(_ context.Context, x int) (int, error) {
+	flaky := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
 		calls++
 		if calls < 2 {
 			return 0, boom
@@ -107,8 +107,7 @@ func TestWrap_fluent(t *testing.T) {
 
 	node := flowx.Wrap(flaky).
 		Retry(flowx.WithAttempts(3)).
-		Timeout(time.Second).
-		Node()
+		Timeout(time.Second)
 
 	got, err := node.Run(context.Background(), 21)
 	if err != nil {
@@ -122,7 +121,7 @@ func TestWrap_fluent(t *testing.T) {
 func TestRetry_nilOptionAndPredicateUseDefaults(t *testing.T) {
 	boom := errors.New("boom")
 	calls := 0
-	node := core.Func[int, int](func(_ context.Context, in int) (int, error) {
+	node := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 		calls++
 		if calls == 1 {
 			return 0, boom
@@ -145,7 +144,7 @@ func TestExponentialBackoffSaturates(t *testing.T) {
 
 func TestRetry_backoffRespectsContext(t *testing.T) {
 	boom := errors.New("boom")
-	node := core.Func[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom })
+	node := core.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom })
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 
@@ -160,8 +159,8 @@ func TestRetry_backoffRespectsContext(t *testing.T) {
 
 func TestTraceAndFluentFallback(t *testing.T) {
 	boom := errors.New("boom")
-	primary := core.Func[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom })
-	alternate := core.Func[int, int](func(_ context.Context, in int) (int, error) { return in + 1, nil })
+	primary := core.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom })
+	alternate := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in + 1, nil })
 	var before, after bool
 	node := flowx.Wrap(primary).
 		Trace("primary", flowx.TraceHooks{
@@ -170,8 +169,7 @@ func TestTraceAndFluentFallback(t *testing.T) {
 				after = errors.Is(err, boom)
 			},
 		}).
-		Fallback(alternate).
-		Node()
+		Fallback(alternate)
 
 	got, err := node.Run(context.Background(), 4)
 	if err != nil || got != 5 || !before || !after {
@@ -187,7 +185,7 @@ func TestTimeout_nilNode(t *testing.T) {
 }
 
 func TestFallback_rejectsNilAlternate(t *testing.T) {
-	primary := core.Func[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
+	primary := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
 	_, err := flowx.Fallback[int, int](primary, nil).Run(context.Background(), 1)
 	if !errors.Is(err, core.ErrNilNode) {
 		t.Fatalf("err = %v; want ErrNilNode", err)
@@ -196,7 +194,7 @@ func TestFallback_rejectsNilAlternate(t *testing.T) {
 
 func TestBuilder_zeroValueIsUsable(t *testing.T) {
 	var builder flowx.Builder[int, int]
-	_, err := builder.Node().Run(context.Background(), 1)
+	_, err := builder.Run(context.Background(), 1)
 	if !errors.Is(err, core.ErrNilNode) {
 		t.Fatalf("err = %v; want ErrNilNode", err)
 	}
@@ -204,12 +202,12 @@ func TestBuilder_zeroValueIsUsable(t *testing.T) {
 
 func TestRetryAndFallbackPreferParentCancellation(t *testing.T) {
 	boom := errors.New("boom")
-	alternate := core.Func[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
+	alternate := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
 
 	t.Run("retry", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		node := core.Func[int, int](func(_ context.Context, _ int) (int, error) {
+		node := core.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) {
 			cancel()
 			return 0, boom
 		})
@@ -221,7 +219,7 @@ func TestRetryAndFallbackPreferParentCancellation(t *testing.T) {
 	t.Run("fallback", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		node := core.Func[int, int](func(_ context.Context, _ int) (int, error) {
+		node := core.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) {
 			cancel()
 			return 0, boom
 		})

@@ -10,16 +10,16 @@ import (
 )
 
 func TestEvents_emittedForSequence(t *testing.T) {
-	from := func(id string) func(workflow.Store) (int, error) {
-		return workflow.FromRef[int](workflow.Ref{NodeID: id, Path: "output"})
+	from := func(id string) workflow.Binder[int] {
+		return workflow.From[int](workflow.Output(id))
 	}
-	a := workflow.Adapt("a", from("start"), core.Func[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
-	b := workflow.Adapt("b", from("a"), core.Func[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
+	a := workflow.Leaf("a", from("start"), core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
+	b := workflow.Leaf("b", from("a"), core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
 
 	var col workflow.Collector
-	ctx := workflow.WithSink(context.Background(), col.Sink())
+	ctx := workflow.WithObserver(context.Background(), &col)
 
-	_, err := workflow.Sequence(a, b).Run(ctx, workflow.NewStore().With("start", "output", 1))
+	_, err := workflow.Sequence(a, b).Run(ctx, workflow.NewStore().WithOutput("start", 1))
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -29,43 +29,52 @@ func TestEvents_emittedForSequence(t *testing.T) {
 	if len(events) != 4 {
 		t.Fatalf("got %d events, want 4: %#v", len(events), events)
 	}
-	if _, ok := events[0].(workflow.NodeStarted); !ok {
-		t.Fatalf("event 0 = %T, want NodeStarted", events[0])
+	if events[0].Kind != workflow.EventStarted || events[0].ID != "a" {
+		t.Fatalf("event 0 = %#v, want started a", events[0])
 	}
-	if c, ok := events[1].(workflow.NodeCompleted); !ok || c.ID != "a" {
-		t.Fatalf("event 1 = %#v, want NodeCompleted{a}", events[1])
+	if events[1].Kind != workflow.EventCompleted || events[1].ID != "a" {
+		t.Fatalf("event 1 = %#v, want completed a", events[1])
 	}
 }
 
 func TestEvents_failure(t *testing.T) {
 	boom := errors.New("boom")
-	bad := workflow.Adapt("bad",
-		workflow.FromRef[int](workflow.Ref{NodeID: "start", Path: "output"}),
-		core.Func[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom }),
+	bad := workflow.Leaf("bad",
+		workflow.From[int](workflow.Ref{NodeID: "start", Path: "output"}),
+		core.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom }),
 	)
 
 	var col workflow.Collector
-	ctx := workflow.WithSink(context.Background(), col.Sink())
+	ctx := workflow.WithObserver(context.Background(), &col)
 
-	_, _ = bad.Run(ctx, workflow.NewStore().With("start", "output", 1))
+	_, _ = bad.Run(ctx, workflow.NewStore().WithOutput("start", 1))
 
 	events := col.Events()
 	if len(events) != 2 {
 		t.Fatalf("got %d events, want 2", len(events))
 	}
-	f, ok := events[1].(workflow.NodeFailed)
-	if !ok || f.ID != "bad" || !errors.Is(f.Err, boom) {
-		t.Fatalf("event 1 = %#v, want NodeFailed{bad, boom}", events[1])
+	f := events[1]
+	if f.Kind != workflow.EventFailed || f.ID != "bad" || !errors.Is(f.Err, boom) {
+		t.Fatalf("event 1 = %#v, want failed bad with boom", events[1])
 	}
 }
 
-func TestEvents_noSinkIsFine(t *testing.T) {
-	a := workflow.Adapt("a",
-		workflow.FromRef[int](workflow.Ref{NodeID: "start", Path: "output"}),
-		core.Func[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
+func TestEvents_noObserverIsFine(t *testing.T) {
+	a := workflow.Leaf("a",
+		workflow.From[int](workflow.Ref{NodeID: "start", Path: "output"}),
+		core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
-	// No sink in context: emit must be a no-op, not panic.
-	if _, err := a.Run(context.Background(), workflow.NewStore().With("start", "output", 1)); err != nil {
+	// No observer in context: emit must be a no-op, not panic.
+	if _, err := a.Run(context.Background(), workflow.NewStore().WithOutput("start", 1)); err != nil {
 		t.Fatalf("run: %v", err)
+	}
+}
+
+func TestObserverFunc(t *testing.T) {
+	var got workflow.Event
+	observer := workflow.ObserverFunc(func(_ context.Context, event workflow.Event) { got = event })
+	observer.Observe(context.Background(), workflow.Event{Kind: workflow.EventStarted, ID: "a"})
+	if got.Kind != workflow.EventStarted || got.ID != "a" {
+		t.Fatalf("event = %#v", got)
 	}
 }

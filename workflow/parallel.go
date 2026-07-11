@@ -12,22 +12,31 @@ import (
 // their resulting Stores into one. Because the Store structure is persistent,
 // branches can safely share it when stored values obey Store's immutability
 // contract. The first branch to fail cancels the rest and its error is returned;
-// already-running branches must cooperate with context cancellation. Bound the
-// concurrency with core.WithConcurrency.
+// already-running branches must cooperate with context cancellation.
 //
 // Parallel merges only cells actually written by each branch; cells merely
 // inherited from the input snapshot cannot overwrite another branch's work. On
 // a same-cell conflict a later branch's value wins. Parallel derives its fan-out
 // from core.Map applied to the branches as data.
-func Parallel(branches []Step, opts ...core.MapOption) Step {
+func Parallel(branches ...Step) Step {
+	return parallelN(0, branches)
+}
+
+// ParallelN is like [Parallel] but runs at most limit branches concurrently. A
+// non-positive limit is unbounded.
+func ParallelN(limit int, branches ...Step) Step {
+	return parallelN(limit, branches)
+}
+
+func parallelN(limit int, branches []Step) Step {
 	branches = slices.Clone(branches)
 	p := parallel{branches: branches}
-	p.node = core.Func[Store, Store](func(ctx context.Context, s Store) (Store, error) {
+	p.node = core.NodeFunc[Store, Store](func(ctx context.Context, s Store) (Store, error) {
 		results, err := core.Map(
-			core.Func[Step, Store](func(ctx context.Context, b Step) (Store, error) {
+			core.NodeFunc[Step, Store](func(ctx context.Context, b Step) (Store, error) {
 				return runStep(ctx, b, s)
 			}),
-			opts...,
+			core.WithConcurrency(limit),
 		).Run(ctx, branches)
 		if err != nil {
 			return s, err

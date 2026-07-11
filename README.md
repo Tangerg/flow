@@ -32,15 +32,15 @@ type Node[I, O any] interface {
 
 | Primitive | Role |
 | --- | --- |
-| `Func` | adapt a plain function into a `Node` |
+| `NodeFunc` | adapt a plain function into a `Node` |
 | `Then` | sequence: run one node, feed its output to the next |
 | `Switch` | selection: route to a node chosen at runtime |
 | `Loop` | iteration: repeat until done |
 | `Map` | concurrency: apply a node to every element of a slice |
 
 ```go
-double := core.Func[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil })
-addOne := core.Func[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil })
+double := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil })
+addOne := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil })
 
 pipe := core.Then(double, addOne)
 out, _ := pipe.Run(ctx, 10) // 21
@@ -64,8 +64,7 @@ outermost at run time:
 node := flowx.Wrap(callAPI).
     Retry(flowx.WithAttempts(3), flowx.WithBackoff(flowx.ExponentialBackoff(50*time.Millisecond))).
     Timeout(2 * time.Second).
-    Fallback(serveFromCache).
-    Node()
+    Fallback(serveFromCache)
 ```
 
 ## workflow — the dynamic layer
@@ -75,16 +74,16 @@ editor), `workflow` threads a persistent variable pool through nodes addressed
 by ID.
 
 ```go
-reg := workflow.NewRegistry().RegisterLeaf("addN", addNFactory)
+reg := workflow.NewRegistry().MustRegisterLeaf("addN", addNFactory)
 
 graph := `{"nodes":[
   {"id":"a","type":"addN","input":{"nodeID":"start","path":"output"},"config":{"n":10}},
   {"id":"b","type":"addN","input":{"nodeID":"a","path":"output"},"config":{"n":5}}
 ]}`
 
-step, _ := reg.CompileJSON([]byte(graph))
-out, _ := step.Run(ctx, workflow.NewStore().With("start", "output", 1))
-v, _ := out.Get("b", workflow.OutputKey) // 16
+step, _ := reg.CompileGraphJSON([]byte(graph))
+out, _ := step.Run(ctx, workflow.NewStore().WithOutput("start", 1))
+v, _ := workflow.Get[int](out, workflow.Output("b")) // 16
 ```
 
 Highlights:
@@ -99,11 +98,11 @@ Highlights:
   scopes each element.
 - **Config-driven.** A nested `Spec` or a flat, arbitrarily wired `Graph`
   (topologically layered, cycle-checked) compiles to a runnable `Step`.
-- **Validation.** `Registry.Validate` checks a `Graph` — unique IDs, known types,
+- **Validation.** `Registry.ValidateGraph` checks a `Graph` — unique IDs, known types,
   no cycles, and type-compatible edges via registered `Schema`s — without running
   it, for a visual editor's live feedback.
-- **Observability.** Attach a `Sink` with `WithSink` to receive per-node
-  start/complete/fail events.
+- **Observability.** Attach an `Observer` with `WithObserver` to receive typed
+  step lifecycle events; ordinary functions can use `ObserverFunc`.
 - **Introspection.** Every composite describes its own structure via `Describe`;
   `Mermaid` renders a compiled workflow tree and `MermaidGraph` renders the
   original DAG edges.
@@ -133,6 +132,8 @@ flowx ────┘
 - **Minimal core.** Only primitives that cannot be expressed in terms of the
   others. If it is derivable, it belongs in a higher layer.
 - **Type-safe.** Composition is checked at compile time; no reflection in `core`.
+- **Small interfaces.** `Node`, `Binder`, and `Observer` are single-method
+  contracts with `NodeFunc`, `BindFunc`, and `ObserverFunc` adapters.
 - **Zero dependencies in `core`.** Bounded concurrency uses only the standard
   library.
 - **Persistent state in `workflow`.** Store structure is copy-on-write; inserted
@@ -173,8 +174,27 @@ are compatibility commitments.
 
 Current rewrite migrations:
 
+- `core.Func` is now `core.NodeFunc`, following the `http.HandlerFunc` adapter
+  convention.
+- `FanOut`, `FanOutAll`, `Race`, and `Parallel` accept variadic nodes directly;
+  bounded variants use the explicit `FanOutN`, `FanOutAllN`, `MapAllN`,
+  `ParallelN`, and `IterationN` names.
+- `workflow.LoopLimit` replaces passing `core.WithMaxIterations` through the
+  dynamic workflow layer.
+- A decorator `Builder` now implements `Node` directly; remove the final
+  `.Node()` call.
 - `flowx.Result.Error` is now `Result.Err`, following Go's conventional error
   field naming.
+- `workflow.Adapt` and `FromRef` are now `Leaf` and `From`; custom binders use
+  the `Binder` interface or `BindFunc` adapter.
+- `Store.Get(nodeID, path)` is now `Store.Lookup(Ref)`; use `workflow.Get[T]`
+  for checked typed reads and `Output(nodeID)` for the common output reference.
+- Registry registration methods now return errors immediately. Startup code
+  that prefers fail-fast chaining can use the `MustRegister*` methods.
+- Registry compilation uses explicit `CompileSpec`, `CompileSpecJSON`,
+  `CompileGraph`, `CompileGraphJSON`, and `ValidateGraph` names.
+- `Sink` and the three event variants are replaced by the single-method
+  `Observer` contract and the `Event` value type.
 - `workflow.Condition` returns `(bool, error)` so condition evaluation failures
   are not mistaken for “keep looping”.
 
