@@ -60,19 +60,20 @@ func TestPipeline_compositeMethods(t *testing.T) {
 		return iteration == 1, nil
 	}
 	iterationBody := flow.NodeFunc[workflow.Store, workflow.Store](func(_ context.Context, s workflow.Store) (workflow.Store, error) {
-		item, err := workflow.Get[any](s, workflow.At("each", workflow.ItemKey))
+		item, err := workflow.Get[any](s, workflow.Item("each"))
 		if err != nil {
 			return s, err
 		}
 		return s.WithOutput("item", item), nil
 	})
 
-	pipe := workflow.Pipe().
-		Branch(branch, map[string]workflow.Step{
+	pipe := workflow.Pipe().Then(
+		workflow.Branch(branch, map[string]workflow.Step{
 			"yes": pipelineAdd("chosen", "seed", 1),
-		}).
-		LoopLimit(3, loopBody, done).
-		IterationN(1, "each", workflow.Output("items"), iterationBody, workflow.Output("item"))
+		}),
+		workflow.LoopN(3, loopBody, done),
+		workflow.IterationN(1, "each", workflow.Output("items"), iterationBody, workflow.Output("item")),
+	)
 
 	input := workflow.NewStore().
 		WithOutput("seed", 1).

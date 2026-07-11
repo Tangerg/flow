@@ -2,7 +2,7 @@
 //
 // Where flow composes statically typed nodes at compile time, workflow threads a
 // heterogeneous variable pool — the [Store] — through nodes addressed by ID, so
-// graphs can be assembled at runtime (from config, a builder, or a visual
+// graphs can be assembled at runtime (from config, a [Pipeline], or a visual
 // editor).
 //
 // The Store is persistent: every write returns a new structural snapshot that
@@ -18,6 +18,11 @@
 // [Parallel], [Iteration]) are built from flow's primitives. [Pipe] provides a
 // fluent API for assembling the same composites; its [Pipeline] result is
 // itself a Step.
+//
+// [SpecJSONSchema] and [GraphJSONSchema] expose the Draft 2020-12 schemas for
+// the two JSON DSL shapes. [ValidateSpecJSON] and [ValidateGraphJSON] perform
+// portable structural checks; a Registry adds node, config, type, and graph
+// semantics when it validates or compiles the decoded workflow.
 //
 // Errors preserve their causes for errors.Is and errors.As. [RefError],
 // [RegistrationError], [GraphError], [SpecError], and [StepError] identify the

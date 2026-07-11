@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Tangerg/flow/schema/workflow-graph.json",
+  "title": "Flow workflow graph",
+  "description": "A flat directed acyclic graph of registered leaf nodes.",
+  "type": "object",
+  "properties": {
+    "nodes": {
+      "type": ["array", "null"],
+      "description": "Nodes in stable declaration order.",
+      "items": { "$ref": "#/$defs/node" }
+    }
+  },
+  "required": ["nodes"],
+  "additionalProperties": false,
+  "$defs": {
+    "ref": {
+      "type": "object",
+      "description": "A path into a graph node's stored value or an external seed value.",
+      "properties": {
+        "nodeID": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 }
+      },
+      "required": ["nodeID", "path"],
+      "additionalProperties": false
+    },
+    "node": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 },
+        "input": { "$ref": "#/$defs/ref" },
+        "config": {},
+        "dependsOn": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      },
+      "required": ["id", "type"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -31,6 +31,16 @@ func FuzzCompileGraphJSON(f *testing.F) {
 	})
 }
 
+func FuzzCompileSpecJSON(f *testing.F) {
+	f.Add([]byte(`{"kind":"sequence","steps":[]}`))
+	f.Add([]byte(`{"kind":"leaf","id":"a","type":"addN"}`))
+	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_, _ = reg.CompileSpecJSON(data)
+	})
+}
+
 func FuzzStoreJSON(f *testing.F) {
 	f.Add([]byte(`{"node":{"output":1}}`))
 	f.Add([]byte(`null`))

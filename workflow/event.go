@@ -2,8 +2,6 @@ package workflow
 
 import (
 	"context"
-	"slices"
-	"sync"
 )
 
 // EventKind identifies a step lifecycle event.
@@ -53,27 +51,4 @@ func emit(ctx context.Context, event Event) {
 	if observer, ok := ctx.Value(observerKey{}).(Observer); ok && observer != nil {
 		observer.Observe(ctx, event)
 	}
-}
-
-// Collector is a concurrency-safe [Observer] that records events in arrival
-// order. Its zero value is ready to use.
-type Collector struct {
-	mu     sync.Mutex
-	events []Event
-}
-
-var _ Observer = (*Collector)(nil)
-
-// Observe records event.
-func (c *Collector) Observe(_ context.Context, event Event) {
-	c.mu.Lock()
-	c.events = append(c.events, event)
-	c.mu.Unlock()
-}
-
-// Events returns a copy of the events collected so far.
-func (c *Collector) Events() []Event {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return slices.Clone(c.events)
 }

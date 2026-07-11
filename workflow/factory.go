@@ -23,7 +23,7 @@ func Factory[C, I, O any](build func(C) (flow.Node[I, O], error)) LeafFactory {
 		var cfg C
 		if len(config) > 0 {
 			if err := decodeStrict(config, &cfg); err != nil {
-				return nil, fmt.Errorf("%w: decode config: %v", ErrInvalidSpec, err)
+				return nil, fmt.Errorf("%w: decode config: %w", ErrInvalidSpec, err)
 			}
 		}
 		node, err := build(cfg)

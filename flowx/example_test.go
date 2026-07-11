@@ -10,9 +10,9 @@ import (
 	"github.com/Tangerg/flow/flowx"
 )
 
-// This example decorates a flaky node with retry and a timeout using the fluent
-// Wrap builder. The node fails once, then succeeds on the retry.
-func ExampleWrap() {
+// This example decorates a flaky node with retry and a timeout. The node fails
+// once, then succeeds on the retry.
+func ExampleRetry() {
 	attempts := 0
 	flaky := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
 		attempts++
@@ -22,9 +22,10 @@ func ExampleWrap() {
 		return x * 2, nil
 	})
 
-	node := flowx.Wrap(flaky).
-		Retry(flowx.WithAttempts(3)).
-		Timeout(time.Second)
+	node := flowx.Timeout(
+		flowx.Retry(flaky, flowx.WithAttempts(3)),
+		time.Second,
+	)
 
 	out, err := node.Run(context.Background(), 21)
 	if err != nil {

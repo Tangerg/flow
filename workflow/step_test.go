@@ -18,7 +18,7 @@ func TestSequence_threadsStore(t *testing.T) {
 	inc := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil })
 
 	step1 := workflow.Leaf("double", workflow.From[int](workflow.Ref{NodeID: "start", Path: "output"}), double)
-	step2 := workflow.Leaf("inc", workflow.From[int](workflow.Ref{NodeID: "double", Path: workflow.OutputKey}), inc)
+	step2 := workflow.Leaf("inc", workflow.From[int](workflow.Output("double")), inc)
 
 	flow := workflow.Sequence(step1, step2)
 

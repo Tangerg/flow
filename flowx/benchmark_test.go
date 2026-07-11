@@ -14,10 +14,10 @@ func BenchmarkDecoratorStack(b *testing.B) {
 	base := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 		return in + 1, nil
 	})
-	node := flowx.Wrap(base).
-		Retry(flowx.WithAttempts(3)).
-		Timeout(time.Minute).
-		Fallback(base)
+	node := flowx.Fallback(
+		flowx.Timeout(flowx.Retry(base, flowx.WithAttempts(3)), time.Minute),
+		base,
+	)
 
 	b.ReportAllocs()
 	for b.Loop() {

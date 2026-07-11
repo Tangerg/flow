@@ -11,16 +11,16 @@ import (
 // FanOut runs every node on the same input concurrently and returns their
 // outputs in argument order. The first failure cancels the rest.
 func FanOut[I, O any](nodes ...flow.Node[I, O]) flow.Node[I, []O] {
-	return fanOut(nodes, nil)
+	return fanOut(0, nodes)
 }
 
 // FanOutN is like [FanOut] but runs at most limit nodes concurrently. A
 // non-positive limit is unbounded.
 func FanOutN[I, O any](limit int, nodes ...flow.Node[I, O]) flow.Node[I, []O] {
-	return fanOut(nodes, []flow.MapOption{flow.WithConcurrency(limit)})
+	return fanOut(limit, nodes)
 }
 
-func fanOut[I, O any](nodes []flow.Node[I, O], opts []flow.MapOption) flow.Node[I, []O] {
+func fanOut[I, O any](limit int, nodes []flow.Node[I, O]) flow.Node[I, []O] {
 	nodes = slices.Clone(nodes)
 	return flow.NodeFunc[I, []O](func(ctx context.Context, in I) ([]O, error) {
 		apply := flow.NodeFunc[flow.Node[I, O], O](func(ctx context.Context, n flow.Node[I, O]) (O, error) {
@@ -30,23 +30,26 @@ func fanOut[I, O any](nodes []flow.Node[I, O], opts []flow.MapOption) flow.Node[
 			}
 			return n.Run(ctx, in)
 		})
-		return flow.Map(apply, opts...).Run(ctx, nodes)
+		if limit > 0 {
+			return flow.MapN(limit, apply).Run(ctx, nodes)
+		}
+		return flow.Map(apply).Run(ctx, nodes)
 	})
 }
 
 // FanOutAll runs every node on the same input concurrently and collects a
 // [Result] per node. The returned error is non-nil only on context cancellation.
 func FanOutAll[I, O any](nodes ...flow.Node[I, O]) flow.Node[I, []Result[O]] {
-	return fanOutAll(nodes, nil)
+	return fanOutAll(0, nodes)
 }
 
 // FanOutAllN is like [FanOutAll] but runs at most limit nodes concurrently. A
 // non-positive limit is unbounded.
 func FanOutAllN[I, O any](limit int, nodes ...flow.Node[I, O]) flow.Node[I, []Result[O]] {
-	return fanOutAll(nodes, []flow.MapOption{flow.WithConcurrency(limit)})
+	return fanOutAll(limit, nodes)
 }
 
-func fanOutAll[I, O any](nodes []flow.Node[I, O], opts []flow.MapOption) flow.Node[I, []Result[O]] {
+func fanOutAll[I, O any](limit int, nodes []flow.Node[I, O]) flow.Node[I, []Result[O]] {
 	nodes = slices.Clone(nodes)
 	return flow.NodeFunc[I, []Result[O]](func(ctx context.Context, in I) ([]Result[O], error) {
 		apply := flow.NodeFunc[flow.Node[I, O], Result[O]](func(ctx context.Context, n flow.Node[I, O]) (Result[O], error) {
@@ -59,23 +62,26 @@ func fanOutAll[I, O any](nodes []flow.Node[I, O], opts []flow.MapOption) flow.No
 			}
 			return Result[O]{Value: out, Err: err}, nil
 		})
-		return flow.Map(apply, opts...).Run(ctx, nodes)
+		if limit > 0 {
+			return flow.MapN(limit, apply).Run(ctx, nodes)
+		}
+		return flow.Map(apply).Run(ctx, nodes)
 	})
 }
 
 // MapAll applies node to every element concurrently and collects a [Result] per
 // element. It does not fail fast.
 func MapAll[I, O any](node flow.Node[I, O]) flow.Node[[]I, []Result[O]] {
-	return mapAll(node, nil)
+	return mapAll(0, node)
 }
 
 // MapAllN is like [MapAll] but processes at most limit elements concurrently. A
 // non-positive limit is unbounded.
 func MapAllN[I, O any](limit int, node flow.Node[I, O]) flow.Node[[]I, []Result[O]] {
-	return mapAll(node, []flow.MapOption{flow.WithConcurrency(limit)})
+	return mapAll(limit, node)
 }
 
-func mapAll[I, O any](node flow.Node[I, O], opts []flow.MapOption) flow.Node[[]I, []Result[O]] {
+func mapAll[I, O any](limit int, node flow.Node[I, O]) flow.Node[[]I, []Result[O]] {
 	wrapped := flow.NodeFunc[I, Result[O]](func(ctx context.Context, in I) (Result[O], error) {
 		var out O
 		var err error
@@ -86,7 +92,10 @@ func mapAll[I, O any](node flow.Node[I, O], opts []flow.MapOption) flow.Node[[]I
 		}
 		return Result[O]{Value: out, Err: err}, nil
 	})
-	return flow.Map(wrapped, opts...)
+	if limit > 0 {
+		return flow.MapN(limit, wrapped)
+	}
+	return flow.Map(wrapped)
 }
 
 // Combine2 runs two differently typed nodes concurrently on the same input and

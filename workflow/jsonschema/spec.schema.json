@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Tangerg/flow/schema/workflow-spec.json",
+  "title": "Flow workflow specification",
+  "description": "A nested workflow made from leaf, sequence, parallel, branch, loop, and iteration steps.",
+  "$ref": "#/$defs/spec",
+  "$defs": {
+    "ref": {
+      "type": "object",
+      "description": "A path into a workflow node's stored value.",
+      "properties": {
+        "nodeID": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The producing node ID. It may refer to an external seed value."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The dot-separated path below the node value, such as output or output.items.0."
+        }
+      },
+      "required": ["nodeID", "path"],
+      "additionalProperties": false
+    },
+    "leaf": {
+      "type": "object",
+      "description": "A registered leaf node.",
+      "properties": {
+        "kind": { "const": "leaf" },
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 },
+        "input": { "$ref": "#/$defs/ref" },
+        "config": {}
+      },
+      "required": ["id", "type"],
+      "additionalProperties": false
+    },
+    "sequence": {
+      "type": "object",
+      "description": "Steps executed in declaration order. An empty sequence is an identity step.",
+      "properties": {
+        "kind": { "const": "sequence" },
+        "steps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/spec" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "parallel": {
+      "type": "object",
+      "description": "Independent steps executed concurrently.",
+      "properties": {
+        "kind": { "const": "parallel" },
+        "steps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/spec" }
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum concurrent steps. Zero or omission means unbounded."
+        }
+      },
+      "additionalProperties": false
+    },
+    "branch": {
+      "type": "object",
+      "description": "One named case selected by a registered resolver.",
+      "properties": {
+        "kind": { "const": "branch" },
+        "resolver": { "type": "string", "minLength": 1 },
+        "cases": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "minLength": 1 },
+          "additionalProperties": { "$ref": "#/$defs/spec" }
+        }
+      },
+      "required": ["resolver", "cases"],
+      "additionalProperties": false
+    },
+    "loop": {
+      "type": "object",
+      "description": "A body repeated until a registered condition stops it.",
+      "properties": {
+        "kind": { "const": "loop" },
+        "body": { "$ref": "#/$defs/spec" },
+        "condition": { "type": "string", "minLength": 1 },
+        "maxIterations": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum iterations. Zero or omission means unbounded."
+        }
+      },
+      "required": ["body", "condition"],
+      "additionalProperties": false
+    },
+    "iteration": {
+      "type": "object",
+      "description": "Runs a nested body once for each item in an input array.",
+      "properties": {
+        "kind": { "const": "iteration" },
+        "id": { "type": "string", "minLength": 1 },
+        "input": { "$ref": "#/$defs/ref" },
+        "body": { "$ref": "#/$defs/spec" },
+        "bodyOutput": { "$ref": "#/$defs/ref" },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum concurrent items. Zero or omission means unbounded."
+        }
+      },
+      "required": ["id", "input", "body", "bodyOutput"],
+      "additionalProperties": false
+    },
+    "spec": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": ["leaf", "sequence", "parallel", "branch", "loop", "iteration"]
+        }
+      },
+      "required": ["kind"],
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "leaf" } }, "required": ["kind"] },
+          "then": { "$ref": "#/$defs/leaf" }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "sequence" } }, "required": ["kind"] },
+          "then": { "$ref": "#/$defs/sequence" }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "parallel" } }, "required": ["kind"] },
+          "then": { "$ref": "#/$defs/parallel" }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "branch" } }, "required": ["kind"] },
+          "then": { "$ref": "#/$defs/branch" }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "loop" } }, "required": ["kind"] },
+          "then": { "$ref": "#/$defs/loop" }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "iteration" } }, "required": ["kind"] },
+          "then": { "$ref": "#/$defs/iteration" }
+        }
+      ]
+    }
+  }
+}

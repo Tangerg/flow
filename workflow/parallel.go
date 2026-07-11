@@ -64,7 +64,7 @@ func (p parallel) Run(ctx context.Context, s Store) (Store, error) {
 	}
 	mapper := flow.Map[Step, Store](branchRunner{input: branchInput})
 	if p.limit > 0 {
-		mapper = flow.Map[Step, Store](branchRunner{input: branchInput}, flow.WithConcurrency(p.limit))
+		mapper = flow.MapN[Step, Store](p.limit, branchRunner{input: branchInput})
 	}
 	results, err := mapper.Run(ctx, p.branches)
 	if err != nil {

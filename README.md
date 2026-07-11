@@ -35,8 +35,8 @@ type Node[I, O any] interface {
 | `NodeFunc` | adapt a plain function into a `Node` |
 | `Then` | sequence: run one node, feed its output to the next |
 | `Switch` | selection: route to a node chosen at runtime |
-| `Loop` | iteration: repeat until done |
-| `Map` | concurrency: apply a node to every element of a slice |
+| `Loop` / `LoopN` | iteration: repeat until done, optionally with an explicit limit |
+| `Map` / `MapN` | apply a node to a slice, optionally with bounded concurrency |
 
 ```go
 double := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil })
@@ -57,14 +57,19 @@ Everything deliberately kept out of the root `flow` package lives here:
 `FanOut`, `FanOutAll`, `MapAll`, `Combine2` (heterogeneous fan-in), `Race` (first
 success wins), `Identity`, and `Chain`.
 
-Decorators are type-preserving and compose fluently — the last applied is the
-outermost at run time:
+Decorators are ordinary functions. Nesting makes the execution order explicit:
 
 ```go
-node := flowx.Wrap(callAPI).
-    Retry(flowx.WithAttempts(3), flowx.WithBackoff(flowx.ExponentialBackoff(50*time.Millisecond))).
-    Timeout(2 * time.Second).
-    Fallback(serveFromCache)
+node := flowx.Fallback(
+    flowx.Timeout(
+        flowx.Retry(callAPI,
+            flowx.WithAttempts(3),
+            flowx.WithBackoff(flowx.ExponentialBackoff(50*time.Millisecond)),
+        ),
+        2*time.Second,
+    ),
+    serveFromCache,
+)
 ```
 
 ## workflow — the dynamic layer
@@ -96,6 +101,45 @@ out, _ := step.Run(ctx, workflow.NewStore().WithOutput("start", 1))
 v, _ := workflow.Get[int](out, workflow.Output("b")) // 16
 ```
 
+### JSON DSL and Schema
+
+`Spec` is the nested control-flow form; `Graph` is the flat DAG form. Both JSON
+formats have strict, embedded [JSON Schema Draft 2020-12](https://json-schema.org/draft/2020-12)
+definitions:
+
+```go
+if err := workflow.ValidateGraphJSON(data); err != nil {
+    // Structural error: syntax, required field, type, or unknown field.
+}
+
+schema := workflow.GraphJSONSchema() // safe copy for an editor or API endpoint
+step, err := reg.CompileGraphJSON(data) // repeats structural and Registry checks
+```
+
+Node types may also declare a config schema. It is compiled once at
+registration and checked before a factory is called; an omitted config is
+treated as `{}` so `required` remains meaningful:
+
+```go
+reg.MustRegisterSchema("addN", workflow.NodeSchema{
+    Input:  workflow.TypeNumber,
+    Output: workflow.TypeNumber,
+    ConfigSchema: json.RawMessage(`{
+      "$schema":"https://json-schema.org/draft/2020-12/schema",
+      "type":"object",
+      "properties":{"n":{"type":"integer"}},
+      "required":["n"],
+      "additionalProperties":false
+    }`),
+})
+```
+
+Schemas must be self-contained: external `$ref` loading is deliberately
+disabled so startup never performs hidden network or filesystem I/O. JSON
+Schema diagnostics retain their instance paths; `SpecError` and `GraphError`
+identify the JSON boundary, while `ErrInvalidSpec` and `ErrInvalidGraph` remain
+available through `errors.Is`.
+
 Code-defined workflows can use the fluent API. A `Pipeline` is already a
 `Step`, so there is no final build call:
 
@@ -124,14 +168,14 @@ Highlights:
   (topologically layered, cycle-checked) compiles to a runnable `Step`.
 - **Typed factories.** `Factory` strictly decodes JSON config and adapts a typed
   node constructor into the common `LeafFactory` shape.
-- **Validation.** `Registry.ValidateGraph` checks a `Graph` — unique IDs, known types,
-  no cycles, and type-compatible edges via registered `Schema`s — without running
-  it, for a visual editor's live feedback.
+- **Validation.** Embedded JSON Schemas check both DSL shapes;
+  `Registry.ValidateSpec` and `Registry.ValidateGraph` add registrations, config
+  schemas, unique IDs, cycles, references, and compatible edge types without
+  running the workflow.
 - **Observability.** Attach an `Observer` with `WithObserver` to receive typed
   step lifecycle events; ordinary functions can use `ObserverFunc`.
-- **Introspection.** Every composite describes its own structure via `Describe`;
-  `Mermaid` renders a compiled workflow tree and `MermaidGraph` renders the
-  original DAG edges.
+- **Introspection.** Every composite describes its own structure via `Describe`,
+  leaving rendering and presentation to callers.
 
 ## Architecture
 
@@ -206,27 +250,36 @@ Current rewrite migrations:
   import `github.com/Tangerg/flow` and use the package name `flow`.
 - The former `core.Func` is now `flow.NodeFunc`, following the `http.HandlerFunc` adapter
   convention.
-- `FanOut`, `FanOutAll`, `Race`, and `Parallel` accept variadic nodes directly;
-  bounded variants use the explicit `FanOutN`, `FanOutAllN`, `MapAllN`,
-  `ParallelN`, and `IterationN` names.
-- `workflow.LoopLimit` replaces passing `flow.WithMaxIterations` through the
-  dynamic workflow layer.
-- A decorator `Builder` now implements `Node` directly; remove the final
-  `.Node()` call.
+- Collection combinators accept variadic nodes directly. Bounded operations use
+  explicit `N` variants such as `flow.MapN`, `flow.LoopN`, `flowx.FanOutN`,
+  `workflow.ParallelN`, and `workflow.IterationN`; root Option types were
+  removed.
+- `flowx` decorators are ordinary composable functions; fluent chaining is
+  reserved for `workflow.Pipeline`.
 - `flowx.Result.Error` is now `Result.Err`, following Go's conventional error
   field naming.
 - `workflow.Adapt` and `FromRef` are now `Leaf` and `From`; custom binders use
   the `Binder` interface or `BindFunc` adapter.
-- `Store.Get(nodeID, path)` is now `Store.Lookup(Ref)`; use `workflow.Get[T]`
-  for checked typed reads and `Output(nodeID)` for the common output reference.
+- Store reads use `Store.Lookup(Ref)` or `workflow.Get[T]`; `Output`, `Item`,
+  and `Index` create the conventional references without exposing path-key
+  constants.
 - Registry registration methods now return errors immediately. Startup code
   that prefers fail-fast chaining can use the `MustRegister*` methods.
 - Registry compilation uses explicit `CompileSpec`, `CompileSpecJSON`,
-  `CompileGraph`, `CompileGraphJSON`, and `ValidateGraph` names.
+  `CompileGraph`, and `CompileGraphJSON` names; validation uses matching
+  `ValidateSpec`, `ValidateGraph`, `ValidateSpecJSON`, and `ValidateGraphJSON`
+  names.
 - `Sink` and the three event variants are replaced by the single-method
-  `Observer` contract and the `Event` value type.
+  `Observer` contract and the `Event` value type. Use `ObserverFunc` when a
+  function is enough.
 - `workflow.Condition` returns `(bool, error)` so condition evaluation failures
   are not mistaken for “keep looping”.
+- `Pipeline` intentionally exposes only `Then` and the high-frequency
+  `Parallel` shortcut; append other composites with `Then`.
+- Diagram rendering is no longer part of `workflow`; consume `Description`
+  directly or render it in an integration package.
+- Node metadata uses the explicit `NodeSchema` name; `Schema` is reserved as a
+  general concept rather than an ambiguous exported type.
 
 ## Non-goals
 

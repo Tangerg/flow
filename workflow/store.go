@@ -64,9 +64,9 @@ func NewStore() Store {
 }
 
 // With returns a copy of the Store with value written at (nodeID, key). The
-// receiver is not modified. Most writes add a constant-size overlay; after a
-// bounded number of writes the overlays are compacted into a new snapshot.
-// Value is not cloned and must not be mutated after insertion.
+// receiver is not modified. Most writes add a constant-size overlay, which is
+// periodically compacted. Value is not cloned and must not be mutated after
+// insertion.
 func (s Store) With(nodeID, key string, value any) Store {
 	next := cell{value: value, revision: revisionCounter.Add(1)}
 	identity := storeKey{nodeID: nodeID, key: key}
@@ -97,7 +97,7 @@ func (s Store) compact() Store {
 // WithOutput returns a copy of the Store with value written to the conventional
 // output key for nodeID.
 func (s Store) WithOutput(nodeID string, value any) Store {
-	return s.With(nodeID, OutputKey, value)
+	return s.With(nodeID, outputKey, value)
 }
 
 // Lookup returns the value at ref. The path's first segment is the key under the

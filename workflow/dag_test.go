@@ -39,7 +39,7 @@ func TestCompileGraph_diamond(t *testing.T) {
 		MustRegisterLeaf("addN", addN()).
 		MustRegisterLeaf("sum2", sum2())
 
-	ref := func(id string) *workflow.Ref { return &workflow.Ref{NodeID: id, Path: workflow.OutputKey} }
+	ref := func(id string) *workflow.Ref { value := workflow.Output(id); return &value }
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
 		{ID: "a", Type: "addN", Input: &workflow.Ref{NodeID: "start", Path: "output"}, Config: json.RawMessage(`{"n":1}`)},
 		{ID: "b", Type: "addN", Input: ref("a"), Config: json.RawMessage(`{"n":10}`)},
@@ -138,12 +138,12 @@ func TestCompileGraph_rejectsUnknownExplicitDependency(t *testing.T) {
 func TestCompileGraph_runsSchemaValidation(t *testing.T) {
 	reg := workflow.NewRegistry().
 		MustRegisterLeaf("addN", addN()).
-		MustRegisterSchema("addN", workflow.Schema{Input: workflow.TypeNumber, Output: workflow.TypeNumber}).
+		MustRegisterSchema("addN", workflow.NodeSchema{Input: workflow.TypeNumber, Output: workflow.TypeNumber}).
 		MustRegisterLeaf("stringNode", addN()).
-		MustRegisterSchema("stringNode", workflow.Schema{Input: workflow.TypeString, Output: workflow.TypeString})
+		MustRegisterSchema("stringNode", workflow.NodeSchema{Input: workflow.TypeString, Output: workflow.TypeString})
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
 		{ID: "a", Type: "addN"},
-		{ID: "b", Type: "stringNode", Input: &workflow.Ref{NodeID: "a", Path: workflow.OutputKey}},
+		{ID: "b", Type: "stringNode", Input: refPtr(workflow.Output("a"))},
 	}}
 	if _, err := reg.CompileGraph(g); err == nil {
 		t.Fatal("expected incompatible schema error")
