@@ -62,10 +62,10 @@ Decorators are ordinary functions. Nesting makes the execution order explicit:
 ```go
 node := flowx.Fallback(
     flowx.Timeout(
-        flowx.Retry(callAPI,
-            flowx.WithAttempts(3),
-            flowx.WithBackoff(flowx.ExponentialBackoff(50*time.Millisecond)),
-        ),
+        flowx.Retry(callAPI, flowx.RetryConfig{
+            Attempts: 3,
+            Backoff:  flowx.ExponentialBackoff(50 * time.Millisecond),
+        }),
         2*time.Second,
     ),
     serveFromCache,
@@ -140,14 +140,16 @@ Schema diagnostics retain their instance paths; `SpecError` and `GraphError`
 identify the JSON boundary, while `ErrInvalidSpec` and `ErrInvalidGraph` remain
 available through `errors.Is`.
 
-Code-defined workflows can use the fluent API. A `Pipeline` is already a
-`Step`, so there is no final build call:
+Code-defined workflows compose the primitives directly. A composite is already
+a `Step`, so there is no final build call:
 
 ```go
-pipeline := workflow.Pipe(load).
-    Then(validate).
-    Parallel(saveDB, writeAudit).
-    Then(reply)
+pipeline := workflow.Sequence(
+    load,
+    validate,
+    workflow.Parallel(saveDB, writeAudit),
+    reply,
+)
 
 out, err := pipeline.Run(ctx, input)
 ```
@@ -162,8 +164,6 @@ Highlights:
 - **Composites on flow.** `Sequence`/`Branch`/`Loop`/`Parallel`/`Iteration` are
   built from root primitives; `Parallel` merges branch stores, `Iteration`
   scopes each element.
-- **Fluent composition.** `Pipe(...).Then(...).Parallel(...)` assembles those
-  same composites while remaining an ordinary `Step`.
 - **Config-driven.** A nested `Spec` or a flat, arbitrarily wired `Graph`
   (topologically layered, cycle-checked) compiles to a runnable `Step`.
 - **Typed factories.** `Factory` strictly decodes JSON config and adapts a typed
@@ -201,8 +201,8 @@ flowx ────┘
 - **Minimal flow.** Only primitives that cannot be expressed in terms of the
   others. If it is derivable, it belongs in a higher layer.
 - **Type-safe.** Composition is checked at compile time; no reflection in `flow`.
-- **Small interfaces.** `Node`, `Binder`, and `Observer` are single-method
-  contracts with `NodeFunc`, `BindFunc`, and `ObserverFunc` adapters.
+- **Small interfaces.** `Node` and `Observer` are single-method contracts with
+  `NodeFunc`, `BindFunc`, and `ObserverFunc` function adapters.
 - **Zero dependencies in `flow`.** Bounded concurrency uses only the standard
   library.
 - **Persistent state in `workflow`.** Store structure is copy-on-write; inserted
@@ -254,12 +254,12 @@ Current rewrite migrations:
   explicit `N` variants such as `flow.MapN`, `flow.LoopN`, `flowx.FanOutN`,
   `workflow.ParallelN`, and `workflow.IterationN`; root Option types were
   removed.
-- `flowx` decorators are ordinary composable functions; fluent chaining is
-  reserved for `workflow.Pipeline`.
+- `flowx` decorators are ordinary composable functions; compose them by nesting.
+- `flowx.Retry` takes a `RetryConfig` struct instead of functional options.
 - `flowx.Result.Error` is now `Result.Err`, following Go's conventional error
   field naming.
-- `workflow.Adapt` and `FromRef` are now `Leaf` and `From`; custom binders use
-  the `Binder` interface or `BindFunc` adapter.
+- `workflow.Adapt` and `FromRef` are now `Leaf` and `From`; custom binders are
+  `BindFunc` values.
 - Store reads use `Store.Lookup(Ref)` or `workflow.Get[T]`; `Output`, `Item`,
   and `Index` create the conventional references without exposing path-key
   constants.
@@ -274,8 +274,8 @@ Current rewrite migrations:
   function is enough.
 - `workflow.Condition` returns `(bool, error)` so condition evaluation failures
   are not mistaken for “keep looping”.
-- `Pipeline` intentionally exposes only `Then` and the high-frequency
-  `Parallel` shortcut; append other composites with `Then`.
+- `Pipeline` was removed; compose sequential and parallel stages directly with
+  `Sequence` and `Parallel`.
 - Diagram rendering is no longer part of `workflow`; consume `Description`
   directly or render it in an integration package.
 - Node metadata uses the explicit `NodeSchema` name; `Schema` is reserved as a

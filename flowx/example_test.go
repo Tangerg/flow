@@ -23,7 +23,7 @@ func ExampleRetry() {
 	})
 
 	node := flowx.Timeout(
-		flowx.Retry(flaky, flowx.WithAttempts(3)),
+		flowx.Retry(flaky, flowx.RetryConfig{Attempts: 3}),
 		time.Second,
 	)
 

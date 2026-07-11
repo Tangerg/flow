@@ -68,27 +68,13 @@ func Get[T any](s Store, ref Ref) (T, error) {
 	return v, nil
 }
 
-// Binder reads a typed input from a Store. Small custom binders can implement
-// this interface directly; ordinary functions can use [BindFunc].
-type Binder[I any] interface {
-	Bind(Store) (I, error)
-}
-
-// BindFunc adapts a function into a [Binder], analogous to flow.NodeFunc.
+// BindFunc reads a typed input from a Store. Create one with [From], or write
+// one inline when a step needs to read several references.
 type BindFunc[I any] func(Store) (I, error)
-
-// Bind calls f. A nil BindFunc returns [flow.ErrNilFunc].
-func (f BindFunc[I]) Bind(s Store) (I, error) {
-	if f == nil {
-		var zero I
-		return zero, flow.ErrNilFunc
-	}
-	return f(s)
-}
 
 // From returns a BindFunc that reads a value of type I from ref.
 func From[I any](ref Ref) BindFunc[I] {
-	return BindFunc[I](func(s Store) (I, error) { return Get[I](s, ref) })
+	return func(s Store) (I, error) { return Get[I](s, ref) }
 }
 
 // Leaf turns a statically typed node into a [Step]. On each run it binds the
@@ -99,14 +85,14 @@ func From[I any](ref Ref) BindFunc[I] {
 // This is the prep/exec/post split: bind reads the pool, node computes, the Step
 // writes back — the node itself stays free of any Store knowledge and is unit
 // testable on its own.
-func Leaf[I, O any](id string, bind Binder[I], node flow.Node[I, O]) Step {
+func Leaf[I, O any](id string, bind BindFunc[I], node flow.Node[I, O]) Step {
 	return leaf[I, O]{id: id, bind: bind, node: node}
 }
 
 // leaf is the [Step] produced by [Leaf].
 type leaf[I, O any] struct {
 	id   string
-	bind Binder[I]
+	bind BindFunc[I]
 	node flow.Node[I, O]
 }
 
@@ -124,7 +110,7 @@ func (l leaf[I, O]) Run(ctx context.Context, s Store) (Store, error) {
 	if l.bind == nil {
 		return fail(OpBind, flow.ErrNilFunc)
 	}
-	in, err := l.bind.Bind(s)
+	in, err := l.bind(s)
 	if err != nil {
 		return fail(OpBind, err)
 	}

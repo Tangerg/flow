@@ -21,7 +21,7 @@ func TestRetry_succeedsAfterFailures(t *testing.T) {
 		return x, nil
 	})
 
-	got, err := flowx.Retry(flaky, flowx.WithAttempts(3)).Run(context.Background(), 42)
+	got, err := flowx.Retry(flaky, flowx.RetryConfig{Attempts: 3}).Run(context.Background(), 42)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestRetry_exhausts(t *testing.T) {
 		return 0, boom
 	})
 
-	_, err := flowx.Retry(always, flowx.WithAttempts(2)).Run(context.Background(), 1)
+	_, err := flowx.Retry(always, flowx.RetryConfig{Attempts: 2}).Run(context.Background(), 1)
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want boom", err)
 	}
@@ -55,10 +55,10 @@ func TestRetry_notRetryableStopsEarly(t *testing.T) {
 		return 0, fatal
 	})
 
-	_, err := flowx.Retry(node,
-		flowx.WithAttempts(5),
-		flowx.WithRetryable(func(error) bool { return false }),
-	).Run(context.Background(), 1)
+	_, err := flowx.Retry(node, flowx.RetryConfig{
+		Attempts:  5,
+		Retryable: func(error) bool { return false },
+	}).Run(context.Background(), 1)
 	if !errors.Is(err, fatal) || calls != 1 {
 		t.Fatalf("err=%v calls=%d; want fatal after 1 call", err, calls)
 	}
@@ -106,7 +106,7 @@ func TestDecoratorComposition(t *testing.T) {
 	})
 
 	node := flowx.Timeout(
-		flowx.Retry(flaky, flowx.WithAttempts(3)),
+		flowx.Retry(flaky, flowx.RetryConfig{Attempts: 3}),
 		time.Second,
 	)
 
@@ -119,7 +119,7 @@ func TestDecoratorComposition(t *testing.T) {
 	}
 }
 
-func TestRetry_nilOptionAndPredicateUseDefaults(t *testing.T) {
+func TestRetry_zeroConfigUsesDefaults(t *testing.T) {
 	boom := errors.New("boom")
 	calls := 0
 	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
@@ -130,9 +130,24 @@ func TestRetry_nilOptionAndPredicateUseDefaults(t *testing.T) {
 		return in, nil
 	})
 
-	got, err := flowx.Retry(node, nil, flowx.WithRetryable(nil)).Run(context.Background(), 7)
+	// The zero RetryConfig means three attempts and the default predicate.
+	got, err := flowx.Retry(node, flowx.RetryConfig{}).Run(context.Background(), 7)
 	if err != nil || got != 7 || calls != 2 {
 		t.Fatalf("Retry = %d, %v after %d calls", got, err, calls)
+	}
+}
+
+func TestRetry_negativeAttemptsUsesDefault(t *testing.T) {
+	calls := 0
+	boom := errors.New("boom")
+	node := flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) {
+		calls++
+		return 0, boom
+	})
+
+	_, err := flowx.Retry(node, flowx.RetryConfig{Attempts: -1}).Run(context.Background(), 0)
+	if !errors.Is(err, boom) || calls != 3 {
+		t.Fatalf("Attempts=-1 should default to 3; err=%v calls=%d", err, calls)
 	}
 }
 
@@ -149,10 +164,10 @@ func TestRetry_backoffRespectsContext(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 
-	_, err := flowx.Retry(node,
-		flowx.WithAttempts(3),
-		flowx.WithBackoff(flowx.ConstantBackoff(time.Hour)),
-	).Run(ctx, 0)
+	_, err := flowx.Retry(node, flowx.RetryConfig{
+		Attempts: 3,
+		Backoff:  flowx.ConstantBackoff(time.Hour),
+	}).Run(ctx, 0)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v; want DeadlineExceeded", err)
 	}
@@ -205,7 +220,7 @@ func TestRetryAndFallbackPreferParentCancellation(t *testing.T) {
 			cancel()
 			return 0, boom
 		})
-		if _, err := flowx.Retry(node).Run(ctx, 0); !errors.Is(err, context.Canceled) {
+		if _, err := flowx.Retry(node, flowx.RetryConfig{}).Run(ctx, 0); !errors.Is(err, context.Canceled) {
 			t.Fatalf("err = %v; want context.Canceled", err)
 		}
 	})

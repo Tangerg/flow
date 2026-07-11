@@ -10,7 +10,7 @@ import (
 )
 
 func TestEvents_emittedForSequence(t *testing.T) {
-	from := func(id string) workflow.Binder[int] {
+	from := func(id string) workflow.BindFunc[int] {
 		return workflow.From[int](workflow.Output(id))
 	}
 	a := workflow.Leaf("a", from("start"), flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))

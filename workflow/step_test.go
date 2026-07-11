@@ -9,10 +9,6 @@ import (
 	"github.com/Tangerg/flow/workflow"
 )
 
-type staticBinder int
-
-func (b staticBinder) Bind(workflow.Store) (int, error) { return int(b), nil }
-
 func TestSequence_threadsStore(t *testing.T) {
 	double := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil })
 	inc := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil })
@@ -90,7 +86,7 @@ func TestSequence_singleNilStep(t *testing.T) {
 	}
 }
 
-func TestLeaf_rejectsEmptyIDAndNilBinder(t *testing.T) {
+func TestLeaf_rejectsEmptyIDAndNilBind(t *testing.T) {
 	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
 	if _, err := workflow.Leaf("", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }), node).
 		Run(context.Background(), workflow.NewStore()); !errors.Is(err, workflow.ErrInvalidStepID) {
@@ -107,9 +103,11 @@ func TestLeaf_rejectsEmptyIDAndNilBinder(t *testing.T) {
 	}
 }
 
-func TestLeaf_acceptsCustomBinder(t *testing.T) {
+func TestLeaf_acceptsCustomBindFunc(t *testing.T) {
 	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in * 2, nil })
-	out, err := workflow.Leaf("double", staticBinder(21), node).Run(context.Background(), workflow.NewStore())
+	// A custom binder is just a BindFunc; this one ignores the store.
+	bind := workflow.BindFunc[int](func(workflow.Store) (int, error) { return 21, nil })
+	out, err := workflow.Leaf("double", bind, node).Run(context.Background(), workflow.NewStore())
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
