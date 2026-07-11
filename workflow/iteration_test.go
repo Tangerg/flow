@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Tangerg/flow/core"
+	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
 )
 
@@ -12,7 +12,7 @@ func TestIteration_mapsAndCollects(t *testing.T) {
 	// body doubles each element, read from the scoped (iter, item) slot.
 	body := workflow.Leaf("el",
 		workflow.From[int](workflow.Ref{NodeID: "iter", Path: workflow.ItemKey}),
-		core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil }),
+		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil }),
 	)
 
 	iter := workflow.IterationN(
@@ -49,7 +49,7 @@ func TestIteration_usesIndex(t *testing.T) {
 	// body returns the element's index, proving the scope carries it.
 	body := workflow.Leaf("el",
 		workflow.From[int](workflow.Ref{NodeID: "iter", Path: workflow.IndexKey}),
-		core.NodeFunc[int, int](func(_ context.Context, i int) (int, error) { return i, nil }),
+		flow.NodeFunc[int, int](func(_ context.Context, i int) (int, error) { return i, nil }),
 	)
 
 	iter := workflow.Iteration(
@@ -75,7 +75,7 @@ func TestIteration_usesIndex(t *testing.T) {
 func TestIteration_inputNotArray(t *testing.T) {
 	body := workflow.Leaf("el",
 		workflow.From[int](workflow.Ref{NodeID: "iter", Path: workflow.ItemKey}),
-		core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
+		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 	iter := workflow.Iteration("iter", workflow.Ref{NodeID: "start", Path: "output"}, body, workflow.Ref{NodeID: "el", Path: workflow.OutputKey})
 

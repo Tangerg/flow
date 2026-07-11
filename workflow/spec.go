@@ -91,7 +91,7 @@ func (r *Registry) build(spec Spec) (Step, error) {
 	case KindIteration:
 		return r.buildIteration(spec)
 	default:
-		return nil, fmt.Errorf("workflow: unknown spec kind %q", spec.Kind)
+		return nil, specError(spec, "kind", fmt.Errorf("%w: unknown kind %q", ErrInvalidSpec, spec.Kind))
 	}
 }
 
@@ -99,7 +99,7 @@ func (r *Registry) build(spec Spec) (Step, error) {
 func (r *Registry) CompileSpecJSON(data []byte) (Step, error) {
 	var spec Spec
 	if err := decodeStrict(data, &spec); err != nil {
-		return nil, fmt.Errorf("workflow: invalid spec: %w", err)
+		return nil, &SpecError{Field: "json", Err: fmt.Errorf("%w: %v", ErrInvalidSpec, err)}
 	}
 	return r.CompileSpec(spec)
 }
@@ -119,7 +119,7 @@ func (r *Registry) buildAll(specs []Spec) ([]Step, error) {
 func (r *Registry) buildLeaf(spec Spec) (Step, error) {
 	f, ok := r.leafFactory(spec.Type)
 	if !ok {
-		return nil, fmt.Errorf("workflow: unknown leaf type %q", spec.Type)
+		return nil, specError(spec, "type", fmt.Errorf("%w %q", ErrUnknownNodeType, spec.Type))
 	}
 	var input Ref
 	if spec.Input != nil {
@@ -127,7 +127,7 @@ func (r *Registry) buildLeaf(spec Spec) (Step, error) {
 	}
 	step, err := f(spec.ID, input, spec.Config)
 	if err != nil {
-		return nil, fmt.Errorf("workflow: leaf %q (%s): %w", spec.ID, spec.Type, err)
+		return nil, specError(spec, "config", err)
 	}
 	return step, nil
 }
@@ -135,7 +135,7 @@ func (r *Registry) buildLeaf(spec Spec) (Step, error) {
 func (r *Registry) buildBranch(spec Spec) (Step, error) {
 	resolve, ok := r.resolver(spec.Resolver)
 	if !ok {
-		return nil, fmt.Errorf("workflow: unknown resolver %q", spec.Resolver)
+		return nil, specError(spec, "resolver", fmt.Errorf("%w: unknown resolver %q", ErrInvalidSpec, spec.Resolver))
 	}
 	cases := make(map[string]Step, len(spec.Cases))
 	for _, name := range slices.Sorted(maps.Keys(spec.Cases)) {
@@ -150,11 +150,11 @@ func (r *Registry) buildBranch(spec Spec) (Step, error) {
 
 func (r *Registry) buildLoop(spec Spec) (Step, error) {
 	if spec.Body == nil {
-		return nil, fmt.Errorf("workflow: loop requires a body")
+		return nil, specError(spec, "body", fmt.Errorf("%w: required", ErrInvalidSpec))
 	}
 	cond, ok := r.condition(spec.Condition)
 	if !ok {
-		return nil, fmt.Errorf("workflow: unknown condition %q", spec.Condition)
+		return nil, specError(spec, "condition", fmt.Errorf("%w: unknown condition %q", ErrInvalidSpec, spec.Condition))
 	}
 	body, err := r.build(*spec.Body)
 	if err != nil {
@@ -168,10 +168,10 @@ func (r *Registry) buildLoop(spec Spec) (Step, error) {
 
 func (r *Registry) buildIteration(spec Spec) (Step, error) {
 	if spec.Body == nil {
-		return nil, fmt.Errorf("workflow: iteration requires a body")
+		return nil, specError(spec, "body", fmt.Errorf("%w: required", ErrInvalidSpec))
 	}
 	if spec.Input == nil || spec.BodyOutput == nil {
-		return nil, fmt.Errorf("workflow: iteration requires input and bodyOutput")
+		return nil, specError(spec, "iteration", fmt.Errorf("%w: input and bodyOutput are required", ErrInvalidSpec))
 	}
 	body, err := r.build(*spec.Body)
 	if err != nil {

@@ -3,7 +3,7 @@ package flowx
 import (
 	"errors"
 
-	"github.com/Tangerg/flow/core"
+	"github.com/Tangerg/flow"
 )
 
 // Result pairs a value with an error. The collecting combinators [FanOutAll] and
@@ -16,14 +16,14 @@ type Result[V any] struct {
 
 // Collect splits results into their values and the joined error of any failures
 // (nil if none failed). Values, including partial values returned alongside an
-// error, are preserved. Each failure is wrapped in [core.IndexError].
+// error, are preserved. Each failure is wrapped in [flow.IndexError].
 func Collect[V any](rs []Result[V]) ([]V, error) {
 	vals := make([]V, len(rs))
 	var errs []error
 	for i, r := range rs {
 		vals[i] = r.Value
 		if r.Err != nil {
-			errs = append(errs, &core.IndexError{Index: i, Err: r.Err})
+			errs = append(errs, &flow.IndexError{Index: i, Err: r.Err})
 		}
 	}
 	return vals, errors.Join(errs...)

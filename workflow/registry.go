@@ -51,11 +51,11 @@ func (r *Registry) RegisterLeaf(nodeType string, f LeafFactory) error {
 	r.initLocked()
 	switch {
 	case nodeType == "":
-		return fmt.Errorf("workflow: register leaf: type is empty")
+		return &RegistrationError{Kind: "leaf", Err: fmt.Errorf("%w: empty type", ErrInvalidRegistration)}
 	case f == nil:
-		return fmt.Errorf("workflow: register leaf %q: nil factory", nodeType)
+		return &RegistrationError{Kind: "leaf", Name: nodeType, Err: fmt.Errorf("%w: nil factory", ErrInvalidRegistration)}
 	case r.leaves[nodeType] != nil:
-		return fmt.Errorf("workflow: register leaf %q: already registered", nodeType)
+		return &RegistrationError{Kind: "leaf", Name: nodeType, Err: ErrDuplicateRegistration}
 	default:
 		r.leaves[nodeType] = f
 	}
@@ -78,11 +78,11 @@ func (r *Registry) RegisterResolver(name string, f Resolver) error {
 	r.initLocked()
 	switch {
 	case name == "":
-		return fmt.Errorf("workflow: register resolver: name is empty")
+		return &RegistrationError{Kind: "resolver", Err: fmt.Errorf("%w: empty name", ErrInvalidRegistration)}
 	case f == nil:
-		return fmt.Errorf("workflow: register resolver %q: nil resolver", name)
+		return &RegistrationError{Kind: "resolver", Name: name, Err: fmt.Errorf("%w: nil resolver", ErrInvalidRegistration)}
 	case r.resolvers[name] != nil:
-		return fmt.Errorf("workflow: register resolver %q: already registered", name)
+		return &RegistrationError{Kind: "resolver", Name: name, Err: ErrDuplicateRegistration}
 	default:
 		r.resolvers[name] = f
 	}
@@ -104,11 +104,11 @@ func (r *Registry) RegisterCondition(name string, f Condition) error {
 	r.initLocked()
 	switch {
 	case name == "":
-		return fmt.Errorf("workflow: register condition: name is empty")
+		return &RegistrationError{Kind: "condition", Err: fmt.Errorf("%w: empty name", ErrInvalidRegistration)}
 	case f == nil:
-		return fmt.Errorf("workflow: register condition %q: nil condition", name)
+		return &RegistrationError{Kind: "condition", Name: name, Err: fmt.Errorf("%w: nil condition", ErrInvalidRegistration)}
 	case r.conditions[name] != nil:
-		return fmt.Errorf("workflow: register condition %q: already registered", name)
+		return &RegistrationError{Kind: "condition", Name: name, Err: ErrDuplicateRegistration}
 	default:
 		r.conditions[name] = f
 	}

@@ -1,4 +1,4 @@
-package core
+package flow
 
 import (
 	"context"

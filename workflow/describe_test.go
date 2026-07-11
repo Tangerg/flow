@@ -5,14 +5,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Tangerg/flow/core"
+	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
 )
 
 func leafStep(id string) workflow.Step {
 	return workflow.Leaf(id,
 		workflow.From[int](workflow.Ref{NodeID: "start", Path: "output"}),
-		core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
+		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 }
 
@@ -39,8 +39,8 @@ func TestDescribe_tree(t *testing.T) {
 }
 
 func TestDescribe_opaque(t *testing.T) {
-	// A bare core.NodeFunc is not a Describer.
-	bare := core.NodeFunc[workflow.Store, workflow.Store](func(_ context.Context, s workflow.Store) (workflow.Store, error) {
+	// A bare flow.NodeFunc is not a Describer.
+	bare := flow.NodeFunc[workflow.Store, workflow.Store](func(_ context.Context, s workflow.Store) (workflow.Store, error) {
 		return s, nil
 	})
 	if d := workflow.Describe(bare); d.Kind != "opaque" {

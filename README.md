@@ -7,8 +7,8 @@ optional dynamic layer for building workflows from config or a visual editor.
 
 | Package | What it is | Types |
 | --- | --- | --- |
-| [`core`](./core) | The minimal, atomic composition primitives. Compile-time typed, zero third-party dependencies. | `Node[I, O]` |
-| [`flowx`](./flowx) | Derived combinators (`FanOut`, `Race`, …) and decorators (`Retry`, `Timeout`, `Trace`, …) built on `core`. | `Node[I, O]` |
+| [`flow`](.) | The minimal, atomic composition primitives. Compile-time typed, zero third-party dependencies. | `Node[I, O]` |
+| [`flowx`](./flowx) | Derived combinators (`FanOut`, `Race`, …) and decorators (`Retry`, `Timeout`, `Trace`, …) built on `flow`. | `Node[I, O]` |
 | [`workflow`](./workflow) | The dynamic layer: a variable pool (`Store`) threaded through nodes addressed by ID, plus config-driven construction. | `Node[Store, Store]` |
 
 ## Install
@@ -19,7 +19,7 @@ go get github.com/Tangerg/flow
 
 The current implementation requires Go 1.25 or newer.
 
-## core — typed composition
+## flow — typed composition
 
 The whole package is six irreducible primitives. Everything else is derivable
 and lives elsewhere.
@@ -39,21 +39,21 @@ type Node[I, O any] interface {
 | `Map` | concurrency: apply a node to every element of a slice |
 
 ```go
-double := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil })
-addOne := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil })
+double := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil })
+addOne := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil })
 
-pipe := core.Then(double, addOne)
+pipe := flow.Then(double, addOne)
 out, _ := pipe.Run(ctx, 10) // 21
 ```
 
 These form a category: `Then` is associative and closed over `Node`, so any
 composition is itself a `Node` you can `Run`. Convenience shapes (fan-out,
 collect-all, heterogeneous fan-in, race, retry, timeout) are derivable from these
-and live in `flowx`, not the core.
+and live in `flowx`, not the flow.
 
 ## flowx — derived combinators and decorators
 
-Everything deliberately kept out of `core` lives here, built on top of it:
+Everything deliberately kept out of the root `flow` package lives here:
 `FanOut`, `FanOutAll`, `MapAll`, `Combine2` (heterogeneous fan-in), `Race` (first
 success wins), `Identity`, and `Chain`.
 
@@ -74,7 +74,17 @@ editor), `workflow` threads a persistent variable pool through nodes addressed
 by ID.
 
 ```go
-reg := workflow.NewRegistry().MustRegisterLeaf("addN", addNFactory)
+type addConfig struct {
+    N int `json:"n"`
+}
+
+addN := workflow.Factory(func(cfg addConfig) (flow.Node[int, int], error) {
+    return flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
+        return in + cfg.N, nil
+    }), nil
+})
+
+reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN)
 
 graph := `{"nodes":[
   {"id":"a","type":"addN","input":{"nodeID":"start","path":"output"},"config":{"n":10}},
@@ -86,6 +96,18 @@ out, _ := step.Run(ctx, workflow.NewStore().WithOutput("start", 1))
 v, _ := workflow.Get[int](out, workflow.Output("b")) // 16
 ```
 
+Code-defined workflows can use the fluent API. A `Pipeline` is already a
+`Step`, so there is no final build call:
+
+```go
+pipeline := workflow.Pipe(load).
+    Then(validate).
+    Parallel(saveDB, writeAudit).
+    Then(reply)
+
+out, err := pipeline.Run(ctx, input)
+```
+
 Highlights:
 
 - **Persistent `Store`.** Every write returns a new structural snapshot. Values
@@ -93,11 +115,15 @@ Highlights:
 - **Serializable state.** `Store` implements `json.Marshaler` and
   `json.Unmarshaler`; decoding is atomic and uses encoding/json's standard value
   representation.
-- **Composites on core.** `Sequence`/`Branch`/`Loop`/`Parallel`/`Iteration` are
-  built from the core primitives; `Parallel` merges branch stores, `Iteration`
+- **Composites on flow.** `Sequence`/`Branch`/`Loop`/`Parallel`/`Iteration` are
+  built from root primitives; `Parallel` merges branch stores, `Iteration`
   scopes each element.
+- **Fluent composition.** `Pipe(...).Then(...).Parallel(...)` assembles those
+  same composites while remaining an ordinary `Step`.
 - **Config-driven.** A nested `Spec` or a flat, arbitrarily wired `Graph`
   (topologically layered, cycle-checked) compiles to a runnable `Step`.
+- **Typed factories.** `Factory` strictly decodes JSON config and adapts a typed
+  node constructor into the common `LeafFactory` shape.
 - **Validation.** `Registry.ValidateGraph` checks a `Graph` — unique IDs, known types,
   no cycles, and type-compatible edges via registered `Schema`s — without running
   it, for a visual editor's live feedback.
@@ -109,16 +135,15 @@ Highlights:
 
 ## Architecture
 
-Dependencies point inward, toward the stable kernel — `core` imports nothing from
-the outer packages:
+Dependencies point inward, toward the stable root package:
 
 ```
 workflow ─┐
-          ├─► core   (zero dependencies)
+          ├─► flow   (zero dependencies)
 flowx ────┘
 ```
 
-- `core` is the domain kernel: minimal, and already rich — behavior lives on
+- `flow` is the domain kernel: minimal, and already rich — behavior lives on
   concrete types (`then`, `mapNode`, …) behind the `Node` interface.
 - `flowx` adds derived combinators and cross-cutting decorators (interceptors);
   it is a utility layer, not a set of domain entities, so it stays functional.
@@ -129,12 +154,12 @@ flowx ────┘
 
 ## Design principles
 
-- **Minimal core.** Only primitives that cannot be expressed in terms of the
+- **Minimal flow.** Only primitives that cannot be expressed in terms of the
   others. If it is derivable, it belongs in a higher layer.
-- **Type-safe.** Composition is checked at compile time; no reflection in `core`.
+- **Type-safe.** Composition is checked at compile time; no reflection in `flow`.
 - **Small interfaces.** `Node`, `Binder`, and `Observer` are single-method
   contracts with `NodeFunc`, `BindFunc`, and `ObserverFunc` adapters.
-- **Zero dependencies in `core`.** Bounded concurrency uses only the standard
+- **Zero dependencies in `flow`.** Bounded concurrency uses only the standard
   library.
 - **Persistent state in `workflow`.** Store structure is copy-on-write; inserted
   values follow an explicit caller-owned immutability contract.
@@ -158,12 +183,15 @@ deterministic in-process runtime over maximally eager DAG scheduling.
 Errors wrap their causes and are intended for `errors.Is` and `errors.As`, not
 string matching. In particular:
 
-- `core.IndexError` identifies the failing item in `Map`, `Race`, and collected
+- `flow.IndexError` identifies the failing item in `Map`, `Race`, and collected
   result errors.
 - `workflow.StepError` identifies the step ID and operation (`bind`, `run`, or
   `validate`).
-- Sentinel errors such as `core.ErrNilNode`, `core.ErrNoCase`, and
-  `core.ErrMaxIterations` remain discoverable through wrapping.
+- `workflow.RefError`, `RegistrationError`, `GraphError`, and `SpecError`
+  identify the exact reference, registry entry, graph field, or specification
+  field that failed.
+- Sentinel errors such as `flow.ErrNilNode`, `flow.ErrNoCase`, and
+  `flow.ErrMaxIterations` remain discoverable through wrapping.
 
 ## Compatibility
 
@@ -174,12 +202,14 @@ are compatibility commitments.
 
 Current rewrite migrations:
 
-- `core.Func` is now `core.NodeFunc`, following the `http.HandlerFunc` adapter
+- The former `github.com/Tangerg/flow/core` package now lives at the module root:
+  import `github.com/Tangerg/flow` and use the package name `flow`.
+- The former `core.Func` is now `flow.NodeFunc`, following the `http.HandlerFunc` adapter
   convention.
 - `FanOut`, `FanOutAll`, `Race`, and `Parallel` accept variadic nodes directly;
   bounded variants use the explicit `FanOutN`, `FanOutAllN`, `MapAllN`,
   `ParallelN`, and `IterationN` names.
-- `workflow.LoopLimit` replaces passing `core.WithMaxIterations` through the
+- `workflow.LoopLimit` replaces passing `flow.WithMaxIterations` through the
   dynamic workflow layer.
 - A decorator `Builder` now implements `Node` directly; remove the final
   `.Node()` call.

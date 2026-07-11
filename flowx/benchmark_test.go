@@ -5,13 +5,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Tangerg/flow/core"
+	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/flowx"
 )
 
 func BenchmarkDecoratorStack(b *testing.B) {
 	ctx := context.Background()
-	base := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
+	base := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 		return in + 1, nil
 	})
 	node := flowx.Wrap(base).

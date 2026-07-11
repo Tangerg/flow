@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Tangerg/flow/core"
+	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
 )
 
@@ -13,8 +13,8 @@ func TestEvents_emittedForSequence(t *testing.T) {
 	from := func(id string) workflow.Binder[int] {
 		return workflow.From[int](workflow.Output(id))
 	}
-	a := workflow.Leaf("a", from("start"), core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
-	b := workflow.Leaf("b", from("a"), core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
+	a := workflow.Leaf("a", from("start"), flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
+	b := workflow.Leaf("b", from("a"), flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
 
 	var col workflow.Collector
 	ctx := workflow.WithObserver(context.Background(), &col)
@@ -41,7 +41,7 @@ func TestEvents_failure(t *testing.T) {
 	boom := errors.New("boom")
 	bad := workflow.Leaf("bad",
 		workflow.From[int](workflow.Ref{NodeID: "start", Path: "output"}),
-		core.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom }),
+		flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom }),
 	)
 
 	var col workflow.Collector
@@ -62,7 +62,7 @@ func TestEvents_failure(t *testing.T) {
 func TestEvents_noObserverIsFine(t *testing.T) {
 	a := workflow.Leaf("a",
 		workflow.From[int](workflow.Ref{NodeID: "start", Path: "output"}),
-		core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
+		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 	// No observer in context: emit must be a no-op, not panic.
 	if _, err := a.Run(context.Background(), workflow.NewStore().WithOutput("start", 1)); err != nil {

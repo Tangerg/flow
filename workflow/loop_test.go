@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Tangerg/flow/core"
+	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
 )
 
@@ -18,7 +18,7 @@ func TestLoop_untilDone(t *testing.T) {
 		v, _ := s.Lookup(workflow.At("start", "output"))
 		return v.(int), nil
 	})
-	body := workflow.Leaf("step", bind, core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil }))
+	body := workflow.Leaf("step", bind, flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil }))
 
 	done := func(_ context.Context, _ int, s workflow.Store) (bool, error) {
 		v, _ := s.Lookup(workflow.Output("step"))
@@ -39,11 +39,11 @@ func TestLoop_untilDone(t *testing.T) {
 func TestLoop_nilCondition(t *testing.T) {
 	body := workflow.Leaf("x",
 		workflow.From[int](workflow.Ref{NodeID: "start", Path: "output"}),
-		core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
+		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 
 	_, err := workflow.Loop(body, nil).Run(context.Background(), workflow.NewStore().WithOutput("start", 1))
-	if !errors.Is(err, core.ErrNilFunc) {
+	if !errors.Is(err, flow.ErrNilFunc) {
 		t.Fatalf("err = %v; want ErrNilFunc", err)
 	}
 }
@@ -51,12 +51,12 @@ func TestLoop_nilCondition(t *testing.T) {
 func TestLoop_maxIterations(t *testing.T) {
 	body := workflow.Leaf("x",
 		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
-		core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
+		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 	done := func(context.Context, int, workflow.Store) (bool, error) { return false, nil } // never done
 
 	_, err := workflow.LoopLimit(3, body, done).Run(context.Background(), workflow.NewStore())
-	if !errors.Is(err, core.ErrMaxIterations) {
+	if !errors.Is(err, flow.ErrMaxIterations) {
 		t.Fatalf("err = %v; want ErrMaxIterations", err)
 	}
 }
@@ -65,7 +65,7 @@ func TestLoop_conditionError(t *testing.T) {
 	boom := errors.New("condition failed")
 	body := workflow.Leaf("x",
 		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
-		core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
+		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 	done := func(context.Context, int, workflow.Store) (bool, error) { return false, boom }
 

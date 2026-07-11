@@ -16,14 +16,14 @@ type Description struct {
 }
 
 // Describer is implemented by steps that can describe their own structure. Every
-// step this package builds (via [Leaf], [Sequence], [Branch], [Loop],
+// step this package builds (via [Leaf], [Pipe], [Sequence], [Branch], [Loop],
 // [Parallel], [Iteration]) implements it.
 type Describer interface {
 	Describe() Description
 }
 
 // Describe returns step's Description, or an opaque leaf for steps that do not
-// implement [Describer] (for example a bare core.NodeFunc supplied by the caller).
+// implement [Describer] (for example a bare flow.NodeFunc supplied by the caller).
 func Describe(step Step) Description {
 	if d, ok := step.(Describer); ok {
 		return d.Describe()

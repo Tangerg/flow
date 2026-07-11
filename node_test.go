@@ -1,15 +1,15 @@
-package core_test
+package flow_test
 
 import (
 	"context"
 	"errors"
 	"testing"
 
-	"github.com/Tangerg/flow/core"
+	"github.com/Tangerg/flow"
 )
 
 func TestFunc_Run(t *testing.T) {
-	double := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
+	double := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
 		return x * 2, nil
 	})
 
@@ -24,7 +24,7 @@ func TestFunc_Run(t *testing.T) {
 
 func TestFunc_Run_propagatesError(t *testing.T) {
 	sentinel := errors.New("boom")
-	fail := core.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) {
+	fail := flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) {
 		return 0, sentinel
 	})
 
@@ -35,10 +35,10 @@ func TestFunc_Run_propagatesError(t *testing.T) {
 }
 
 func TestFunc_Run_nil(t *testing.T) {
-	var f core.NodeFunc[int, int]
+	var f flow.NodeFunc[int, int]
 
 	_, err := f.Run(context.Background(), 1)
-	if !errors.Is(err, core.ErrNilNode) {
+	if !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("Run error = %v, want ErrNilNode", err)
 	}
 }
@@ -47,7 +47,7 @@ func TestFunc_Run_passesContext(t *testing.T) {
 	type ctxKey struct{}
 	ctx := context.WithValue(context.Background(), ctxKey{}, "v")
 
-	read := core.NodeFunc[struct{}, string](func(ctx context.Context, _ struct{}) (string, error) {
+	read := flow.NodeFunc[struct{}, string](func(ctx context.Context, _ struct{}) (string, error) {
 		s, _ := ctx.Value(ctxKey{}).(string)
 		return s, nil
 	})

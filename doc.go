@@ -1,4 +1,5 @@
-// Package core provides the minimal, atomic building blocks of a flow.
+// Package flow provides the minimal, type-safe building blocks for composing
+// in-process control flow.
 //
 // It is deliberately reduced to the irreducible set of primitives — those that
 // cannot be expressed in terms of the others:
@@ -23,4 +24,4 @@
 // The package has no third-party dependencies. Durability, distribution, and
 // deterministic replay are out of scope; for those use a workflow engine such as
 // Temporal.
-package core
+package flow

@@ -23,3 +23,28 @@ jobs:
       - run: go mod tidy -diff
       - run: go test -race -cover ./...
       - run: go vet ./...
+
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+      - run: golangci-lint run ./...
+      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+      - run: govulncheck ./...
+
+  api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - run: go install golang.org/x/exp/cmd/apidiff@v0.0.0-20260709172345-9ea1abe57597
+      - name: Check public API compatibility
+        run: apidiff -m -incompatible api/flow.api github.com/Tangerg/flow
