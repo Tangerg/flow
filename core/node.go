@@ -16,22 +16,20 @@ type Node[I, O any] interface {
 	Run(ctx context.Context, in I) (O, error)
 }
 
-// Func adapts an ordinary function into a [Node], letting plain functions take
-// part in a flow without a dedicated type — analogous to net/http's HandlerFunc.
+// NodeFunc adapts an ordinary function into a [Node], analogous to
+// net/http.HandlerFunc.
 //
-//	double := core.Func[int, int](func(_ context.Context, x int) (int, error) {
+//	double := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
 //		return x * 2, nil
 //	})
 //	out, err := double.Run(ctx, 21) // 42, nil
-type Func[I, O any] func(ctx context.Context, in I) (O, error)
+type NodeFunc[I, O any] func(ctx context.Context, in I) (O, error)
 
-// Func satisfies Node.
-var _ Node[any, any] = Func[any, any](nil)
+// NodeFunc satisfies Node.
+var _ Node[any, any] = NodeFunc[any, any](nil)
 
-// Run calls the underlying function. A nil Func returns [ErrNilNode] instead of
-// panicking, so a forgotten or zero-value Func fails loudly without taking down
-// the surrounding flow.
-func (f Func[I, O]) Run(ctx context.Context, in I) (O, error) {
+// Run calls f. A nil NodeFunc returns [ErrNilNode].
+func (f NodeFunc[I, O]) Run(ctx context.Context, in I) (O, error) {
 	if f == nil {
 		var zero O
 		return zero, ErrNilNode

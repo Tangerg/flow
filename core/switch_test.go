@@ -10,10 +10,10 @@ import (
 
 func TestSwitch_routes(t *testing.T) {
 	cases := map[string]core.Node[int, string]{
-		"even": core.Func[int, string](func(_ context.Context, _ int) (string, error) { return "even", nil }),
-		"odd":  core.Func[int, string](func(_ context.Context, _ int) (string, error) { return "odd", nil }),
+		"even": core.NodeFunc[int, string](func(_ context.Context, _ int) (string, error) { return "even", nil }),
+		"odd":  core.NodeFunc[int, string](func(_ context.Context, _ int) (string, error) { return "odd", nil }),
 	}
-	resolve := core.Func[int, string](func(_ context.Context, n int) (string, error) {
+	resolve := core.NodeFunc[int, string](func(_ context.Context, n int) (string, error) {
 		if n%2 == 0 {
 			return "even", nil
 		}
@@ -35,9 +35,9 @@ func TestSwitch_routes(t *testing.T) {
 
 func TestSwitch_noCase(t *testing.T) {
 	cases := map[string]core.Node[int, int]{
-		"a": core.Func[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
+		"a": core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	}
-	resolve := core.Func[int, string](func(_ context.Context, _ int) (string, error) { return "missing", nil })
+	resolve := core.NodeFunc[int, string](func(_ context.Context, _ int) (string, error) { return "missing", nil })
 
 	_, err := core.Switch(resolve, cases).Run(context.Background(), 1)
 	if !errors.Is(err, core.ErrNoCase) {
@@ -48,7 +48,7 @@ func TestSwitch_noCase(t *testing.T) {
 func TestSwitch_resolveError(t *testing.T) {
 	boom := errors.New("boom")
 	cases := map[string]core.Node[int, int]{}
-	resolve := core.Func[int, string](func(_ context.Context, _ int) (string, error) { return "", boom })
+	resolve := core.NodeFunc[int, string](func(_ context.Context, _ int) (string, error) { return "", boom })
 
 	_, err := core.Switch(resolve, cases).Run(context.Background(), 1)
 	if !errors.Is(err, boom) {
@@ -66,8 +66,8 @@ func TestSwitch_nilResolver(t *testing.T) {
 func TestSwitch_composedResolver(t *testing.T) {
 	// The router itself is a composed node: double, then bucket by size.
 	router := core.Then(
-		core.Func[int, int](func(_ context.Context, n int) (int, error) { return n * 2, nil }),
-		core.Func[int, string](func(_ context.Context, n int) (string, error) {
+		core.NodeFunc[int, int](func(_ context.Context, n int) (int, error) { return n * 2, nil }),
+		core.NodeFunc[int, string](func(_ context.Context, n int) (string, error) {
 			if n >= 10 {
 				return "big", nil
 			}
@@ -75,8 +75,8 @@ func TestSwitch_composedResolver(t *testing.T) {
 		}),
 	)
 	cases := map[string]core.Node[int, string]{
-		"big":   core.Func[int, string](func(_ context.Context, _ int) (string, error) { return "BIG", nil }),
-		"small": core.Func[int, string](func(_ context.Context, _ int) (string, error) { return "small", nil }),
+		"big":   core.NodeFunc[int, string](func(_ context.Context, _ int) (string, error) { return "BIG", nil }),
+		"small": core.NodeFunc[int, string](func(_ context.Context, _ int) (string, error) { return "small", nil }),
 	}
 
 	got, err := core.Switch(router, cases).Run(context.Background(), 6) // 6*2=12 >= 10 -> "big"

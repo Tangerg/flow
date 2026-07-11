@@ -3,14 +3,13 @@ package workflow
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sync"
 )
 
 // LeafFactory builds a leaf [Step] from its ID, input reference, and raw config.
 // The factory knows the leaf's concrete input/output types and typically ends in
-// a call to [Adapt].
+// a call to [Leaf].
 type LeafFactory func(id string, input Ref, config json.RawMessage) (Step, error)
 
 // Resolver picks a branch name from the Store (see [Branch]).
@@ -29,16 +28,14 @@ type Condition func(ctx context.Context, iter int, s Store) (bool, error)
 // engine has: nodes are registered types, not inline functions.
 //
 // Registry is safe for concurrent access, although applications should normally
-// finish registration before calling Build, Compile, or Validate. Invalid and
-// duplicate registrations are accumulated and reported by [Registry.Err]. A
-// Registry must not be copied after first use.
+// finish registration before compiling workflows. A Registry must not be copied
+// after first use.
 type Registry struct {
 	mu         sync.RWMutex
 	leaves     map[string]LeafFactory
 	resolvers  map[string]Resolver
 	conditions map[string]Condition
 	schemas    map[string]Schema
-	problems   []error
 }
 
 // NewRegistry returns an empty Registry. The zero Registry is also ready to use.
@@ -46,72 +43,85 @@ func NewRegistry() *Registry {
 	return &Registry{}
 }
 
-// RegisterLeaf registers a leaf factory under a node type name. It returns the
-// Registry for chaining.
-func (r *Registry) RegisterLeaf(nodeType string, f LeafFactory) *Registry {
+// RegisterLeaf registers a leaf factory under a node type name. It reports an
+// empty name, nil factory, or duplicate registration immediately.
+func (r *Registry) RegisterLeaf(nodeType string, f LeafFactory) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.initLocked()
 	switch {
 	case nodeType == "":
-		r.addProblemLocked("leaf type is empty")
+		return fmt.Errorf("workflow: register leaf: type is empty")
 	case f == nil:
-		r.addProblemLocked("leaf %q has a nil factory", nodeType)
+		return fmt.Errorf("workflow: register leaf %q: nil factory", nodeType)
 	case r.leaves[nodeType] != nil:
-		r.addProblemLocked("leaf %q is already registered", nodeType)
+		return fmt.Errorf("workflow: register leaf %q: already registered", nodeType)
 	default:
 		r.leaves[nodeType] = f
+	}
+	return nil
+}
+
+// MustRegisterLeaf is like [Registry.RegisterLeaf] but panics on error. It
+// returns r so startup-time registrations can be chained.
+func (r *Registry) MustRegisterLeaf(nodeType string, f LeafFactory) *Registry {
+	if err := r.RegisterLeaf(nodeType, f); err != nil {
+		panic(err)
 	}
 	return r
 }
 
 // RegisterResolver registers a branch resolver under a name.
-func (r *Registry) RegisterResolver(name string, f Resolver) *Registry {
+func (r *Registry) RegisterResolver(name string, f Resolver) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.initLocked()
 	switch {
 	case name == "":
-		r.addProblemLocked("resolver name is empty")
+		return fmt.Errorf("workflow: register resolver: name is empty")
 	case f == nil:
-		r.addProblemLocked("resolver %q is nil", name)
+		return fmt.Errorf("workflow: register resolver %q: nil resolver", name)
 	case r.resolvers[name] != nil:
-		r.addProblemLocked("resolver %q is already registered", name)
+		return fmt.Errorf("workflow: register resolver %q: already registered", name)
 	default:
 		r.resolvers[name] = f
+	}
+	return nil
+}
+
+// MustRegisterResolver is like [Registry.RegisterResolver] but panics on error.
+func (r *Registry) MustRegisterResolver(name string, f Resolver) *Registry {
+	if err := r.RegisterResolver(name, f); err != nil {
+		panic(err)
 	}
 	return r
 }
 
 // RegisterCondition registers a loop condition under a name.
-func (r *Registry) RegisterCondition(name string, f Condition) *Registry {
+func (r *Registry) RegisterCondition(name string, f Condition) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.initLocked()
 	switch {
 	case name == "":
-		r.addProblemLocked("condition name is empty")
+		return fmt.Errorf("workflow: register condition: name is empty")
 	case f == nil:
-		r.addProblemLocked("condition %q is nil", name)
+		return fmt.Errorf("workflow: register condition %q: nil condition", name)
 	case r.conditions[name] != nil:
-		r.addProblemLocked("condition %q is already registered", name)
+		return fmt.Errorf("workflow: register condition %q: already registered", name)
 	default:
 		r.conditions[name] = f
 	}
+	return nil
+}
+
+// MustRegisterCondition is like [Registry.RegisterCondition] but panics on
+// error.
+func (r *Registry) MustRegisterCondition(name string, f Condition) *Registry {
+	if err := r.RegisterCondition(name, f); err != nil {
+		panic(err)
+	}
 	return r
-}
-
-// Err reports invalid or duplicate registrations accumulated by the fluent
-// Register methods. Build, Compile, and Validate return the same error before
-// doing any work.
-func (r *Registry) Err() error {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return errors.Join(r.problems...)
-}
-
-func (r *Registry) addProblemLocked(format string, args ...any) {
-	r.problems = append(r.problems, fmt.Errorf("workflow: registry: "+format, args...))
 }
 
 func (r *Registry) initLocked() {

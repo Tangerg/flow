@@ -10,8 +10,8 @@ import (
 )
 
 func TestThen(t *testing.T) {
-	double := core.Func[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil })
-	str := core.Func[int, string](func(_ context.Context, x int) (string, error) { return strconv.Itoa(x), nil })
+	double := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil })
+	str := core.NodeFunc[int, string](func(_ context.Context, x int) (string, error) { return strconv.Itoa(x), nil })
 
 	pipe := core.Then(double, str)
 
@@ -26,10 +26,10 @@ func TestThen(t *testing.T) {
 
 func TestThen_shortCircuitsOnFirstError(t *testing.T) {
 	boom := errors.New("boom")
-	first := core.Func[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom })
+	first := core.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom })
 
 	secondRan := false
-	second := core.Func[int, int](func(_ context.Context, x int) (int, error) {
+	second := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
 		secondRan = true
 		return x, nil
 	})
@@ -44,7 +44,7 @@ func TestThen_shortCircuitsOnFirstError(t *testing.T) {
 }
 
 func TestThen_nilNode(t *testing.T) {
-	ok := core.Func[int, int](func(_ context.Context, x int) (int, error) { return x, nil })
+	ok := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil })
 
 	_, err := core.Then(core.Node[int, int](nil), ok).Run(context.Background(), 1)
 	if !errors.Is(err, core.ErrNilNode) {

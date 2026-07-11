@@ -11,7 +11,7 @@ import (
 )
 
 func TestMap(t *testing.T) {
-	square := core.Func[int, int](func(_ context.Context, x int) (int, error) { return x * x, nil })
+	square := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * x, nil })
 
 	got, err := core.Map(square).Run(context.Background(), []int{1, 2, 3, 4})
 	if err != nil {
@@ -29,7 +29,7 @@ func TestMap_failFastCancelsSiblings(t *testing.T) {
 	boom := errors.New("boom")
 	var cancelledSeen atomic.Bool
 
-	node := core.Func[int, int](func(ctx context.Context, x int) (int, error) {
+	node := core.NodeFunc[int, int](func(ctx context.Context, x int) (int, error) {
 		if x == 0 {
 			return 0, boom
 		}
@@ -58,7 +58,7 @@ func TestWithConcurrency_bounds(t *testing.T) {
 		max     atomic.Int32
 	)
 
-	node := core.Func[int, int](func(_ context.Context, x int) (int, error) {
+	node := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
 		c := current.Add(1)
 		for {
 			old := max.Load()
@@ -85,7 +85,7 @@ func TestMap_cancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	node := core.Func[int, int](func(_ context.Context, x int) (int, error) { return x, nil })
+	node := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil })
 
 	_, err := core.Map(node).Run(ctx, []int{1, 2, 3})
 	if !errors.Is(err, context.Canceled) {
@@ -95,7 +95,7 @@ func TestMap_cancellation(t *testing.T) {
 
 func TestMap_parentCancellationIsNotIndexWrapped(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	node := core.Func[int, int](func(ctx context.Context, in int) (int, error) {
+	node := core.NodeFunc[int, int](func(ctx context.Context, in int) (int, error) {
 		cancel()
 		return 0, ctx.Err()
 	})
@@ -109,7 +109,7 @@ func TestMap_parentCancellationIsNotIndexWrapped(t *testing.T) {
 
 func TestMap_singleItemReportsCancellationAfterRun(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	node := core.Func[int, int](func(_ context.Context, in int) (int, error) {
+	node := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 		cancel()
 		return in, nil
 	})
@@ -121,7 +121,7 @@ func TestMap_singleItemReportsCancellationAfterRun(t *testing.T) {
 }
 
 func TestMap_nilOptionIsIgnored(t *testing.T) {
-	node := core.Func[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
+	node := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
 	got, err := core.Map(node, nil).Run(context.Background(), []int{1})
 	if err != nil || len(got) != 1 || got[0] != 1 {
 		t.Fatalf("Map with nil option = %v, %v", got, err)
@@ -130,7 +130,7 @@ func TestMap_nilOptionIsIgnored(t *testing.T) {
 
 func TestMap_errorIncludesIndex(t *testing.T) {
 	boom := errors.New("boom")
-	node := core.Func[int, int](func(_ context.Context, in int) (int, error) {
+	node := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 		if in == 2 {
 			return 0, boom
 		}
@@ -148,7 +148,7 @@ func TestMap_boundedFailureStopsScheduling(t *testing.T) {
 	boom := errors.New("boom")
 	secondStarted := make(chan struct{})
 	var started atomic.Int32
-	node := core.Func[int, int](func(ctx context.Context, in int) (int, error) {
+	node := core.NodeFunc[int, int](func(ctx context.Context, in int) (int, error) {
 		started.Add(1)
 		switch in {
 		case 0:

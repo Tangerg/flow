@@ -14,7 +14,7 @@ import (
 // Wrap builder. The node fails once, then succeeds on the retry.
 func ExampleWrap() {
 	attempts := 0
-	flaky := core.Func[int, int](func(_ context.Context, x int) (int, error) {
+	flaky := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
 		attempts++
 		if attempts == 1 {
 			return 0, errors.New("temporary failure")
@@ -24,8 +24,7 @@ func ExampleWrap() {
 
 	node := flowx.Wrap(flaky).
 		Retry(flowx.WithAttempts(3)).
-		Timeout(time.Second).
-		Node()
+		Timeout(time.Second)
 
 	out, err := node.Run(context.Background(), 21)
 	if err != nil {

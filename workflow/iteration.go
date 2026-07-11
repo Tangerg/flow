@@ -24,11 +24,21 @@ const (
 // post-run Store to collect for that element.
 //
 // The value at inputRef must be a []any. The first element to fail cancels the
-// rest; bound the concurrency with core.WithConcurrency.
-func Iteration(id string, inputRef Ref, body Step, bodyOutput Ref, opts ...core.MapOption) Step {
+// rest.
+func Iteration(id string, inputRef Ref, body Step, bodyOutput Ref) Step {
+	return iterationN(0, id, inputRef, body, bodyOutput)
+}
+
+// IterationN is like [Iteration] but runs at most limit body executions
+// concurrently. A non-positive limit is unbounded.
+func IterationN(limit int, id string, inputRef Ref, body Step, bodyOutput Ref) Step {
+	return iterationN(limit, id, inputRef, body, bodyOutput)
+}
+
+func iterationN(limit int, id string, inputRef Ref, body Step, bodyOutput Ref) Step {
 	it := iteration{id: id, body: body}
-	it.node = core.Func[Store, Store](func(ctx context.Context, s Store) (Store, error) {
-		raw, ok := s.Get(inputRef.NodeID, inputRef.Path)
+	it.node = core.NodeFunc[Store, Store](func(ctx context.Context, s Store) (Store, error) {
+		raw, ok := s.Lookup(inputRef)
 		if !ok {
 			return s, fmt.Errorf("workflow: iteration %q: input %s.%s not found", id, inputRef.NodeID, inputRef.Path)
 		}
@@ -43,25 +53,25 @@ func Iteration(id string, inputRef Ref, body Step, bodyOutput Ref, opts ...core.
 		}
 
 		outputs, err := core.Map(
-			core.Func[int, any](func(ctx context.Context, i int) (any, error) {
+			core.NodeFunc[int, any](func(ctx context.Context, i int) (any, error) {
 				scoped := s.With(id, ItemKey, items[i]).With(id, IndexKey, i)
 				result, err := runStep(ctx, body, scoped)
 				if err != nil {
 					return nil, err
 				}
-				out, ok := result.Get(bodyOutput.NodeID, bodyOutput.Path)
+				out, ok := result.Lookup(bodyOutput)
 				if !ok {
 					return nil, fmt.Errorf("body output %s.%s not found", bodyOutput.NodeID, bodyOutput.Path)
 				}
 				return out, nil
 			}),
-			opts...,
+			core.WithConcurrency(limit),
 		).Run(ctx, indexes)
 		if err != nil {
 			return s, fmt.Errorf("workflow: iteration %q: %w", id, err)
 		}
 
-		return s.With(id, OutputKey, outputs), nil
+		return s.WithOutput(id, outputs), nil
 	})
 	return it
 }

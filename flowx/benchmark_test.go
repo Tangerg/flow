@@ -11,14 +11,13 @@ import (
 
 func BenchmarkDecoratorStack(b *testing.B) {
 	ctx := context.Background()
-	base := core.Func[int, int](func(_ context.Context, in int) (int, error) {
+	base := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 		return in + 1, nil
 	})
 	node := flowx.Wrap(base).
 		Retry(flowx.WithAttempts(3)).
 		Timeout(time.Minute).
-		Fallback(base).
-		Node()
+		Fallback(base)
 
 	b.ReportAllocs()
 	for b.Loop() {

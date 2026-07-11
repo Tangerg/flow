@@ -17,7 +17,7 @@ import (
 // Values are held and returned as-is (any). Callers must treat mutable values
 // such as maps, slices, and pointers as immutable after insertion; mutating one
 // would mutate every Store snapshot that shares it and may introduce a data
-// race. Get walks into map[string]any and []any, so JSON-shaped data can be
+// race. Lookup walks into map[string]any and []any, so JSON-shaped data can be
 // addressed by path such as "result.items.0".
 //
 // The zero Store is empty and ready to use; prefer [NewStore] for clarity.
@@ -62,16 +62,22 @@ func (s Store) With(nodeID, key string, value any) Store {
 	return Store{data: outer}
 }
 
-// Get looks up a value by node ID and path. The path's first segment is the key
-// under the node; any remaining segments walk into nested map[string]any and
-// []any values (for example "result.items.0"). The bool reports whether the path
-// resolved. Returned mutable values are borrowed views and must not be mutated.
-func (s Store) Get(nodeID, path string) (any, bool) {
-	inner, ok := s.data[nodeID]
+// WithOutput returns a copy of the Store with value written to the conventional
+// output key for nodeID.
+func (s Store) WithOutput(nodeID string, value any) Store {
+	return s.With(nodeID, OutputKey, value)
+}
+
+// Lookup returns the value at ref. The path's first segment is the key under the
+// node; remaining segments walk into nested map[string]any and []any values. The
+// bool reports whether the reference resolved. Returned mutable values are
+// borrowed views and must not be mutated.
+func (s Store) Lookup(ref Ref) (any, bool) {
+	inner, ok := s.data[ref.NodeID]
 	if !ok {
 		return nil, false
 	}
-	key, rest, _ := strings.Cut(path, ".")
+	key, rest, _ := strings.Cut(ref.Path, ".")
 	c, ok := inner[key]
 	if !ok {
 		return nil, false

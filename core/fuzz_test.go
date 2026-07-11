@@ -13,9 +13,9 @@ func FuzzThenAssociative(f *testing.F) {
 	f.Add(-7)
 
 	f.Fuzz(func(t *testing.T, input int) {
-		addOne := core.Func[int, int](func(_ context.Context, in int) (int, error) { return in + 1, nil })
-		double := core.Func[int, int](func(_ context.Context, in int) (int, error) { return in * 2, nil })
-		minusThree := core.Func[int, int](func(_ context.Context, in int) (int, error) { return in - 3, nil })
+		addOne := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in + 1, nil })
+		double := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in * 2, nil })
+		minusThree := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in - 3, nil })
 
 		left := core.Then(core.Then(addOne, double), minusThree)
 		right := core.Then(addOne, core.Then(double, minusThree))
@@ -36,7 +36,7 @@ func FuzzMapPreservesOrder(f *testing.F) {
 			input = input[:256]
 		}
 		limit := int(rawLimit%8) + 1
-		node := core.Func[byte, byte](func(_ context.Context, in byte) (byte, error) { return in + 1, nil })
+		node := core.NodeFunc[byte, byte](func(_ context.Context, in byte) (byte, error) { return in + 1, nil })
 		out, err := core.Map(node, core.WithConcurrency(limit)).Run(context.Background(), input)
 		if err != nil {
 			t.Fatalf("Map: %v", err)

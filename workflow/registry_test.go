@@ -22,13 +22,13 @@ func addN() workflow.LeafFactory {
 				return nil, err
 			}
 		}
-		leaf := core.Func[int, int](func(_ context.Context, x int) (int, error) { return x + cfg.N, nil })
-		return workflow.Adapt(id, workflow.FromRef[int](input), leaf), nil
+		leaf := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + cfg.N, nil })
+		return workflow.Leaf(id, workflow.From[int](input), leaf), nil
 	}
 }
 
-func TestRegistry_buildSequenceJSON(t *testing.T) {
-	reg := workflow.NewRegistry().RegisterLeaf("addN", addN())
+func TestRegistry_compileSequenceJSON(t *testing.T) {
+	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
 
 	spec := `{
 	  "kind": "sequence",
@@ -38,25 +38,25 @@ func TestRegistry_buildSequenceJSON(t *testing.T) {
 	  ]
 	}`
 
-	step, err := reg.BuildJSON([]byte(spec))
+	step, err := reg.CompileSpecJSON([]byte(spec))
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 
-	out, err := step.Run(context.Background(), workflow.NewStore().With("start", "output", 1))
+	out, err := step.Run(context.Background(), workflow.NewStore().WithOutput("start", 1))
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if v, ok := out.Get("b", workflow.OutputKey); !ok || v.(int) != 16 {
+	if v, ok := out.Lookup(workflow.Output("b")); !ok || v.(int) != 16 {
 		t.Fatalf("result = %v, %v; want 16", v, ok) // 1 +10 +5
 	}
 }
 
-func TestRegistry_buildBranch(t *testing.T) {
+func TestRegistry_compileBranch(t *testing.T) {
 	reg := workflow.NewRegistry().
-		RegisterLeaf("addN", addN()).
-		RegisterResolver("sign", func(_ context.Context, s workflow.Store) (string, error) {
-			v, _ := s.Get("start", "output")
+		MustRegisterLeaf("addN", addN()).
+		MustRegisterResolver("sign", func(_ context.Context, s workflow.Store) (string, error) {
+			v, _ := s.Lookup(workflow.At("start", "output"))
 			if v.(int) >= 0 {
 				return "pos", nil
 			}
@@ -72,21 +72,21 @@ func TestRegistry_buildBranch(t *testing.T) {
 		},
 	}
 
-	step, err := reg.Build(spec)
+	step, err := reg.CompileSpec(spec)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	out, err := step.Run(context.Background(), workflow.NewStore().With("start", "output", 5))
+	out, err := step.Run(context.Background(), workflow.NewStore().WithOutput("start", 5))
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if v, ok := out.Get("p", workflow.OutputKey); !ok || v.(int) != 105 {
+	if v, ok := out.Lookup(workflow.Output("p")); !ok || v.(int) != 105 {
 		t.Fatalf("pos branch = %v, %v; want 105", v, ok)
 	}
 }
 
-func TestRegistry_buildIteration(t *testing.T) {
-	reg := workflow.NewRegistry().RegisterLeaf("addN", addN())
+func TestRegistry_compileIteration(t *testing.T) {
+	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
 
 	spec := workflow.Spec{
 		Kind:       workflow.KindIteration,
@@ -100,16 +100,16 @@ func TestRegistry_buildIteration(t *testing.T) {
 		},
 	}
 
-	step, err := reg.Build(spec)
+	step, err := reg.CompileSpec(spec)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	out, err := step.Run(context.Background(), workflow.NewStore().With("start", "output", []any{1, 2, 3}))
+	out, err := step.Run(context.Background(), workflow.NewStore().WithOutput("start", []any{1, 2, 3}))
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	got := out
-	raw, ok := got.Get("iter", workflow.OutputKey)
+	raw, ok := got.Lookup(workflow.Output("iter"))
 	if !ok {
 		t.Fatal("iteration output missing")
 	}
@@ -124,7 +124,7 @@ func TestRegistry_buildIteration(t *testing.T) {
 
 func TestRegistry_unknownType(t *testing.T) {
 	reg := workflow.NewRegistry()
-	_, err := reg.Build(workflow.Spec{Kind: workflow.KindLeaf, Type: "nope"})
+	_, err := reg.CompileSpec(workflow.Spec{Kind: workflow.KindLeaf, Type: "nope"})
 	if err == nil {
 		t.Fatal("expected error for unknown leaf type")
 	}
@@ -132,7 +132,7 @@ func TestRegistry_unknownType(t *testing.T) {
 
 func TestRegistry_unknownKind(t *testing.T) {
 	reg := workflow.NewRegistry()
-	_, err := reg.Build(workflow.Spec{Kind: "bogus"})
+	_, err := reg.CompileSpec(workflow.Spec{Kind: "bogus"})
 	if err == nil {
 		t.Fatal("expected error for unknown kind")
 	}
@@ -140,35 +140,44 @@ func TestRegistry_unknownKind(t *testing.T) {
 
 func TestRegistry_reportsInvalidAndDuplicateRegistrations(t *testing.T) {
 	factory := addN()
-	reg := workflow.NewRegistry().
-		RegisterLeaf("", factory).
-		RegisterLeaf("addN", nil).
-		RegisterLeaf("addN", factory).
-		RegisterLeaf("addN", factory)
-
-	if reg.Err() == nil {
-		t.Fatal("expected accumulated registration errors")
+	reg := workflow.NewRegistry()
+	for name, f := range map[string]workflow.LeafFactory{"": factory, "nil": nil} {
+		if err := reg.RegisterLeaf(name, f); err == nil {
+			t.Fatalf("RegisterLeaf(%q) unexpectedly succeeded", name)
+		}
 	}
-	if _, err := reg.Build(workflow.Spec{Kind: workflow.KindLeaf, ID: "a", Type: "addN"}); err == nil {
-		t.Fatal("Build must reject an invalid registry")
+	if err := reg.RegisterLeaf("addN", factory); err != nil {
+		t.Fatalf("first registration: %v", err)
+	}
+	if err := reg.RegisterLeaf("addN", factory); err == nil {
+		t.Fatal("duplicate registration unexpectedly succeeded")
 	}
 }
 
+func TestRegistry_mustRegisterPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("MustRegisterLeaf did not panic")
+		}
+	}()
+	workflow.NewRegistry().MustRegisterLeaf("", addN())
+}
+
 func TestRegistry_rejectsDuplicateIDsInNestedSpec(t *testing.T) {
-	reg := workflow.NewRegistry().RegisterLeaf("addN", addN())
+	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
 	spec := workflow.Spec{Kind: workflow.KindParallel, Steps: []workflow.Spec{
 		{Kind: workflow.KindLeaf, ID: "same", Type: "addN"},
 		{Kind: workflow.KindLeaf, ID: "same", Type: "addN"},
 	}}
-	if _, err := reg.Build(spec); err == nil {
+	if _, err := reg.CompileSpec(spec); err == nil {
 		t.Fatal("expected duplicate step ID error")
 	}
 }
 
 func TestRegistry_rejectsNegativeConcurrency(t *testing.T) {
-	reg := workflow.NewRegistry().RegisterLeaf("addN", addN())
+	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
 	spec := workflow.Spec{Kind: workflow.KindParallel, Concurrency: -1}
-	if _, err := reg.Build(spec); err == nil {
+	if _, err := reg.CompileSpec(spec); err == nil {
 		t.Fatal("expected negative concurrency error")
 	}
 }
@@ -178,23 +187,20 @@ func TestRegistry_concurrentRegistrationIsRaceFree(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range 32 {
 		wg.Go(func() {
-			reg.RegisterLeaf(fmt.Sprintf("leaf-%d", i), addN())
-			_ = reg.Err()
+			if err := reg.RegisterLeaf(fmt.Sprintf("leaf-%d", i), addN()); err != nil {
+				t.Errorf("RegisterLeaf: %v", err)
+			}
 		})
 	}
 	wg.Wait()
-	if err := reg.Err(); err != nil {
-		t.Fatalf("unexpected registry error: %v", err)
-	}
 }
 
 func TestRegistry_zeroValueIsUsable(t *testing.T) {
 	var reg workflow.Registry
-	reg.RegisterLeaf("addN", addN())
-	if reg.Err() != nil {
-		t.Fatalf("zero Registry: %v", reg.Err())
+	if err := reg.RegisterLeaf("addN", addN()); err != nil {
+		t.Fatalf("zero Registry: %v", err)
 	}
-	if _, err := reg.Build(workflow.Spec{Kind: workflow.KindLeaf, ID: "a", Type: "addN"}); err != nil {
+	if _, err := reg.CompileSpec(workflow.Spec{Kind: workflow.KindLeaf, ID: "a", Type: "addN"}); err != nil {
 		t.Fatalf("zero Registry Build: %v", err)
 	}
 }

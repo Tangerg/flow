@@ -8,7 +8,7 @@ import (
 // Sentinel errors returned by the core combinators. Test for them with
 // [errors.Is].
 var (
-	// ErrNilNode is returned when a nil Node or nil Func is Run.
+	// ErrNilNode is returned when a nil Node or nil NodeFunc is Run.
 	ErrNilNode = errors.New("flow: nil node")
 	// ErrNilFunc is returned when a required function argument is nil.
 	ErrNilFunc = errors.New("flow: nil function")

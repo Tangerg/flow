@@ -19,18 +19,18 @@ type NodeSpec struct {
 
 // Graph is a flat, arbitrarily wired DAG of leaf nodes — the shape a visual
 // editor produces. Unlike a nested [Spec], any node may depend on any other as
-// long as the result is acyclic. [Registry.Compile] topologically layers it and
+// long as the result is acyclic. [Registry.CompileGraph] topologically layers it and
 // builds Sequence(Parallel(layer)...) so independent nodes run concurrently.
 type Graph struct {
 	Nodes []NodeSpec `json:"nodes"`
 }
 
-// Compile validates a flat Graph, builds its leaves, and returns a Step. It
-// rejects invalid registrations, duplicate IDs, missing dependencies, cycles,
-// unknown node types, and incompatible registered schemas, then runs each
-// topological layer's nodes concurrently.
-func (r *Registry) Compile(g Graph) (Step, error) {
-	if err := r.Validate(g); err != nil {
+// CompileGraph validates a flat Graph, builds its leaves, and returns a Step.
+// It rejects duplicate IDs, missing dependencies, cycles, unknown node types,
+// and incompatible registered schemas, then runs each topological layer's
+// nodes concurrently.
+func (r *Registry) CompileGraph(g Graph) (Step, error) {
+	if err := r.ValidateGraph(g); err != nil {
 		return nil, err
 	}
 	layers, byID, err := r.plan(g)
@@ -51,24 +51,24 @@ func (r *Registry) Compile(g Graph) (Step, error) {
 		if len(branch) == 1 {
 			steps = append(steps, branch[0])
 		} else {
-			steps = append(steps, Parallel(branch))
+			steps = append(steps, Parallel(branch...))
 		}
 	}
 	return Sequence(steps...), nil
 }
 
-// CompileJSON unmarshals data into a [Graph] and compiles it.
-func (r *Registry) CompileJSON(data []byte) (Step, error) {
+// CompileGraphJSON strictly unmarshals data into a [Graph] and compiles it.
+func (r *Registry) CompileGraphJSON(data []byte) (Step, error) {
 	var g Graph
 	if err := decodeStrict(data, &g); err != nil {
 		return nil, fmt.Errorf("workflow: invalid graph: %w", err)
 	}
-	return r.Compile(g)
+	return r.CompileGraph(g)
 }
 
 // plan validates the graph structurally (unique IDs, no cycles) and returns its
 // topological layers along with a lookup of nodes by ID. It is shared by Compile
-// and Validate.
+// and ValidateGraph.
 func (r *Registry) plan(g Graph) (layers [][]string, byID map[string]NodeSpec, err error) {
 	byID = make(map[string]NodeSpec, len(g.Nodes))
 	for _, n := range g.Nodes {

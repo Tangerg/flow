@@ -12,9 +12,9 @@ import (
 // branch name from the Store, then runs the step registered under that name. If
 // resolve yields a name with no matching case, Run fails (see core.ErrNoCase).
 // It composes with core.Switch.
-func Branch(resolve func(ctx context.Context, s Store) (string, error), cases map[string]Step) Step {
+func Branch(resolve Resolver, cases map[string]Step) Step {
 	cases = maps.Clone(cases)
-	resolver := core.Func[Store, string](resolve)
+	resolver := core.NodeFunc[Store, string](resolve)
 	if resolve == nil {
 		resolver = func(context.Context, Store) (string, error) {
 			return "", core.ErrNilFunc

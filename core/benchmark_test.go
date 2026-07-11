@@ -9,7 +9,7 @@ import (
 
 func BenchmarkFunc(b *testing.B) {
 	ctx := context.Background()
-	node := core.Func[int, int](func(_ context.Context, in int) (int, error) {
+	node := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 		return in + 1, nil
 	})
 
@@ -21,7 +21,7 @@ func BenchmarkFunc(b *testing.B) {
 
 func BenchmarkThen(b *testing.B) {
 	ctx := context.Background()
-	inc := core.Func[int, int](func(_ context.Context, in int) (int, error) {
+	inc := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 		return in + 1, nil
 	})
 	node := core.Then(core.Then(inc, inc), inc)
@@ -34,7 +34,7 @@ func BenchmarkThen(b *testing.B) {
 
 func BenchmarkMap(b *testing.B) {
 	ctx := context.Background()
-	node := core.Func[int, int](func(_ context.Context, in int) (int, error) {
+	node := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 		return in + 1, nil
 	})
 

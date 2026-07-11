@@ -9,8 +9,8 @@ import (
 )
 
 func ExampleThen() {
-	double := core.Func[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil })
-	addOne := core.Func[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil })
+	double := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil })
+	addOne := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil })
 
 	pipe := core.Then(double, addOne)
 
@@ -20,7 +20,7 @@ func ExampleThen() {
 }
 
 func ExampleMap() {
-	square := core.Func[int, int](func(_ context.Context, x int) (int, error) { return x * x, nil })
+	square := core.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * x, nil })
 
 	out, _ := core.Map(square).Run(context.Background(), []int{1, 2, 3, 4})
 	fmt.Println(out)
@@ -29,7 +29,7 @@ func ExampleMap() {
 
 func ExampleIndexError() {
 	boom := errors.New("boom")
-	node := core.Func[int, int](func(_ context.Context, in int) (int, error) {
+	node := core.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 		if in == 2 {
 			return 0, boom
 		}

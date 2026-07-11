@@ -15,19 +15,19 @@ func FuzzStoreGetPath(f *testing.F) {
 	value := map[string]any{
 		"items": []any{map[string]any{"name": "first"}},
 	}
-	store := workflow.NewStore().With("node", "output", value)
+	store := workflow.NewStore().WithOutput("node", value)
 	f.Fuzz(func(t *testing.T, path string) {
-		_, _ = store.Get("node", path)
+		_, _ = store.Lookup(workflow.At("node", path))
 	})
 }
 
 func FuzzCompileJSON(f *testing.F) {
 	f.Add([]byte(`{"nodes":[]}`))
 	f.Add([]byte(`{"nodes":[{"id":"a","type":"addN"}]}`))
-	reg := workflow.NewRegistry().RegisterLeaf("addN", addN())
+	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _ = reg.CompileJSON(data)
+		_, _ = reg.CompileGraphJSON(data)
 	})
 }
 

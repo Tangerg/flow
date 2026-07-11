@@ -3,7 +3,7 @@
 // It is deliberately reduced to the irreducible set of primitives — those that
 // cannot be expressed in terms of the others:
 //
-//   - [Node] and [Func]: the abstraction and its function adapter.
+//   - [Node] and [NodeFunc]: the abstraction and its function adapter.
 //   - [Then]: sequential composition.
 //   - [Switch]: data-dependent selection.
 //   - [Loop]: bounded iteration.
