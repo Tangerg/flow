@@ -8,42 +8,21 @@ import (
 
 // Map applies node to every element of the input slice concurrently and returns
 // the outputs in input order. The first failure cancels the remaining calls and
-// is returned. By default every element runs concurrently; bound it with
-// [WithConcurrency]. Cancellation is cooperative: calls already running must
-// honor their context; Map waits for them to return.
+// is returned. Every element runs concurrently. Use [MapN] to bound
+// concurrency. Cancellation is cooperative: calls already running must honor
+// their context; Map waits for them to return.
 //
 // Map is the concurrency primitive. Fan-out over several nodes, collecting a
 // result per item, and heterogeneous fan-in are all derivable from it and live
 // in higher-level packages rather than in flow.
-func Map[I, O any](node Node[I, O], opts ...MapOption) Node[[]I, []O] {
-	var c mapConfig
-	for _, opt := range opts {
-		if opt != nil {
-			opt.applyMap(&c)
-		}
-	}
-	return mapNode[I, O]{node: node, limit: c.concurrency}
+func Map[I, O any](node Node[I, O]) Node[[]I, []O] {
+	return mapNode[I, O]{node: node}
 }
 
-// MapOption configures a [Map]. Options are created by this package.
-type MapOption interface {
-	applyMap(*mapConfig)
-}
-
-type mapOptionFunc func(*mapConfig)
-
-func (f mapOptionFunc) applyMap(c *mapConfig) { f(c) }
-
-type mapConfig struct {
-	concurrency int // <= 0 means unbounded
-}
-
-// WithConcurrency caps the number of elements processed at once. A value <= 0
-// (the default) means unbounded — every element starts immediately. A positive
-// limit uses a fixed set of workers, so goroutine count is bounded independently
-// of input size.
-func WithConcurrency(n int) MapOption {
-	return mapOptionFunc(func(c *mapConfig) { c.concurrency = n })
+// MapN is like [Map] but runs at most limit calls concurrently. A non-positive
+// limit is unbounded.
+func MapN[I, O any](limit int, node Node[I, O]) Node[[]I, []O] {
+	return mapNode[I, O]{node: node, limit: limit}
 }
 
 type mapNode[I, O any] struct {

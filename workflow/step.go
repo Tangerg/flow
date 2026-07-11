@@ -26,13 +26,10 @@ type Ref struct {
 // At returns a reference to path under nodeID.
 func At(nodeID, path string) Ref { return Ref{NodeID: nodeID, Path: path} }
 
-// OutputKey is the conventional key under which a step writes its result via
-// [Leaf]. Downstream steps address it as Ref{NodeID: <id>, Path: OutputKey},
-// optionally with a deeper path.
-const OutputKey = "output"
+const outputKey = "output"
 
 // Output returns a reference to a step's conventional output value.
-func Output(nodeID string) Ref { return At(nodeID, OutputKey) }
+func Output(nodeID string) Ref { return At(nodeID, outputKey) }
 
 // String returns the reference in nodeID.path form.
 func (r Ref) String() string { return r.NodeID + "." + r.Path }
@@ -89,14 +86,14 @@ func (f BindFunc[I]) Bind(s Store) (I, error) {
 	return f(s)
 }
 
-// From returns a Binder that reads a value of type I from ref.
-func From[I any](ref Ref) Binder[I] {
+// From returns a BindFunc that reads a value of type I from ref.
+func From[I any](ref Ref) BindFunc[I] {
 	return BindFunc[I](func(s Store) (I, error) { return Get[I](s, ref) })
 }
 
 // Leaf turns a statically typed node into a [Step]. On each run it binds the
 // node's input from the Store, runs it, and writes the result under
-// (id, OutputKey). Errors are tagged with the step id, and lifecycle events are
+// [Output]. Errors are tagged with the step id, and lifecycle events are
 // emitted (see [WithObserver]).
 //
 // This is the prep/exec/post split: bind reads the pool, node computes, the Step

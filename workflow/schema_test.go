@@ -9,7 +9,7 @@ import (
 func TestValidateGraph_compatible(t *testing.T) {
 	reg := workflow.NewRegistry().
 		MustRegisterLeaf("toNumber", addN()).
-		MustRegisterSchema("toNumber", workflow.Schema{Input: workflow.TypeNumber, Output: workflow.TypeNumber})
+		MustRegisterSchema("toNumber", workflow.NodeSchema{Input: workflow.TypeNumber, Output: workflow.TypeNumber})
 
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
 		{ID: "a", Type: "toNumber", Input: &workflow.Ref{NodeID: "start", Path: "output"}},
@@ -25,8 +25,8 @@ func TestValidateGraph_incompatible(t *testing.T) {
 	reg := workflow.NewRegistry().
 		MustRegisterLeaf("num", addN()).
 		MustRegisterLeaf("str", addN()).
-		MustRegisterSchema("num", workflow.Schema{Input: workflow.TypeNumber, Output: workflow.TypeNumber}).
-		MustRegisterSchema("str", workflow.Schema{Input: workflow.TypeString, Output: workflow.TypeString})
+		MustRegisterSchema("num", workflow.NodeSchema{Input: workflow.TypeNumber, Output: workflow.TypeNumber}).
+		MustRegisterSchema("str", workflow.NodeSchema{Input: workflow.TypeString, Output: workflow.TypeString})
 
 	// num.output (number) -> str.input (string): incompatible.
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
@@ -72,7 +72,7 @@ func TestValidateGraph_unregisteredSchemaIsAny(t *testing.T) {
 
 func TestRegisterSchema_rejectsInvalidType(t *testing.T) {
 	reg := workflow.NewRegistry()
-	if err := reg.RegisterSchema("bad", workflow.Schema{Input: workflow.ValueType("wat")}); err == nil {
+	if err := reg.RegisterSchema("bad", workflow.NodeSchema{Input: workflow.ValueType("wat")}); err == nil {
 		t.Fatal("invalid schema type unexpectedly succeeded")
 	}
 }

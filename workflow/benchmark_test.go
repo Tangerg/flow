@@ -97,10 +97,7 @@ func BenchmarkSequenceRun(b *testing.B) {
 		node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 			return in + 1, nil
 		})
-		return workflow.Leaf(id, workflow.From[int](workflow.Ref{
-			NodeID: input,
-			Path:   workflow.OutputKey,
-		}), node)
+		return workflow.Leaf(id, workflow.From[int](workflow.Output(input)), node)
 	}
 	step := workflow.Sequence(
 		inc("a", "seed"),
@@ -227,6 +224,23 @@ func BenchmarkCompileGraphScaling(b *testing.B) {
 				}
 			})
 		}
+	}
+}
+
+func BenchmarkValidateGraphJSONScaling(b *testing.B) {
+	for _, size := range []int{16, 128, 1024} {
+		data, err := json.Marshal(benchmarkGraph("chain", size))
+		if err != nil {
+			b.Fatalf("Marshal setup: %v", err)
+		}
+		b.Run(strconv.Itoa(size), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if err := workflow.ValidateGraphJSON(data); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 

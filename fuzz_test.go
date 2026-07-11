@@ -37,7 +37,7 @@ func FuzzMapPreservesOrder(f *testing.F) {
 		}
 		limit := int(rawLimit%8) + 1
 		node := flow.NodeFunc[byte, byte](func(_ context.Context, in byte) (byte, error) { return in + 1, nil })
-		out, err := flow.Map(node, flow.WithConcurrency(limit)).Run(context.Background(), input)
+		out, err := flow.MapN(limit, node).Run(context.Background(), input)
 		if err != nil {
 			t.Fatalf("Map: %v", err)
 		}

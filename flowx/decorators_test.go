@@ -94,7 +94,7 @@ func TestFallback(t *testing.T) {
 	}
 }
 
-func TestWrap_fluent(t *testing.T) {
+func TestDecoratorComposition(t *testing.T) {
 	calls := 0
 	boom := errors.New("boom")
 	flaky := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
@@ -105,9 +105,10 @@ func TestWrap_fluent(t *testing.T) {
 		return x * 2, nil
 	})
 
-	node := flowx.Wrap(flaky).
-		Retry(flowx.WithAttempts(3)).
-		Timeout(time.Second)
+	node := flowx.Timeout(
+		flowx.Retry(flaky, flowx.WithAttempts(3)),
+		time.Second,
+	)
 
 	got, err := node.Run(context.Background(), 21)
 	if err != nil {
@@ -157,19 +158,20 @@ func TestRetry_backoffRespectsContext(t *testing.T) {
 	}
 }
 
-func TestTraceAndFluentFallback(t *testing.T) {
+func TestTraceAndFallback(t *testing.T) {
 	boom := errors.New("boom")
 	primary := flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom })
 	alternate := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in + 1, nil })
 	var before, after bool
-	node := flowx.Wrap(primary).
-		Trace("primary", flowx.TraceHooks{
+	node := flowx.Fallback(
+		flowx.Trace(primary, "primary", flowx.TraceHooks{
 			Before: func(context.Context, string) { before = true },
 			After: func(_ context.Context, _ string, _ time.Duration, err error) {
 				after = errors.Is(err, boom)
 			},
-		}).
-		Fallback(alternate)
+		}),
+		alternate,
+	)
 
 	got, err := node.Run(context.Background(), 4)
 	if err != nil || got != 5 || !before || !after {
@@ -187,14 +189,6 @@ func TestTimeout_nilNode(t *testing.T) {
 func TestFallback_rejectsNilAlternate(t *testing.T) {
 	primary := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
 	_, err := flowx.Fallback[int, int](primary, nil).Run(context.Background(), 1)
-	if !errors.Is(err, flow.ErrNilNode) {
-		t.Fatalf("err = %v; want ErrNilNode", err)
-	}
-}
-
-func TestBuilder_zeroValueIsUsable(t *testing.T) {
-	var builder flowx.Builder[int, int]
-	_, err := builder.Run(context.Background(), 1)
 	if !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("err = %v; want ErrNilNode", err)
 	}

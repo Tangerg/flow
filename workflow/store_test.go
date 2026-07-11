@@ -17,6 +17,12 @@ func TestRef_helpers(t *testing.T) {
 	if got := ref.Child(""); got != ref {
 		t.Fatalf("Child(empty) = %#v, want %#v", got, ref)
 	}
+	if workflow.Item("each") != workflow.At("each", "item") {
+		t.Fatal("Item returned the wrong reference")
+	}
+	if workflow.Index("each") != workflow.At("each", "index") {
+		t.Fatal("Index returned the wrong reference")
+	}
 }
 
 func TestStore_WithAndGet(t *testing.T) {

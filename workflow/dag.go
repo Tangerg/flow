@@ -27,8 +27,8 @@ type Graph struct {
 
 // CompileGraph validates a flat Graph, builds its leaves, and returns a Step.
 // It rejects duplicate IDs, missing dependencies, cycles, unknown node types,
-// and incompatible registered schemas, then runs each topological layer's
-// nodes concurrently.
+// invalid node configs, and incompatible registered schemas, then runs each
+// topological layer's nodes concurrently.
 func (r *Registry) CompileGraph(g Graph) (Step, error) {
 	layers, byID, err := r.validateGraph(g)
 	if err != nil {
@@ -54,11 +54,15 @@ func (r *Registry) CompileGraph(g Graph) (Step, error) {
 	return Sequence(steps...), nil
 }
 
-// CompileGraphJSON strictly unmarshals data into a [Graph] and compiles it.
+// CompileGraphJSON validates data against [GraphJSONSchema], strictly
+// unmarshals it into a Graph, and compiles it.
 func (r *Registry) CompileGraphJSON(data []byte) (Step, error) {
+	if err := ValidateGraphJSON(data); err != nil {
+		return nil, err
+	}
 	var g Graph
 	if err := decodeStrict(data, &g); err != nil {
-		return nil, &GraphError{Err: fmt.Errorf("%w: %v", ErrInvalidGraph, err)}
+		return nil, &GraphError{Field: "json", Err: fmt.Errorf("%w: %w", ErrInvalidGraph, err)}
 	}
 	return r.CompileGraph(g)
 }
@@ -78,7 +82,7 @@ func (r *Registry) plan(g Graph) (layers [][]string, byID map[string]NodeSpec, e
 		}
 		if n.Input != nil {
 			if err := validateRef(*n.Input, fmt.Sprintf("node %q input", n.ID)); err != nil {
-				return nil, nil, &GraphError{NodeID: n.ID, Field: "input", Err: fmt.Errorf("%w: %v", ErrInvalidGraph, err)}
+				return nil, nil, &GraphError{NodeID: n.ID, Field: "input", Err: fmt.Errorf("%w: %w", ErrInvalidGraph, err)}
 			}
 		}
 		byID[n.ID] = n

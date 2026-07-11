@@ -7,7 +7,7 @@
 //   - Combinators: [FanOut], [FanOutAll], [MapAll], [Combine2] (heterogeneous
 //     fan-in), [Race] (first success wins), [Identity], and [Chain].
 //   - Decorators — type-preserving flow.Node[I, O] -> flow.Node[I, O]: [Retry],
-//     [Timeout], [Trace], and [Fallback], composed fluently with [Wrap].
+//     [Timeout], [Trace], and [Fallback].
 //
 // All combinators except Race are thin derivations of flow.Map; Race needs its
 // own goroutines because "first to finish" cannot be expressed by a wait-for-all

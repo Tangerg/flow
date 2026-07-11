@@ -35,7 +35,7 @@ type Registry struct {
 	leaves     map[string]LeafFactory
 	resolvers  map[string]Resolver
 	conditions map[string]Condition
-	schemas    map[string]Schema
+	schemas    map[string]registeredNodeSchema
 }
 
 // NewRegistry returns an empty Registry. The zero Registry is also ready to use.
@@ -135,7 +135,7 @@ func (r *Registry) initLocked() {
 		r.conditions = make(map[string]Condition)
 	}
 	if r.schemas == nil {
-		r.schemas = make(map[string]Schema)
+		r.schemas = make(map[string]registeredNodeSchema)
 	}
 }
 
@@ -160,7 +160,13 @@ func (r *Registry) condition(name string) (Condition, bool) {
 	return f, ok
 }
 
-func (r *Registry) schema(nodeType string) Schema {
+func (r *Registry) nodeSchema(nodeType string) NodeSchema {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.schemas[nodeType].schema
+}
+
+func (r *Registry) registeredNodeSchema(nodeType string) registeredNodeSchema {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.schemas[nodeType]

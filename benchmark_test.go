@@ -48,14 +48,14 @@ func BenchmarkMap(b *testing.B) {
 			}
 		})
 		b.Run("limit1/"+benchmarkSize(size), func(b *testing.B) {
-			mapped := flow.Map(node, flow.WithConcurrency(1))
+			mapped := flow.MapN(1, node)
 			b.ReportAllocs()
 			for b.Loop() {
 				_, _ = mapped.Run(ctx, input)
 			}
 		})
 		b.Run("limit8/"+benchmarkSize(size), func(b *testing.B) {
-			mapped := flow.Map(node, flow.WithConcurrency(8))
+			mapped := flow.MapN(8, node)
 			b.ReportAllocs()
 			for b.Loop() {
 				_, _ = mapped.Run(ctx, input)

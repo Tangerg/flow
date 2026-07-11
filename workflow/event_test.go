@@ -16,15 +16,16 @@ func TestEvents_emittedForSequence(t *testing.T) {
 	a := workflow.Leaf("a", from("start"), flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
 	b := workflow.Leaf("b", from("a"), flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
 
-	var col workflow.Collector
-	ctx := workflow.WithObserver(context.Background(), &col)
+	var events []workflow.Event
+	ctx := workflow.WithObserver(context.Background(), workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
+		events = append(events, event)
+	}))
 
 	_, err := workflow.Sequence(a, b).Run(ctx, workflow.NewStore().WithOutput("start", 1))
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
-	events := col.Events()
 	// Expect: started a, completed a, started b, completed b.
 	if len(events) != 4 {
 		t.Fatalf("got %d events, want 4: %#v", len(events), events)
@@ -44,12 +45,13 @@ func TestEvents_failure(t *testing.T) {
 		flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom }),
 	)
 
-	var col workflow.Collector
-	ctx := workflow.WithObserver(context.Background(), &col)
+	var events []workflow.Event
+	ctx := workflow.WithObserver(context.Background(), workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
+		events = append(events, event)
+	}))
 
 	_, _ = bad.Run(ctx, workflow.NewStore().WithOutput("start", 1))
 
-	events := col.Events()
 	if len(events) != 2 {
 		t.Fatalf("got %d events, want 2", len(events))
 	}

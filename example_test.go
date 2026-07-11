@@ -36,7 +36,7 @@ func ExampleIndexError() {
 		return in, nil
 	})
 
-	_, err := flow.Map(node, flow.WithConcurrency(1)).Run(context.Background(), []int{1, 2, 3})
+	_, err := flow.MapN(1, node).Run(context.Background(), []int{1, 2, 3})
 	var indexed *flow.IndexError
 	fmt.Println(errors.As(err, &indexed), indexed.Index, errors.Is(err, boom))
 	// Output: true 1 true

@@ -10,7 +10,7 @@ import (
 const DefaultMaxIterations = 1024
 
 // Loop repeatedly applies body to a value until body reports done, ctx is
-// cancelled, or the iteration cap is reached (see [WithMaxIterations]).
+// cancelled, or [DefaultMaxIterations] is reached.
 //
 // body receives the zero-based iteration index and the value from the previous
 // iteration (or the initial input on the first call). It returns the next value,
@@ -19,39 +19,20 @@ const DefaultMaxIterations = 1024
 // [ErrMaxIterations].
 func Loop[T any](
 	body func(ctx context.Context, iter int, in T) (out T, done bool, err error),
-	opts ...LoopOption,
 ) Node[T, T] {
-	c := loopConfig{maxIterations: DefaultMaxIterations}
-	for _, opt := range opts {
-		if opt != nil {
-			opt.applyLoop(&c)
-		}
+	return loopNode[T]{body: body, max: DefaultMaxIterations}
+}
+
+// LoopN is like [Loop] but stops after at most limit iterations. A non-positive
+// limit uses [DefaultMaxIterations].
+func LoopN[T any](
+	limit int,
+	body func(ctx context.Context, iter int, in T) (out T, done bool, err error),
+) Node[T, T] {
+	if limit <= 0 {
+		limit = DefaultMaxIterations
 	}
-	return loopNode[T]{body: body, max: c.maxIterations}
-}
-
-type loopConfig struct {
-	maxIterations int
-}
-
-// LoopOption configures a [Loop]. Options are created by this package.
-type LoopOption interface {
-	applyLoop(*loopConfig)
-}
-
-type loopOptionFunc func(*loopConfig)
-
-func (f loopOptionFunc) applyLoop(c *loopConfig) { f(c) }
-
-// WithMaxIterations sets the maximum number of iterations. A value <= 0 restores
-// the default ([DefaultMaxIterations]).
-func WithMaxIterations(n int) LoopOption {
-	return loopOptionFunc(func(c *loopConfig) {
-		if n <= 0 {
-			n = DefaultMaxIterations
-		}
-		c.maxIterations = n
-	})
+	return loopNode[T]{body: body, max: limit}
 }
 
 type loopNode[T any] struct {

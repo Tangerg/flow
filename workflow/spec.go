@@ -65,6 +65,13 @@ func (r *Registry) CompileSpec(spec Spec) (Step, error) {
 	return r.build(spec)
 }
 
+// ValidateSpec checks a nested Spec without building it. It verifies its
+// structure, registrations, references, unique IDs, and registered node config
+// schemas.
+func (r *Registry) ValidateSpec(spec Spec) error {
+	return r.validateSpec(spec)
+}
+
 func (r *Registry) build(spec Spec) (Step, error) {
 	switch spec.Kind {
 	case KindLeaf:
@@ -95,11 +102,15 @@ func (r *Registry) build(spec Spec) (Step, error) {
 	}
 }
 
-// CompileSpecJSON strictly unmarshals data into a Spec and compiles it.
+// CompileSpecJSON validates data against [SpecJSONSchema], strictly unmarshals
+// it into a Spec, and compiles it.
 func (r *Registry) CompileSpecJSON(data []byte) (Step, error) {
+	if err := ValidateSpecJSON(data); err != nil {
+		return nil, err
+	}
 	var spec Spec
 	if err := decodeStrict(data, &spec); err != nil {
-		return nil, &SpecError{Field: "json", Err: fmt.Errorf("%w: %v", ErrInvalidSpec, err)}
+		return nil, &SpecError{Field: "json", Err: fmt.Errorf("%w: %w", ErrInvalidSpec, err)}
 	}
 	return r.CompileSpec(spec)
 }
@@ -161,7 +172,7 @@ func (r *Registry) buildLoop(spec Spec) (Step, error) {
 		return nil, err
 	}
 	if spec.MaxIterations > 0 {
-		return LoopLimit(spec.MaxIterations, body, cond), nil
+		return LoopN(spec.MaxIterations, body, cond), nil
 	}
 	return Loop(body, cond), nil
 }

@@ -14,9 +14,9 @@ func Loop(body Step, done Condition) Step {
 	return loopLimit(0, body, done)
 }
 
-// LoopLimit is like [Loop] but sets the maximum number of iterations. A
-// non-positive limit uses [flow.DefaultMaxIterations].
-func LoopLimit(limit int, body Step, done Condition) Step {
+// LoopN is like [Loop] but stops after at most limit iterations. A non-positive
+// limit uses [flow.DefaultMaxIterations].
+func LoopN(limit int, body Step, done Condition) Step {
 	return loopLimit(limit, body, done)
 }
 
@@ -28,14 +28,19 @@ func loopLimit(limit int, body Step, done Condition) Step {
 		})
 		return l
 	}
-	l.node = flow.Loop(func(ctx context.Context, iter int, s Store) (Store, bool, error) {
+	bodyNode := func(ctx context.Context, iter int, s Store) (Store, bool, error) {
 		next, err := runStep(ctx, body, s)
 		if err != nil {
 			return s, false, err
 		}
 		stop, err := done(ctx, iter, next)
 		return next, stop, err
-	}, flow.WithMaxIterations(limit))
+	}
+	if limit > 0 {
+		l.node = flow.LoopN(limit, bodyNode)
+	} else {
+		l.node = flow.Loop(bodyNode)
+	}
 	return l
 }
 

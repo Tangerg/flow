@@ -21,6 +21,8 @@ func addN() workflow.LeafFactory {
 	})
 }
 
+func refPtr(ref workflow.Ref) *workflow.Ref { return &ref }
+
 func TestRegistry_compileSequenceJSON(t *testing.T) {
 	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
 
@@ -86,10 +88,10 @@ func TestRegistry_compileIteration(t *testing.T) {
 		Kind:       workflow.KindIteration,
 		ID:         "iter",
 		Input:      &workflow.Ref{NodeID: "start", Path: "output"},
-		BodyOutput: &workflow.Ref{NodeID: "el", Path: workflow.OutputKey},
+		BodyOutput: refPtr(workflow.Output("el")),
 		Body: &workflow.Spec{
 			Kind: workflow.KindLeaf, ID: "el", Type: "addN",
-			Input:  &workflow.Ref{NodeID: "iter", Path: workflow.ItemKey},
+			Input:  refPtr(workflow.Item("iter")),
 			Config: json.RawMessage(`{"n":1}`),
 		},
 	}

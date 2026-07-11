@@ -11,7 +11,7 @@ import (
 func TestIteration_mapsAndCollects(t *testing.T) {
 	// body doubles each element, read from the scoped (iter, item) slot.
 	body := workflow.Leaf("el",
-		workflow.From[int](workflow.Ref{NodeID: "iter", Path: workflow.ItemKey}),
+		workflow.From[int](workflow.Item("iter")),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil }),
 	)
 
@@ -20,7 +20,7 @@ func TestIteration_mapsAndCollects(t *testing.T) {
 		"iter",
 		workflow.Ref{NodeID: "start", Path: "output"},
 		body,
-		workflow.Ref{NodeID: "el", Path: workflow.OutputKey},
+		workflow.Output("el"),
 	)
 
 	in := workflow.NewStore().WithOutput("start", []any{1, 2, 3})
@@ -48,7 +48,7 @@ func TestIteration_mapsAndCollects(t *testing.T) {
 func TestIteration_usesIndex(t *testing.T) {
 	// body returns the element's index, proving the scope carries it.
 	body := workflow.Leaf("el",
-		workflow.From[int](workflow.Ref{NodeID: "iter", Path: workflow.IndexKey}),
+		workflow.From[int](workflow.Index("iter")),
 		flow.NodeFunc[int, int](func(_ context.Context, i int) (int, error) { return i, nil }),
 	)
 
@@ -56,7 +56,7 @@ func TestIteration_usesIndex(t *testing.T) {
 		"iter",
 		workflow.Ref{NodeID: "start", Path: "output"},
 		body,
-		workflow.Ref{NodeID: "el", Path: workflow.OutputKey},
+		workflow.Output("el"),
 	)
 
 	in := workflow.NewStore().WithOutput("start", []any{"a", "b", "c"})
@@ -74,10 +74,10 @@ func TestIteration_usesIndex(t *testing.T) {
 
 func TestIteration_inputNotArray(t *testing.T) {
 	body := workflow.Leaf("el",
-		workflow.From[int](workflow.Ref{NodeID: "iter", Path: workflow.ItemKey}),
+		workflow.From[int](workflow.Item("iter")),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
-	iter := workflow.Iteration("iter", workflow.Ref{NodeID: "start", Path: "output"}, body, workflow.Ref{NodeID: "el", Path: workflow.OutputKey})
+	iter := workflow.Iteration("iter", workflow.Output("start"), body, workflow.Output("el"))
 
 	_, err := iter.Run(context.Background(), workflow.NewStore().WithOutput("start", 42))
 	if err == nil {

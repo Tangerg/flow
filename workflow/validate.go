@@ -42,9 +42,12 @@ func (r *Registry) validateSpec(root Spec) error {
 			if _, ok := r.leafFactory(spec.Type); !ok {
 				return specError(spec, "type", fmt.Errorf("%w %q", ErrUnknownNodeType, spec.Type))
 			}
+			if err := validateConfig(r.registeredNodeSchema(spec.Type).configValidator, spec.Config); err != nil {
+				return specError(spec, "config", fmt.Errorf("%w: %w", ErrInvalidSpec, err))
+			}
 			if spec.Input != nil {
 				if err := validateRef(*spec.Input, "leaf input"); err != nil {
-					return specError(spec, "input", fmt.Errorf("%w: %v", ErrInvalidSpec, err))
+					return specError(spec, "input", fmt.Errorf("%w: %w", ErrInvalidSpec, err))
 				}
 			}
 		case KindSequence, KindParallel:
@@ -84,10 +87,10 @@ func (r *Registry) validateSpec(root Spec) error {
 				return specError(spec, "iteration", fmt.Errorf("%w: input, body, and bodyOutput are required", ErrInvalidSpec))
 			}
 			if err := validateRef(*spec.Input, "iteration input"); err != nil {
-				return specError(spec, "input", fmt.Errorf("%w: %v", ErrInvalidSpec, err))
+				return specError(spec, "input", fmt.Errorf("%w: %w", ErrInvalidSpec, err))
 			}
 			if err := validateRef(*spec.BodyOutput, "iteration bodyOutput"); err != nil {
-				return specError(spec, "bodyOutput", fmt.Errorf("%w: %v", ErrInvalidSpec, err))
+				return specError(spec, "bodyOutput", fmt.Errorf("%w: %w", ErrInvalidSpec, err))
 			}
 			return walk(*spec.Body)
 		default:
