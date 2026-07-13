@@ -28,7 +28,7 @@ func Factory[C, I, O any](build func(C) (flow.Node[I, O], error)) LeafFactory {
 		}
 		node, err := build(cfg)
 		if err != nil {
-			return nil, fmt.Errorf("build node: %w", err)
+			return nil, fmt.Errorf("workflow: build node: %w", err)
 		}
 		if node == nil {
 			return nil, flow.ErrNilNode

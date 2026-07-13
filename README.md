@@ -246,6 +246,11 @@ refine public APIs; release notes should call out migrations such as renamed
 fields or callback signatures. After v1, exported behavior and error contracts
 are compatibility commitments.
 
+Construct exported structs (config structs, `Ref`, `Spec`, `Event`, and the error
+types) with keyed fields, and prefer the provided constructors (`At`, `Output`,
+`Item`, `Index`) where they exist. This is a compatibility contract: it lets new
+fields be added in a minor release without breaking callers.
+
 Current rewrite migrations:
 
 - The former `github.com/Tangerg/flow/core` package now lives at the module root:
