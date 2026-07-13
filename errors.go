@@ -17,6 +17,8 @@ var (
 	// ErrMaxIterations is returned by Loop when it reaches its iteration cap
 	// without the body reporting done.
 	ErrMaxIterations = errors.New("flow: max iterations exceeded")
+	// ErrNoNodes is returned by Race when given no nodes.
+	ErrNoNodes = errors.New("flow: no nodes")
 )
 
 // IndexError reports an error produced while processing one element of an

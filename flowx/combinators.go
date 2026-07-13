@@ -2,7 +2,6 @@ package flowx
 
 import (
 	"context"
-	"errors"
 	"slices"
 
 	"github.com/Tangerg/flow"
@@ -10,12 +9,9 @@ import (
 
 // FanOut runs every node on the same input concurrently and returns their
 // outputs in argument order. The first failure cancels the rest. Bound
-// concurrency with cfg.Concurrency (non-positive is unbounded).
+// concurrency with cfg.Concurrency (non-positive is unbounded). It is a thin
+// convenience over flow.Map applied to the nodes as data.
 func FanOut[I, O any](cfg flow.MapConfig, nodes ...flow.Node[I, O]) flow.Node[I, []O] {
-	return fanOut(cfg.Concurrency, nodes)
-}
-
-func fanOut[I, O any](limit int, nodes []flow.Node[I, O]) flow.Node[I, []O] {
 	nodes = slices.Clone(nodes)
 	return flow.NodeFunc[I, []O](func(ctx context.Context, in I) ([]O, error) {
 		apply := flow.NodeFunc[flow.Node[I, O], O](func(ctx context.Context, n flow.Node[I, O]) (O, error) {
@@ -25,62 +21,14 @@ func fanOut[I, O any](limit int, nodes []flow.Node[I, O]) flow.Node[I, []O] {
 			}
 			return n.Run(ctx, in)
 		})
-		return flow.Map(apply, flow.MapConfig{Concurrency: limit}).Run(ctx, nodes)
+		return flow.Map(apply, cfg).Run(ctx, nodes)
 	})
-}
-
-// FanOutAll runs every node on the same input concurrently and collects a
-// [Result] per node. The returned error is non-nil only on context cancellation.
-// Bound concurrency with cfg.Concurrency (non-positive is unbounded).
-func FanOutAll[I, O any](cfg flow.MapConfig, nodes ...flow.Node[I, O]) flow.Node[I, []Result[O]] {
-	return fanOutAll(cfg.Concurrency, nodes)
-}
-
-func fanOutAll[I, O any](limit int, nodes []flow.Node[I, O]) flow.Node[I, []Result[O]] {
-	nodes = slices.Clone(nodes)
-	return flow.NodeFunc[I, []Result[O]](func(ctx context.Context, in I) ([]Result[O], error) {
-		apply := flow.NodeFunc[flow.Node[I, O], Result[O]](func(ctx context.Context, n flow.Node[I, O]) (Result[O], error) {
-			var out O
-			var err error
-			if n == nil {
-				err = flow.ErrNilNode
-			} else {
-				out, err = n.Run(ctx, in)
-			}
-			return Result[O]{Value: out, Err: err}, nil
-		})
-		return flow.Map(apply, flow.MapConfig{Concurrency: limit}).Run(ctx, nodes)
-	})
-}
-
-// MapAll applies node to every element concurrently and collects a [Result] per
-// element. It does not fail fast. Bound concurrency with a [flow.MapConfig]; the
-// optional cfg is a single configuration.
-func MapAll[I, O any](node flow.Node[I, O], cfg ...flow.MapConfig) flow.Node[[]I, []Result[O]] {
-	limit := 0
-	if len(cfg) > 0 {
-		limit = cfg[0].Concurrency
-	}
-	return mapAll(limit, node)
-}
-
-func mapAll[I, O any](limit int, node flow.Node[I, O]) flow.Node[[]I, []Result[O]] {
-	wrapped := flow.NodeFunc[I, Result[O]](func(ctx context.Context, in I) (Result[O], error) {
-		var out O
-		var err error
-		if node == nil {
-			err = flow.ErrNilNode
-		} else {
-			out, err = node.Run(ctx, in)
-		}
-		return Result[O]{Value: out, Err: err}, nil
-	})
-	return flow.Map(wrapped, flow.MapConfig{Concurrency: limit})
 }
 
 // Combine2 runs two differently typed nodes concurrently on the same input and
-// merges their outputs. The implementation uses flow.Map as the concurrency
-// primitive while keeping both intermediate values statically typed.
+// merges their outputs. It is the heterogeneous fan-in that flow.Map (which is
+// homogeneous) cannot express, while keeping both intermediate values statically
+// typed.
 func Combine2[I, A, B, O any](a flow.Node[I, A], b flow.Node[I, B], merge func(ctx context.Context, a A, b B) (O, error)) flow.Node[I, O] {
 	return flow.NodeFunc[I, O](func(ctx context.Context, in I) (O, error) {
 		var zero O
@@ -112,78 +60,13 @@ func Combine2[I, A, B, O any](a flow.Node[I, A], b flow.Node[I, B], merge func(c
 	})
 }
 
-// ErrNoNodes is returned by [Race] when given no nodes.
-var ErrNoNodes = errors.New("flowx: no nodes")
-
-// Race runs all nodes concurrently on the same input and returns the first
-// successful result, cancelling the rest. If every node fails, it returns their
-// joined errors in input order. Cancellation is cooperative; losing nodes must
-// honor their context. Race cannot be derived from flow.Map (which waits for
-// all), so it uses its own goroutines.
-func Race[I, O any](nodes ...flow.Node[I, O]) flow.Node[I, O] {
-	nodes = slices.Clone(nodes)
-	return flow.NodeFunc[I, O](func(ctx context.Context, in I) (O, error) {
-		var zero O
-		if len(nodes) == 0 {
-			return zero, ErrNoNodes
-		}
-		if err := ctx.Err(); err != nil {
-			return zero, err
-		}
-		parent := ctx
-		ctx, cancel := context.WithCancel(parent)
-		defer cancel()
-
-		type result struct {
-			index int
-			val   O
-			err   error
-		}
-		ch := make(chan result, len(nodes))
-		for i, n := range nodes {
-			go func() {
-				r := result{index: i}
-				if n == nil {
-					r.err = flow.ErrNilNode
-				} else {
-					r.val, r.err = n.Run(ctx, in)
-				}
-				ch <- r
-			}()
-		}
-
-		errs := make([]error, len(nodes))
-		for range nodes {
-			var r result
-			select {
-			case <-parent.Done():
-				return zero, parent.Err()
-			case r = <-ch:
-			}
-			if err := parent.Err(); err != nil {
-				return zero, err
-			}
-			if r.err == nil {
-				return r.val, nil // cancel() (deferred) stops the losers
-			}
-			errs[r.index] = &flow.IndexError{Index: r.index, Err: r.err}
-		}
-		return zero, errors.Join(errs...)
-	})
-}
-
-// Identity returns a node that returns its input unchanged — the neutral element
-// for flow.Then.
-func Identity[T any]() flow.Node[T, T] {
-	return flow.NodeFunc[T, T](func(_ context.Context, in T) (T, error) { return in, nil })
-}
-
-// Chain composes any number of same-type nodes in sequence via flow.Then. With
-// no nodes it is [Identity].
+// Chain composes any number of same-type nodes in sequence via flow.Then. It is
+// the variadic convenience for the common same-type case; with no nodes it is a
+// pass-through.
 func Chain[T any](nodes ...flow.Node[T, T]) flow.Node[T, T] {
 	switch len(nodes) {
 	case 0:
-		return Identity[T]()
+		return flow.NodeFunc[T, T](func(_ context.Context, in T) (T, error) { return in, nil })
 	case 1:
 		if nodes[0] == nil {
 			return flow.NodeFunc[T, T](nil)

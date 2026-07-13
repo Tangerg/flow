@@ -8,7 +8,7 @@ optional dynamic layer for building workflows from config or a visual editor.
 | Package | What it is | Types |
 | --- | --- | --- |
 | [`flow`](.) | The minimal, atomic composition primitives. Compile-time typed, zero third-party dependencies. | `Node[I, O]` |
-| [`flowx`](./flowx) | Derived control-flow combinators (`FanOut`, `Race`, `Fallback`, …) built on `flow`. | `Node[I, O]` |
+| [`flowx`](./flowx) | Derived control-flow sugar (`FanOut`, `Combine2`, `Chain`, `Fallback`) built on `flow`. | `Node[I, O]` |
 | [`workflow`](./workflow) | The dynamic layer: a variable pool (`Store`) threaded through nodes addressed by ID, plus config-driven construction. | `Node[Store, Store]` |
 
 ## Install
@@ -36,7 +36,8 @@ type Node[I, O any] interface {
 | `Then` | sequence: run one node, feed its output to the next |
 | `Switch` | selection: route to a node chosen at runtime |
 | `Loop` | iteration: repeat until done, with an optional `LoopConfig` limit |
-| `Map` | apply a node to a slice, with an optional `MapConfig` concurrency bound |
+| `Map` | concurrency (AND): apply a node to every element and wait for all |
+| `Race` | concurrency (OR): run nodes on one input, first success wins |
 
 ```go
 double := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil })
@@ -47,16 +48,21 @@ out, _ := pipe.Run(ctx, 10) // 21
 ```
 
 These form a category: `Then` is associative and closed over `Node`, so any
-composition is itself a `Node` you can `Run`. Convenience shapes (fan-out,
-collect-all, heterogeneous fan-in, race, retry, timeout) are derivable from these
-and live in `flowx`, not the flow.
+composition is itself a `Node` you can `Run`. `Map` and `Race` are the two
+concurrency atoms — wait-for-all (AND) and first-success (OR) — and neither is
+expressible in terms of the other, so both live in the core. Convenience shapes
+(fan-out, heterogeneous fan-in, variadic sequence, fallback) are derivable and
+live in `flowx`, not the core.
 
-## flowx — derived control-flow combinators
+## flowx — derived control-flow sugar
 
-Everything deliberately kept out of the root `flow` package lives here — all
-pure control-flow shapes: `FanOut`, `FanOutAll`, `MapAll`, `Combine2`
-(heterogeneous fan-in), `Race` (first success wins), `Fallback` (try then an
-alternate), `Identity`, and `Chain`.
+Everything derivable from the core primitives lives here, with exactly one
+implementation per control-flow shape:
+
+- `Chain` — variadic same-type sequence (sugar over `Then`).
+- `FanOut` — run several nodes on the same input concurrently.
+- `Combine2` — heterogeneous fan-in: merge two differently typed nodes.
+- `Fallback` — run a primary node, then an alternate if it fails.
 
 ```go
 // Serve a cached value when the primary node fails.
@@ -184,8 +190,9 @@ flowx ────┘
 
 - `flow` is the domain kernel: minimal, and already rich — behavior lives on
   concrete types (`then`, `mapNode`, …) behind the `Node` interface.
-- `flowx` adds derived control-flow combinators (fan-out, race, fallback, …); it
-  is a utility layer, not a set of domain entities, so it stays functional.
+- `flowx` adds derived control-flow sugar (fan-out, heterogeneous fan-in, chain,
+  fallback); it is a utility layer, not a set of domain entities, so it stays
+  functional.
 - `workflow` is the dynamic domain layer: a persistent `Store` value object,
   composite domain types (`Sequence`, `Branch`, `Loop`, `Parallel`, `Iteration`)
   that own their behavior and describe themselves, and a `Registry` that compiles
@@ -249,10 +256,14 @@ Current rewrite migrations:
   `flow.Loop` accept an optional trailing config; `flowx.FanOut` and
   `workflow.Parallel` take a leading config; `workflow.Iteration` takes an
   `IterationConfig`.
-- `flowx` provides control-flow combinators only; resilience (retry, timeout)
-  and observability are the caller's job — wrap a `Node`, or use a library.
-- `flowx.Result.Error` is now `Result.Err`, following Go's conventional error
-  field naming.
+- `flowx` provides control-flow sugar only, with one implementation per shape:
+  `Chain`, `FanOut`, `Combine2`, and `Fallback`. Resilience (retry, timeout) and
+  observability are the caller's job — wrap a `Node`, or use a library.
+- `Race` is a core concurrency primitive (`flow.Race`), the OR twin of `flow.Map`;
+  it is no longer in `flowx`. The collecting `flowx.FanOutAll`/`MapAll` and their
+  `Result` type were removed — error aggregation is a policy, not control flow.
+- `flowx.Identity` was removed; a pass-through is a one-line `NodeFunc`, and
+  `flowx.Chain()` with no nodes already returns one.
 - `workflow.Adapt` and `FromRef` are now `Leaf` and `From`; custom binders are
   `BindFunc` values.
 - Store reads use `Store.Lookup(Ref)` or `workflow.Get[T]`; `Output`, `Item`,
