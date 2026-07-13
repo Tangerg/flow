@@ -7,7 +7,7 @@
 //
 //   - [Chain]: variadic same-type sequence (sugar over flow.Then).
 //   - [FanOut]: run several nodes on the same input concurrently.
-//   - [Combine2]: heterogeneous fan-in — merge two differently typed nodes.
+//   - [Combine]: heterogeneous fan-in — merge two differently typed nodes.
 //   - [Fallback]: run a primary node, then an alternate if it fails.
 //
 // These are pure control-flow composition — no tunable policies (retry, timeout,

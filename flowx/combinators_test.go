@@ -83,11 +83,11 @@ func TestFanOut_clonesNodes(t *testing.T) {
 	}
 }
 
-func TestCombine2(t *testing.T) {
+func TestCombine(t *testing.T) {
 	length := flow.NodeFunc[string, int](func(_ context.Context, s string) (int, error) { return len(s), nil })
 	upper := flow.NodeFunc[string, string](func(_ context.Context, s string) (string, error) { return s + "!", nil })
 
-	node := flowx.Combine2(length, upper, func(_ context.Context, n int, s string) (string, error) {
+	node := flowx.Combine(length, upper, func(_ context.Context, n int, s string) (string, error) {
 		return s, nil
 	})
 	got, err := node.Run(context.Background(), "hi")
@@ -99,13 +99,13 @@ func TestCombine2(t *testing.T) {
 	}
 }
 
-func TestCombine2_rejectsNilInputs(t *testing.T) {
+func TestCombine_rejectsNilInputs(t *testing.T) {
 	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
-	if _, err := flowx.Combine2[int, int, int, int](node, node, nil).Run(context.Background(), 1); !errors.Is(err, flow.ErrNilFunc) {
+	if _, err := flowx.Combine[int, int, int, int](node, node, nil).Run(context.Background(), 1); !errors.Is(err, flow.ErrNilFunc) {
 		t.Fatalf("nil merge err = %v", err)
 	}
 	merge := func(_ context.Context, a, b int) (int, error) { return a + b, nil }
-	if _, err := flowx.Combine2[int, int, int, int](nil, node, merge).Run(context.Background(), 1); !errors.Is(err, flow.ErrNilNode) {
+	if _, err := flowx.Combine[int, int, int, int](nil, node, merge).Run(context.Background(), 1); !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("nil node err = %v", err)
 	}
 }

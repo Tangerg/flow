@@ -25,11 +25,11 @@ func FanOut[I, O any](cfg flow.MapConfig, nodes ...flow.Node[I, O]) flow.Node[I,
 	})
 }
 
-// Combine2 runs two differently typed nodes concurrently on the same input and
+// Combine runs two differently typed nodes concurrently on the same input and
 // merges their outputs. It is the heterogeneous fan-in that flow.Map (which is
 // homogeneous) cannot express, while keeping both intermediate values statically
 // typed.
-func Combine2[I, A, B, O any](a flow.Node[I, A], b flow.Node[I, B], merge func(ctx context.Context, a A, b B) (O, error)) flow.Node[I, O] {
+func Combine[I, A, B, O any](a flow.Node[I, A], b flow.Node[I, B], merge func(ctx context.Context, a A, b B) (O, error)) flow.Node[I, O] {
 	return flow.NodeFunc[I, O](func(ctx context.Context, in I) (O, error) {
 		var zero O
 		if merge == nil {
