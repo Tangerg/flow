@@ -42,7 +42,7 @@ All notable changes to this project are documented here. The format follows
 - `Race` moved into the core as `flow.Race`, the OR (first-success) twin of the
   AND (wait-for-all) `flow.Map`; it is a primitive, not derived sugar.
 - `flowx` keeps one implementation per control-flow shape: `Chain`, `FanOut`,
-  `Combine2`, and `Fallback`.
+  `Combine`, and `Fallback`.
 
 ### Breaking
 

@@ -8,7 +8,7 @@ optional dynamic layer for building workflows from config or a visual editor.
 | Package | What it is | Types |
 | --- | --- | --- |
 | [`flow`](.) | The minimal, atomic composition primitives. Compile-time typed, zero third-party dependencies. | `Node[I, O]` |
-| [`flowx`](./flowx) | Derived control-flow sugar (`FanOut`, `Combine2`, `Chain`, `Fallback`) built on `flow`. | `Node[I, O]` |
+| [`flowx`](./flowx) | Derived control-flow sugar (`FanOut`, `Combine`, `Chain`, `Fallback`) built on `flow`. | `Node[I, O]` |
 | [`workflow`](./workflow) | The dynamic layer: a variable pool (`Store`) threaded through nodes addressed by ID, plus config-driven construction. | `Node[Store, Store]` |
 
 ## Install
@@ -61,7 +61,7 @@ implementation per control-flow shape:
 
 - `Chain` — variadic same-type sequence (sugar over `Then`).
 - `FanOut` — run several nodes on the same input concurrently.
-- `Combine2` — heterogeneous fan-in: merge two differently typed nodes.
+- `Combine` — heterogeneous fan-in: merge two differently typed nodes.
 - `Fallback` — run a primary node, then an alternate if it fails.
 
 ```go
@@ -257,7 +257,7 @@ Current rewrite migrations:
   `workflow.Parallel` take a leading config; `workflow.Iteration` takes an
   `IterationConfig`.
 - `flowx` provides control-flow sugar only, with one implementation per shape:
-  `Chain`, `FanOut`, `Combine2`, and `Fallback`. Resilience (retry, timeout) and
+  `Chain`, `FanOut`, `Combine`, and `Fallback`. Resilience (retry, timeout) and
   observability are the caller's job — wrap a `Node`, or use a library.
 - `Race` is a core concurrency primitive (`flow.Race`), the OR twin of `flow.Map`;
   it is no longer in `flowx`. The collecting `flowx.FanOutAll`/`MapAll` and their
