@@ -7,15 +7,17 @@
 //   - [Node] and [NodeFunc]: the abstraction and its function adapter.
 //   - [Then]: sequential composition.
 //   - [Switch]: data-dependent selection.
-//   - [Loop] and [LoopN]: bounded iteration.
-//   - [Map] and [MapN]: concurrent execution over a collection.
+//   - [Loop]: bounded iteration (with an optional [LoopConfig] limit).
+//   - [Map]: concurrent execution over a collection — AND, wait for all.
+//   - [Race]: concurrent execution over one input — OR, first success wins.
 //
 // Together these are control-complete — sequence, selection, and iteration — plus
-// concurrency. Every other convenience (fan-out, heterogeneous fan-in, collecting
-// per-item results) is derivable from these and therefore belongs in
-// higher-level packages, not here. For example fan-out over nodes is Map applied
-// to the nodes as data, and a collect-all Map is Map over a node wrapped to fold
-// its error into the result.
+// the two concurrency atoms [Map] (AND) and [Race] (OR), neither expressible in
+// terms of the other. Every other convenience (fan-out, heterogeneous fan-in,
+// variadic sequencing, fallback) is derivable from these and therefore belongs in
+// higher-level packages, not here. For example fan-out over nodes is [Map] applied
+// to the nodes as data, and a try/else fallback is a node that runs an alternate
+// when the primary fails.
 //
 // Errors preserve their causes. Concurrent collection operations report item
 // positions with [IndexError], allowing callers to use errors.Is and errors.As
