@@ -36,9 +36,13 @@ All notable changes to this project are documented here. The format follows
   and diagram rendering is left to callers.
 - One shape per purpose: a leaf binder is a `BindFunc`, dropping the redundant
   `Binder` interface and the redundant `Pipeline` fluent builder.
-- `flowx` is control-flow combinators only. `Retry`, `Timeout`, and `Trace` were
+- `flowx` is control-flow sugar only. `Retry`, `Timeout`, and `Trace` were
   removed; resilience and observability are the caller's concern (wrap a `Node`,
   or use a dedicated library).
+- `Race` moved into the core as `flow.Race`, the OR (first-success) twin of the
+  AND (wait-for-all) `flow.Map`; it is a primitive, not derived sugar.
+- `flowx` keeps one implementation per control-flow shape: `Chain`, `FanOut`,
+  `Combine2`, and `Fallback`.
 
 ### Breaking
 
@@ -50,8 +54,13 @@ All notable changes to this project are documented here. The format follows
 - `workflow.Pipeline` and `Pipe` were removed. Build sequential and parallel
   stages with `Sequence` and `Parallel`.
 - `flowx.Retry`, `Timeout`, and `Trace` were removed; `flowx` is now control-flow
-  combinators only. Wrap a `Node` for resilience, or use a library. The `Binder`
+  sugar only. Wrap a `Node` for resilience, or use a library. The `Binder`
   interface was removed; pass a `BindFunc` to `Leaf`.
+- `flowx.Race` moved to `flow.Race` (core primitive). Update the import path.
+- `flowx.FanOutAll`, `flowx.MapAll`, the `flowx.Result`/`Collect` collecting API,
+  and `flowx.Identity` were removed. Use `flow.Race`/`flowx.FanOut` for control
+  flow, aggregate errors yourself, and write a one-line `NodeFunc` (or
+  `flowx.Chain()`) for a pass-through.
 - Use `Output`, `Item`, and `Index` instead of exported Store path constants;
   use `ObserverFunc` instead of the removed event collector.
 - Consume `workflow.Description` directly; Mermaid rendering is no longer part
