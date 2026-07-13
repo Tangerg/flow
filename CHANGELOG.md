@@ -34,9 +34,11 @@ All notable changes to this project are documented here. The format follows
 - The public surface is smaller: bounded operations take config structs (no `N`
   twins), conventional Store refs use constructors instead of key constants,
   and diagram rendering is left to callers.
-- One shape per purpose: `flowx.Retry` takes a `RetryConfig` struct instead of
-  sealed functional options, and a leaf binder is a `BindFunc`, dropping the
-  redundant `Binder` interface and the redundant `Pipeline` fluent builder.
+- One shape per purpose: a leaf binder is a `BindFunc`, dropping the redundant
+  `Binder` interface and the redundant `Pipeline` fluent builder.
+- `flowx` is control-flow combinators only. `Retry`, `Timeout`, and `Trace` were
+  removed; resilience and observability are the caller's concern (wrap a `Node`,
+  or use a dedicated library).
 
 ### Breaking
 
@@ -45,11 +47,11 @@ All notable changes to this project are documented here. The format follows
 - Configure bounded operations with config structs (`flow.MapConfig`,
   `flow.LoopConfig`, `workflow.ParallelConfig`, `workflow.IterationConfig`); the
   `XxxN` variants were removed.
-- Compose `flowx` decorators by nesting; `workflow.Pipeline` and `Pipe` were
-  removed. Build sequential and parallel stages with `Sequence` and `Parallel`.
-- `flowx.Retry` now takes a `RetryConfig`; replace `WithAttempts`, `WithBackoff`,
-  and `WithRetryable` with its fields. The `Binder` interface was removed; pass a
-  `BindFunc` to `Leaf`.
+- `workflow.Pipeline` and `Pipe` were removed. Build sequential and parallel
+  stages with `Sequence` and `Parallel`.
+- `flowx.Retry`, `Timeout`, and `Trace` were removed; `flowx` is now control-flow
+  combinators only. Wrap a `Node` for resilience, or use a library. The `Binder`
+  interface was removed; pass a `BindFunc` to `Leaf`.
 - Use `Output`, `Item`, and `Index` instead of exported Store path constants;
   use `ObserverFunc` instead of the removed event collector.
 - Consume `workflow.Description` directly; Mermaid rendering is no longer part
