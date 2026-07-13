@@ -86,17 +86,17 @@ func From[I any](ref Ref) BindFunc[I] {
 // writes back — the node itself stays free of any Store knowledge and is unit
 // testable on its own.
 func Leaf[I, O any](id string, bind BindFunc[I], node flow.Node[I, O]) Step {
-	return leaf[I, O]{id: id, bind: bind, node: node}
+	return leafStep[I, O]{id: id, bind: bind, node: node}
 }
 
 // leaf is the [Step] produced by [Leaf].
-type leaf[I, O any] struct {
+type leafStep[I, O any] struct {
 	id   string
 	bind BindFunc[I]
 	node flow.Node[I, O]
 }
 
-func (l leaf[I, O]) Run(ctx context.Context, s Store) (Store, error) {
+func (l leafStep[I, O]) Run(ctx context.Context, s Store) (Store, error) {
 	emit(ctx, Event{Kind: EventStarted, ID: l.id})
 	fail := func(op StepOp, err error) (Store, error) {
 		err = &StepError{ID: l.id, Op: op, Err: err}
@@ -126,25 +126,25 @@ func (l leaf[I, O]) Run(ctx context.Context, s Store) (Store, error) {
 	return s.WithOutput(l.id, out), nil
 }
 
-func (l leaf[I, O]) Describe() Description {
+func (l leafStep[I, O]) Describe() Description {
 	return Description{ID: l.id, Kind: "leaf"}
 }
 
 // Sequence runs steps in order, threading the Store through each.
 func Sequence(steps ...Step) Step {
-	return sequence{steps: slices.Clone(steps)}
+	return sequenceStep{steps: slices.Clone(steps)}
 }
 
 // sequence is the [Step] produced by [Sequence].
-type sequence struct {
+type sequenceStep struct {
 	steps []Step
 }
 
-func (s sequence) Run(ctx context.Context, st Store) (Store, error) {
+func (s sequenceStep) Run(ctx context.Context, st Store) (Store, error) {
 	return runSteps(ctx, s.steps, st)
 }
 
-func (s sequence) Describe() Description {
+func (s sequenceStep) Describe() Description {
 	return Description{Kind: "sequence", Children: describeAll(s.steps)}
 }
 

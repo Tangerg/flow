@@ -41,7 +41,7 @@ type IterationConfig struct {
 // [Item](cfg.ID) and its index via [Index](cfg.ID). The value at cfg.Input must
 // be a []any. The first element to fail cancels the rest.
 func Iteration(cfg IterationConfig) Step {
-	it := iteration{id: cfg.ID, body: cfg.Body}
+	it := iterationStep{id: cfg.ID, body: cfg.Body}
 	it.node = flow.NodeFunc[Store, Store](func(ctx context.Context, s Store) (Store, error) {
 		items, err := Get[[]any](s, cfg.Input)
 		if err != nil {
@@ -72,14 +72,14 @@ func Iteration(cfg IterationConfig) Step {
 }
 
 // iteration is the [Step] produced by [Iteration].
-type iteration struct {
+type iterationStep struct {
 	id   string
 	body Step
 	node Step
 }
 
-func (it iteration) Run(ctx context.Context, s Store) (Store, error) { return it.node.Run(ctx, s) }
+func (it iterationStep) Run(ctx context.Context, s Store) (Store, error) { return it.node.Run(ctx, s) }
 
-func (it iteration) Describe() Description {
+func (it iterationStep) Describe() Description {
 	return Description{ID: it.id, Kind: "iteration", Children: []Description{Describe(it.body)}}
 }

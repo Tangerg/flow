@@ -87,7 +87,7 @@ func (r *Registry) build(spec Spec) (Step, error) {
 		if err != nil {
 			return nil, err
 		}
-		return Parallel(ParallelConfig{Concurrency: spec.Concurrency}, steps...), nil
+		return Parallel(steps, ParallelConfig{Concurrency: spec.Concurrency}), nil
 	case KindBranch:
 		return r.buildBranch(spec)
 	case KindLoop:

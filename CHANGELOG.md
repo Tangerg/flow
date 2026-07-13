@@ -43,6 +43,11 @@ All notable changes to this project are documented here. The format follows
   AND (wait-for-all) `flow.Map`; it is a primitive, not derived sugar.
 - `flowx` keeps one implementation per control-flow shape: `Chain`, `FanOut`,
   `Combine`, and `Fallback`.
+- Uniform style across the repo: private implementation types are named after
+  the interface they satisfy — `thenNode`/`switchNode`/`mapNode`/`loopNode` for
+  `flow.Node`, and `sequenceStep`/`branchStep`/`loopStep`/`parallelStep`/
+  `iterationStep`/`leafStep` for `Step`. Every config struct is now the last,
+  optional argument of its constructor.
 
 ### Breaking
 
@@ -57,6 +62,10 @@ All notable changes to this project are documented here. The format follows
   sugar only. Wrap a `Node` for resilience, or use a library. The `Binder`
   interface was removed; pass a `BindFunc` to `Leaf`.
 - `flowx.Race` moved to `flow.Race` (core primitive). Update the import path.
+- `flowx.FanOut` and `workflow.Parallel` now take their nodes/branches as a
+  slice with the config as a trailing optional argument —
+  `FanOut(nodes, cfg...)` and `Parallel(branches, cfg...)` — replacing the
+  previous required leading `cfg` and variadic nodes/branches.
 - `flowx.FanOutAll`, `flowx.MapAll`, the `flowx.Result`/`Collect` collecting API,
   and `flowx.Identity` were removed. Use `flow.Race`/`flowx.FanOut` for control
   flow, aggregate errors yourself, and write a one-line `NodeFunc` (or

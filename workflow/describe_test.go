@@ -18,7 +18,7 @@ func leafStep(id string) workflow.Step {
 func TestDescribe_tree(t *testing.T) {
 	step := workflow.Sequence(
 		leafStep("a"),
-		workflow.Parallel(workflow.ParallelConfig{}, leafStep("b"), leafStep("c")),
+		workflow.Parallel([]workflow.Step{leafStep("b"), leafStep("c")}),
 	)
 
 	d := workflow.Describe(step)

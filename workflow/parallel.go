@@ -7,6 +7,14 @@ import (
 	"github.com/Tangerg/flow"
 )
 
+// ParallelConfig configures [Parallel]. Its zero value runs every branch
+// concurrently.
+type ParallelConfig struct {
+	// Concurrency caps the number of branches running at once. A non-positive
+	// value is unbounded.
+	Concurrency int
+}
+
 // Parallel runs every branch concurrently on the same input Store and merges
 // their resulting Stores into one. Because the Store structure is persistent,
 // branches can safely share it when stored values obey Store's immutability
@@ -16,26 +24,23 @@ import (
 // Parallel merges only cells actually written by each branch; cells merely
 // inherited from the input snapshot cannot overwrite another branch's work. On
 // a same-cell conflict a later branch's value wins. Parallel derives its fan-out
-// from flow.Map applied to the branches as data.
-// ParallelConfig configures [Parallel]. Its zero value runs every branch
-// concurrently.
-type ParallelConfig struct {
-	// Concurrency caps the number of branches running at once. A non-positive
-	// value is unbounded.
-	Concurrency int
-}
-
-func Parallel(cfg ParallelConfig, branches ...Step) Step {
-	return parallel{branches: slices.Clone(branches), limit: cfg.Concurrency}
+// from flow.Map applied to the branches as data. The optional cfg is a single
+// configuration; if several are passed, the first applies.
+func Parallel(branches []Step, cfg ...ParallelConfig) Step {
+	limit := 0
+	if len(cfg) > 0 {
+		limit = cfg[0].Concurrency
+	}
+	return parallelStep{branches: slices.Clone(branches), limit: limit}
 }
 
 // parallel is the [Step] produced by [Parallel].
-type parallel struct {
+type parallelStep struct {
 	branches []Step
 	limit    int
 }
 
-func (p parallel) Run(ctx context.Context, s Store) (Store, error) {
+func (p parallelStep) Run(ctx context.Context, s Store) (Store, error) {
 	switch len(p.branches) {
 	case 0:
 		return s, ctx.Err()
@@ -76,7 +81,7 @@ func (r branchRunner) Run(ctx context.Context, branch Step) (Store, error) {
 	return runStep(ctx, branch, r.input)
 }
 
-func (p parallel) Describe() Description {
+func (p parallelStep) Describe() Description {
 	return Description{Kind: "parallel", Children: describeAll(p.branches)}
 }
 
