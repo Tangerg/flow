@@ -8,7 +8,7 @@ optional dynamic layer for building workflows from config or a visual editor.
 | Package | What it is | Types |
 | --- | --- | --- |
 | [`flow`](.) | The minimal, atomic composition primitives. Compile-time typed, zero third-party dependencies. | `Node[I, O]` |
-| [`flowx`](./flowx) | Derived combinators (`FanOut`, `Race`, …) and decorators (`Retry`, `Timeout`, `Trace`, …) built on `flow`. | `Node[I, O]` |
+| [`flowx`](./flowx) | Derived control-flow combinators (`FanOut`, `Race`, `Fallback`, …) built on `flow`. | `Node[I, O]` |
 | [`workflow`](./workflow) | The dynamic layer: a variable pool (`Store`) threaded through nodes addressed by ID, plus config-driven construction. | `Node[Store, Store]` |
 
 ## Install
@@ -51,26 +51,21 @@ composition is itself a `Node` you can `Run`. Convenience shapes (fan-out,
 collect-all, heterogeneous fan-in, race, retry, timeout) are derivable from these
 and live in `flowx`, not the flow.
 
-## flowx — derived combinators and decorators
+## flowx — derived control-flow combinators
 
-Everything deliberately kept out of the root `flow` package lives here:
-`FanOut`, `FanOutAll`, `MapAll`, `Combine2` (heterogeneous fan-in), `Race` (first
-success wins), `Identity`, and `Chain`.
-
-Decorators are ordinary functions. Nesting makes the execution order explicit:
+Everything deliberately kept out of the root `flow` package lives here — all
+pure control-flow shapes: `FanOut`, `FanOutAll`, `MapAll`, `Combine2`
+(heterogeneous fan-in), `Race` (first success wins), `Fallback` (try then an
+alternate), `Identity`, and `Chain`.
 
 ```go
-node := flowx.Fallback(
-    flowx.Timeout(
-        flowx.Retry(callAPI, flowx.RetryConfig{
-            Attempts: 3,
-            Backoff:  flowx.ExponentialBackoff(50 * time.Millisecond),
-        }),
-        2*time.Second,
-    ),
-    serveFromCache,
-)
+// Serve a cached value when the primary node fails.
+node := flowx.Fallback(callAPI, serveFromCache)
 ```
+
+Resilience (retry, timeout, circuit breaking) and observability are left out on
+purpose: a decorator is just a `flow.Node[I, O] -> flow.Node[I, O]`, so wrap a
+node yourself or drop in a dedicated library.
 
 ## workflow — the dynamic layer
 
@@ -189,8 +184,8 @@ flowx ────┘
 
 - `flow` is the domain kernel: minimal, and already rich — behavior lives on
   concrete types (`then`, `mapNode`, …) behind the `Node` interface.
-- `flowx` adds derived combinators and cross-cutting decorators (interceptors);
-  it is a utility layer, not a set of domain entities, so it stays functional.
+- `flowx` adds derived control-flow combinators (fan-out, race, fallback, …); it
+  is a utility layer, not a set of domain entities, so it stays functional.
 - `workflow` is the dynamic domain layer: a persistent `Store` value object,
   composite domain types (`Sequence`, `Branch`, `Loop`, `Parallel`, `Iteration`)
   that own their behavior and describe themselves, and a `Registry` that compiles
@@ -254,8 +249,8 @@ Current rewrite migrations:
   `flow.Loop` accept an optional trailing config; `flowx.FanOut` and
   `workflow.Parallel` take a leading config; `workflow.Iteration` takes an
   `IterationConfig`.
-- `flowx` decorators are ordinary composable functions; compose them by nesting.
-- `flowx.Retry` takes a `RetryConfig` struct instead of functional options.
+- `flowx` provides control-flow combinators only; resilience (retry, timeout)
+  and observability are the caller's job — wrap a `Node`, or use a library.
 - `flowx.Result.Error` is now `Result.Err`, following Go's conventional error
   field naming.
 - `workflow.Adapt` and `FromRef` are now `Leaf` and `From`; custom binders are

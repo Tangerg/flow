@@ -196,3 +196,23 @@ func Chain[T any](nodes ...flow.Node[T, T]) flow.Node[T, T] {
 	}
 	return n
 }
+
+// Fallback runs primary; if it fails while the parent context remains live, it
+// runs alternate with the same input. Cancellation of the outer operation is
+// returned as-is and does not trigger the fallback.
+func Fallback[I, O any](primary, alternate flow.Node[I, O]) flow.Node[I, O] {
+	return flow.NodeFunc[I, O](func(ctx context.Context, in I) (O, error) {
+		var out O
+		if primary == nil || alternate == nil {
+			return out, flow.ErrNilNode
+		}
+		out, err := primary.Run(ctx, in)
+		if err == nil {
+			return out, nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return out, ctxErr
+		}
+		return alternate.Run(ctx, in)
+	})
+}
