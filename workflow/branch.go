@@ -20,21 +20,21 @@ func Branch(resolve Resolver, cases map[string]Step) Step {
 			return "", flow.ErrNilFunc
 		}
 	}
-	return branch{
+	return branchStep{
 		cases: cases,
 		node:  flow.Switch(resolver, cases),
 	}
 }
 
 // branch is the [Step] produced by [Branch].
-type branch struct {
+type branchStep struct {
 	cases map[string]Step
 	node  Step
 }
 
-func (b branch) Run(ctx context.Context, s Store) (Store, error) { return b.node.Run(ctx, s) }
+func (b branchStep) Run(ctx context.Context, s Store) (Store, error) { return b.node.Run(ctx, s) }
 
-func (b branch) Describe() Description {
+func (b branchStep) Describe() Description {
 	children := make([]Description, 0, len(b.cases))
 	for _, name := range slices.Sorted(maps.Keys(b.cases)) {
 		d := Describe(b.cases[name])

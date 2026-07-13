@@ -148,7 +148,7 @@ a `Step`, so there is no final build call:
 pipeline := workflow.Sequence(
     load,
     validate,
-    workflow.Parallel(saveDB, writeAudit),
+    workflow.Parallel([]workflow.Step{saveDB, writeAudit}),
     reply,
 )
 
@@ -252,10 +252,13 @@ Current rewrite migrations:
   import `github.com/Tangerg/flow` and use the package name `flow`.
 - The former `core.Func` is now `flow.NodeFunc`, following the `http.HandlerFunc` adapter
   convention.
-- Bounded operations take a config struct, not `N` variants: `flow.Map` and
-  `flow.Loop` accept an optional trailing config; `flowx.FanOut` and
-  `workflow.Parallel` take a leading config; `workflow.Iteration` takes an
-  `IterationConfig`.
+- Bounded operations take a config struct, not `N` variants, and it is always
+  the last, optional argument: `flow.Map(node, cfg...)`,
+  `flow.Loop(body, cfg...)`, `flowx.FanOut(nodes, cfg...)`,
+  `workflow.Parallel(branches, cfg...)`, `workflow.Loop(body, done, cfg...)`.
+  Variadic subjects (FanOut, Parallel) take a slice so the config stays trailing.
+  `workflow.Iteration(IterationConfig{...})` is fully config-defined, so its
+  config is the single required argument.
 - `flowx` provides control-flow sugar only, with one implementation per shape:
   `Chain`, `FanOut`, `Combine`, and `Fallback`. Resilience (retry, timeout) and
   observability are the caller's job — wrap a `Node`, or use a library.

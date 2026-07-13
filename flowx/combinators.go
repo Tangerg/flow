@@ -9,9 +9,10 @@ import (
 
 // FanOut runs every node on the same input concurrently and returns their
 // outputs in argument order. The first failure cancels the rest. Bound
-// concurrency with cfg.Concurrency (non-positive is unbounded). It is a thin
-// convenience over flow.Map applied to the nodes as data.
-func FanOut[I, O any](cfg flow.MapConfig, nodes ...flow.Node[I, O]) flow.Node[I, []O] {
+// concurrency with the optional cfg (a single configuration; if several are
+// passed, the first applies). It is a thin convenience over flow.Map applied to
+// the nodes as data.
+func FanOut[I, O any](nodes []flow.Node[I, O], cfg ...flow.MapConfig) flow.Node[I, []O] {
 	nodes = slices.Clone(nodes)
 	return flow.NodeFunc[I, []O](func(ctx context.Context, in I) ([]O, error) {
 		apply := flow.NodeFunc[flow.Node[I, O], O](func(ctx context.Context, n flow.Node[I, O]) (O, error) {
@@ -21,7 +22,7 @@ func FanOut[I, O any](cfg flow.MapConfig, nodes ...flow.Node[I, O]) flow.Node[I,
 			}
 			return n.Run(ctx, in)
 		})
-		return flow.Map(apply, cfg).Run(ctx, nodes)
+		return flow.Map(apply, cfg...).Run(ctx, nodes)
 	})
 }
 

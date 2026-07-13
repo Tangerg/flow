@@ -43,11 +43,10 @@ func ExampleSequence() {
 
 	pipeline := workflow.Sequence(
 		add("load", "input", 1),
-		workflow.Parallel(
-			workflow.ParallelConfig{},
+		workflow.Parallel([]workflow.Step{
 			add("save", "load", 10),
 			add("audit", "load", 100),
-		),
+		}),
 	)
 
 	out, err := pipeline.Run(context.Background(), workflow.NewStore().WithOutput("input", 1))

@@ -16,7 +16,7 @@ func TestFanOut(t *testing.T) {
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 2, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 3, nil }),
 	}
-	got, err := flowx.FanOut(flow.MapConfig{}, nodes...).Run(context.Background(), 10)
+	got, err := flowx.FanOut(nodes).Run(context.Background(), 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestFanOut_boundsConcurrency(t *testing.T) {
 	})
 	done := make(chan error, 1)
 	go func() {
-		_, err := flowx.FanOut(flow.MapConfig{Concurrency: 2}, node, node, node, node).Run(context.Background(), 1)
+		_, err := flowx.FanOut([]flow.Node[int, int]{node, node, node, node}, flow.MapConfig{Concurrency: 2}).Run(context.Background(), 1)
 		done <- err
 	}()
 
@@ -65,7 +65,7 @@ func TestFanOut_failFast(t *testing.T) {
 		flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in + 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom }),
 	}
-	if _, err := flowx.FanOut(flow.MapConfig{}, nodes...).Run(context.Background(), 1); !errors.Is(err, boom) {
+	if _, err := flowx.FanOut(nodes).Run(context.Background(), 1); !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want boom", err)
 	}
 }
@@ -74,7 +74,7 @@ func TestFanOut_clonesNodes(t *testing.T) {
 	nodes := []flow.Node[int, int]{
 		flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in + 1, nil }),
 	}
-	fan := flowx.FanOut(flow.MapConfig{}, nodes...)
+	fan := flowx.FanOut(nodes)
 	nodes[0] = flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in + 100, nil })
 
 	got, err := fan.Run(context.Background(), 1)

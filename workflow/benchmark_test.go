@@ -148,7 +148,7 @@ func BenchmarkParallelMerge(b *testing.B) {
 			return s.WithOutput(id, i), nil
 		})
 	}
-	node := workflow.Parallel(workflow.ParallelConfig{}, branches...)
+	node := workflow.Parallel(branches)
 
 	b.ReportAllocs()
 	for b.Loop() {
@@ -167,7 +167,7 @@ func BenchmarkParallelArity(b *testing.B) {
 					return store.WithOutput(id, i), nil
 				})
 			}
-			step := workflow.Parallel(workflow.ParallelConfig{}, branches...)
+			step := workflow.Parallel(branches)
 			input := workflow.NewStore().WithOutput("seed", 1)
 
 			b.ReportAllocs()
@@ -190,7 +190,7 @@ func BenchmarkParallelBaseScaling(b *testing.B) {
 					return store.WithOutput(id, i), nil
 				})
 			}
-			step := workflow.Parallel(workflow.ParallelConfig{}, branches...)
+			step := workflow.Parallel(branches)
 			input := benchmarkStore(size)
 
 			b.ReportAllocs()

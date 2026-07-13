@@ -15,7 +15,7 @@ func TestParallel_mergesBranches(t *testing.T) {
 	a := workflow.Leaf("a", from, flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil }))
 	b := workflow.Leaf("b", from, flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil }))
 
-	p := workflow.Parallel(workflow.ParallelConfig{Concurrency: 2}, a, b)
+	p := workflow.Parallel([]workflow.Step{a, b}, workflow.ParallelConfig{Concurrency: 2})
 
 	out, err := p.Run(context.Background(), workflow.NewStore().WithOutput("start", 5))
 	if err != nil {
@@ -35,7 +35,7 @@ func TestParallel_failFast(t *testing.T) {
 	ok := workflow.Leaf("ok", from, flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
 	bad := workflow.Leaf("bad", from, flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom }))
 
-	_, err := workflow.Parallel(workflow.ParallelConfig{}, ok, bad).Run(context.Background(), workflow.NewStore().WithOutput("start", 1))
+	_, err := workflow.Parallel([]workflow.Step{ok, bad}).Run(context.Background(), workflow.NewStore().WithOutput("start", 1))
 	if !errors.Is(err, boom) {
 		t.Fatalf("error = %v, want boom", err)
 	}
@@ -47,7 +47,7 @@ func TestParallel_singleBranchPreservesIndexError(t *testing.T) {
 		return store, boom
 	})
 
-	_, err := workflow.Parallel(workflow.ParallelConfig{}, branch).Run(context.Background(), workflow.NewStore())
+	_, err := workflow.Parallel([]workflow.Step{branch}).Run(context.Background(), workflow.NewStore())
 	var indexErr *flow.IndexError
 	if !errors.As(err, &indexErr) || indexErr.Index != 0 || !errors.Is(err, boom) {
 		t.Fatalf("err = %v; want IndexError(0, boom)", err)
@@ -61,7 +61,7 @@ func TestParallel_emptyAndSingleRespectCancellation(t *testing.T) {
 		return store, nil
 	})
 
-	for _, step := range []workflow.Step{workflow.Parallel(workflow.ParallelConfig{}), workflow.Parallel(workflow.ParallelConfig{}, identity)} {
+	for _, step := range []workflow.Step{workflow.Parallel(nil), workflow.Parallel([]workflow.Step{identity})} {
 		if _, err := step.Run(ctx, workflow.NewStore()); !errors.Is(err, context.Canceled) {
 			t.Fatalf("err = %v; want context.Canceled", err)
 		}
@@ -77,7 +77,7 @@ func TestParallel_mergesOnlyBranchWrites(t *testing.T) {
 	})
 	base := workflow.NewStore().With("existing", "value", 0)
 
-	out, err := workflow.Parallel(workflow.ParallelConfig{}, writeExisting, writeOther).Run(context.Background(), base)
+	out, err := workflow.Parallel([]workflow.Step{writeExisting, writeOther}).Run(context.Background(), base)
 	if err != nil {
 		t.Fatalf("Parallel: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestParallel_laterBranchWinsCellConflict(t *testing.T) {
 		})
 	}
 
-	out, err := workflow.Parallel(workflow.ParallelConfig{}, write(1), write(2)).Run(context.Background(), workflow.NewStore())
+	out, err := workflow.Parallel([]workflow.Step{write(1), write(2)}).Run(context.Background(), workflow.NewStore())
 	if err != nil {
 		t.Fatalf("Parallel: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestParallel_compactedBranchMergesOnlyWrites(t *testing.T) {
 	})
 	base := workflow.NewStore().WithOutput("shared", 0)
 
-	out, err := workflow.Parallel(workflow.ParallelConfig{}, writeShared, writeMany).Run(context.Background(), base)
+	out, err := workflow.Parallel([]workflow.Step{writeShared, writeMany}).Run(context.Background(), base)
 	if err != nil {
 		t.Fatalf("Parallel: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestParallel_mergesUnrelatedStore(t *testing.T) {
 	})
 	base := workflow.NewStore().WithOutput("base", 1)
 
-	out, err := workflow.Parallel(workflow.ParallelConfig{}, replace).Run(context.Background(), base)
+	out, err := workflow.Parallel([]workflow.Step{replace}).Run(context.Background(), base)
 	if err != nil {
 		t.Fatalf("Parallel: %v", err)
 	}

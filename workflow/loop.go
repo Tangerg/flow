@@ -18,7 +18,7 @@ type LoopConfig struct {
 // cap is reached. done receives the zero-based iteration index and the Store
 // produced by that iteration. The optional cfg is a single configuration.
 func Loop(body Step, done Condition, cfg ...LoopConfig) Step {
-	l := loop{body: body}
+	l := loopStep{body: body}
 	if done == nil {
 		l.node = flow.NodeFunc[Store, Store](func(_ context.Context, s Store) (Store, error) {
 			return s, flow.ErrNilFunc
@@ -42,13 +42,13 @@ func Loop(body Step, done Condition, cfg ...LoopConfig) Step {
 }
 
 // loop is the [Step] produced by [Loop].
-type loop struct {
+type loopStep struct {
 	body Step
 	node Step
 }
 
-func (l loop) Run(ctx context.Context, s Store) (Store, error) { return l.node.Run(ctx, s) }
+func (l loopStep) Run(ctx context.Context, s Store) (Store, error) { return l.node.Run(ctx, s) }
 
-func (l loop) Describe() Description {
+func (l loopStep) Describe() Description {
 	return Description{Kind: "loop", Children: []Description{Describe(l.body)}}
 }
