@@ -78,6 +78,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Repository documentation is now organized by audience: the root README is a
+  concise adoption guide, the English tutorial series owns progressive
+  learning, executable examples remain the runnable source of truth, package
+  comments own API reference, and maintainer documents cover contribution,
+  security, and releases.
 - Internal code is organized by domain responsibility rather than historical
   growth: references, leaves, sequences, strict JSON decoding, JSON Pointers,
   Store persistence, Journal persistence, awaits, interrupts, suspensions, graph

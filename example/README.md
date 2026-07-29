@@ -1,22 +1,29 @@
-# Examples
+# Executable examples
 
-This package is an executable learning path. Read the examples in order:
+This package is the runnable counterpart to the
+[step-by-step tutorials](../docs/tutorials/README.md). Read the examples in
+order; each uses only public APIs and has asserted output.
 
-| Level | Example | What it introduces |
-| --- | --- | --- |
-| 1 | [`node_test.go`](./node_test.go) | `NodeFunc` and typed `Then` composition |
-| 2 | [`composition_test.go`](./composition_test.go) | Composites as nodes and bounded `Map` concurrency |
-| 3 | [`workflow_test.go`](./workflow_test.go) | `Step`, `Store`, `Ref`, and `Sequence` |
-| 4 | [`dag_test.go`](./dag_test.go) | Registry, named ports, schemas, fan-out, and fan-in |
-| 5 | [`json_test.go`](./json_test.go) | JSON DAG compilation and Draft 2020-12 schema support |
-| 6 | [`rules_test.go`](./rules_test.go) | Data-driven expressions and branching |
-| 7 | [`resume_test.go`](./resume_test.go) | Interrupt, persistence, and resumption with a Journal |
+| Level | Example | Tutorial | Introduces |
+| --- | --- | --- | --- |
+| 1 | [`node_test.go`](./node_test.go) | [Nodes and `Then`](../docs/tutorials/01-node-and-then.md) | `NodeFunc` and typed composition |
+| 2 | [`composition_test.go`](./composition_test.go) | [Composition and concurrency](../docs/tutorials/02-composition-and-concurrency.md) | Composites as nodes and bounded `Map` concurrency |
+| 3 | [`workflow_test.go`](./workflow_test.go) | [Stores, references, and steps](../docs/tutorials/03-workflow-store-and-ref.md) | `Step`, `Store`, `Ref`, and `Sequence` |
+| 4 | [`dag_test.go`](./dag_test.go) | [Registries, ports, and DAGs](../docs/tutorials/04-graph-registry-and-ports.md) | Runtime node types, named ports, schemas, fan-out, and fan-in |
+| 5 | [`json_test.go`](./json_test.go) | [The JSON DSL and schemas](../docs/tutorials/05-json-dsl-and-schema.md) | JSON Graph compilation and Draft 2020-12 schemas |
+| 6 | [`rules_test.go`](./rules_test.go) | [Data-driven rules](../docs/tutorials/06-data-driven-rules.md) | Expression-based routing |
+| 7 | [`resume_test.go`](./resume_test.go) | [Suspension and resumption](../docs/tutorials/07-suspension-and-resumption.md) | Interrupts, persistence, and Journal replay |
 
-Every example uses only public APIs and has asserted output. Run the complete
-set with:
+Run the complete path:
 
 ```sh
 go test ./example -run Example -v
+```
+
+Run one level:
+
+```sh
+go test ./example -run Example_jsonDSL -v
 ```
 
 The package deliberately exports no helper API. Copy the smallest relevant
