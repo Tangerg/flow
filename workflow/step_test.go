@@ -156,6 +156,21 @@ func TestLeaf_validatesDefinitionBeforeJournalReplay(t *testing.T) {
 	}
 }
 
+func TestLeaf_validatesNilNodeFuncBeforeJournalReplay(t *testing.T) {
+	journal := workflow.NewJournal()
+	if err := journal.Record(workflow.JournalKey{ID: "broken"}, 42); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	bind := workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil })
+	var node flow.NodeFunc[int, int]
+	step := workflow.Leaf("broken", bind, node)
+
+	if _, err := workflow.Run(context.Background(), step, workflow.NewStore(),
+		workflow.RunConfig{Journal: journal}); !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("err = %v; want ErrNilNode instead of Journal replay", err)
+	}
+}
+
 func TestLeaf_acceptsCustomBindFunc(t *testing.T) {
 	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in * 2, nil })
 	// A custom binder is just a BindFunc; this one ignores the store.

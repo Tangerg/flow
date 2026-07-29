@@ -8,10 +8,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- An executable `example` package with a seven-stage learning path from one
+- First-class streaming output for Go-defined workflow leaves.
+  `StreamNode[I, O, C]` and `StreamNodeFunc` model a typed producer with a
+  synchronous, stoppable yield callback; `StreamLeaf` gives it the same binding,
+  replay, event, suspension, Journal, and final-output lifecycle as `Leaf`.
+  A run-scoped, error-returning `Emitter` receives immutable `Chunk` values with
+  step identity, scope, per-invocation index, and ordering shared with lifecycle
+  events. Completed Journal replay emits nothing; an incomplete rerun may repeat
+  its attempted prefix from index zero.
+- `SuspendedOnly` and variadic `JoinSuspensions`, allowing caller-defined
+  composites to preserve the package's suspension-as-a-third-outcome semantics
+  without depending on internal error types.
+- An executable `example` package with an eight-stage learning path from one
   typed node through composition, dynamic DAGs, the JSON DSL, expression-based
-  routing, and persisted suspension/resumption. The examples use only public
-  APIs and run as output-checked Go examples.
+  routing, persisted suspension/resumption, and streaming output. The examples
+  use only public APIs and run as output-checked Go examples.
 - Suspension as a third outcome alongside success and failure. `Suspend` reports
   from inside a node that work cannot proceed yet; `Await` is a Store gate, with
   `AwaitFactory` for the JSON DSL; and `Interrupt` is an explicit request/response
@@ -24,9 +35,9 @@ All notable changes to this project are documented here. The format follows
   would discard the work and repeat its side effects on the run that resumes.
   Real errors still fail fast.
 - `workflow.Run`, the explicit execution boundary for a configured workflow.
-  `RunConfig` carries that call's `Observer` and `Journal`; every call gets fresh
-  run bookkeeping while a Journal may deliberately carry completed work into a
-  later call.
+  `RunConfig` carries that call's `Observer`, `Emitter`, and `Journal`; every
+  call gets fresh run bookkeeping while a Journal may deliberately carry
+  completed work into a later call.
 - `Journal` for checkpointed resumption, passed to `workflow.Run` through
   `RunConfig`: a later run skips every completed leaf boundary the Journal holds
   and restores its result.
@@ -78,6 +89,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `RunConfig` now includes an `Emitter`. Callers should continue to construct
+  `RunConfig` with keyed fields; unkeyed composite literals must be updated.
+- `Event.Seq` now shares one run-wide ordering with streaming `Chunk` values.
+  Event-only runs retain their existing dense sequence.
+- Leaf validation now recognizes a typed nil `flow.NodeFunc` before Journal
+  replay, so a stale record cannot hide an invalid definition.
 - Workflow execution now enforces one `(scope, step ID)` identity per run.
   Built-in composites reject duplicate IDs before executing, opaque custom
   wrappers are covered at runtime, Journal write conflicts are returned instead
@@ -93,6 +110,9 @@ All notable changes to this project are documented here. The format follows
 - `Map` now documents that parent cancellation takes precedence over a completed
   output slice, and `Race` explicitly documents that it waits indefinitely for
   a losing node that ignores cancellation.
+- Policy documentation now distinguishes typed node decorators from named
+  workflow execution boundaries: retry and hedging belong inside `Leaf`, while
+  mutually exclusive Step alternatives belong in `Branch`.
 - Repository documentation is now organized by audience: the root README is a
   concise adoption guide, the English tutorial series owns progressive
   learning, executable examples remain the runnable source of truth, package

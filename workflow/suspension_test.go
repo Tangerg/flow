@@ -767,6 +767,61 @@ func TestSuspensions_ofOtherErrors(t *testing.T) {
 	}
 }
 
+func TestSuspendedOnly_classifiesTheWholeErrorTree(t *testing.T) {
+	first := &workflow.Suspension{ID: "a", Value: "first"}
+	second := &workflow.Suspension{ID: "b", Value: "second"}
+
+	for name, test := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"nil":        {err: nil, want: false},
+		"failure":    {err: errors.New("boom"), want: false},
+		"suspension": {err: fmt.Errorf("wrapped: %w", first), want: true},
+		"only joined suspensions": {
+			err:  errors.Join(first, fmt.Errorf("nested: %w", second)),
+			want: true,
+		},
+		"mixed join": {
+			err:  errors.Join(first, errors.New("boom")),
+			want: false,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := workflow.SuspendedOnly(test.err); got != test.want {
+				t.Fatalf("SuspendedOnly(%v) = %v; want %v", test.err, got, test.want)
+			}
+		})
+	}
+}
+
+func TestJoinSuspensions_normalizesAndCopies(t *testing.T) {
+	path := []string{"items[1]"}
+	second := &workflow.Suspension{ID: "b", Path: path, Value: "second"}
+	err := workflow.JoinSuspensions(
+		second,
+		nil,
+		&workflow.Suspension{ID: "a", Value: "first"},
+	)
+	if !errors.Is(err, workflow.ErrSuspended) || !workflow.SuspendedOnly(err) {
+		t.Fatalf("JoinSuspensions error = %v; want pure suspension", err)
+	}
+	got := workflow.Suspensions(err)
+	if len(got) != 2 || got[0].ID != "a" || got[1].ID != "b" {
+		t.Fatalf("Suspensions = %+v; want a, b", got)
+	}
+
+	path[0] = "changed"
+	second.ID = "changed"
+	if got = workflow.Suspensions(err); got[1].ID != "b" ||
+		!slices.Equal(got[1].Path, []string{"items[1]"}) {
+		t.Fatalf("joined suspension changed with its input: %+v", got[1])
+	}
+	if err := workflow.JoinSuspensions(nil, nil); err != nil {
+		t.Fatalf("JoinSuspensions(nil, nil) = %v; want nil", err)
+	}
+}
+
 func TestSuspend_eventsReportTheThirdOutcome(t *testing.T) {
 	pipeline := workflow.Sequence(
 		workflow.Leaf("a", workflow.From[int](workflow.Output("start")),

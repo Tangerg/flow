@@ -6,8 +6,8 @@ changelog rather than the user guide.
 
 ## Learn
 
-- [Tutorials](./tutorials/README.md) progress from a single typed node to a
-  JSON-defined, resumable workflow.
+- [Tutorials](./tutorials/README.md) progress from a single typed node to
+  JSON-defined, resumable workflows with streaming output.
 - [Executable examples](../example/README.md) mirror the tutorial levels with
   output-checked public-API examples.
 - [Project README](../README.md) explains package selection, the execution
@@ -19,8 +19,8 @@ Package comments and Go examples are the canonical API reference:
 
 - [`flow`](../doc.go) — typed control-flow primitives.
 - [`flowx`](../flowx/doc.go) — derived composition helpers.
-- [`workflow`](../workflow/doc.go) — dynamic state, graphs, JSON, observation,
-  and resumption.
+- [`workflow`](../workflow/doc.go) — dynamic state, graphs, JSON, streaming,
+  observation, and resumption.
 - [`workflow/expr`](../workflow/expr/doc.go) — optional data-driven rules.
 
 Read them locally with:

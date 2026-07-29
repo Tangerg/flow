@@ -142,6 +142,8 @@ out, err := workflow.Run(
 - Spreading type assertions from `Lookup` throughout application code.
 - Changing a step ID casually. IDs are data addresses, diagnostics, and replay
   keys.
+- Retrying the returned `Step` instead of the typed node inside `Leaf`. A named
+  Step may run once per scope; use `Branch` for mutually exclusive alternatives.
 - Mutating a map or slice after writing it to a Store.
 
 ## Exercise

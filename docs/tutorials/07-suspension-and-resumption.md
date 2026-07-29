@@ -156,6 +156,24 @@ than silently overwriting the first result.
 A waiting branch must not cancel its siblings as if it had failed. Doing so
 would discard their completed work and repeat their side effects after resume.
 
+Caller-defined fan-out composites can preserve the same distinction using only
+public APIs:
+
+```go
+if err != nil {
+	if !workflow.SuspendedOnly(err) {
+		return store, err
+	}
+	waits = append(waits, workflow.Suspensions(err)...)
+}
+// After every waiting branch has returned:
+return store, workflow.JoinSuspensions(waits...)
+```
+
+`SuspendedOnly` examines the complete standard Go error tree. It returns false
+for a join containing both a suspension and a real failure, even though
+`errors.Is(err, workflow.ErrSuspended)` is true.
+
 ## 7. Keep the boundary explicit
 
 This is step-level checkpoint and restart, not a durable workflow service. It

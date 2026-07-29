@@ -48,6 +48,22 @@ func TestDescribe_opaque(t *testing.T) {
 	}
 }
 
+func TestDescribe_streamLeafIsALeafBoundary(t *testing.T) {
+	step := workflow.StreamLeaf(
+		"stream",
+		workflow.From[int](workflow.Output("start")),
+		workflow.StreamNodeFunc[int, int, int](
+			func(_ context.Context, input int, _ func(int) bool) (int, error) {
+				return input, nil
+			},
+		),
+	)
+	if description := workflow.Describe(step); description.Kind != "leaf" ||
+		description.ID != "stream" || len(description.Children) != 0 {
+		t.Fatalf("Describe = %+v; want leaf:stream", description)
+	}
+}
+
 func TestBranchDescriptionPreservesIDAndCaseLabel(t *testing.T) {
 	step := workflow.Branch("route",
 		func(context.Context, workflow.Store) (string, error) { return "yes", nil },

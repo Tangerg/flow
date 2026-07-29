@@ -11,8 +11,8 @@ type Description struct {
 }
 
 // Describer is implemented by steps that can describe their own structure. Every
-// step this package builds (via [Leaf], [Sequence], [Branch], [Loop],
-// [Parallel], [Iteration]) implements it.
+// step this package builds (via [Leaf], [StreamLeaf], [Sequence], [Branch],
+// [Loop], [Parallel], [Iteration]) implements it.
 type Describer interface {
 	Describe() Description
 }

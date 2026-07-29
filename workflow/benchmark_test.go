@@ -112,6 +112,43 @@ func BenchmarkSequenceRun(b *testing.B) {
 	}
 }
 
+func BenchmarkStreamLeaf(b *testing.B) {
+	ctx := context.Background()
+	node := workflow.StreamNodeFunc[int, int, int](
+		func(_ context.Context, input int, yield func(int) bool) (int, error) {
+			for value := range 4 {
+				if !yield(input + value) {
+					return 0, context.Canceled
+				}
+			}
+			return input + 4, nil
+		},
+	)
+	step := workflow.StreamLeaf(
+		"stream",
+		workflow.From[int](workflow.Output("seed")),
+		node,
+	)
+	input := workflow.NewStore().WithOutput("seed", 1)
+
+	b.Run("no-emitter", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			_, _ = step.Run(ctx, input)
+		}
+	})
+	b.Run("emitter", func(b *testing.B) {
+		emitter := workflow.EmitterFunc(func(context.Context, workflow.Chunk) error {
+			return nil
+		})
+		cfg := workflow.RunConfig{Emitter: emitter}
+		b.ReportAllocs()
+		for b.Loop() {
+			_, _ = workflow.Run(ctx, step, input, cfg)
+		}
+	})
+}
+
 func BenchmarkSequenceRunScaling(b *testing.B) {
 	ctx := context.Background()
 	for _, size := range []int{1, 16, 128, 512} {

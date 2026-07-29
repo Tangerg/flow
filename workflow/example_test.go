@@ -30,6 +30,47 @@ func ExampleLeaf() {
 	// Output: 42
 }
 
+func ExampleStreamLeaf() {
+	step := workflow.StreamLeaf(
+		"count",
+		workflow.From[int](workflow.Output("input")),
+		workflow.StreamNodeFunc[int, int, int](
+			func(ctx context.Context, input int, yield func(int) bool) (int, error) {
+				for value := range input {
+					if !yield(value) {
+						return 0, context.Cause(ctx)
+					}
+				}
+				return input, nil
+			},
+		),
+	)
+	out, err := workflow.Run(
+		context.Background(),
+		step,
+		workflow.NewStore().WithOutput("input", 3),
+		workflow.RunConfig{
+			Emitter: workflow.EmitterFunc(
+				func(_ context.Context, chunk workflow.Chunk) error {
+					fmt.Println("chunk", chunk.Index, chunk.Value)
+					return nil
+				},
+			),
+		},
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(workflow.Get[int](out, workflow.Output("count")))
+
+	// Output:
+	// chunk 0 0
+	// chunk 1 1
+	// chunk 2 2
+	// 3 <nil>
+}
+
 func ExampleSequence() {
 	add := func(id, input string, n int) workflow.Step {
 		return workflow.Leaf(

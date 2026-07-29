@@ -24,6 +24,7 @@ go test ./example -run Example -v
 | 5 | [The JSON DSL and schemas](./05-json-dsl-and-schema.md) | [`json_test.go`](../../example/json_test.go) | Safely compile an external workflow definition |
 | 6 | [Data-driven rules](./06-data-driven-rules.md) | [`rules_test.go`](../../example/rules_test.go) | Move routing policy into configuration |
 | 7 | [Suspension and resumption](./07-suspension-and-resumption.md) | [`resume_test.go`](../../example/resume_test.go) | Resume a workflow across process boundaries |
+| 8 | [Streaming output](./08-streaming-output.md) | [`stream_test.go`](../../example/stream_test.go) | Deliver incremental output with backpressure |
 
 Read the series in order on your first pass. If your workflow is defined in Go,
 Levels 1 and 2 may be all you need. Continue into `workflow` only when the

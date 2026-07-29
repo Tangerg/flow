@@ -8,8 +8,9 @@ import (
 	"sync/atomic"
 )
 
-// RunConfig configures one run of a workflow: what watches it and what lets it
-// resume. Its zero value runs the workflow with neither.
+// RunConfig configures one run of a workflow: what observes it, what receives
+// its streaming output, and what lets it resume. Its zero value enables none of
+// those facilities.
 //
 // Configuration belongs to one call to [Run], not to the workflow definition.
 // A compiled workflow can therefore be reused concurrently with independent
@@ -18,8 +19,14 @@ import (
 // Construct it with keyed fields. New run-scoped settings can then be added
 // without breaking callers.
 type RunConfig struct {
-	// Observer receives step lifecycle events. A nil Observer disables events.
+	// Observer receives step lifecycle events. A nil Observer or nil
+	// ObserverFunc disables events.
 	Observer Observer
+
+	// Emitter receives values produced by a [StreamLeaf]. A nil Emitter or nil
+	// EmitterFunc discards them without constructing chunks or consuming
+	// sequence numbers.
+	Emitter Emitter
 
 	// Journal records completed steps so a later run can resume instead of
 	// starting over. A nil Journal disables resumption.
@@ -42,10 +49,10 @@ type runState struct {
 }
 
 // Run executes step once under cfg. Each call establishes a fresh run boundary:
-// event sequence numbers start at one, while cfg.Journal may deliberately carry
-// completed work across calls. Journal replay observes a stable snapshot from
-// the start of the call; records added during the call belong to a later run. A
-// nil step returns [ErrNilStep].
+// signal sequence numbers start at one, while cfg.Journal may deliberately
+// carry completed work across calls. Journal replay observes a stable snapshot
+// from the start of the call; records added during the call belong to a later
+// run. A nil step returns [ErrNilStep].
 //
 //	journal := workflow.NewJournal()
 //	out, err := workflow.Run(ctx, pipeline, in, workflow.RunConfig{
@@ -86,8 +93,16 @@ func runFrom(ctx context.Context) *runState {
 }
 
 // observing reports whether anything is watching, so a step can skip work that
-// only an observer would use. A nil receiver is not observing.
-func (r *runState) observing() bool { return r != nil && r.config.Observer != nil }
+// only an observer would use. The nil function adapter is disabled just like a
+// nil interface; otherwise it would consume sequence numbers without delivering
+// an event.
+func (r *runState) observing() bool {
+	if r == nil || r.config.Observer == nil {
+		return false
+	}
+	function, ok := r.config.Observer.(ObserverFunc)
+	return !ok || function != nil
+}
 
 // journal returns the run's Journal, or nil when resumption is disabled.
 func (r *runState) journal() *Journal {
@@ -95,6 +110,24 @@ func (r *runState) journal() *Journal {
 		return nil
 	}
 	return r.config.Journal
+}
+
+// emitter returns the run's Emitter, or nil when streaming is disabled.
+func (r *runState) emitter() Emitter {
+	if r == nil || r.config.Emitter == nil {
+		return nil
+	}
+	if function, ok := r.config.Emitter.(EmitterFunc); ok && function == nil {
+		return nil
+	}
+	return r.config.Emitter
+}
+
+// nextSeq assigns every externally visible signal a total order within this
+// run. Delivery remains concurrent; consumers can sort events and chunks by the
+// assigned number when they need one timeline.
+func (r *runState) nextSeq() uint64 {
+	return r.seq.Add(1)
 }
 
 // replay returns a record that existed when this run began. Records written by
@@ -149,7 +182,7 @@ func (r *runState) emit(ctx context.Context, event Event) {
 	if !r.observing() {
 		return
 	}
-	event.Seq = r.seq.Add(1)
+	event.Seq = r.nextSeq()
 	event.Path = Scope(ctx)
 	r.config.Observer.Observe(ctx, event)
 }

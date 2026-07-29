@@ -12,10 +12,11 @@
 //
 // A workflow node is a [Step] — a flow.Node[Store, Store] that reads its inputs
 // from the Store and returns a Store extended with its output. Typed business
-// logic is bridged in with [Leaf]; [Factory] adapts the common case of a typed
-// node constructor with JSON config, and [BindFactory] the case of a node
-// reading several inputs. Composites ([Sequence], [Branch], [Loop], [Parallel],
-// [Iteration]) are built from flow's primitives.
+// logic is bridged in with [Leaf], and streaming logic with [StreamLeaf];
+// [Factory] adapts the common case of a typed node constructor with JSON config,
+// and [BindFactory] the case of a node reading several inputs. Composites
+// ([Sequence], [Branch], [Loop], [Parallel], [Iteration]) are built from flow's
+// primitives.
 //
 // # Named input ports
 //
@@ -37,19 +38,21 @@
 //
 // # Configuring a run
 //
-// One [RunConfig] carries everything a single run needs — what watches it and
-// what lets it resume — and [Run] establishes the execution boundary:
+// One [RunConfig] carries everything a single run needs — what watches it, what
+// receives streaming output, and what lets it resume — and [Run] establishes
+// the execution boundary:
 //
 //	cfg := workflow.RunConfig{
 //		Observer: workflow.ObserverFunc(log),
+//		Emitter:  workflow.EmitterFunc(send),
 //		Journal:  workflow.NewJournal(),
 //	}
 //	out, err := workflow.Run(ctx, pipeline, in, cfg)
 //
 // Configuration belongs to the call rather than to the Step definition: a
 // compiled workflow can be run many times, concurrently, and each call gets an
-// independent observer sequence and Journal. Call Step.Run directly when no run
-// configuration is needed.
+// independent signal sequence, receivers, and Journal configuration. Call
+// Step.Run directly when no run configuration is needed.
 //
 // # Suspension and resumption
 //
@@ -84,12 +87,36 @@
 // combinators in flow and flowx know nothing about a Store, so they treat a
 // suspension as any other error and fail fast; compose Steps with [Sequence],
 // [Parallel], [Branch], [Loop], and [Iteration] when a workflow can suspend.
+// A caller-defined composite can make the same distinction with
+// [SuspendedOnly], collect waits with [Suspensions], and return them together
+// with [JoinSuspensions].
+// They also do not own Step identity: apply retry or hedging to the typed node
+// before [Leaf], and use [Branch] for mutually exclusive Step alternatives.
+// Invoking one named Step more than once in the same scope is
+// [ErrDuplicateStep].
 //
 // What this is not is a durable workflow engine. There is no scheduler, no timer,
 // and no exactly-once guarantee: a step that suspends after a side effect and
 // before recording its result will repeat that effect. Resumption is
 // checkpoint-and-restart at step granularity, which fits an approval, a callback,
 // or a retry window — not a distributed saga.
+//
+// # Streaming output
+//
+// [StreamLeaf] is the named workflow boundary for a typed [StreamNode]. Its
+// intermediate values go to the run's [Emitter], while its final result is
+// written to the Store and Journal exactly like an ordinary [Leaf]. The producer
+// calls a synchronous yield function and must stop when it returns false. A slow
+// Emitter therefore applies backpressure; an Emitter error cancels that stream
+// and returns through the leaf's normal failure or suspension classification.
+// Different leaf invocations may emit concurrently.
+//
+// A [Chunk] carries the leaf ID, scope path, a zero-based invocation index, and
+// a run sequence shared with [Event]. Chunks describe execution attempts rather
+// than durable delivery: replaying a completed Journal record emits nothing,
+// while rerunning an incomplete leaf starts again at index zero and may repeat a
+// prefix. Applications that persist chunks should key them with their own run
+// identity and workflow-definition version as well as the Chunk fields.
 //
 // # Observation
 //
@@ -99,7 +126,9 @@
 // leaf or wait boundary under [Loop] and [Iteration], and [Event.Store] is the
 // serializable snapshot that boundary produced. [Store.Changes] narrows that
 // snapshot to just its writes, the delta an audit log or external persister
-// records. Attach a receiver through [RunConfig] when calling [Run].
+// records. Attach an Observer through [RunConfig] when calling [Run]. Use an
+// Emitter for high-volume intermediate values; lifecycle events deliberately
+// remain a separate, low-volume channel.
 //
 // # Behavior by name
 //

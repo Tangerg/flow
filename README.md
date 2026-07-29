@@ -27,7 +27,7 @@ go get github.com/Tangerg/flow
 | --- | --- | --- |
 | [`flow`](.) | Typed sequence, selection, iteration, and concurrency | `Node[I, O]` |
 | [`flowx`](./flowx) | Derived convenience shapes such as fan-out and fallback | `Node[I, O]` |
-| [`workflow`](./workflow) | Named state, runtime definitions, JSON DSLs, and resumption | `Step`, `Store` |
+| [`workflow`](./workflow) | Named state, streaming output, JSON DSLs, and resumption | `Step`, `Store` |
 | [`workflow/expr`](./workflow/expr) | Optional data-driven branch and loop rules | `Condition`, `Resolver` |
 
 Start with `flow`. A pipeline defined in Go rarely needs the dynamic layer.
@@ -111,6 +111,13 @@ Retry, timeout, tracing, and circuit breaking are policies rather than core
 control flow. Implement them as decorators from `Node[I, O]` to `Node[I, O]`,
 or use a dedicated package.
 
+That advice applies directly to ordinary typed nodes. Once a node is lifted
+with `workflow.Leaf`, the returned Step is a named execution boundary and may
+run only once per scope in one run. Apply retry or hedging decorators to the
+typed business node before lifting it; use `workflow.Branch` for mutually
+exclusive Step alternatives. A policy that invokes the returned Step more than
+once fails with `workflow.ErrDuplicateStep`.
+
 ## Dynamic workflows
 
 `workflow.Step` is an alias for `flow.Node[Store, Store]`. A step reads named
@@ -163,6 +170,49 @@ fmt.Println(ref) // load#/output/items/0/display~1name
 
 Prefer `workflow.Get[T]` for application reads. It preserves typed behavior
 after a Store has been serialized and restored.
+
+## Streaming output
+
+Use `StreamLeaf` when a named step has a final result but also produces
+incremental values such as model tokens, progress updates, or rows:
+
+```go
+generate := workflow.StreamLeaf(
+	"generate",
+	workflow.From[string](workflow.Output("prompt")),
+	workflow.StreamNodeFunc[string, string, string](
+		func(ctx context.Context, prompt string, yield func(string) bool) (string, error) {
+			var answer strings.Builder
+			for _, token := range []string{"hello", ", ", prompt} {
+				if !yield(token) {
+					return "", context.Cause(ctx)
+				}
+				answer.WriteString(token)
+			}
+			return answer.String(), nil
+		},
+	),
+)
+
+out, err := workflow.Run(ctx, generate, in, workflow.RunConfig{
+	Emitter: workflow.EmitterFunc(func(ctx context.Context, chunk workflow.Chunk) error {
+		return send(ctx, chunk.Value)
+	}),
+})
+```
+
+`Emitter` is a synchronous, error-returning output boundary. A slow emitter
+applies backpressure; an ordinary emitter error cancels the stream and fails its
+leaf. `yield` returns `false` after cancellation or an emitter error, and
+producers must stop promptly. Different leaves may emit concurrently, so an
+emitter must be concurrency-safe.
+
+Chunks carry the leaf ID, repeated-scope path, a zero-based per-invocation
+index, and a run-wide sequence shared with lifecycle events. They are attempt
+output rather than checkpoints: replaying a completed Journal record emits no
+chunks, while rerunning an incomplete or suspended leaf starts at index zero
+and may repeat a prefix. Include an application run ID and definition version
+when deduplicating output outside the process.
 
 ## Runtime definitions
 
@@ -253,13 +303,19 @@ Suspension is a third outcome, not a failure. A waiting parallel branch lets its
 siblings finish and reports every suspension; a real failure still cancels
 siblings promptly.
 
+Caller-defined composites can preserve that distinction with `SuspendedOnly`,
+`Suspensions`, and `JoinSuspensions`. Classification walks the complete standard
+Go error tree, so a mixed join of a suspension and a real failure is never
+mistaken for “not yet.”
+
 ## Observation and diagnostics
 
-Use `workflow.Run` when one call needs an Observer or Journal:
+Use `workflow.Run` when one call needs an Observer, Emitter, or Journal:
 
 ```go
 out, err := workflow.Run(ctx, step, input, workflow.RunConfig{
 	Observer: observer,
+	Emitter:  emitter,
 	Journal:  journal,
 })
 ```
@@ -267,7 +323,9 @@ out, err := workflow.Run(ctx, step, input, workflow.RunConfig{
 Events carry the step ID, scope path, per-run sequence number, elapsed time, and
 produced Store. `Store.Changes` narrows one snapshot to its writes for audit or
 persistence code. A compiled Step remains reusable; run configuration belongs
-to the call.
+to the call. Use Observer for low-volume lifecycle transitions and Emitter for
+high-volume intermediate values. Events and chunks share the run sequence, so
+either receiver may see gaps occupied by the other signal type.
 
 Errors preserve their causes:
 
@@ -307,7 +365,7 @@ timers are requirements.
 
 ## Documentation
 
-- [Tutorials](./docs/tutorials/README.md) — Level 0 through Level 7, aligned
+- [Tutorials](./docs/tutorials/README.md) — Level 0 through Level 8, aligned
   with executable examples.
 - [Executable examples](./example/README.md) — public-API examples with asserted
   output.

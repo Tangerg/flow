@@ -22,10 +22,10 @@ const (
 // Event describes one step lifecycle transition.
 //
 // Together the fields carry enough to build tracing and durability outside this
-// package: Seq orders the events of one run, Path distinguishes repeated
-// executions of the same step, and Store is the snapshot a step produced, which
-// is serializable. Keeping those concerns out of the package is deliberate — see
-// the package documentation.
+// package: Seq orders the externally visible signals of one run, Path
+// distinguishes repeated executions of the same step, and Store is the
+// snapshot a step produced, which is serializable. Keeping those concerns out
+// of the package is deliberate — see the package documentation.
 type Event struct {
 	// Kind is the transition this event reports.
 	Kind EventKind
@@ -38,9 +38,11 @@ type Event struct {
 	// most once per run. Each event owns its slice.
 	Path []string
 
-	// Seq numbers events within one run, starting at 1. Events are numbered in
-	// the order they are emitted, so a step's completion always outnumbers its
-	// start even when steps run concurrently.
+	// Seq numbers events and [Chunk] values within one run, starting at 1. It is
+	// assigned immediately before delivery, so sorting both signal types by Seq
+	// gives one run timeline; callbacks from concurrent invocations may arrive
+	// out of order. A step's completion always outnumbers its start. Either
+	// consumer may see gaps occupied by the other signal type.
 	Seq uint64
 
 	// Elapsed is how long the step took. It is zero on [EventStarted].
@@ -56,9 +58,10 @@ type Event struct {
 	Err error
 }
 
-// Observer receives workflow events synchronously. Pass one to [Run] through
-// [RunConfig]. Observe may be called from multiple goroutines and should return
-// promptly. A slow Observer delays the step emitting the event.
+// Observer receives low-volume workflow lifecycle events synchronously. Pass
+// one to [Run] through [RunConfig]. Observe may be called from multiple
+// goroutines and should return promptly. A slow Observer delays the step
+// emitting the event. Use [Emitter] for intermediate application values.
 type Observer interface {
 	Observe(context.Context, Event)
 }

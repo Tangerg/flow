@@ -24,16 +24,61 @@ func From[I any](ref Ref) BindFunc[I] {
 // This is the prep/exec/post split: bind reads the pool, node computes, the Step
 // writes back — the node itself stays free of any Store knowledge and is unit
 // testable on its own. id must be non-empty and unique among steps that can run
-// in the same execution scope.
+// in the same execution scope. A policy that may invoke work more than once,
+// such as retry or hedging, must wrap node before it is passed to Leaf; invoking
+// the returned Step twice in one scope fails with [ErrDuplicateStep].
 func Leaf[I, O any](id string, bind BindFunc[I], node flow.Node[I, O]) Step {
-	return leafStep[I, O]{id: id, bind: bind, node: node}
+	return leafStep[I, O]{
+		id:     id,
+		bind:   bind,
+		runner: nodeRunner[I, O]{node: node},
+	}
 }
 
 // leafStep is the [Step] produced by [Leaf].
 type leafStep[I, O any] struct {
-	id   string
-	bind BindFunc[I]
+	id     string
+	bind   BindFunc[I]
+	runner leafRunner[I, O]
+}
+
+// leafRunner is the typed computation inside a leaf boundary. Both ordinary
+// and streaming leaves use it, which keeps binding, replay, events, suspension,
+// journaling, and output publication in one execution path.
+type leafRunner[I, O any] interface {
+	validate() error
+	run(context.Context, I, leafInvocation) (O, error)
+}
+
+type nodeRunner[I, O any] struct {
 	node flow.Node[I, O]
+}
+
+func (runner nodeRunner[I, O]) validate() error {
+	if runner.node == nil {
+		return flow.ErrNilNode
+	}
+	if function, ok := runner.node.(flow.NodeFunc[I, O]); ok && function == nil {
+		return flow.ErrNilNode
+	}
+	return nil
+}
+
+func (runner nodeRunner[I, O]) run(
+	ctx context.Context,
+	input I,
+	_ leafInvocation,
+) (O, error) {
+	return runner.node.Run(ctx, input)
+}
+
+// leafInvocation identifies one execution of a leaf. Runners receive only the
+// state that belongs to the invocation; the immutable step definition remains
+// safe to reuse concurrently.
+type leafInvocation struct {
+	id   string
+	path []string
+	run  *runState
 }
 
 func (leaf leafStep[I, O]) Run(ctx context.Context, store Store) (Store, error) {
@@ -80,7 +125,11 @@ func (execution *leafExecution[I, O]) execute(ctx context.Context) (Store, error
 	if err != nil {
 		return execution.fail(ctx, OpBind, err)
 	}
-	output, err := execution.leaf.node.Run(ctx, input)
+	output, err := execution.leaf.runner.run(ctx, input, leafInvocation{
+		id:   execution.leaf.id,
+		path: scope(ctx),
+		run:  execution.run,
+	})
 	if err != nil {
 		return execution.fail(ctx, OpRun, err)
 	}
@@ -95,9 +144,12 @@ func (execution *leafExecution[I, O]) validate(ctx context.Context) error {
 		return &StepError{ID: execution.leaf.id, Op: OpValidate, Err: ErrInvalidStepID}
 	case execution.leaf.bind == nil:
 		return &StepError{ID: execution.leaf.id, Op: OpBind, Err: flow.ErrNilFunc}
-	case execution.leaf.node == nil:
+	case execution.leaf.runner == nil:
 		return &StepError{ID: execution.leaf.id, Op: OpRun, Err: flow.ErrNilNode}
 	default:
+		if err := execution.leaf.runner.validate(); err != nil {
+			return &StepError{ID: execution.leaf.id, Op: OpRun, Err: err}
+		}
 		if err := execution.run.claim(scope(ctx), execution.leaf.id); err != nil {
 			return &StepError{ID: execution.leaf.id, Op: OpValidate, Err: err}
 		}

@@ -268,3 +268,26 @@ func Suspensions(err error) []*Suspension {
 	suspensions, _ := (suspensionTree{err: err}).suspensions()
 	return suspensions
 }
+
+// SuspendedOnly reports whether err contains one or more suspensions and no
+// failure leaves. It understands both standard error wrapping and errors
+// joined with [errors.Join]. A nil error is not a suspension.
+//
+// Caller-defined composites can use SuspendedOnly to preserve the distinction
+// between "not yet" and failure without depending on this package's internal
+// error representation.
+func SuspendedOnly(err error) bool {
+	_, only := (suspensionTree{err: err}).suspensions()
+	return only
+}
+
+// JoinSuspensions returns one error containing every non-nil suspension,
+// ordered by step ID and then scope. It returns nil when all arguments are nil.
+// The supplied suspensions and their paths are copied.
+//
+// Caller-defined fan-out composites use JoinSuspensions after allowing every
+// suspended branch to finish. Use [SuspendedOnly] to distinguish suspensions
+// from ordinary failures before collecting them with [Suspensions].
+func JoinSuspensions(suspensions ...*Suspension) error {
+	return suspensionList(suspensions).err()
+}
