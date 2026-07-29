@@ -19,6 +19,8 @@ var (
 	ErrMaxIterations = errors.New("flow: max iterations exceeded")
 	// ErrNoNodes is returned by Race when given no nodes.
 	ErrNoNodes = errors.New("flow: no nodes")
+	// ErrInvalidConfig is returned when a combinator's configuration is invalid.
+	ErrInvalidConfig = errors.New("flow: invalid config")
 )
 
 // IndexError reports an error produced while processing one element of an

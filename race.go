@@ -7,9 +7,11 @@ import (
 )
 
 // Race runs all nodes concurrently on the same input and returns the first
-// successful result, cancelling the rest. If every node fails, it returns their
-// joined errors in input order, each wrapped in an [IndexError]. Cancellation is
-// cooperative; losing nodes must honor their context.
+// successful result, cancelling the rest. Before Run returns it waits for every
+// losing call to stop, so no goroutine retains the input after the operation
+// completes. If every node fails, it returns their joined errors in input order,
+// each wrapped in an [IndexError]. Cancellation is cooperative; losing nodes
+// must honor their context.
 //
 // Race is the disjunction concurrency primitive — the "first success wins" twin
 // of [Map]'s "wait for all". It cannot be expressed by a wait-for-all map, so it
@@ -20,6 +22,11 @@ func Race[I, O any](nodes ...Node[I, O]) Node[I, O] {
 		var zero O
 		if len(nodes) == 0 {
 			return zero, ErrNoNodes
+		}
+		for _, node := range nodes {
+			if node == nil {
+				return zero, ErrNilNode
+			}
 		}
 		if err := ctx.Err(); err != nil {
 			return zero, err
@@ -38,30 +45,50 @@ func Race[I, O any](nodes ...Node[I, O]) Node[I, O] {
 		for i, n := range nodes {
 			go func() {
 				r := result{index: i}
-				if n == nil {
-					r.err = ErrNilNode
-				} else {
-					r.val, r.err = n.Run(ctx, in)
-				}
+				r.val, r.err = n.Run(ctx, in)
 				ch <- r
 			}()
 		}
 
 		errs := make([]error, len(nodes))
-		for range nodes {
+		var (
+			winner    O
+			won       bool
+			parentErr error
+		)
+		for remaining := len(nodes); remaining > 0; remaining-- {
 			var r result
-			select {
-			case <-parent.Done():
-				return zero, parent.Err()
-			case r = <-ch:
+			if won || parentErr != nil {
+				// A winner or parent cancellation has already stopped the
+				// operation. Drain every result so Run owns the complete
+				// lifetime of the goroutines it started.
+				r = <-ch
+			} else {
+				select {
+				case r = <-ch:
+				case <-parent.Done():
+					parentErr = parent.Err()
+					cancel()
+					r = <-ch
+				}
 			}
-			if err := parent.Err(); err != nil {
-				return zero, err
+			if r.err == nil && !won && parentErr == nil {
+				winner, won = r.val, true
+				cancel()
+				continue
 			}
-			if r.err == nil {
-				return r.val, nil // cancel() (deferred) stops the losers
+			if !won && parentErr == nil {
+				errs[r.index] = &IndexError{Index: r.index, Err: r.err}
 			}
-			errs[r.index] = &IndexError{Index: r.index, Err: r.err}
+		}
+		if err := parent.Err(); err != nil {
+			return zero, err
+		}
+		if parentErr != nil {
+			return zero, parentErr
+		}
+		if won {
+			return winner, nil
 		}
 		return zero, errors.Join(errs...)
 	})

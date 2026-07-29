@@ -38,13 +38,14 @@
 //
 // # Values
 //
-// A Store holds values as any, so scalar values are normalized on read: integer
-// kinds become int64 or uint64, floats become float64, and named bool and string
-// types become their underlying values. Integer comparison remains exact even
-// against a float outside float64's exact-integer range. Integer arithmetic stays
-// exact and wraps on overflow as Go's does; arithmetic involving a float uses
-// float64. Division or remainder by zero is [ErrDivideByZero] rather than an
-// infinity.
+// A Store holds values as any, so scalar values are normalized on read to the
+// semantics that survive encoding/json: integer kinds become int64 or uint64,
+// fractional floats become float64, integral floats become integers, and named
+// bool and string types become their underlying values. Integer comparison
+// remains exact even against a float outside float64's exact-integer range.
+// Integer arithmetic stays exact and wraps on overflow as Go's does; arithmetic
+// involving a fractional float uses float64. Division or remainder by zero is
+// [ErrDivideByZero] rather than an infinity.
 //
 // len accepts strings, arrays, slices, and maps of any concrete Go type, so a
 // JSON-compatible value behaves the same before and after Store serialization.

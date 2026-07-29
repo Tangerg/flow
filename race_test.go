@@ -3,6 +3,7 @@ package flow_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,55 @@ func TestRace_firstWins(t *testing.T) {
 	}
 	if got != 500 {
 		t.Fatalf("got %d, want 500 (fast should win)", got)
+	}
+}
+
+func TestRace_waitsForLosingNodesToStop(t *testing.T) {
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	loser := flow.NodeFunc[int, int](func(ctx context.Context, _ int) (int, error) {
+		close(started)
+		<-ctx.Done()
+		close(stopped)
+		return 0, ctx.Err()
+	})
+	winner := flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+		<-started
+		return value, nil
+	})
+
+	if got, err := flow.Race(loser, winner).Run(context.Background(), 7); err != nil || got != 7 {
+		t.Fatalf("Race = %d, %v; want 7, nil", got, err)
+	}
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("Race returned while a losing node was still running")
+	}
+}
+
+func TestRace_parentCancellationWaitsForNodesToStop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	node := flow.NodeFunc[int, int](func(ctx context.Context, _ int) (int, error) {
+		close(started)
+		<-ctx.Done()
+		close(stopped)
+		return 0, ctx.Err()
+	})
+
+	go func() {
+		<-started
+		cancel()
+	}()
+	if _, err := flow.Race(node).Run(ctx, 0); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v; want context.Canceled", err)
+	}
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("Race returned from cancellation while a node was still running")
 	}
 }
 
@@ -72,11 +122,17 @@ func TestRace_cancelledBeforeRun(t *testing.T) {
 	}
 }
 
-func TestRace_nilNodeFails(t *testing.T) {
-	// A nil node yields ErrNilNode; a non-nil sibling can still win.
-	ok := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil })
-	got, err := flow.Race[int, int](nil, ok).Run(context.Background(), 7)
-	if err != nil || got != 7 {
-		t.Fatalf("Race(nil, ok) = %d, %v; want 7, nil", got, err)
+func TestRace_rejectsNilBeforeRunningAnyNode(t *testing.T) {
+	var ran atomic.Bool
+	ok := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
+		ran.Store(true)
+		return x, nil
+	})
+	_, err := flow.Race[int, int](nil, ok).Run(context.Background(), 7)
+	if !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("err = %v; want ErrNilNode", err)
+	}
+	if ran.Load() {
+		t.Fatal("valid sibling ran before the invalid composition was rejected")
 	}
 }

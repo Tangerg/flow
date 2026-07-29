@@ -11,8 +11,8 @@ const DefaultMaxIterations = 1024
 
 // LoopConfig configures [Loop]. Its zero value uses [DefaultMaxIterations].
 type LoopConfig struct {
-	// MaxIterations caps the number of iterations. A non-positive value uses
-	// [DefaultMaxIterations].
+	// MaxIterations caps the number of iterations. Zero uses
+	// [DefaultMaxIterations]; negative values are invalid.
 	MaxIterations int
 }
 
@@ -32,18 +32,22 @@ func Loop[T any](
 	if cfg.MaxIterations > 0 {
 		max = cfg.MaxIterations
 	}
-	return loopNode[T]{body: body, max: max}
+	return loopNode[T]{body: body, max: max, invalid: cfg.MaxIterations < 0}
 }
 
 type loopNode[T any] struct {
-	body func(context.Context, int, T) (T, bool, error)
-	max  int
+	body    func(context.Context, int, T) (T, bool, error)
+	max     int
+	invalid bool
 }
 
 func (l loopNode[T]) Run(ctx context.Context, in T) (T, error) {
 	cur := in
 	if l.body == nil {
 		return cur, ErrNilFunc
+	}
+	if l.invalid {
+		return cur, fmt.Errorf("%w: negative max iterations", ErrInvalidConfig)
 	}
 	for i := range l.max {
 		if err := ctx.Err(); err != nil {

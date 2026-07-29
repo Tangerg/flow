@@ -1,14 +1,11 @@
 package workflow
 
 import (
-	"bytes"
 	"cmp"
 	"encoding/json"
 	"fmt"
-	"io"
 	"slices"
 	"strconv"
-	"strings"
 	"sync/atomic"
 )
 
@@ -20,8 +17,10 @@ import (
 // Values are held and returned as-is (any). Callers must treat mutable values
 // such as maps, slices, and pointers as immutable after insertion; mutating one
 // would mutate every Store snapshot that shares it and may introduce a data
-// race. Lookup walks into map[string]any and []any, so JSON-shaped data can be
-// addressed by path such as "result.items.0".
+// race. Lookup walks through a value's JSON representation, so maps, slices,
+// arrays, structs, pointers, and custom JSON marshalers have the same path
+// semantics before and after Store serialization. Ref paths are JSON Pointers,
+// so every possible object key is representable without ambiguity.
 //
 // A Store holds arbitrary Go values, but a Store that has been serialized holds
 // JSON-domain values: [json.Number], string, bool, nil, []any, and
@@ -62,6 +61,11 @@ var revisionCounter atomic.Uint64
 type cell struct {
 	value    any
 	revision uint64
+}
+
+type storeWrite struct {
+	key  storeKey
+	cell cell
 }
 
 var (
@@ -112,16 +116,42 @@ func (s Store) WithOutput(nodeID string, value any) Store {
 }
 
 // Lookup returns the value at ref. The path's first segment is the key under the
-// node; remaining segments walk into nested map[string]any and []any values. The
-// bool reports whether the reference resolved. Returned mutable values are
-// borrowed views and must not be mutated.
+// node; remaining segments walk through the value's JSON representation. The
+// bool reports whether the reference resolved. A whole-cell lookup returns the
+// stored Go value as-is; a nested lookup into a typed Go value returns the
+// corresponding JSON-domain value. Returned mutable values are borrowed views
+// and must not be mutated.
 func (s Store) Lookup(ref Ref) (any, bool) {
-	key, rest, _ := strings.Cut(ref.Path, ".")
+	var conventionalKey string
+	switch ref.Path {
+	case outputPath:
+		conventionalKey = outputKey
+	case itemPath:
+		conventionalKey = itemKey
+	case indexPath:
+		conventionalKey = indexKey
+	}
+	if conventionalKey != "" {
+		c, ok := s.lookupCell(ref.NodeID, conventionalKey)
+		if !ok {
+			return nil, false
+		}
+		return c.value, true
+	}
+
+	pointer, ok := scanPointer(ref.Path)
+	if !ok {
+		return nil, false
+	}
+	key, present, valid := pointer.next()
+	if !present || !valid {
+		return nil, false
+	}
 	c, ok := s.lookupCell(ref.NodeID, key)
 	if !ok {
 		return nil, false
 	}
-	return walk(c.value, rest)
+	return walk(c.value, &pointer)
 }
 
 // Write records one Store write: the cell it landed in and the value it wrote.
@@ -152,28 +182,39 @@ func (s Store) Changes(base Store) []Write {
 
 	// s may be unrelated to base or may have compacted a long overlay. Compare
 	// write identities, then restore write order from the revision counter.
-	baseData := base.materialize()
-	type revisioned struct {
-		write    Write
-		revision uint64
-	}
-	changed := make([]revisioned, 0, len(baseData))
-	for identity, candidate := range s.materialize() {
-		if original, existed := baseData[identity]; existed && candidate.revision == original.revision {
-			continue
-		}
-		changed = append(changed, revisioned{
-			write:    Write{NodeID: identity.nodeID, Key: identity.key, Value: candidate.value},
-			revision: candidate.revision,
+	changed := changedStoreWrites(base.materialize(), s.materialize())
+	changes := make([]Write, 0, len(changed))
+	for _, write := range changed {
+		changes = append(changes, Write{
+			NodeID: write.key.nodeID,
+			Key:    write.key.key,
+			Value:  write.cell.value,
 		})
 	}
-	slices.SortFunc(changed, func(a, b revisioned) int { return cmp.Compare(a.revision, b.revision) })
-
-	changes := make([]Write, 0, len(changed))
-	for _, c := range changed {
-		changes = append(changes, c.write)
-	}
 	return changes
+}
+
+// changedStoreWrites returns the cells in candidate that do not share the
+// corresponding cell identity in base. Revisions preserve write order; the key
+// is a deterministic tie-breaker for data restored from an external snapshot.
+func changedStoreWrites(base, candidate map[storeKey]cell) []storeWrite {
+	changed := make([]storeWrite, 0, len(candidate))
+	for identity, next := range candidate {
+		if current, ok := base[identity]; ok && next.revision == current.revision {
+			continue
+		}
+		changed = append(changed, storeWrite{key: identity, cell: next})
+	}
+	slices.SortFunc(changed, func(a, b storeWrite) int {
+		if order := cmp.Compare(a.cell.revision, b.cell.revision); order != 0 {
+			return order
+		}
+		if order := cmp.Compare(a.key.nodeID, b.key.nodeID); order != 0 {
+			return order
+		}
+		return cmp.Compare(a.key.key, b.key.key)
+	})
+	return changed
 }
 
 // MarshalJSON serializes the Store as nodeID -> key -> value. It reports the
@@ -204,10 +245,25 @@ func (s Store) MarshalJSON() ([]byte, error) {
 
 	// Keep the successful path to one encoding pass. On failure, isolate the
 	// offending cell so callers retain the more useful Store path in the error.
-	for nodeID, inner := range raw {
-		for key, value := range inner {
+	nodeIDs := make([]string, 0, len(raw))
+	for nodeID := range raw {
+		nodeIDs = append(nodeIDs, nodeID)
+	}
+	slices.Sort(nodeIDs)
+	for _, nodeID := range nodeIDs {
+		inner := raw[nodeID]
+		keys := make([]string, 0, len(inner))
+		for key := range inner {
+			keys = append(keys, key)
+		}
+		slices.Sort(keys)
+		for _, key := range keys {
+			value := inner[key]
 			if _, cellErr := json.Marshal(value); cellErr != nil {
-				return nil, fmt.Errorf("workflow: marshal store %s.%s: %w", nodeID, key, cellErr)
+				return nil, fmt.Errorf(
+					"workflow: marshal store node %q key %q: %w",
+					nodeID, key, cellErr,
+				)
 			}
 		}
 	}
@@ -259,31 +315,48 @@ func (s Store) deltasOldestFirst() []*storeDelta {
 }
 
 // UnmarshalJSON atomically replaces the Store from nodeID -> key -> value JSON.
-// On failure the receiver is unchanged.
+// The top level and each node must be objects; null and duplicate object members
+// are rejected. On failure the receiver is unchanged.
 //
 // Numbers decode as [json.Number] rather than float64, so a decoded Store loses
 // no precision and an int64 beyond float64's exact range survives the round
 // trip. Read decoded values with [Get], which converts them to the type a caller
 // asks for; a bare [Store.Lookup] returns the JSON-domain value.
 func (s *Store) UnmarshalJSON(data []byte) error {
-	var raw map[string]map[string]json.RawMessage
-	if err := decodeStrict(data, &raw); err != nil {
+	document, err := decodeUniqueJSON(data)
+	if err != nil {
 		return fmt.Errorf("workflow: unmarshal store: %w", err)
 	}
+	raw, ok := document.(map[string]any)
+	if !ok {
+		return fmt.Errorf("workflow: unmarshal store: expected object, got %s", jsonValueKind(document))
+	}
 
+	nodeIDs := make([]string, 0, len(raw))
 	size := 0
-	for _, inner := range raw {
+	for nodeID, value := range raw {
+		inner, ok := value.(map[string]any)
+		if !ok {
+			return fmt.Errorf(
+				"workflow: unmarshal store node %q: expected object, got %s",
+				nodeID, jsonValueKind(value),
+			)
+		}
+		nodeIDs = append(nodeIDs, nodeID)
 		size += len(inner)
 	}
+	slices.Sort(nodeIDs)
 	nextData := make(map[storeKey]cell, size)
-	for nodeID, inner := range raw {
-		for key, encoded := range inner {
-			value, err := decodeValue(encoded)
-			if err != nil {
-				return fmt.Errorf("workflow: unmarshal store %s.%s: %w", nodeID, key, err)
-			}
+	for _, nodeID := range nodeIDs {
+		inner := raw[nodeID].(map[string]any)
+		keys := make([]string, 0, len(inner))
+		for key := range inner {
+			keys = append(keys, key)
+		}
+		slices.Sort(keys)
+		for _, key := range keys {
 			nextData[storeKey{nodeID: nodeID, key: key}] = cell{
-				value:    value,
+				value:    inner[key],
 				revision: revisionCounter.Add(1),
 			}
 		}
@@ -299,43 +372,103 @@ func (s *Store) UnmarshalJSON(data []byte) error {
 // decodeValue decodes one stored value into the JSON domain, keeping numbers as
 // [json.Number] so nothing is rounded on the way in.
 func decodeValue(encoded json.RawMessage) (any, error) {
-	decoder := json.NewDecoder(bytes.NewReader(encoded))
-	decoder.UseNumber()
-	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return nil, err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		if err == nil {
-			return nil, fmt.Errorf("multiple JSON values")
-		}
-		return nil, err
-	}
-	return value, nil
+	return decodeUniqueJSON(encoded)
 }
 
-// walk descends into v following a dot-separated path over map[string]any and
-// []any values.
-func walk(v any, path string) (any, bool) {
-	if path == "" {
-		return v, true
-	}
-	key, rest, _ := strings.Cut(path, ".")
-	switch c := v.(type) {
-	case map[string]any:
-		next, ok := c[key]
-		if !ok {
-			return nil, false
-		}
-		return walk(next, rest)
+func jsonValueKind(value any) string {
+	switch value.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "boolean"
+	case json.Number:
+		return "number"
+	case string:
+		return "string"
 	case []any:
-		i, err := strconv.Atoi(key)
-		if err != nil || i < 0 || i >= len(c) {
+		return "array"
+	case map[string]any:
+		return "object"
+	default:
+		return fmt.Sprintf("%T", value)
+	}
+}
+
+// walk descends through a pointer without first materializing its segments.
+// JSON-domain maps and arrays remain allocation-free. A typed Go value is
+// converted through JSON at most once, after which the rest of the walk stays
+// in the JSON domain.
+func walk(value any, pointer *pointerScanner) (any, bool) {
+	jsonDomain := false
+	for {
+		key, present, valid := pointer.next()
+		if !valid {
 			return nil, false
 		}
-		return walk(c[i], rest)
-	default:
-		return nil, false
+		if !present {
+			return value, true
+		}
+
+		switch current := value.(type) {
+		case map[string]any:
+			next, ok := current[key]
+			if !ok {
+				return nil, false
+			}
+			value = next
+		case []any:
+			index, ok := parseArrayIndex(key, len(current))
+			if !ok {
+				return nil, false
+			}
+			value = current[index]
+		default:
+			if jsonDomain {
+				return nil, false
+			}
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				return nil, false
+			}
+			value, err = decodeValue(encoded)
+			if err != nil {
+				return nil, false
+			}
+			jsonDomain = true
+
+			// Reprocess this segment against the converted value.
+			switch current := value.(type) {
+			case map[string]any:
+				next, ok := current[key]
+				if !ok {
+					return nil, false
+				}
+				value = next
+			case []any:
+				index, ok := parseArrayIndex(key, len(current))
+				if !ok {
+					return nil, false
+				}
+				value = current[index]
+			default:
+				return nil, false
+			}
+		}
 	}
+}
+
+// parseArrayIndex implements RFC 6901's array-index grammar. strconv.Atoi alone
+// would incorrectly accept tokens such as "+1" and "01", which are object keys
+// but not canonical array indexes.
+func parseArrayIndex(token string, length int) (int, bool) {
+	if token == "" || (len(token) > 1 && token[0] == '0') {
+		return 0, false
+	}
+	for i := range len(token) {
+		if token[i] < '0' || token[i] > '9' {
+			return 0, false
+		}
+	}
+	index, err := strconv.Atoi(token)
+	return index, err == nil && index < length
 }

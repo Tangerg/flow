@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/Tangerg/flow"
@@ -13,10 +14,16 @@ import (
 //
 // A node built this way always reads exactly one port, so an unwired
 // [DefaultPort] is reported as [ErrMissingPort] at build time rather than
-// failing mid-run. Use [BindFactory] to bind several ports, or write a
-// [LeafFactory] directly for a non-standard binding strategy.
+// failing mid-run, and every other port is [ErrUnknownPort]. Use [BindFactory]
+// to bind several ports, or write a [LeafFactory] directly for a non-standard
+// binding strategy.
 func Factory[C, I, O any](build func(C) (flow.Node[I, O], error)) LeafFactory {
 	return BindFactory(func(_ C, inputs Inputs) (BindFunc[I], error) {
+		for _, port := range inputs.PortNames() {
+			if port != DefaultPort {
+				return nil, fmt.Errorf("%w %q", ErrUnknownPort, port)
+			}
+		}
 		ref, ok := inputs.Default()
 		if !ok {
 			return nil, fmt.Errorf("%w %q", ErrMissingPort, DefaultPort)
@@ -52,8 +59,8 @@ func BindFactory[C, I, O any](bind func(cfg C, inputs Inputs) (BindFunc[I], erro
 		}
 
 		var cfg C
-		if len(spec.Config) > 0 {
-			if err := decodeStrict(spec.Config, &cfg); err != nil {
+		if config := bytes.TrimSpace(spec.Config); len(config) > 0 {
+			if err := decodeStrict(config, &cfg); err != nil {
 				return nil, fmt.Errorf("%w: decode config: %w", ErrInvalidSpec, err)
 			}
 		}

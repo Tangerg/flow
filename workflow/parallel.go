@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"fmt"
 	"slices"
 
 	"github.com/Tangerg/flow"
@@ -10,8 +11,8 @@ import (
 // ParallelConfig configures [Parallel]. Its zero value runs every branch
 // concurrently.
 type ParallelConfig struct {
-	// Concurrency caps the number of branches running at once. A non-positive
-	// value is unbounded.
+	// Concurrency caps the number of branches running at once. Zero is
+	// unbounded; negative values are invalid.
 	Concurrency int
 }
 
@@ -30,7 +31,7 @@ type ParallelConfig struct {
 // Parallel merges only cells actually written by each branch; cells merely
 // inherited from the input snapshot cannot overwrite another branch's work. On
 // a same-cell conflict a later branch's value wins. A zero [ParallelConfig] runs
-// every branch concurrently.
+// every branch concurrently. It rejects a nil branch before running any branch.
 func Parallel(branches []Step, cfg ParallelConfig) Step {
 	return parallelStep{branches: slices.Clone(branches), limit: cfg.Concurrency}
 }
@@ -42,13 +43,21 @@ type parallelStep struct {
 }
 
 func (p parallelStep) Run(ctx context.Context, s Store) (Store, error) {
+	for i, branch := range p.branches {
+		if branch == nil {
+			return s, &flow.IndexError{Index: i, Err: ErrNilStep}
+		}
+	}
+	if p.limit < 0 {
+		return s, fmt.Errorf("%w: negative concurrency", flow.ErrInvalidConfig)
+	}
+	if err := ctx.Err(); err != nil {
+		return s, err
+	}
 	switch len(p.branches) {
 	case 0:
-		return s, ctx.Err()
+		return s, nil
 	case 1:
-		if err := ctx.Err(); err != nil {
-			return s, err
-		}
 		result, err := runStep(ctx, p.branches[0], s)
 		if err != nil {
 			if contextErr := ctx.Err(); contextErr != nil {
@@ -144,12 +153,8 @@ func mergeStores(base Store, others ...Store) Store {
 		if baseData == nil {
 			baseData = base.materialize()
 		}
-		for identity, candidate := range other.materialize() {
-			original, existed := baseData[identity]
-			if existed && candidate.revision == original.revision {
-				continue
-			}
-			out = out.withDelta(identity, candidate)
+		for _, write := range changedStoreWrites(baseData, other.materialize()) {
+			out = out.withDelta(write.key, write.cell)
 		}
 	}
 	if out.depth > storeOverlayLimit*2 {

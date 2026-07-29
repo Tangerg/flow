@@ -9,13 +9,9 @@ import (
 // RunConfig configures one run of a workflow: what watches it and what lets it
 // resume. Its zero value runs the workflow with neither.
 //
-// A run's configuration travels in the [context.Context] rather than in a
-// [Step]'s construction because it belongs to the run, not to the definition. A
-// compiled workflow is built once and run many times, concurrently, and each of
-// those runs wants its own [Journal] and may want its own [Observer]; baking
-// either into the steps would mean rebuilding the graph per run. It cannot travel
-// in the [Store] either — an Observer is a live object, while a Store is
-// serializable data that [Parallel] merges.
+// Configuration belongs to one call to [Run], not to the workflow definition.
+// A compiled workflow can therefore be reused concurrently with independent
+// observers and journals.
 //
 // Construct it with keyed fields. New run-scoped settings can then be added
 // without breaking callers.
@@ -35,36 +31,31 @@ type runKey struct{}
 // leaves the exported type plain data.
 type runState struct {
 	config RunConfig
-	seq    *atomic.Uint64
+	seq    atomic.Uint64
 }
 
-// WithConfig returns a context that runs a workflow under cfg. Steps running
-// under it report events to cfg.Observer and record into cfg.Journal.
+// Run executes step once under cfg. Each call establishes a fresh run boundary:
+// event sequence numbers start at one, while cfg.Journal may deliberately carry
+// completed work across calls. A nil step returns [ErrNilStep].
 //
 //	journal := workflow.NewJournal()
-//	ctx = workflow.WithConfig(ctx, workflow.RunConfig{
+//	out, err := workflow.Run(ctx, pipeline, in, workflow.RunConfig{
 //		Observer: workflow.ObserverFunc(log),
 //		Journal:  journal,
 //	})
-//	out, err := pipeline.Run(ctx, in)
 //
-// Event sequence numbering starts fresh at each call, so one call marks one run.
-// A zero cfg returns ctx unchanged.
-func WithConfig(ctx context.Context, cfg RunConfig) context.Context {
-	if cfg.Observer == nil && cfg.Journal == nil {
-		return ctx
+// Call step.Run directly when no run configuration is needed.
+func Run(ctx context.Context, step Step, in Store, cfg RunConfig) (Store, error) {
+	if step == nil {
+		return in, ErrNilStep
 	}
-	return context.WithValue(ctx, runKey{}, &runState{config: cfg, seq: new(atomic.Uint64)})
+	return step.Run(withConfig(ctx, cfg), in)
 }
 
-// Config returns the configuration a step running under ctx was given, or the
-// zero RunConfig outside a configured run. Use it to pass a run's observer and
-// journal on to a nested run.
-func Config(ctx context.Context) RunConfig {
-	if run := runFrom(ctx); run != nil {
-		return run.config
-	}
-	return RunConfig{}
+// withConfig installs a new run even for the zero configuration. Masking an
+// enclosing run is what makes a nested Run call an independent boundary.
+func withConfig(ctx context.Context, cfg RunConfig) context.Context {
+	return context.WithValue(ctx, runKey{}, &runState{config: cfg})
 }
 
 func runFrom(ctx context.Context) *runState {

@@ -68,11 +68,11 @@ func TestJSONSchemasValidateNamedInputs(t *testing.T) {
 		wantErr bool
 	}{
 		"graph named ports": {
-			data:  `{"nodes":[{"id":"a","type":"t","inputs":{"left":{"nodeID":"x","path":"output"}}}]}`,
+			data:  `{"nodes":[{"id":"a","type":"t","inputs":{"left":{"nodeID":"x","path":"/output"}}}]}`,
 			graph: true,
 		},
 		"graph empty port name": {
-			data:    `{"nodes":[{"id":"a","type":"t","inputs":{"":{"nodeID":"x","path":"output"}}}]}`,
+			data:    `{"nodes":[{"id":"a","type":"t","inputs":{"":{"nodeID":"x","path":"/output"}}}]}`,
 			graph:   true,
 			wantErr: true,
 		},
@@ -82,12 +82,15 @@ func TestJSONSchemasValidateNamedInputs(t *testing.T) {
 			wantErr: true,
 		},
 		"graph port with unknown ref field": {
-			data:    `{"nodes":[{"id":"a","type":"t","inputs":{"left":{"nodeID":"x","path":"output","extra":1}}}]}`,
+			data:    `{"nodes":[{"id":"a","type":"t","inputs":{"left":{"nodeID":"x","path":"/output","extra":1}}}]}`,
 			graph:   true,
 			wantErr: true,
 		},
 		"spec named ports": {
-			data: `{"kind":"leaf","id":"a","type":"t","inputs":{"left":{"nodeID":"x","path":"output"}}}`,
+			data: `{"kind":"leaf","id":"a","type":"t","inputs":{"left":{"nodeID":"x","path":"/output"}}}`,
+		},
+		"escaped JSON Pointer": {
+			data: `{"kind":"leaf","id":"a","type":"t","inputs":{"left":{"nodeID":"x","path":"/output/a~1b/~0"}}}`,
 		},
 		"spec port is not a ref": {
 			data:    `{"kind":"leaf","id":"a","type":"t","inputs":{"left":3}}`,
@@ -125,7 +128,7 @@ func TestCompileSpecJSONAcceptsEveryKind(t *testing.T) {
 	tests := map[string]string{
 		"leaf": `{
 			"kind":"leaf", "id":"leaf", "type":"addN",
-			"input":{"nodeID":"seed","path":"output"}, "config":{"n":1}
+			"input":{"nodeID":"seed","path":"/output"}, "config":{"n":1}
 		}`,
 		"sequence": `{"kind":"sequence","steps":[]}`,
 		"parallel": `{"kind":"parallel","steps":[],"concurrency":2}`,
@@ -139,9 +142,9 @@ func TestCompileSpecJSONAcceptsEveryKind(t *testing.T) {
 		}`,
 		"iteration": `{
 			"kind":"iteration", "id":"each",
-			"input":{"nodeID":"seed","path":"output"},
-			"body":{"kind":"leaf","id":"item","type":"addN","input":{"nodeID":"each","path":"item"}},
-			"bodyOutput":{"nodeID":"item","path":"output"}, "concurrency":2
+			"input":{"nodeID":"seed","path":"/output"},
+			"body":{"kind":"leaf","id":"item","type":"addN","input":{"nodeID":"each","path":"/item"}},
+			"bodyOutput":{"nodeID":"item","path":"/output"}, "concurrency":2
 		}`,
 	}
 	for name, data := range tests {
@@ -160,6 +163,9 @@ func TestValidateSpecJSONRejectsSchemaViolations(t *testing.T) {
 		"irrelevant field":     `{"kind":"sequence","steps":[],"type":"x"}`,
 		"negative concurrency": `{"kind":"parallel","steps":[],"concurrency":-1}`,
 		"empty ref path":       `{"kind":"leaf","id":"x","type":"x","input":{"nodeID":"seed","path":""}}`,
+		"legacy dotted path":   `{"kind":"leaf","id":"x","type":"x","input":{"nodeID":"seed","path":"output.value"}}`,
+		"bad pointer escape":   `{"kind":"leaf","id":"x","type":"x","input":{"nodeID":"seed","path":"/output/~2"}}`,
+		"duplicate member":     `{"kind":"sequence","kind":"parallel","steps":[]}`,
 		"unknown field":        `{"kind":"sequence","steps":[],"unknown":true}`,
 	}
 	for name, data := range tests {
@@ -173,6 +179,16 @@ func TestValidateSpecJSONRejectsSchemaViolations(t *testing.T) {
 				t.Fatalf("error = %v; want JSON SpecError", err)
 			}
 		})
+	}
+}
+
+func TestValidateGraphJSONReportsDuplicateMemberPath(t *testing.T) {
+	err := workflow.ValidateGraphJSON([]byte(
+		`{"nodes":[{"id":"first","id":"second","type":"x"}]}`,
+	))
+	if !errors.Is(err, workflow.ErrInvalidGraph) ||
+		!strings.Contains(err.Error(), `duplicate object member "id" at /nodes/0/id`) {
+		t.Fatalf("err = %v; want duplicate member path", err)
 	}
 }
 

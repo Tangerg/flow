@@ -70,6 +70,9 @@ func resolveInputs(input *Ref, inputs Inputs) (Inputs, error) {
 // validatePortRefs checks that every wired reference is well formed.
 func validatePortRefs(inputs Inputs, what string) error {
 	for _, port := range inputs.PortNames() {
+		if port == "" {
+			return fmt.Errorf("%s has an empty port name", what)
+		}
 		if err := validateRef(inputs[port], fmt.Sprintf("%s port %q", what, port)); err != nil {
 			return err
 		}

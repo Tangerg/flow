@@ -215,7 +215,7 @@ func (c *compiler) reference(node ast.Expr) (workflow.Ref, error) {
 		return workflow.Ref{}, c.errorAt(node, fmt.Errorf(
 			"%w: %q is not a reference; a reference needs a node ID and a path", ErrUnsupported, root))
 	}
-	ref := workflow.At(root, strings.Join(segments, "."))
+	ref := workflow.At(root, segments[0], segments[1:]...)
 	c.refs = append(c.refs, ref)
 	return ref, nil
 }
@@ -280,18 +280,15 @@ func (c *compiler) indexSegment(index ast.Expr) (string, error) {
 	}
 	switch lit.Kind {
 	case token.INT:
-		if _, err := strconv.ParseInt(lit.Value, 0, 64); err != nil {
+		index, err := strconv.ParseInt(lit.Value, 0, 64)
+		if err != nil {
 			return "", c.errorAt(lit, fmt.Errorf("%w: index %s: %w", ErrSyntax, lit.Value, err))
 		}
-		return lit.Value, nil
+		return strconv.FormatInt(index, 10), nil
 	case token.STRING:
 		s, err := strconv.Unquote(lit.Value)
 		if err != nil {
 			return "", c.errorAt(lit, fmt.Errorf("%w: index %s: %w", ErrSyntax, lit.Value, err))
-		}
-		if s == "" || strings.Contains(s, ".") {
-			return "", c.errorAt(lit, fmt.Errorf(
-				"%w: index %q must be a non-empty name without a dot", ErrUnsupported, s))
 		}
 		return s, nil
 	default:

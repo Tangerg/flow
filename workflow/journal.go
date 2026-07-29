@@ -10,9 +10,9 @@ import (
 )
 
 // Journal records what a run already did, so a later run can pick up where it
-// stopped instead of starting over. Attach one through [RunConfig]; every [Leaf]
-// then records its output as it completes and skips any step the Journal already
-// holds.
+// stopped instead of starting over. Pass one to [Run] through [RunConfig]; every
+// [Leaf] then records its output as it completes and skips any step the Journal
+// already holds.
 //
 // Records are keyed by scope path and step ID, not by step ID alone. That is what
 // makes resumption correct inside [Loop] and [Iteration], where the same step
@@ -28,9 +28,12 @@ import (
 // [Interrupt] result, [Journal.Reset] starts a run over, and [Journal.Forget]
 // retries one step.
 //
-// A Journal is safe for concurrent use; concurrent branches record into the same
-// one. The zero Journal is empty and ready to use. A Journal must not be copied
-// after first use.
+// A Journal is safe for concurrent use within one logical workflow execution;
+// concurrent branches record into the same one. Do not share one Journal between
+// unrelated executions, because records intentionally have no run ID. Records are
+// append-only until Forget or Reset: an internal duplicate completion keeps the
+// first value, while Record reports ErrJournalConflict. The zero Journal is empty
+// and ready to use. A Journal must not be copied after first use.
 type Journal struct {
 	mu    sync.RWMutex
 	root  journalNode
@@ -116,9 +119,11 @@ func (n *journalNode) record(path []string, id string, value any) bool {
 	if n.records == nil {
 		n.records = make(map[string]any)
 	}
-	_, replaced := n.records[id]
+	if _, exists := n.records[id]; exists {
+		return false
+	}
 	n.records[id] = value
-	return !replaced
+	return true
 }
 
 func (j *Journal) lookup(path []string, id string) (any, bool) {

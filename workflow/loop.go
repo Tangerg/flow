@@ -9,8 +9,8 @@ import (
 
 // LoopConfig configures [Loop]. Its zero value uses [flow.DefaultMaxIterations].
 type LoopConfig struct {
-	// MaxIterations caps the number of iterations. A non-positive value uses
-	// [flow.DefaultMaxIterations].
+	// MaxIterations caps the number of iterations. Zero uses
+	// [flow.DefaultMaxIterations]; negative values are invalid.
 	MaxIterations int
 }
 
@@ -29,43 +29,53 @@ type LoopConfig struct {
 // make a resumed loop stop at a different place than the original.
 //
 // id names the loop for those records and for [Describe]; it must be unique among
-// steps that can run in the same execution.
+// steps that can run in the same execution. An empty ID, nil body, or nil
+// condition is rejected before the body runs.
 func Loop(id string, body Step, done Condition, cfg LoopConfig) Step {
-	l := loopStep{id: id, body: body}
-	if done == nil {
-		l.node = flow.NodeFunc[Store, Store](func(_ context.Context, s Store) (Store, error) {
-			return s, flow.ErrNilFunc
-		})
-		return l
-	}
-	bodyNode := func(ctx context.Context, iter int, s Store) (Store, bool, error) {
-		if id == "" {
-			return s, false, &StepError{ID: id, Op: OpValidate, Err: ErrInvalidStepID}
-		}
-		scoped := WithScope(ctx, indexScope("", iter))
-		next, err := runStep(scoped, body, s)
-		if err != nil {
-			return s, false, err
-		}
-		stop, err := l.stop(scoped, iter, next, done)
-		return next, stop, err
-	}
-	var lc flow.LoopConfig
-	lc.MaxIterations = cfg.MaxIterations
-	l.node = flow.Loop(bodyNode, lc)
-	return l
+	return loopStep{id: id, body: body, done: done, config: cfg}
 }
 
 // loop is the [Step] produced by [Loop].
 type loopStep struct {
-	id   string
-	body Step
-	node Step
+	id     string
+	body   Step
+	done   Condition
+	config LoopConfig
+}
+
+func (l loopStep) Run(ctx context.Context, s Store) (Store, error) {
+	switch {
+	case l.id == "":
+		return s, &StepError{ID: l.id, Op: OpValidate, Err: ErrInvalidStepID}
+	case l.body == nil:
+		return s, &StepError{ID: l.id, Op: OpValidate, Err: ErrNilStep}
+	case l.done == nil:
+		return s, &StepError{ID: l.id, Op: OpValidate, Err: flow.ErrNilFunc}
+	case l.config.MaxIterations < 0:
+		return s, &StepError{
+			ID:  l.id,
+			Op:  OpValidate,
+			Err: fmt.Errorf("%w: negative max iterations", flow.ErrInvalidConfig),
+		}
+	}
+
+	bodyNode := func(ctx context.Context, iter int, s Store) (Store, bool, error) {
+		scoped := WithScope(ctx, indexScope("", iter))
+		next, err := runStep(scoped, l.body, s)
+		if err != nil {
+			return s, false, err
+		}
+		stop, err := l.stop(scoped, iter, next)
+		return next, stop, err
+	}
+	return flow.Loop(bodyNode, flow.LoopConfig{
+		MaxIterations: l.config.MaxIterations,
+	}).Run(ctx, s)
 }
 
 // stop returns whether the loop ends after this iteration, reusing the recorded
 // decision when the run is resuming.
-func (l loopStep) stop(ctx context.Context, iter int, s Store, done Condition) (bool, error) {
+func (l loopStep) stop(ctx context.Context, iter int, s Store) (bool, error) {
 	journal := runFrom(ctx).journal()
 	if journal != nil {
 		if recorded, ok := journal.lookup(scope(ctx), l.id); ok {
@@ -80,7 +90,7 @@ func (l loopStep) stop(ctx context.Context, iter int, s Store, done Condition) (
 		}
 	}
 
-	stop, err := done(ctx, iter, s)
+	stop, err := l.done(ctx, iter, s)
 	if err != nil {
 		if suspensions, only := asSuspensions(err); only {
 			return false, joinSuspensions(identifySuspensions(suspensions, l.id, scope(ctx)))
@@ -90,8 +100,6 @@ func (l loopStep) stop(ctx context.Context, iter int, s Store, done Condition) (
 	journal.record(scope(ctx), l.id, stop)
 	return stop, nil
 }
-
-func (l loopStep) Run(ctx context.Context, s Store) (Store, error) { return l.node.Run(ctx, s) }
 
 func (l loopStep) Describe() Description {
 	return Description{ID: l.id, Kind: "loop", Children: []Description{Describe(l.body)}}

@@ -5,12 +5,11 @@ import (
 	"fmt"
 )
 
-// ErrNilStep is returned when a nil [Step] is run inside a composite (Loop,
-// Parallel, Iteration). Test for it with [errors.Is].
+// ErrNilStep is returned when [Run] or a composite is given a nil [Step]. Test
+// for it with [errors.Is].
 var ErrNilStep = errors.New("workflow: nil step")
 
-// ErrInvalidStepID is returned when a step that writes to the Store has an
-// empty ID.
+// ErrInvalidStepID is returned when a named workflow step has an empty ID.
 var ErrInvalidStepID = errors.New("workflow: empty step ID")
 
 // Stable sentinel errors returned by Store lookup, Journal mutation,
@@ -35,10 +34,10 @@ var (
 	ErrDuplicatePort         = errors.New("workflow: duplicate input port")
 )
 
-// StepOp identifies the phase of a [Leaf] that failed.
+// StepOp identifies the phase of a workflow step that failed.
 type StepOp string
 
-// Leaf execution phases reported by [StepError].
+// Workflow step phases reported by [StepError].
 const (
 	OpValidate StepOp = "validate"
 	OpBind     StepOp = "bind"
@@ -57,7 +56,7 @@ func (e *StepError) Error() string {
 	return fmt.Sprintf("workflow: step %q %s: %v", e.ID, e.Op, e.Err)
 }
 
-// Unwrap returns the underlying bind or run error.
+// Unwrap returns the underlying validation, bind, or run error.
 func (e *StepError) Unwrap() error { return e.Err }
 
 // RefError reports a failed typed lookup in a [Store]. Want is the requested

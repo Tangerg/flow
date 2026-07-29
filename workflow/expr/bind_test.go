@@ -187,8 +187,8 @@ func TestBindings_registerAndRefs(t *testing.T) {
 		t.Fatalf("Refs: %v", err)
 	}
 	want := []workflow.Ref{
-		workflow.At("classify", "output.intent"),
-		workflow.At("poll", "output.status"),
+		workflow.At("classify", "output", "intent"),
+		workflow.At("poll", "output", "status"),
 		workflow.Output("size"),
 	}
 	if !slices.Equal(refs, want) {

@@ -57,7 +57,7 @@ type Event struct {
 	Err error
 }
 
-// Observer receives workflow events synchronously. Attach one with a
+// Observer receives workflow events synchronously. Pass one to [Run] through
 // [RunConfig]. Observe may be called from multiple goroutines and should return
 // promptly. A slow Observer delays the step emitting the event.
 type Observer interface {

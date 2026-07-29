@@ -222,6 +222,50 @@ func TestParse_indexBounds(t *testing.T) {
 	}
 }
 
+func TestParse_integerIndexesUseTheStorePathRepresentation(t *testing.T) {
+	s := store("list.output", []any{"zero", "one", "two"})
+	for src, want := range map[string]string{
+		"list.output[0x1]": "one",
+		"list.output[0o2]": "two",
+	} {
+		t.Run(src, func(t *testing.T) {
+			e := expr.MustParse(src)
+			got, err := e.String(s)
+			if err != nil || got != want {
+				t.Fatalf("String = %q, %v; want %q", got, err, want)
+			}
+			if refs := e.Refs(); len(refs) != 1 || refs[0].Path != "/output/"+map[string]string{
+				"list.output[0x1]": "1",
+				"list.output[0o2]": "2",
+			}[src] {
+				t.Fatalf("Refs = %v; want a decimal Store path", refs)
+			}
+		})
+	}
+}
+
+func TestEval_stringIndexesAddressEveryJSONKey(t *testing.T) {
+	s := workflow.NewStore().WithOutput("a", map[string]any{
+		"":    "empty",
+		"x.y": "dot",
+		"x/y": "slash",
+		"x~y": "tilde",
+	})
+	for src, want := range map[string]string{
+		`a.output[""]`:    "empty",
+		`a.output["x.y"]`: "dot",
+		`a.output["x/y"]`: "slash",
+		`a.output["x~y"]`: "tilde",
+	} {
+		t.Run(src, func(t *testing.T) {
+			got, err := expr.MustParse(src).String(s)
+			if err != nil || got != want {
+				t.Fatalf("String = %q, %v; want %q", got, err, want)
+			}
+		})
+	}
+}
+
 func TestEval_normalizesEveryNumericKind(t *testing.T) {
 	// A value written as any Go numeric type must compare like the same number
 	// decoded from JSON as a float64.
@@ -444,6 +488,37 @@ func TestEval_hugeUnsignedStaysExactAcrossJSON(t *testing.T) {
 	}
 }
 
+func TestEval_numericSemanticsSurviveStoreJSON(t *testing.T) {
+	original := workflow.NewStore().
+		WithOutput("whole", float64(7)).
+		WithOutput("single", float32(1.2)).
+		WithOutput("boundary", float64(1<<63))
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var restored workflow.Store
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	for src, want := range map[string]any{
+		"whole.output / 2":                       int64(3),
+		"single.output == 1.2":                   true,
+		"boundary.output == 9223372036854776000": true,
+	} {
+		t.Run(src, func(t *testing.T) {
+			e := expr.MustParse(src)
+			before, beforeErr := e.Eval(original)
+			after, afterErr := e.Eval(restored)
+			if beforeErr != nil || afterErr != nil || before != want || after != want {
+				t.Fatalf("before = %#v, %v; after = %#v, %v; want %#v",
+					before, beforeErr, after, afterErr, want)
+			}
+		})
+	}
+}
+
 func TestEval_unsignedArithmeticAndSpecialFloats(t *testing.T) {
 	maxUint := uint64(math.MaxUint64)
 	s := store(
@@ -541,8 +616,6 @@ func TestParse_rejectsEverythingOutsideTheGrammar(t *testing.T) {
 		"bare identifier":      `counter`,
 		"select into literal":  `true.field`,
 		"computed index":       `a.output[b.output]`,
-		"dotted string index":  `a["x.y"]`,
-		"empty string index":   `a[""]`,
 		"unknown function":     `abs(a.output)`,
 		"len without argument": `len()`,
 		"len with two":         `len(a.output, b.output)`,
@@ -644,7 +717,7 @@ func TestBoolAndString_requireTheirType(t *testing.T) {
 func TestRefs(t *testing.T) {
 	e := expr.MustParse(`has(b.output) && a.output.items[0] > 1 && a.output.items[0] < 9 || z.flag`)
 	want := []workflow.Ref{
-		workflow.At("a", "output.items.0"),
+		workflow.At("a", "output", "items", "0"),
 		workflow.Output("b"),
 		workflow.At("z", "flag"),
 	}

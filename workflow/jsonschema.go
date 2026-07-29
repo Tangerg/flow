@@ -50,8 +50,9 @@ func GraphJSONSchema() json.RawMessage {
 }
 
 // ValidateSpecJSON checks that data is one complete JSON value conforming to
-// [SpecJSONSchema]. Registry-dependent checks such as node types and config
-// schemas are performed by [Registry.ValidateSpec] and compilation.
+// [SpecJSONSchema]. Duplicate object members are rejected. Registry-dependent
+// checks such as node types and config schemas are performed by
+// [Registry.ValidateSpec] and compilation.
 func ValidateSpecJSON(data []byte) error {
 	if err := validateJSON(data, loadSpecSchema); err != nil {
 		return &SpecError{Field: "json", Err: fmt.Errorf("%w: %w", ErrInvalidSpec, err)}
@@ -60,8 +61,9 @@ func ValidateSpecJSON(data []byte) error {
 }
 
 // ValidateGraphJSON checks that data is one complete JSON value conforming to
-// [GraphJSONSchema]. Registry-dependent checks such as node types, cycles, and
-// config schemas are performed by [Registry.ValidateGraph] and compilation.
+// [GraphJSONSchema]. Duplicate object members are rejected. Registry-dependent
+// checks such as node types, cycles, and config schemas are performed by
+// [Registry.ValidateGraph] and compilation.
 func ValidateGraphJSON(data []byte) error {
 	if err := validateJSON(data, loadGraphSchema); err != nil {
 		return &GraphError{Field: "json", Err: fmt.Errorf("%w: %w", ErrInvalidGraph, err)}
@@ -70,7 +72,7 @@ func ValidateGraphJSON(data []byte) error {
 }
 
 func compileJSONSchema(resourceURL string, data []byte) (jsonValidator, error) {
-	doc, err := jschema.UnmarshalJSON(bytes.NewReader(data))
+	doc, err := decodeUniqueJSON(data)
 	if err != nil {
 		return nil, fmt.Errorf("decode JSON Schema: %w", err)
 	}
@@ -90,7 +92,7 @@ func compileJSONSchema(resourceURL string, data []byte) (jsonValidator, error) {
 }
 
 func validateJSON(data []byte, load func() (jsonValidator, error)) error {
-	doc, err := jschema.UnmarshalJSON(bytes.NewReader(data))
+	doc, err := decodeUniqueJSON(data)
 	if err != nil {
 		return err
 	}
@@ -109,16 +111,19 @@ func compileConfigSchema(data json.RawMessage) (jsonValidator, error) {
 }
 
 func validateConfig(schema jsonValidator, config json.RawMessage) error {
-	if schema == nil {
-		return nil
-	}
-	data := config
-	if len(bytes.TrimSpace(data)) == 0 {
+	data := bytes.TrimSpace(config)
+	if len(data) == 0 {
+		if schema == nil {
+			return nil
+		}
 		data = json.RawMessage(`{}`)
 	}
-	doc, err := jschema.UnmarshalJSON(bytes.NewReader(data))
+	doc, err := decodeUniqueJSON(data)
 	if err != nil {
 		return err
+	}
+	if schema == nil {
+		return nil
 	}
 	return validateDocument(schema, doc)
 }

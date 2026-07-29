@@ -52,7 +52,8 @@ type registeredNodeSchema struct {
 
 // RegisterSchema associates a [NodeSchema] with a node type. It compiles
 // ConfigSchema once and rejects invalid or external references immediately.
-// Node types without a schema accept any connection and config.
+// Node types without a schema accept any connection and any syntactically valid
+// JSON config.
 func (r *Registry) RegisterSchema(nodeType string, schema NodeSchema) error {
 	switch {
 	case nodeType == "":
@@ -169,10 +170,17 @@ func (r *Registry) validateGraph(g Graph) ([][]string, map[string]NodeSpec, erro
 				Err:    fmt.Errorf("%w: %w", ErrInvalidGraph, err),
 			}
 		}
-		if err := r.validatePorts(n.Type, wiring[n.ID], func(producerID string) (ValueType, bool) {
-			producer, ok := byID[producerID]
+		if err := r.validatePorts(n.Type, wiring[n.ID], func(ref Ref) (ValueType, bool) {
+			producer, ok := byID[ref.NodeID]
 			if !ok {
 				return "", false // external input (the seed Store); nothing to check
+			}
+			// NodeSchema describes the conventional output as a whole. Its type
+			// says nothing about a nested member or another cell written by a
+			// custom step, so treating those references as the whole output
+			// produces false type errors.
+			if ref.Path != Output(ref.NodeID).Path {
+				return TypeAny, true
 			}
 			return r.nodeSchema(producer.Type).Output, true
 		}); err != nil {
@@ -189,7 +197,7 @@ func (r *Registry) validateGraph(g Graph) ([][]string, map[string]NodeSpec, erro
 //
 // A node type with no declared ports is left unchecked, so nodes may be
 // registered without a schema.
-func (r *Registry) validatePorts(nodeType string, inputs Inputs, producerOutput func(string) (ValueType, bool)) error {
+func (r *Registry) validatePorts(nodeType string, inputs Inputs, producerOutput func(Ref) (ValueType, bool)) error {
 	declared := r.nodeSchema(nodeType).Inputs
 	if len(declared) == 0 {
 		return nil
@@ -206,7 +214,7 @@ func (r *Registry) validatePorts(nodeType string, inputs Inputs, producerOutput 
 			return fmt.Errorf("%w %q", ErrUnknownPort, port)
 		}
 		ref := inputs[port]
-		out, ok := producerOutput(ref.NodeID)
+		out, ok := producerOutput(ref)
 		if !ok {
 			continue
 		}

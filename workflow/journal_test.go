@@ -22,8 +22,9 @@ func TestJournal_recordsOnlyCompletedSteps(t *testing.T) {
 		flow.NodeFunc[int, int](func(context.Context, int) (int, error) { return 0, boom }))
 
 	journal := workflow.NewJournal()
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
-	if _, err := workflow.Sequence(ok, bad).Run(ctx, workflow.NewStore()); !errors.Is(err, boom) {
+	cfg := workflow.RunConfig{Journal: journal}
+	if _, err := workflow.Run(context.Background(), workflow.Sequence(ok, bad),
+		workflow.NewStore(), cfg); !errors.Is(err, boom) {
 		t.Fatalf("err = %v; want boom", err)
 	}
 	// A failed step is not recorded, so a later run retries it.
@@ -44,10 +45,10 @@ func TestJournal_forgetAndReset(t *testing.T) {
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { runs++; return x, nil }))
 
 	journal := workflow.NewJournal()
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
+	cfg := workflow.RunConfig{Journal: journal}
 
 	for range 3 {
-		if _, err := step.Run(ctx, workflow.NewStore()); err != nil {
+		if _, err := workflow.Run(context.Background(), step, workflow.NewStore(), cfg); err != nil {
 			t.Fatalf("run: %v", err)
 		}
 	}
@@ -56,7 +57,7 @@ func TestJournal_forgetAndReset(t *testing.T) {
 	}
 
 	journal.Forget(workflow.JournalKey{ID: "a"})
-	if _, err := step.Run(ctx, workflow.NewStore()); err != nil {
+	if _, err := workflow.Run(context.Background(), step, workflow.NewStore(), cfg); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if runs != 2 {
@@ -67,7 +68,7 @@ func TestJournal_forgetAndReset(t *testing.T) {
 	if journal.Len() != 0 {
 		t.Fatalf("Len after Reset = %d; want 0", journal.Len())
 	}
-	if _, err := step.Run(ctx, workflow.NewStore()); err != nil {
+	if _, err := workflow.Run(context.Background(), step, workflow.NewStore(), cfg); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if runs != 3 {
@@ -118,14 +119,14 @@ func TestJournal_jsonRoundTrip(t *testing.T) {
 		return workflow.Leaf(id, workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
 			flow.NodeFunc[int, any](func(context.Context, int) (any, error) { return value, nil }))
 	}
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
+	cfg := workflow.RunConfig{Journal: journal}
 	pipeline := workflow.Sequence(
 		step("i", 42),
 		step("s", "text"),
 		step("b", true),
 		step("struct", payload{N: 7}),
 	)
-	if _, err := pipeline.Run(ctx, workflow.NewStore()); err != nil {
+	if _, err := workflow.Run(context.Background(), pipeline, workflow.NewStore(), cfg); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -142,7 +143,8 @@ func TestJournal_jsonRoundTrip(t *testing.T) {
 	}
 
 	// A restored record has to read back as the type the reading step asks for.
-	out, err := pipeline.Run(workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: restored}), workflow.NewStore())
+	out, err := workflow.Run(context.Background(), pipeline, workflow.NewStore(),
+		workflow.RunConfig{Journal: restored})
 	if err != nil {
 		t.Fatalf("resumed run: %v", err)
 	}
@@ -175,13 +177,15 @@ func TestJournal_keysAreStructuredAndCollisionFree(t *testing.T) {
 	second := step("b/c", &secondRuns)
 
 	journal := workflow.NewJournal()
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
+	cfg := workflow.RunConfig{Journal: journal}
 	run := func() {
 		t.Helper()
-		if _, err := first.Run(workflow.WithScope(ctx, "a/b"), workflow.NewStore()); err != nil {
+		if _, err := workflow.Run(workflow.WithScope(context.Background(), "a/b"),
+			first, workflow.NewStore(), cfg); err != nil {
 			t.Fatalf("first: %v", err)
 		}
-		if _, err := second.Run(workflow.WithScope(ctx, "a"), workflow.NewStore()); err != nil {
+		if _, err := workflow.Run(workflow.WithScope(context.Background(), "a"),
+			second, workflow.NewStore(), cfg); err != nil {
 			t.Fatalf("second: %v", err)
 		}
 	}
@@ -248,7 +252,8 @@ func TestJournal_marshalReportsTheOffendingRecord(t *testing.T) {
 	journal := workflow.NewJournal()
 	step := workflow.Leaf("bad", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
 		flow.NodeFunc[int, any](func(context.Context, int) (any, error) { return func() {}, nil }))
-	if _, err := step.Run(workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal}), workflow.NewStore()); err != nil {
+	if _, err := workflow.Run(context.Background(), step, workflow.NewStore(),
+		workflow.RunConfig{Journal: journal}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -280,10 +285,10 @@ func TestJournal_nilIsSafe(t *testing.T) {
 	journal.Forget(workflow.JournalKey{ID: "a"})
 
 	// A nil Journal disables resumption rather than being attached.
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: nil})
 	step := workflow.Leaf("a", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
-	if _, err := step.Run(ctx, workflow.NewStore()); err != nil {
+	if _, err := workflow.Run(context.Background(), step, workflow.NewStore(),
+		workflow.RunConfig{Journal: nil}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 }
@@ -298,8 +303,9 @@ func TestJournal_concurrentBranchesRecordSafely(t *testing.T) {
 	}
 
 	journal := workflow.NewJournal()
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
-	if _, err := workflow.Parallel(steps, workflow.ParallelConfig{}).Run(ctx, workflow.NewStore()); err != nil {
+	cfg := workflow.RunConfig{Journal: journal}
+	if _, err := workflow.Run(context.Background(),
+		workflow.Parallel(steps, workflow.ParallelConfig{}), workflow.NewStore(), cfg); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if journal.Len() != branches {
@@ -321,8 +327,8 @@ func TestAwaitFactory(t *testing.T) {
 		MustRegisterLeaf("await", workflow.AwaitFactory())
 
 	spec := []byte(`{"kind":"sequence","steps":[
-	  {"id":"approval","type":"await","kind":"leaf","input":{"nodeID":"inbox","path":"decision"}},
-	  {"id":"act","type":"addN","kind":"leaf","input":{"nodeID":"start","path":"output"},"config":{"n":1}}
+	  {"id":"approval","type":"await","kind":"leaf","input":{"nodeID":"inbox","path":"/decision"}},
+	  {"id":"act","type":"addN","kind":"leaf","input":{"nodeID":"start","path":"/output"},"config":{"n":1}}
 	]}`)
 	step, err := reg.CompileSpecJSON(spec)
 	if err != nil {
@@ -377,8 +383,8 @@ func TestInterruptFactory_roundTripsStructuredRequestAndResponse(t *testing.T) {
 	}
 
 	journal := workflow.NewJournal()
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
-	_, err = step.Run(ctx, workflow.NewStore())
+	cfg := workflow.RunConfig{Journal: journal}
+	_, err = workflow.Run(context.Background(), step, workflow.NewStore(), cfg)
 	waits := workflow.Suspensions(err)
 	if len(waits) != 1 {
 		t.Fatalf("Suspensions = %+v; want one", waits)
@@ -391,7 +397,7 @@ func TestInterruptFactory_roundTripsStructuredRequestAndResponse(t *testing.T) {
 	if err := journal.Record(waits[0].Key(), map[string]any{"approved": true}); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
-	out, err := step.Run(ctx, workflow.NewStore())
+	out, err := workflow.Run(context.Background(), step, workflow.NewStore(), cfg)
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -416,5 +422,11 @@ func TestInterruptFactory_rejectsInputsAndInvalidConfig(t *testing.T) {
 		Config: json.RawMessage(`{`),
 	}); !errors.Is(err, workflow.ErrInvalidSpec) {
 		t.Fatalf("config error = %v; want ErrInvalidSpec", err)
+	}
+	if _, err := factory(workflow.LeafSpec{
+		ID:     "approval",
+		Config: json.RawMessage(`{"question":"first","question":"second"}`),
+	}); !errors.Is(err, workflow.ErrInvalidSpec) {
+		t.Fatalf("duplicate config error = %v; want ErrInvalidSpec", err)
 	}
 }

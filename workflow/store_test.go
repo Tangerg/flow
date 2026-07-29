@@ -13,18 +13,41 @@ import (
 )
 
 func TestRef_helpers(t *testing.T) {
-	ref := workflow.Output("step").Child("items.0")
-	if ref != workflow.At("step", "output.items.0") || ref.String() != "step.output.items.0" {
+	ref := workflow.Output("step").Child("items", "0")
+	if ref != workflow.At("step", "output", "items", "0") || ref.String() != "step#/output/items/0" {
 		t.Fatalf("ref = %#v (%s)", ref, ref)
 	}
-	if got := ref.Child(""); got != ref {
-		t.Fatalf("Child(empty) = %#v, want %#v", got, ref)
+	if got := ref.Child(); got != ref {
+		t.Fatalf("Child() = %#v, want %#v", got, ref)
+	}
+	if got := workflow.Output("step").Child(""); got.Path != "/output/" {
+		t.Fatalf("Child(empty segment) = %#v; want an addressable empty JSON key", got)
 	}
 	if workflow.Item("each") != workflow.At("each", "item") {
 		t.Fatal("Item returned the wrong reference")
 	}
 	if workflow.Index("each") != workflow.At("each", "index") {
 		t.Fatal("Index returned the wrong reference")
+	}
+
+	escaped := workflow.At("step", "output", "a/b", "c~d", "")
+	if escaped.Path != "/output/a~1b/c~0d/" {
+		t.Fatalf("escaped Path = %q", escaped.Path)
+	}
+	store := workflow.NewStore().WithOutput("step", map[string]any{
+		"a/b": map[string]any{"c~d": map[string]any{"": "found"}},
+	})
+	if got, ok := store.Lookup(escaped); !ok || got != "found" {
+		t.Fatalf("Lookup(%s) = %v, %v; want found, true", escaped, got, ok)
+	}
+}
+
+func TestStore_LookupRejectsMalformedJSONPointers(t *testing.T) {
+	store := workflow.NewStore().WithOutput("step", 1)
+	for _, path := range []string{"", "output", "/output/~", "/output/~2"} {
+		if value, ok := store.Lookup(workflow.Ref{NodeID: "step", Path: path}); ok {
+			t.Fatalf("Lookup path %q = %v, true; want unresolved", path, value)
+		}
 	}
 }
 
@@ -177,9 +200,69 @@ func TestStore_path(t *testing.T) {
 	}
 	s := workflow.NewStore().WithOutput("n", nested)
 
-	v, ok := s.Lookup(workflow.At("n", "output.items.1.name"))
+	v, ok := s.Lookup(workflow.At("n", "output", "items", "1", "name"))
 	if !ok || v.(string) != "b" {
 		t.Fatalf("path Get = %v, %v; want b, true", v, ok)
+	}
+}
+
+func TestStore_arrayPathsUseCanonicalJSONPointerIndexes(t *testing.T) {
+	store := workflow.NewStore().
+		WithOutput("array", []any{"zero", "one"}).
+		WithOutput("object", map[string]any{"01": "object key"})
+
+	if value, ok := store.Lookup(workflow.Output("array").Child("1")); !ok || value != "one" {
+		t.Fatalf("canonical index = %v, %v; want one, true", value, ok)
+	}
+	for _, token := range []string{"01", "+1", "-1", "-"} {
+		if value, ok := store.Lookup(workflow.Output("array").Child(token)); ok {
+			t.Fatalf("array token %q resolved to %v; want miss", token, value)
+		}
+	}
+	if value, ok := store.Lookup(workflow.Output("object").Child("01")); !ok || value != "object key" {
+		t.Fatalf("object key = %v, %v; want object key, true", value, ok)
+	}
+}
+
+func TestStore_pathHasTheSameJSONSemanticsBeforeAndAfterSerialization(t *testing.T) {
+	type item struct {
+		Name string `json:"name"`
+	}
+	type payload struct {
+		Count  int               `json:"count"`
+		Items  []item            `json:"items"`
+		Labels map[string]string `json:"labels"`
+		Hidden string            `json:"-"`
+	}
+
+	original := workflow.NewStore().WithOutput("typed", payload{
+		Count:  2,
+		Items:  []item{{Name: "first"}, {Name: "second"}},
+		Labels: map[string]string{"kind": "example"},
+		Hidden: "not addressable",
+	})
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var restored workflow.Store
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	for _, store := range []workflow.Store{original, restored} {
+		if got, err := workflow.Get[int](store, workflow.At("typed", "output", "count")); err != nil || got != 2 {
+			t.Fatalf("count = %v, %v; want 2", got, err)
+		}
+		if got, err := workflow.Get[string](store, workflow.At("typed", "output", "items", "1", "name")); err != nil || got != "second" {
+			t.Fatalf("item name = %q, %v; want second", got, err)
+		}
+		if got, err := workflow.Get[string](store, workflow.At("typed", "output", "labels", "kind")); err != nil || got != "example" {
+			t.Fatalf("label = %q, %v; want example", got, err)
+		}
+		if _, ok := store.Lookup(workflow.At("typed", "output", "Hidden")); ok {
+			t.Fatal("json-excluded field unexpectedly resolved")
+		}
 	}
 }
 
@@ -192,7 +275,7 @@ func TestStore_missing(t *testing.T) {
 	if _, ok := s.Lookup(workflow.At("other", "output")); ok {
 		t.Fatal("expected miss on unknown node")
 	}
-	if _, ok := s.Lookup(workflow.At("n", "output.deep")); ok {
+	if _, ok := s.Lookup(workflow.At("n", "output", "deep")); ok {
 		t.Fatal("expected miss walking into a non-container")
 	}
 }
@@ -210,7 +293,7 @@ func TestStore_JSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if got, ok := decoded.Lookup(workflow.At("a", "output.items.1")); !ok || got != true {
+	if got, ok := decoded.Lookup(workflow.At("a", "output", "items", "1")); !ok || got != true {
 		t.Fatalf("nested value = %v, %v", got, ok)
 	}
 	// A decoded Store holds JSON-domain values: a number is a json.Number, so
@@ -278,7 +361,7 @@ func TestStore_JSONRoundTripPreservesTypedReads(t *testing.T) {
 		t.Fatalf("struct = %+v, %v", got, err)
 	}
 	// Conversion applies at any path depth, not just to whole cells.
-	if n, err := workflow.Get[int](decoded, workflow.At("nested", "output.deep.0.n")); err != nil || n != 9 {
+	if n, err := workflow.Get[int](decoded, workflow.At("nested", "output", "deep", "0", "n")); err != nil || n != 9 {
 		t.Fatalf("nested int = %v, %v", n, err)
 	}
 }
@@ -312,9 +395,13 @@ func TestGet_convertsWithoutReinterpreting(t *testing.T) {
 
 func TestStore_UnmarshalIsAtomic(t *testing.T) {
 	for name, data := range map[string]string{
-		"truncated":   `{"new":{"output":1}`,
-		"wrong shape": `{"new":"not an object"}`,
-		"trailing":    `{"new":{"output":1}} {}`,
+		"truncated":      `{"new":{"output":1}`,
+		"wrong shape":    `{"new":"not an object"}`,
+		"null store":     `null`,
+		"null node":      `{"new":null}`,
+		"duplicate node": `{"new":{"output":1},"new":{"output":2}}`,
+		"duplicate cell": `{"new":{"output":1,"output":2}}`,
+		"trailing":       `{"new":{"output":1}} {}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			store := workflow.NewStore().WithOutput("old", 1)
@@ -338,10 +425,46 @@ func TestStore_UnmarshalEmptyReplacesStore(t *testing.T) {
 	}
 }
 
+func TestStore_UnmarshalGivesRestoredWritesDeterministicOrder(t *testing.T) {
+	var store workflow.Store
+	if err := json.Unmarshal([]byte(`{
+		"z":{"output":3},
+		"a":{"z":2,"a":1}
+	}`), &store); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	changes := store.Changes(workflow.NewStore())
+	got := make([]workflow.Ref, len(changes))
+	for i, change := range changes {
+		got[i] = change.Ref()
+	}
+	want := []workflow.Ref{
+		workflow.At("a", "a"),
+		workflow.At("a", "z"),
+		workflow.Output("z"),
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("Changes refs = %v; want %v", got, want)
+	}
+}
+
 func TestStore_MarshalReportsCell(t *testing.T) {
 	store := workflow.NewStore().WithOutput("bad", func() {})
 	_, err := json.Marshal(store)
-	if err == nil || !strings.Contains(err.Error(), "bad.output") {
+	if err == nil || !strings.Contains(err.Error(), `node "bad" key "output"`) {
 		t.Fatalf("err = %v; want cell path", err)
+	}
+}
+
+func TestStore_MarshalReportsTheFirstBadCellDeterministically(t *testing.T) {
+	store := workflow.NewStore().
+		WithOutput("z", func() {}).
+		With("a", "z", func() {}).
+		With("a", "a", func() {})
+
+	_, err := json.Marshal(store)
+	if err == nil || !strings.Contains(err.Error(), `node "a" key "a"`) {
+		t.Fatalf("err = %v; want first bad cell a.a", err)
 	}
 }

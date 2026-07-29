@@ -21,7 +21,8 @@
 //
 // Errors preserve their causes. Concurrent collection operations report item
 // positions with [IndexError], allowing callers to use errors.Is and errors.As
-// instead of matching strings.
+// instead of matching strings. Composites validate required child nodes before
+// invoking any of them, so an invalid composition cannot perform partial work.
 //
 // The package has no third-party dependencies. Durability, distribution, and
 // deterministic replay are out of scope; for those use a workflow engine such as

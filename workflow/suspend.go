@@ -102,7 +102,8 @@ func (e *Suspension) Key() JournalKey {
 //	}
 //
 // The step writes nothing of its own, so it re-evaluates on every run rather than
-// being skipped as completed — which is what makes the wait meaningful.
+// being skipped as completed — which is what makes the wait meaningful. An
+// invalid ID or reference is a validation error rather than a suspension.
 func Await(id string, ref Ref) Step { return awaitStep{id: id, ref: ref} }
 
 // awaitStep is the [Step] produced by [Await].
@@ -115,6 +116,15 @@ func (a awaitStep) Run(ctx context.Context, s Store) (Store, error) {
 	run := runFrom(ctx)
 	if a.id == "" {
 		err := &StepError{ID: a.id, Op: OpValidate, Err: ErrInvalidStepID}
+		run.emit(ctx, Event{Kind: EventFailed, ID: a.id, Err: err})
+		return s, err
+	}
+	if err := validateRef(a.ref, "await reference"); err != nil {
+		err := &StepError{
+			ID:  a.id,
+			Op:  OpValidate,
+			Err: fmt.Errorf("%w: %w", ErrInvalidSpec, err),
+		}
 		run.emit(ctx, Event{Kind: EventFailed, ID: a.id, Err: err})
 		return s, err
 	}
@@ -137,7 +147,7 @@ func (a awaitStep) Describe() Description {
 // the wait must expose a structured request.
 //
 //	reg.MustRegisterLeaf("await", workflow.AwaitFactory())
-//	// {"id":"approval","type":"await","input":{"nodeID":"inbox","path":"decision"}}
+//	// {"id":"approval","type":"await","input":{"nodeID":"inbox","path":"/decision"}}
 func AwaitFactory() LeafFactory {
 	return func(spec LeafSpec) (Step, error) {
 		for _, port := range spec.Inputs.PortNames() {
@@ -169,7 +179,7 @@ func AwaitFactory() LeafFactory {
 //
 //	wait := workflow.Suspensions(err)[0]
 //	if err := journal.Record(wait.Key(), response); err != nil { ... }
-//	out, err := pipeline.Run(ctx, paused)
+//	out, err := workflow.Run(ctx, pipeline, paused, cfg)
 func Interrupt(id string, value any) Step {
 	return interruptStep{id: id, value: value}
 }
@@ -250,6 +260,12 @@ func collectSuspensions(err error) ([]*Suspension, bool) {
 		return nil, false
 	}
 	if suspension, ok := err.(*Suspension); ok {
+		if suspension == nil {
+			// A typed nil still satisfies error and matches ErrSuspended through
+			// Suspension.Unwrap. Preserve that meaning as an anonymous wait
+			// instead of normalizing it away into a nil error.
+			return []*Suspension{{}}, true
+		}
 		return []*Suspension{cloneSuspension(suspension)}, true
 	}
 	if err == ErrSuspended {

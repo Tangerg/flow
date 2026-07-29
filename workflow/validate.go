@@ -15,6 +15,12 @@ import (
 func (r *Registry) validateSpec(root Spec) error {
 	var walk func(Spec, map[string]struct{}) error
 	walk = func(spec Spec, ids map[string]struct{}) error {
+		if field := unexpectedSpecField(spec); field != "" {
+			return specError(spec, field, fmt.Errorf(
+				"%w: field %q is not valid for kind %q",
+				ErrInvalidSpec, field, spec.Kind,
+			))
+		}
 		if spec.Concurrency < 0 {
 			return specError(spec, "concurrency", fmt.Errorf("%w: must not be negative", ErrInvalidSpec))
 		}
@@ -57,7 +63,7 @@ func (r *Registry) validateSpec(root Spec) error {
 			// A nested Spec has no cross-node index, so ports are checked for
 			// completeness only; edge types are checked when a flat Graph names
 			// both ends.
-			if err := r.validatePorts(spec.Type, inputs, func(string) (ValueType, bool) {
+			if err := r.validatePorts(spec.Type, inputs, func(Ref) (ValueType, bool) {
 				return "", false
 			}); err != nil {
 				return specError(spec, "inputs", err)
@@ -120,7 +126,11 @@ func (r *Registry) validateSpec(root Spec) error {
 			if err := validateRef(*spec.BodyOutput, "iteration bodyOutput"); err != nil {
 				return specError(spec, "bodyOutput", fmt.Errorf("%w: %w", ErrInvalidSpec, err))
 			}
-			return walk(*spec.Body, ids)
+			// An iteration body's Store is local to one element and its Journal
+			// records live under the iteration's scope. Body IDs therefore cannot
+			// collide with IDs outside the body; only collisions within one
+			// element execution matter.
+			return walk(*spec.Body, make(map[string]struct{}))
 		default:
 			return specError(spec, "kind", fmt.Errorf("%w: unknown kind %q", ErrInvalidSpec, spec.Kind))
 		}
@@ -129,13 +139,74 @@ func (r *Registry) validateSpec(root Spec) error {
 	return walk(root, make(map[string]struct{}))
 }
 
+// unexpectedSpecField keeps the programmatic Spec API as strict as the JSON
+// schema. A populated field that a kind ignores is almost always a typo, and
+// silently accepting it makes code-built and JSON-built workflows disagree.
+func unexpectedSpecField(spec Spec) string {
+	var allowed []string
+	switch spec.Kind {
+	case KindLeaf:
+		allowed = []string{"id", "type", "config", "input", "inputs"}
+	case KindSequence:
+		allowed = []string{"steps"}
+	case KindParallel:
+		allowed = []string{"steps", "concurrency"}
+	case KindBranch:
+		allowed = []string{"id", "resolver", "cases"}
+	case KindLoop:
+		allowed = []string{"id", "body", "condition", "maxIterations"}
+	case KindIteration:
+		allowed = []string{"id", "input", "body", "bodyOutput", "concurrency"}
+	default:
+		return ""
+	}
+
+	populated := []struct {
+		name string
+		set  bool
+	}{
+		{"id", spec.ID != ""},
+		{"type", spec.Type != ""},
+		{"config", len(spec.Config) > 0},
+		{"input", spec.Input != nil},
+		{"inputs", len(spec.Inputs) > 0},
+		{"steps", len(spec.Steps) > 0},
+		{"resolver", spec.Resolver != ""},
+		{"cases", len(spec.Cases) > 0},
+		{"body", spec.Body != nil},
+		{"condition", spec.Condition != ""},
+		{"maxIterations", spec.MaxIterations != 0},
+		{"bodyOutput", spec.BodyOutput != nil},
+		{"concurrency", spec.Concurrency != 0},
+	}
+	for _, field := range populated {
+		if field.set && !slices.Contains(allowed, field.name) {
+			return field.name
+		}
+	}
+	return ""
+}
+
 func specError(spec Spec, field string, err error) error {
 	return &SpecError{Kind: spec.Kind, ID: spec.ID, Field: field, Err: err}
 }
 
 func validateRef(ref Ref, field string) error {
-	if ref.NodeID == "" || ref.Path == "" {
-		return fmt.Errorf("workflow: %s requires nodeID and path", field)
+	if ref.NodeID == "" {
+		return fmt.Errorf("workflow: %s requires nodeID", field)
+	}
+	pointer, ok := scanPointer(ref.Path)
+	if !ok {
+		return fmt.Errorf("workflow: %s path must be a non-empty JSON Pointer", field)
+	}
+	for {
+		_, present, valid := pointer.next()
+		if !valid {
+			return fmt.Errorf("workflow: %s path must be a non-empty JSON Pointer", field)
+		}
+		if !present {
+			break
+		}
 	}
 	return nil
 }

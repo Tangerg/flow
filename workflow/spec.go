@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,8 +74,8 @@ func (r *Registry) CompileSpec(spec Spec) (Step, error) {
 }
 
 // ValidateSpec checks a nested Spec without building it. It verifies its
-// structure, registrations, references, unique IDs, and registered node config
-// schemas.
+// structure, registrations, references, unique IDs, registered node config
+// schemas, and that each kind carries only fields meaningful to that kind.
 func (r *Registry) ValidateSpec(spec Spec) error {
 	return r.validateSpec(spec)
 }
@@ -132,19 +133,37 @@ func (r *Registry) buildAll(specs []Spec) ([]Step, error) {
 }
 
 func (r *Registry) buildLeaf(spec Spec) (Step, error) {
+	step, field, err := r.makeLeaf(spec)
+	if err != nil {
+		return nil, specError(spec, field, err)
+	}
+	return step, nil
+}
+
+// makeLeaf builds one leaf without attaching a nested-Spec or flat-Graph error
+// boundary. The two compilers share the construction logic but report failures
+// in their own vocabulary.
+func (r *Registry) makeLeaf(spec Spec) (Step, string, error) {
 	f, ok := r.leafFactory(spec.Type)
 	if !ok {
-		return nil, specError(spec, "type", fmt.Errorf("%w %q", ErrUnknownNodeType, spec.Type))
+		return nil, "type", fmt.Errorf("%w %q", ErrUnknownNodeType, spec.Type)
 	}
 	inputs, err := resolveInputs(spec.Input, spec.Inputs)
 	if err != nil {
-		return nil, specError(spec, "inputs", err)
+		return nil, "inputs", err
 	}
-	step, err := f(LeafSpec{ID: spec.ID, Inputs: inputs, Config: spec.Config})
+	step, err := f(LeafSpec{
+		ID:     spec.ID,
+		Inputs: inputs,
+		Config: bytes.Clone(spec.Config),
+	})
 	if err != nil {
-		return nil, specError(spec, factoryErrorField(err), err)
+		return nil, factoryErrorField(err), err
 	}
-	return step, nil
+	if step == nil {
+		return nil, "type", ErrNilStep
+	}
+	return step, "", nil
 }
 
 // factoryErrorField names the Spec field a [LeafFactory] error belongs to, so a

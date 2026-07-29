@@ -18,16 +18,14 @@ import (
 // a resolver need not be a pure function of the Store — a classifier or a model
 // may answer differently the second time — and a resumed run that took the other
 // branch would leave outputs from both in the Store. Recording the decision also
-// spares the second call.
+// spares the second call. A resolver result that names no case is not recorded,
+// so an invalid transient result cannot poison later runs. A nil case is
+// rejected before the resolver runs.
 //
 // id names the branch for that record and for [Describe]; it must be unique
 // among steps that can run in the same execution.
 func Branch(id string, resolve Resolver, cases map[string]Step) Step {
-	cases = maps.Clone(cases)
-	if resolve == nil {
-		resolve = func(context.Context, Store) (string, error) { return "", flow.ErrNilFunc }
-	}
-	return branchStep{id: id, resolve: resolve, cases: cases}
+	return branchStep{id: id, resolve: resolve, cases: maps.Clone(cases)}
 }
 
 // branch is the [Step] produced by [Branch].
@@ -41,6 +39,18 @@ func (b branchStep) Run(ctx context.Context, s Store) (Store, error) {
 	if b.id == "" {
 		return s, &StepError{ID: b.id, Op: OpValidate, Err: ErrInvalidStepID}
 	}
+	if b.resolve == nil {
+		return s, &StepError{ID: b.id, Op: OpValidate, Err: flow.ErrNilFunc}
+	}
+	for _, name := range slices.Sorted(maps.Keys(b.cases)) {
+		if b.cases[name] == nil {
+			return s, &StepError{
+				ID:  b.id,
+				Op:  OpValidate,
+				Err: fmt.Errorf("case %q: %w", name, ErrNilStep),
+			}
+		}
+	}
 
 	name, err := b.decide(ctx, s)
 	if err != nil {
@@ -50,11 +60,15 @@ func (b branchStep) Run(ctx context.Context, s Store) (Store, error) {
 	if !ok {
 		return s, fmt.Errorf("%w: %q", flow.ErrNoCase, name)
 	}
+	// A decision is durable only after it names an actual case. Recording an
+	// unknown name would poison the Journal and make every later run fail before
+	// the resolver had a chance to recover.
+	runFrom(ctx).journal().record(scope(ctx), b.id, name)
 	return runStep(ctx, step, s)
 }
 
 // decide returns the branch to take, reusing the recorded decision when the run
-// is resuming and recording a fresh one otherwise.
+// is resuming. Run records a fresh decision only after verifying the case.
 func (b branchStep) decide(ctx context.Context, s Store) (string, error) {
 	journal := runFrom(ctx).journal()
 	if journal != nil {
@@ -77,7 +91,6 @@ func (b branchStep) decide(ctx context.Context, s Store) (string, error) {
 		}
 		return "", &StepError{ID: b.id, Op: OpRun, Err: err}
 	}
-	journal.record(scope(ctx), b.id, name)
 	return name, nil
 }
 

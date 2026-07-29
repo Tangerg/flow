@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Tangerg/flow"
@@ -13,7 +14,7 @@ import (
 func TestBranch_routes(t *testing.T) {
 	label := func(text string) workflow.Step {
 		return workflow.Leaf(text,
-			workflow.From[int](workflow.Ref{NodeID: "start", Path: "output"}),
+			workflow.From[int](workflow.Ref{NodeID: "start", Path: "/output"}),
 			flow.NodeFunc[int, string](func(_ context.Context, _ int) (string, error) { return text, nil }),
 		)
 	}
@@ -136,10 +137,67 @@ func TestBranch_noCase(t *testing.T) {
 	}
 }
 
+func TestBranch_doesNotJournalAnUnknownDecision(t *testing.T) {
+	var calls atomic.Int64
+	resolve := func(_ context.Context, _ workflow.Store) (string, error) {
+		if calls.Add(1) == 1 {
+			return "missing", nil
+		}
+		return "ready", nil
+	}
+	journal := workflow.NewJournal()
+	cfg := workflow.RunConfig{Journal: journal}
+	branch := workflow.Branch("route", resolve, map[string]workflow.Step{
+		"ready": leafStep("ready"),
+	})
+	input := workflow.NewStore().WithOutput("start", 1)
+
+	if _, err := workflow.Run(context.Background(), branch, input, cfg); !errors.Is(err, flow.ErrNoCase) {
+		t.Fatalf("first run err = %v; want ErrNoCase", err)
+	}
+	if journal.Len() != 0 {
+		t.Fatalf("unknown decision polluted Journal: %v", journal.Keys())
+	}
+	if _, err := workflow.Run(context.Background(), branch, input, cfg); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("resolver calls = %d; want 2", calls.Load())
+	}
+}
+
+func TestBranch_doesNotJournalANilCase(t *testing.T) {
+	journal := workflow.NewJournal()
+	cfg := workflow.RunConfig{Journal: journal}
+	var calls atomic.Int64
+	branch := workflow.Branch(
+		"route",
+		func(context.Context, workflow.Store) (string, error) {
+			calls.Add(1)
+			return "broken", nil
+		},
+		map[string]workflow.Step{"broken": nil},
+	)
+
+	if _, err := workflow.Run(context.Background(), branch, workflow.NewStore(), cfg); !errors.Is(err, workflow.ErrNilStep) {
+		t.Fatalf("err = %v; want ErrNilStep", err)
+	}
+	if journal.Len() != 0 {
+		t.Fatalf("nil case polluted Journal: %v", journal.Keys())
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("resolver ran %d times; want 0", calls.Load())
+	}
+}
+
 func TestBranch_nilResolver(t *testing.T) {
 	_, err := workflow.Branch("route", nil, map[string]workflow.Step{"x": leafStep("x")}).
 		Run(context.Background(), workflow.NewStore())
 	if !errors.Is(err, flow.ErrNilFunc) {
 		t.Fatalf("err = %v; want ErrNilFunc", err)
+	}
+	var stepErr *workflow.StepError
+	if !errors.As(err, &stepErr) || stepErr.ID != "route" || stepErr.Op != workflow.OpValidate {
+		t.Fatalf("err = %v; want route validation StepError", err)
 	}
 }

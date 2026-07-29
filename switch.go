@@ -10,7 +10,7 @@ import (
 // key, then runs the case node registered for that key. Because resolve is itself
 // a [Node], the router can be any composed node — a lookup, a classifier, or an
 // LLM call. If resolve yields a key with no matching case, Run returns an error
-// wrapping [ErrNoCase].
+// wrapping [ErrNoCase]. A nil case is rejected before resolve runs.
 //
 // K may be any comparable type, not just string, so enums and typed keys work.
 func Switch[K comparable, I, O any](resolve Node[I, K], cases map[K]Node[I, O]) Node[I, O] {
@@ -24,6 +24,14 @@ type switchNode[K comparable, I, O any] struct {
 
 func (s switchNode[K, I, O]) Run(ctx context.Context, in I) (O, error) {
 	var zero O
+	if s.resolve == nil {
+		return zero, ErrNilNode
+	}
+	for _, node := range s.cases {
+		if node == nil {
+			return zero, ErrNilNode
+		}
+	}
 	key, err := run(ctx, s.resolve, in)
 	if err != nil {
 		return zero, err

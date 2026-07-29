@@ -25,6 +25,10 @@ func counting(runs *atomic.Int64, id, from string, n int) workflow.Step {
 		}))
 }
 
+func runJournal(step workflow.Step, in workflow.Store, journal *workflow.Journal) (workflow.Store, error) {
+	return workflow.Run(context.Background(), step, in, workflow.RunConfig{Journal: journal})
+}
+
 func TestSuspend_sequenceResumesWithoutRepeatingWork(t *testing.T) {
 	var aRuns, bRuns atomic.Int64
 	pipeline := workflow.Sequence(
@@ -34,10 +38,9 @@ func TestSuspend_sequenceResumesWithoutRepeatingWork(t *testing.T) {
 	)
 
 	journal := workflow.NewJournal()
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
 
 	// First run stops at the gate.
-	paused, err := pipeline.Run(ctx, workflow.NewStore().WithOutput("start", 1))
+	paused, err := runJournal(pipeline, workflow.NewStore().WithOutput("start", 1), journal)
 	if !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("first run err = %v; want ErrSuspended", err)
 	}
@@ -50,7 +53,7 @@ func TestSuspend_sequenceResumesWithoutRepeatingWork(t *testing.T) {
 	}
 
 	// Second run supplies what the gate waited for.
-	final, err := pipeline.Run(ctx, paused.WithOutput("approval", true))
+	final, err := runJournal(pipeline, paused.WithOutput("approval", true), journal)
 	if err != nil {
 		t.Fatalf("resumed run: %v", err)
 	}
@@ -79,9 +82,8 @@ func TestSuspend_structuredLeafValueCanBeResolved(t *testing.T) {
 		}))
 
 	journal := workflow.NewJournal()
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
 	in := workflow.NewStore().WithOutput("document", "draft-42")
-	_, err := approval.Run(ctx, in)
+	_, err := runJournal(approval, in, journal)
 	waits := workflow.Suspensions(err)
 	if len(waits) != 1 {
 		t.Fatalf("Suspensions = %+v; want one", waits)
@@ -95,7 +97,7 @@ func TestSuspend_structuredLeafValueCanBeResolved(t *testing.T) {
 	if err := journal.Record(waits[0].Key(), true); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
-	out, err := approval.Run(ctx, in)
+	out, err := runJournal(approval, in, journal)
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -124,8 +126,7 @@ func TestInterrupt_resumesAsARecordedStepOutput(t *testing.T) {
 	pipeline := workflow.Sequence(before, approval, after)
 
 	journal := workflow.NewJournal()
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
-	paused, err := pipeline.Run(ctx, workflow.NewStore().WithOutput("start", 1))
+	paused, err := runJournal(pipeline, workflow.NewStore().WithOutput("start", 1), journal)
 	if !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("first run err = %v; want ErrSuspended", err)
 	}
@@ -159,9 +160,7 @@ func TestInterrupt_resumesAsARecordedStepOutput(t *testing.T) {
 	if err := json.Unmarshal(journalJSON, resumedJournal); err != nil {
 		t.Fatalf("Unmarshal Journal: %v", err)
 	}
-	resumedCtx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: resumedJournal})
-
-	out, err := pipeline.Run(resumedCtx, paused)
+	out, err := runJournal(pipeline, paused, resumedJournal)
 	if err != nil {
 		t.Fatalf("resumed run: %v", err)
 	}
@@ -185,10 +184,9 @@ func TestInterrupt_resolvesRepeatedScopesIndependently(t *testing.T) {
 		Concurrency: 1,
 	})
 	journal := workflow.NewJournal()
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
 	in := workflow.NewStore().WithOutput("start", []any{"a", "b", "c"})
 
-	_, err := step.Run(ctx, in)
+	_, err := runJournal(step, in, journal)
 	waits := workflow.Suspensions(err)
 	if len(waits) != 3 {
 		t.Fatalf("first Suspensions = %+v; want three", waits)
@@ -202,7 +200,7 @@ func TestInterrupt_resolvesRepeatedScopesIndependently(t *testing.T) {
 	if err := journal.Record(waits[1].Key(), false); err != nil {
 		t.Fatalf("resolve item 1: %v", err)
 	}
-	_, err = step.Run(ctx, in)
+	_, err = runJournal(step, in, journal)
 	remaining := workflow.Suspensions(err)
 	if len(remaining) != 2 ||
 		!slices.Equal(remaining[0].Path, []string{"items[0]"}) ||
@@ -216,7 +214,7 @@ func TestInterrupt_resolvesRepeatedScopesIndependently(t *testing.T) {
 	if err := journal.Record(remaining[1].Key(), true); err != nil {
 		t.Fatalf("resolve item 2: %v", err)
 	}
-	out, err := step.Run(ctx, in)
+	out, err := runJournal(step, in, journal)
 	if err != nil {
 		t.Fatalf("final run: %v", err)
 	}
@@ -238,14 +236,13 @@ func TestSuspend_journalAloneIsEnoughToResume(t *testing.T) {
 	)
 
 	journal := workflow.NewJournal()
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
-	if _, err := pipeline.Run(ctx, workflow.NewStore().WithOutput("start", 1)); !errors.Is(err, workflow.ErrSuspended) {
+	if _, err := runJournal(pipeline, workflow.NewStore().WithOutput("start", 1), journal); !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("first run err = %v; want ErrSuspended", err)
 	}
 
 	// Discard the returned Store entirely and rebuild the input from scratch.
 	fresh := workflow.NewStore().WithOutput("start", 1).WithOutput("approval", true)
-	final, err := pipeline.Run(ctx, fresh)
+	final, err := runJournal(pipeline, fresh, journal)
 	if err != nil {
 		t.Fatalf("resumed run: %v", err)
 	}
@@ -279,8 +276,7 @@ func TestSuspend_durableResumeAcrossSerialization(t *testing.T) {
 
 	// Run one: suspend, then persist both the Store and the Journal.
 	first := workflow.NewJournal()
-	paused, err := pipeline.Run(workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: first}),
-		workflow.NewStore().WithOutput("start", 21))
+	paused, err := runJournal(pipeline, workflow.NewStore().WithOutput("start", 21), first)
 	if !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("first run err = %v; want ErrSuspended", err)
 	}
@@ -303,8 +299,7 @@ func TestSuspend_durableResumeAcrossSerialization(t *testing.T) {
 		t.Fatalf("unmarshal journal: %v", err)
 	}
 
-	final, err := pipeline.Run(workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: restoredJournal}),
-		restoredStore.WithOutput("approval", true))
+	final, err := runJournal(pipeline, restoredStore.WithOutput("approval", true), restoredJournal)
 	if err != nil {
 		t.Fatalf("resumed run: %v", err)
 	}
@@ -325,10 +320,9 @@ func TestSuspend_parallelLetsSiblingsFinish(t *testing.T) {
 	waiting := workflow.Await("waiting", workflow.Output("approval"))
 
 	journal := workflow.NewJournal()
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
 	p := workflow.Parallel([]workflow.Step{slow, waiting}, workflow.ParallelConfig{})
 
-	out, err := p.Run(ctx, workflow.NewStore().WithOutput("start", 1))
+	out, err := runJournal(p, workflow.NewStore().WithOutput("start", 1), journal)
 	if !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("err = %v; want ErrSuspended", err)
 	}
@@ -341,7 +335,7 @@ func TestSuspend_parallelLetsSiblingsFinish(t *testing.T) {
 	}
 
 	// Resuming does not repeat the sibling's work.
-	final, err := p.Run(ctx, out.WithOutput("approval", true))
+	final, err := runJournal(p, out.WithOutput("approval", true), journal)
 	if err != nil {
 		t.Fatalf("resumed run: %v", err)
 	}
@@ -373,7 +367,7 @@ func TestSuspend_parallelReportsEverySuspension(t *testing.T) {
 		t.Fatalf("suspended IDs = %v; want all three", ids)
 	}
 	// The message has to name every wait, since a caller must satisfy all of them.
-	for _, want := range []string{"a.output", "b.output", "c.output"} {
+	for _, want := range []string{"a#/output", "b#/output", "c#/output"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("err = %q; want it to mention %s", err, want)
 		}
@@ -473,6 +467,25 @@ func TestSuspend_joinedFailureIsNotClassifiedAsPureSuspension(t *testing.T) {
 	}
 }
 
+func TestSuspend_typedNilRemainsASuspension(t *testing.T) {
+	var wait *workflow.Suspension
+	node := flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+		return 0, wait
+	})
+	step := workflow.Leaf(
+		"approval",
+		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
+		node,
+	)
+
+	_, err := step.Run(context.Background(), workflow.NewStore())
+	suspensions := workflow.Suspensions(err)
+	if !errors.Is(err, workflow.ErrSuspended) || len(suspensions) != 1 ||
+		suspensions[0].ID != "approval" {
+		t.Fatalf("err = %v, suspensions = %+v; want identified suspension", err, suspensions)
+	}
+}
+
 func TestSuspend_iterationResumesElementByElement(t *testing.T) {
 	// Every element doubles its item, but element 1 waits for approval.
 	var runs atomic.Int64
@@ -501,10 +514,9 @@ func TestSuspend_iterationResumesElementByElement(t *testing.T) {
 	})
 
 	journal := workflow.NewJournal()
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
 	in := workflow.NewStore().WithOutput("start", []any{1, 2, 3})
 
-	_, err := step.Run(ctx, in)
+	_, err := runJournal(step, in, journal)
 	if !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("err = %v; want ErrSuspended", err)
 	}
@@ -523,7 +535,7 @@ func TestSuspend_iterationResumesElementByElement(t *testing.T) {
 		t.Fatalf("journal keys = %v", keys)
 	}
 
-	final, err := step.Run(ctx, in.WithOutput("approval", true))
+	final, err := runJournal(step, in.WithOutput("approval", true), journal)
 	if err != nil {
 		t.Fatalf("resumed run: %v", err)
 	}
@@ -537,7 +549,7 @@ func TestSuspend_iterationResumesElementByElement(t *testing.T) {
 	}
 	want := []any{2, 4, 6}
 	for i := range want {
-		if v, _ := workflow.Get[int](final, workflow.At("iter", "output."+strconv.Itoa(i))); v != want[i] {
+		if v, _ := workflow.Get[int](final, workflow.At("iter", "output", strconv.Itoa(i))); v != want[i] {
 			t.Fatalf("collected = %v; want %v", got, want)
 		}
 	}
@@ -593,9 +605,9 @@ func TestSuspend_loopResumesAtTheWaitingIteration(t *testing.T) {
 	}
 
 	journal := workflow.NewJournal()
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
+	loop := workflow.Loop("loop", body, done, workflow.LoopConfig{})
 
-	if _, err := workflow.Loop("loop", body, done, workflow.LoopConfig{}).Run(ctx, workflow.NewStore()); !errors.Is(err, workflow.ErrSuspended) {
+	if _, err := runJournal(loop, workflow.NewStore(), journal); !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("err = %v; want ErrSuspended", err)
 	}
 	firstPass := runs.Load()
@@ -610,7 +622,7 @@ func TestSuspend_loopResumesAtTheWaitingIteration(t *testing.T) {
 		t.Fatalf("journal keys = %v; want a body and a decision record per iteration", keys)
 	}
 
-	final, err := workflow.Loop("loop", body, done, workflow.LoopConfig{}).Run(ctx, workflow.NewStore().WithOutput("approval", true))
+	final, err := runJournal(loop, workflow.NewStore().WithOutput("approval", true), journal)
 	if err != nil {
 		t.Fatalf("resumed run: %v", err)
 	}
@@ -645,17 +657,16 @@ func TestSuspend_awaitPassesThroughOnceSatisfied(t *testing.T) {
 func TestSuspend_awaitIsNotJournaled(t *testing.T) {
 	gate := workflow.Await("gate", workflow.Output("approval"))
 	journal := workflow.NewJournal()
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
 
 	satisfied := workflow.NewStore().WithOutput("approval", true)
-	if _, err := gate.Run(ctx, satisfied); err != nil {
+	if _, err := runJournal(gate, satisfied, journal); err != nil {
 		t.Fatalf("Await: %v", err)
 	}
 	if journal.Len() != 0 {
 		t.Fatalf("journal recorded %d steps; want none", journal.Len())
 	}
 	// Without the value it suspends again rather than replaying as done.
-	if _, err := gate.Run(ctx, workflow.NewStore()); !errors.Is(err, workflow.ErrSuspended) {
+	if _, err := runJournal(gate, workflow.NewStore(), journal); !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("err = %v; want ErrSuspended", err)
 	}
 }
@@ -667,10 +678,21 @@ func TestSuspend_emptyStepIDIsAnError(t *testing.T) {
 	}
 }
 
+func TestAwait_rejectsAnInvalidReference(t *testing.T) {
+	_, err := workflow.Await("approval", workflow.Ref{}).Run(context.Background(), workflow.NewStore())
+	if !errors.Is(err, workflow.ErrInvalidSpec) || errors.Is(err, workflow.ErrSuspended) {
+		t.Fatalf("err = %v; want ErrInvalidSpec only", err)
+	}
+	var stepErr *workflow.StepError
+	if !errors.As(err, &stepErr) || stepErr.ID != "approval" || stepErr.Op != workflow.OpValidate {
+		t.Fatalf("err = %v; want approval validation StepError", err)
+	}
+}
+
 func TestSuspension_errorMessage(t *testing.T) {
 	tests := map[string]*workflow.Suspension{
 		`workflow: step "a" suspended: waiting on a person`: {ID: "a", Value: "waiting on a person"},
-		`workflow: step "a" suspended: awaiting x.output`:   {ID: "a", Await: workflow.Output("x")},
+		`workflow: step "a" suspended: awaiting x#/output`:  {ID: "a", Await: workflow.Output("x")},
 		`workflow: step "a" in iter[2] suspended`:           {ID: "a", Path: []string{"iter[2]"}},
 		`workflow: step "a" suspended`:                      {ID: "a", Value: map[string]any{"private": "payload"}},
 		`workflow: suspended`:                               nil,
@@ -758,9 +780,9 @@ func TestSuspend_eventsReportTheThirdOutcome(t *testing.T) {
 		kinds = append(kinds, string(e.Kind)+":"+e.ID)
 	})
 
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Observer: observe, Journal: journal})
+	cfg := workflow.RunConfig{Observer: observe, Journal: journal}
 	in := workflow.NewStore().WithOutput("start", 1)
-	if _, err := pipeline.Run(ctx, in); !errors.Is(err, workflow.ErrSuspended) {
+	if _, err := workflow.Run(context.Background(), pipeline, in, cfg); !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("err = %v; want ErrSuspended", err)
 	}
 	if want := []string{"started:a", "completed:a", "suspended:gate"}; !slices.Equal(kinds, want) {
@@ -769,7 +791,7 @@ func TestSuspend_eventsReportTheThirdOutcome(t *testing.T) {
 
 	// On resume, the replayed step reports that it was skipped rather than started.
 	kinds = nil
-	if _, err := pipeline.Run(ctx, in.WithOutput("approval", true)); err != nil {
+	if _, err := workflow.Run(context.Background(), pipeline, in.WithOutput("approval", true), cfg); err != nil {
 		t.Fatalf("resumed run: %v", err)
 	}
 	if want := []string{"skipped:a", "completed:gate"}; !slices.Equal(kinds, want) {
@@ -780,15 +802,15 @@ func TestSuspend_eventsReportTheThirdOutcome(t *testing.T) {
 func TestInterrupt_eventsReportSuspensionThenReplay(t *testing.T) {
 	journal := workflow.NewJournal()
 	var events []workflow.Event
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{
+	cfg := workflow.RunConfig{
 		Journal: journal,
 		Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
 			events = append(events, event)
 		}),
-	})
+	}
 	step := workflow.Interrupt("approval", map[string]any{"question": "approve?"})
 
-	_, err := step.Run(ctx, workflow.NewStore())
+	_, err := workflow.Run(context.Background(), step, workflow.NewStore(), cfg)
 	waits := workflow.Suspensions(err)
 	if len(events) != 1 || events[0].Kind != workflow.EventSuspended ||
 		len(waits) != 1 || events[0].Err == nil {
@@ -799,7 +821,7 @@ func TestInterrupt_eventsReportSuspensionThenReplay(t *testing.T) {
 	}
 
 	events = nil
-	out, err := step.Run(ctx, workflow.NewStore())
+	out, err := workflow.Run(context.Background(), step, workflow.NewStore(), cfg)
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -837,9 +859,8 @@ func TestSuspend_branchDecisionIsJournaled(t *testing.T) {
 	)
 
 	journal := workflow.NewJournal()
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
 
-	paused, err := pipeline.Run(ctx, workflow.NewStore())
+	paused, err := runJournal(pipeline, workflow.NewStore(), journal)
 	if !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("first run err = %v; want ErrSuspended", err)
 	}
@@ -847,7 +868,7 @@ func TestSuspend_branchDecisionIsJournaled(t *testing.T) {
 		t.Fatalf("first run took %q, %v; want first", got, err)
 	}
 
-	final, err := pipeline.Run(ctx, paused.WithOutput("approval", true))
+	final, err := runJournal(pipeline, paused.WithOutput("approval", true), journal)
 	if err != nil {
 		t.Fatalf("resumed run: %v", err)
 	}
@@ -882,15 +903,14 @@ func TestSuspend_loopDecisionIsJournaled(t *testing.T) {
 	}
 
 	journal := workflow.NewJournal()
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
 	loop := workflow.Loop("loop", body, flaky, workflow.LoopConfig{})
 
-	if _, err := loop.Run(ctx, workflow.NewStore()); !errors.Is(err, workflow.ErrSuspended) {
+	if _, err := runJournal(loop, workflow.NewStore(), journal); !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("first run err = %v; want ErrSuspended", err)
 	}
 	firstChecks := checks.Load()
 
-	if _, err := loop.Run(ctx, workflow.NewStore().WithOutput("approval", true)); err != nil {
+	if _, err := runJournal(loop, workflow.NewStore().WithOutput("approval", true), journal); err != nil {
 		t.Fatalf("resumed run: %v", err)
 	}
 	// Iteration 0's recorded "keep going" was reused rather than re-asked, so the
@@ -910,11 +930,11 @@ func TestSuspend_journaledDecisionOfTheWrongTypeIsReported(t *testing.T) {
 	]}`), journal); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
-
 	// A recorded string that names no case is a plain no-case error.
-	_, err := workflow.Branch("route", func(context.Context, workflow.Store) (string, error) { return "a", nil },
-		map[string]workflow.Step{"a": leafStep("a")}).Run(ctx, workflow.NewStore())
+	branch := workflow.Branch("route",
+		func(context.Context, workflow.Store) (string, error) { return "a", nil },
+		map[string]workflow.Step{"a": leafStep("a")})
+	_, err := runJournal(branch, workflow.NewStore(), journal)
 	if !errors.Is(err, flow.ErrNoCase) {
 		t.Fatalf("branch err = %v; want ErrNoCase", err)
 	}
@@ -922,8 +942,10 @@ func TestSuspend_journaledDecisionOfTheWrongTypeIsReported(t *testing.T) {
 	// A recorded value of the wrong type is reported rather than ignored.
 	body := workflow.Leaf("b", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
-	_, err = workflow.Loop("repeat", body, func(context.Context, int, workflow.Store) (bool, error) { return true, nil }, workflow.LoopConfig{}).
-		Run(ctx, workflow.NewStore())
+	loop := workflow.Loop("repeat", body,
+		func(context.Context, int, workflow.Store) (bool, error) { return true, nil },
+		workflow.LoopConfig{})
+	_, err = runJournal(loop, workflow.NewStore(), journal)
 	if !errors.Is(err, workflow.ErrTypeMismatch) {
 		t.Fatalf("loop err = %v; want ErrTypeMismatch", err)
 	}

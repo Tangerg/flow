@@ -38,18 +38,18 @@
 // # Configuring a run
 //
 // One [RunConfig] carries everything a single run needs — what watches it and
-// what lets it resume — and [WithConfig] installs it:
+// what lets it resume — and [Run] establishes the execution boundary:
 //
-//	ctx = workflow.WithConfig(ctx, workflow.RunConfig{
+//	cfg := workflow.RunConfig{
 //		Observer: workflow.ObserverFunc(log),
 //		Journal:  workflow.NewJournal(),
-//	})
-//	out, err := pipeline.Run(ctx, in)
+//	}
+//	out, err := workflow.Run(ctx, pipeline, in, cfg)
 //
-// It travels in the context rather than in a Step's construction because it
-// belongs to the run and not to the definition: a compiled workflow is built once
-// and run many times, concurrently, and each run wants its own Journal. Adding a
-// field later does not break callers, since the struct is built with keyed fields.
+// Configuration belongs to the call rather than to the Step definition: a
+// compiled workflow can be run many times, concurrently, and each call gets an
+// independent observer sequence and Journal. Call Step.Run directly when no run
+// configuration is needed.
 //
 // # Suspension and resumption
 //
@@ -67,18 +67,18 @@
 //
 //	wait := workflow.Suspensions(err)[0]
 //	if err := journal.Record(wait.Key(), response); err != nil { ... }
-//	out, err := pipeline.Run(ctx, paused)
+//	out, err := workflow.Run(ctx, pipeline, paused, cfg)
 //
-// Attach a [Journal] through [RunConfig] and a later run continues instead of
-// starting over: every step it already completed is skipped and its result
+// Pass a [Journal] to [Run] through [RunConfig] and a later run continues instead
+// of starting over: every completed leaf boundary is skipped and its result
 // restored. Records are keyed by scope path and step ID, so this stays correct
-// where one step runs many times, and [Branch] and [Loop] also record the
-// decisions they made — a resolver that is not a pure function of the Store cannot
-// send a resumed run down the other branch. Both a [Store] and a Journal
-// serialize; the Journal uses versioned records with structured scope paths, so
-// the run that resumes need not be the process that started. Recording an
-// Interrupt response under its ID and path makes repeated instances independently
-// resumable without positional matching or delimiter-encoded keys.
+// where one leaf runs many times, and [Branch] and [Loop] also record the decisions
+// they made — a resolver that is not a pure function of the Store cannot send a
+// resumed run down the other branch. Both a [Store] and a Journal serialize; the
+// Journal uses versioned records with structured scope paths, so the run that
+// resumes need not be the process that started. Recording an Interrupt response
+// under its ID and path makes repeated instances independently resumable without
+// positional matching or delimiter-encoded keys.
 //
 // Suspension awareness lives in this package's composites. The generic
 // combinators in flow and flowx know nothing about a Store, so they treat a
@@ -96,10 +96,10 @@
 // Distribution and deterministic replay stay out of scope, but the package
 // carries enough on each [Event] to build tracing and durability outside it:
 // [Event.Seq] orders a run, [Event.Path] distinguishes repeated executions of one
-// step under [Loop] and [Iteration], and [Event.Store] is the serializable
-// snapshot a step produced. [Store.Changes] narrows that snapshot to just the
-// step's writes, the delta an audit log or an external persister records. Attach a
-// receiver through [RunConfig].
+// leaf or wait boundary under [Loop] and [Iteration], and [Event.Store] is the
+// serializable snapshot that boundary produced. [Store.Changes] narrows that
+// snapshot to just its writes, the delta an audit log or external persister
+// records. Attach a receiver through [RunConfig] when calling [Run].
 //
 // # Behavior by name
 //

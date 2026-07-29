@@ -11,7 +11,7 @@ import (
 
 func leafStep(id string) workflow.Step {
 	return workflow.Leaf(id,
-		workflow.From[int](workflow.Ref{NodeID: "start", Path: "output"}),
+		workflow.From[int](workflow.Ref{NodeID: "start", Path: "/output"}),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 }

@@ -23,7 +23,7 @@ func ExampleParse() {
 	fmt.Println(e.Bool(store))
 
 	// Output:
-	// reads: [review.output.blocked review.output.score]
+	// reads: [review#/output/blocked review#/output/score]
 	// true <nil>
 }
 
@@ -82,16 +82,16 @@ func ExampleBindings() {
 	      "condition": "converged",
 	      "maxIterations": 20,
 	      "body": {"kind":"leaf","id":"refine","type":"double",
-	               "input":{"nodeID":"refine","path":"output"}}
+	               "input":{"nodeID":"refine","path":"/output"}}
 	    },
 	    {
 	      "kind": "branch",
 	      "id": "route",
 	      "resolver": "bySize",
 	      "cases": {
-	        "small":  {"kind":"leaf","id":"out","type":"label","input":{"nodeID":"refine","path":"output"},"config":{"text":"small"}},
-	        "medium": {"kind":"leaf","id":"out","type":"label","input":{"nodeID":"refine","path":"output"},"config":{"text":"medium"}},
-	        "large":  {"kind":"leaf","id":"out","type":"label","input":{"nodeID":"refine","path":"output"},"config":{"text":"large"}}
+	        "small":  {"kind":"leaf","id":"out","type":"label","input":{"nodeID":"refine","path":"/output"},"config":{"text":"small"}},
+	        "medium": {"kind":"leaf","id":"out","type":"label","input":{"nodeID":"refine","path":"/output"},"config":{"text":"medium"}},
+	        "large":  {"kind":"leaf","id":"out","type":"label","input":{"nodeID":"refine","path":"/output"},"config":{"text":"large"}}
 	      }
 	    }
 	  ]

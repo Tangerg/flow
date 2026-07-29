@@ -35,8 +35,9 @@ type Graph struct {
 
 // CompileGraph validates a flat Graph, builds its leaves, and returns a Step.
 // It rejects duplicate IDs, missing dependencies, cycles, unknown node types,
-// invalid node configs, and incompatible registered schemas, then runs each
-// topological layer's nodes concurrently.
+// invalid node configs, nil factory results, and incompatible registered
+// schemas, then runs each topological layer's nodes concurrently. Build errors
+// are reported as GraphError values at the graph node and field that caused them.
 func (r *Registry) CompileGraph(g Graph) (Step, error) {
 	layers, byID, err := r.validateGraph(g)
 	if err != nil {
@@ -47,9 +48,13 @@ func (r *Registry) CompileGraph(g Graph) (Step, error) {
 	for _, layer := range layers {
 		branch := make([]Step, 0, len(layer))
 		for _, id := range layer {
-			leaf, err := r.buildLeaf(nodeToSpec(byID[id]))
+			leaf, field, err := r.makeLeaf(nodeToSpec(byID[id]))
 			if err != nil {
-				return nil, err
+				return nil, &GraphError{
+					NodeID: id,
+					Field:  field,
+					Err:    fmt.Errorf("%w: %w", ErrInvalidGraph, err),
+				}
 			}
 			branch = append(branch, leaf)
 		}
@@ -83,8 +88,11 @@ func (r *Registry) plan(g Graph) (layers [][]string, byID map[string]NodeSpec, w
 	wiring = make(map[string]Inputs, len(g.Nodes))
 	indexByID := make(map[string]int, len(g.Nodes))
 	for i, n := range g.Nodes {
-		if n.ID == "" {
+		switch {
+		case n.ID == "":
 			return nil, nil, nil, &GraphError{Field: "id", Err: fmt.Errorf("%w: empty", ErrInvalidGraph)}
+		case n.Type == "":
+			return nil, nil, nil, &GraphError{NodeID: n.ID, Field: "type", Err: fmt.Errorf("%w: empty", ErrInvalidGraph)}
 		}
 		if _, dup := byID[n.ID]; dup {
 			return nil, nil, nil, &GraphError{NodeID: n.ID, Field: "id", Err: ErrDuplicateNode}
@@ -129,7 +137,23 @@ func (r *Registry) plan(g Graph) (layers [][]string, byID map[string]NodeSpec, w
 				return nil, nil, nil, err
 			}
 		}
+		explicit := make(map[string]struct{}, len(n.DependsOn))
 		for _, d := range n.DependsOn {
+			if d == "" {
+				return nil, nil, nil, &GraphError{
+					NodeID: n.ID,
+					Field:  "dependsOn",
+					Err:    fmt.Errorf("%w: empty dependency", ErrInvalidGraph),
+				}
+			}
+			if _, duplicate := explicit[d]; duplicate {
+				return nil, nil, nil, &GraphError{
+					NodeID: n.ID,
+					Field:  "dependsOn",
+					Err:    fmt.Errorf("%w: duplicate dependency %q", ErrInvalidGraph, d),
+				}
+			}
+			explicit[d] = struct{}{}
 			if err := addDep(d, false); err != nil {
 				return nil, nil, nil, err
 			}

@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- An executable `example` package with a seven-stage learning path from one
+  typed node through composition, dynamic DAGs, the JSON DSL, expression-based
+  routing, and persisted suspension/resumption. The examples use only public
+  APIs and run as output-checked Go examples.
 - Suspension as a third outcome alongside success and failure. `Suspend` reports
   from inside a node that work cannot proceed yet; `Await` is a Store gate, with
   `AwaitFactory` for the JSON DSL; and `Interrupt` is an explicit request/response
@@ -19,18 +23,19 @@ All notable changes to this project are documented here. The format follows
   their remaining work finish and merge it instead of cancelling it — cancelling
   would discard the work and repeat its side effects on the run that resumes.
   Real errors still fail fast.
-- `RunConfig` and `WithConfig`: one keyed struct carries everything a single run
-  needs — its `Observer` and its `Journal` — installed with one call instead of a
-  chain of `WithXxx` wrappers, and extensible without breaking callers. `Config`
-  reads it back so a node can hand it to a nested run.
-- `Journal` for checkpointed resumption, attached through `RunConfig`: a later run
-  skips every step the Journal already holds and restores its result. Records are keyed by
-  scope path and step ID, so this is correct where one step runs many times, and
-  `Branch` and `Loop` also record the decisions they made — a resolver or condition
-  that is not a pure function of the Store cannot send a resumed run down a
-  different path, and is not consulted twice. A Journal serializes, so the process
-  that resumes need not be the one that started. `Forget` retries a single step;
-  `Reset` starts over.
+- `workflow.Run`, the explicit execution boundary for a configured workflow.
+  `RunConfig` carries that call's `Observer` and `Journal`; every call gets fresh
+  run bookkeeping while a Journal may deliberately carry completed work into a
+  later call.
+- `Journal` for checkpointed resumption, passed to `workflow.Run` through
+  `RunConfig`: a later run skips every completed leaf boundary the Journal holds
+  and restores its result.
+  Records are keyed by scope path and step ID, so this is correct where one leaf
+  runs many times. `Branch` and `Loop` also record the decisions they made — a
+  resolver or condition that is not a pure function of the Store cannot send a
+  resumed run down a different path, and is not consulted twice. A Journal
+  serializes, so the process that resumes need not be the one that started.
+  `Forget` retries a single step; `Reset` starts over.
 - `Event` gained the `EventSuspended` and `EventSkipped` kinds, so an observer can
   see the third outcome and tell replayed steps from re-run ones.
 - New optional package `workflow/expr`: branch and loop rules as data. It
@@ -73,6 +78,57 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `Ref.Path` is now an RFC 6901 JSON Pointer. `At` and `Ref.Child` take literal
+  path segments and escape them, so empty object keys and keys containing `.`,
+  `/`, or `~` are all representable. The JSON Schemas reject ambiguous legacy
+  dotted paths, while `workflow/expr` keeps its Go-like source syntax and
+  compiles it to pointers. Array traversal accepts only RFC 6901's canonical
+  unsigned decimal indexes.
+- JSON documents are decoded with duplicate-member detection before schema or
+  typed decoding can collapse them. This applies to the workflow DSL, node
+  configs, Store and Journal state, and embedded or registered JSON Schemas.
+  Store decoding also requires object-shaped state rather than treating `null`
+  as an empty Store.
+- `flow.Race` now owns the complete lifetime of the goroutines it starts: after
+  a winner or parent cancellation it cancels and drains every losing call before
+  returning. It also rejects a nil node before starting any sibling.
+- Negative concurrency and iteration limits are consistently invalid across the
+  root and workflow APIs and match `flow.ErrInvalidConfig`; zero retains the
+  documented default.
+- Workflow definitions are validated before replay or user code. In particular,
+  a stale Journal can no longer hide an invalid Leaf, Branch rejects a nil
+  resolver or case before choosing, and ordered composites report the failing
+  position with `flow.IndexError`.
+- Graph type validation applies a node's declared output type only to its exact
+  conventional output. Nested references and custom cells are `TypeAny` because
+  `NodeSchema` does not describe their member types.
+- Expression number semantics now survive a Store JSON round trip. Integral
+  floats follow JSON integer semantics, and `float32` values are normalized to
+  the same decimal value that `encoding/json` preserves.
+- Store path lookup now uses a typed value's JSON representation when needed, so
+  nested reads through structs, typed maps and slices, pointers, and custom JSON
+  marshalers behave the same before and after Store serialization. Restored
+  Store writes and marshal diagnostics are deterministic.
+- Composites validate their required children before invoking any child. A nil
+  second `Then` node, empty-input `Map`, later `Sequence` step, `Parallel`
+  branch, `Loop` body, or `Iteration` body can no longer hide an invalid
+  definition or allow earlier children to perform partial work.
+- Programmatic `Spec` and `Graph` validation now matches the strict JSON DSL:
+  fields irrelevant to a Spec kind, empty or duplicate explicit dependencies,
+  empty ports, empty node types, and malformed raw config are rejected instead
+  of ignored. Iteration body IDs are local to the per-element Store and scope,
+  so they may be reused safely outside the body.
+- Graph leaf construction keeps errors at the graph boundary, rejects a nil Step
+  returned by a custom factory, and gives factories owned config bytes. `Factory`
+  rejects ports beyond its one default input; whitespace-only config selects the
+  zero config like an omitted value.
+- Journal records are append-only until `Forget` or `Reset`, and a Branch records
+  a resolver decision only after confirming that it names a real, non-nil case.
+- `Loop` and `Iteration` now store their definition directly and validate it in
+  `Run`, rather than hiding execution inside a constructor-created closure.
+- Expression indexes written in Go's hexadecimal or octal literal syntax are
+  normalized to the Store's decimal path representation, and unsigned/float
+  comparison handles the complete fractional boundary.
 - Store reads survive serialization. `Store.UnmarshalJSON` keeps numbers as
   `json.Number` so nothing is rounded on the way in, and `Get[T]` converts through
   the value's JSON representation instead of asserting an exact type. A typed step
@@ -141,10 +197,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Breaking
 
-- `WithObserver` and `WithJournal` are replaced by one `WithConfig(ctx, RunConfig{...})`.
-  A run's configuration still travels in the context — it belongs to the run rather
-  than to the definition, since a compiled workflow is run many times concurrently
-  and each run wants its own `Journal` — but it is now a single keyed struct.
+- `WithObserver`, `WithJournal`, `WithConfig`, and configuration readback were
+  removed. Replace
+  `step.Run(workflow.WithConfig(ctx, cfg), in)` with
+  `workflow.Run(ctx, step, in, cfg)`. Call `step.Run` directly when no
+  configuration is needed. A configured call always starts a fresh event
+  sequence, so run-local mutable state cannot leak through a reused context.
+- `Ref.Path` changed from a dotted path to an RFC 6901 JSON Pointer. Replace
+  `At("node", "output.items.0")` with
+  `At("node", "output", "items", "0")`, and JSON
+  `"path":"output.items.0"` with `"path":"/output/items/0"`. `Child()` leaves a
+  Ref unchanged; `Child("")` now addresses an empty object key.
+- Negative `Concurrency` and `MaxIterations` values now fail with
+  `flow.ErrInvalidConfig` instead of selecting an unbounded or default mode.
+- `flow.Race` rejects the entire composition when any node is nil and waits for
+  all losing calls to honor cancellation before returning.
 - `Get[T]` converts instead of asserting. The exact-type fast path is unchanged, so
   existing correct code keeps working; a read that previously failed with
   `ErrTypeMismatch` on a JSON-compatible value now succeeds.

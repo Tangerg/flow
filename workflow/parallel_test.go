@@ -11,7 +11,7 @@ import (
 )
 
 func TestParallel_mergesBranches(t *testing.T) {
-	from := workflow.From[int](workflow.Ref{NodeID: "start", Path: "output"})
+	from := workflow.From[int](workflow.Ref{NodeID: "start", Path: "/output"})
 	a := workflow.Leaf("a", from, flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil }))
 	b := workflow.Leaf("b", from, flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil }))
 
@@ -31,7 +31,7 @@ func TestParallel_mergesBranches(t *testing.T) {
 
 func TestParallel_failFast(t *testing.T) {
 	boom := errors.New("boom")
-	from := workflow.From[int](workflow.Ref{NodeID: "start", Path: "output"})
+	from := workflow.From[int](workflow.Ref{NodeID: "start", Path: "/output"})
 	ok := workflow.Leaf("ok", from, flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
 	bad := workflow.Leaf("bad", from, flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom }))
 
@@ -65,6 +65,31 @@ func TestParallel_emptyAndSingleRespectCancellation(t *testing.T) {
 		if _, err := step.Run(ctx, workflow.NewStore()); !errors.Is(err, context.Canceled) {
 			t.Fatalf("err = %v; want context.Canceled", err)
 		}
+	}
+}
+
+func TestParallel_validatesEveryBranchBeforeRunning(t *testing.T) {
+	ran := false
+	first := flow.NodeFunc[workflow.Store, workflow.Store](func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+		ran = true
+		return store, nil
+	})
+	_, err := workflow.Parallel([]workflow.Step{first, nil}, workflow.ParallelConfig{}).
+		Run(context.Background(), workflow.NewStore())
+	var indexErr *flow.IndexError
+	if !errors.As(err, &indexErr) || indexErr.Index != 1 || !errors.Is(err, workflow.ErrNilStep) {
+		t.Fatalf("err = %v; want IndexError(1, ErrNilStep)", err)
+	}
+	if ran {
+		t.Fatal("a branch ran before the invalid parallel composition was rejected")
+	}
+}
+
+func TestParallel_rejectsNegativeConcurrencyEvenWhenEmpty(t *testing.T) {
+	_, err := workflow.Parallel(nil, workflow.ParallelConfig{Concurrency: -1}).
+		Run(context.Background(), workflow.NewStore())
+	if !errors.Is(err, flow.ErrInvalidConfig) {
+		t.Fatalf("err = %v; want ErrInvalidConfig", err)
 	}
 }
 

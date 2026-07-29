@@ -10,15 +10,16 @@ import (
 // FanOut runs every node on the same input concurrently and returns their
 // outputs in argument order. The first failure cancels the rest. A zero
 // [flow.MapConfig] is unbounded. It is a thin convenience over flow.Map applied
-// to the nodes as data.
+// to the nodes as data. Every node is validated before any of them runs.
 func FanOut[I, O any](nodes []flow.Node[I, O], cfg flow.MapConfig) flow.Node[I, []O] {
 	nodes = slices.Clone(nodes)
 	return flow.NodeFunc[I, []O](func(ctx context.Context, in I) ([]O, error) {
-		apply := flow.NodeFunc[flow.Node[I, O], O](func(ctx context.Context, n flow.Node[I, O]) (O, error) {
-			var zero O
+		for i, n := range nodes {
 			if n == nil {
-				return zero, flow.ErrNilNode
+				return nil, &flow.IndexError{Index: i, Err: flow.ErrNilNode}
 			}
+		}
+		apply := flow.NodeFunc[flow.Node[I, O], O](func(ctx context.Context, n flow.Node[I, O]) (O, error) {
 			return n.Run(ctx, in)
 		})
 		return flow.Map(apply, cfg).Run(ctx, nodes)
@@ -28,12 +29,15 @@ func FanOut[I, O any](nodes []flow.Node[I, O], cfg flow.MapConfig) flow.Node[I, 
 // Combine runs two differently typed nodes concurrently on the same input and
 // merges their outputs. It is the heterogeneous fan-in that flow.Map (which is
 // homogeneous) cannot express, while keeping both intermediate values statically
-// typed.
+// typed. Both nodes and merge are validated before either node runs.
 func Combine[I, A, B, O any](a flow.Node[I, A], b flow.Node[I, B], merge func(ctx context.Context, a A, b B) (O, error)) flow.Node[I, O] {
 	return flow.NodeFunc[I, O](func(ctx context.Context, in I) (O, error) {
 		var zero O
 		if merge == nil {
 			return zero, flow.ErrNilFunc
+		}
+		if a == nil || b == nil {
+			return zero, flow.ErrNilNode
 		}
 		var av A
 		var bv B
@@ -41,14 +45,8 @@ func Combine[I, A, B, O any](a flow.Node[I, A], b flow.Node[I, B], merge func(ct
 			var err error
 			switch task {
 			case 0:
-				if a == nil {
-					return struct{}{}, flow.ErrNilNode
-				}
 				av, err = a.Run(ctx, in)
 			case 1:
-				if b == nil {
-					return struct{}{}, flow.ErrNilNode
-				}
 				bv, err = b.Run(ctx, in)
 			}
 			return struct{}{}, err

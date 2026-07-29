@@ -70,6 +70,25 @@ func TestFanOut_failFast(t *testing.T) {
 	}
 }
 
+func TestFanOut_validatesEveryNodeBeforeRunning(t *testing.T) {
+	ran := false
+	node := flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+		ran = true
+		return 0, nil
+	})
+	_, err := flowx.FanOut(
+		[]flow.Node[int, int]{node, nil},
+		flow.MapConfig{},
+	).Run(context.Background(), 0)
+	var indexErr *flow.IndexError
+	if !errors.As(err, &indexErr) || indexErr.Index != 1 || !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("err = %v; want IndexError(1, ErrNilNode)", err)
+	}
+	if ran {
+		t.Fatal("a node ran before the invalid fan-out was rejected")
+	}
+}
+
 func TestFanOut_clonesNodes(t *testing.T) {
 	nodes := []flow.Node[int, int]{
 		flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in + 1, nil }),
@@ -107,6 +126,25 @@ func TestCombine_rejectsNilInputs(t *testing.T) {
 	merge := func(_ context.Context, a, b int) (int, error) { return a + b, nil }
 	if _, err := flowx.Combine[int, int, int, int](nil, node, merge).Run(context.Background(), 1); !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("nil node err = %v", err)
+	}
+}
+
+func TestCombine_validatesBothNodesBeforeRunning(t *testing.T) {
+	ran := false
+	node := flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+		ran = true
+		return 0, nil
+	})
+	_, err := flowx.Combine(
+		node,
+		flow.Node[int, string](nil),
+		func(context.Context, int, string) (int, error) { return 0, nil },
+	).Run(context.Background(), 0)
+	if !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("err = %v; want ErrNilNode", err)
+	}
+	if ran {
+		t.Fatal("a node ran before the invalid combine was rejected")
 	}
 }
 

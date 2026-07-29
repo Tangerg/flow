@@ -17,7 +17,8 @@
         "path": {
           "type": "string",
           "minLength": 1,
-          "description": "The dot-separated path below the node value, such as output or output.items.0."
+          "pattern": "^/(?:[^~/]|~[01])*(?:/(?:[^~/]|~[01])*)*$",
+          "description": "An RFC 6901 JSON Pointer below the node value, such as /output or /output/items/0."
         }
       },
       "required": ["nodeID", "path"],
@@ -100,7 +101,7 @@
         "maxIterations": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum iterations. Zero or omission means unbounded."
+          "description": "Maximum iterations. Zero or omission uses the library's default safety cap."
         }
       },
       "required": ["id", "body", "condition"],

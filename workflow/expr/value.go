@@ -12,10 +12,12 @@ import (
 
 // The value domain is deliberately narrow: nil, bool, string, int64, uint64,
 // float64, and whatever else a Store happens to hold. Scalars are normalized on
-// read so named Go values and values restored from JSON have the same semantics.
+// read to their JSON numeric semantics so named Go values and values restored
+// from JSON behave the same.
 
 // normalize maps every numeric type a Store may hold onto int64, uint64, or
-// float64 and leaves other values alone.
+// float64 and leaves other values alone. Integral floats become integers because
+// JSON encodes them as integer tokens.
 //
 // A [json.Number] — what a Store holds after being deserialized — normalizes to
 // an exact integer when possible and float64 otherwise, so an expression behaves
@@ -38,8 +40,15 @@ func normalize(v any) any {
 		return value.Int()
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		return normalizeUint(value.Uint())
-	case reflect.Float32, reflect.Float64:
-		return value.Float()
+	case reflect.Float32:
+		// encoding/json emits the shortest decimal that round-trips to the
+		// original float32. Normalize through that same representation so a
+		// fresh value and its decoded json.Number compare identically.
+		decimal := strconv.FormatFloat(value.Float(), 'g', -1, 32)
+		floating, _ := strconv.ParseFloat(decimal, 64)
+		return normalizeFloat(floating)
+	case reflect.Float64:
+		return normalizeFloat(value.Float())
 	}
 	return v
 }
@@ -49,6 +58,29 @@ func normalizeUint(n uint64) any {
 		return n
 	}
 	return int64(n)
+}
+
+// normalizeFloat erases a Go numeric distinction that JSON cannot preserve:
+// an integral float is encoded as an integer token. It derives that integer from
+// encoding/json's actual decimal representation rather than converting the
+// binary float directly. Near the integer limits those values can differ (for
+// example, 2^63 encodes as 9223372036854776000), and only the former survives a
+// Store round trip.
+func normalizeFloat(n float64) any {
+	if math.IsNaN(n) || math.IsInf(n, 0) || n != math.Trunc(n) {
+		return n
+	}
+	encoded, err := json.Marshal(n)
+	if err != nil {
+		return n
+	}
+	if integer, err := strconv.ParseInt(string(encoded), 10, 64); err == nil {
+		return integer
+	}
+	if integer, err := strconv.ParseUint(string(encoded), 10, 64); err == nil {
+		return integer
+	}
+	return n
 }
 
 // normalizeNumber prefers an exact signed or unsigned integer and falls back to
@@ -62,7 +94,7 @@ func normalizeNumber(n json.Number) any {
 		return i
 	}
 	if f, err := strconv.ParseFloat(n.String(), 64); err == nil {
-		return f
+		return normalizeFloat(f)
 	}
 	return n
 }
@@ -317,7 +349,17 @@ func compareUintFloat(integer uint64, floating float64) (order int, unordered bo
 	}
 
 	truncated := uint64(floating)
-	return cmp.Compare(integer, truncated), false
+	if order := cmp.Compare(integer, truncated); order != 0 {
+		return order, false
+	}
+	switch converted := float64(truncated); {
+	case converted < floating:
+		return -1, false
+	case converted > floating:
+		return 1, false
+	default:
+		return 0, false
+	}
 }
 
 func applyString(op token.Token, left, right string) (any, error) {

@@ -2,6 +2,7 @@ package workflow_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/Tangerg/flow"
@@ -17,7 +18,7 @@ func TestIteration_mapsAndCollects(t *testing.T) {
 
 	iter := workflow.Iteration(workflow.IterationConfig{
 		ID:          "iter",
-		Input:       workflow.Ref{NodeID: "start", Path: "output"},
+		Input:       workflow.Ref{NodeID: "start", Path: "/output"},
 		Body:        body,
 		BodyOutput:  workflow.Output("el"),
 		Concurrency: 2,
@@ -54,7 +55,7 @@ func TestIteration_usesIndex(t *testing.T) {
 
 	iter := workflow.Iteration(workflow.IterationConfig{
 		ID:         "iter",
-		Input:      workflow.Ref{NodeID: "start", Path: "output"},
+		Input:      workflow.Ref{NodeID: "start", Path: "/output"},
 		Body:       body,
 		BodyOutput: workflow.Output("el"),
 	})
@@ -82,6 +83,62 @@ func TestIteration_inputNotArray(t *testing.T) {
 	_, err := iter.Run(context.Background(), workflow.NewStore().WithOutput("start", 42))
 	if err == nil {
 		t.Fatal("expected error for non-array input")
+	}
+}
+
+func TestIteration_validatesItsStructureBeforeReadingInput(t *testing.T) {
+	empty := workflow.NewStore().WithOutput("start", []any{})
+	identity := flow.NodeFunc[workflow.Store, workflow.Store](func(_ context.Context, s workflow.Store) (workflow.Store, error) {
+		return s, nil
+	})
+
+	tests := map[string]struct {
+		config workflow.IterationConfig
+		want   error
+	}{
+		"empty ID": {
+			config: workflow.IterationConfig{
+				Input: workflow.Output("start"), Body: identity, BodyOutput: workflow.Output("value"),
+			},
+			want: workflow.ErrInvalidStepID,
+		},
+		"nil body": {
+			config: workflow.IterationConfig{
+				ID: "each", Input: workflow.Output("start"), BodyOutput: workflow.Output("value"),
+			},
+			want: workflow.ErrNilStep,
+		},
+		"invalid input": {
+			config: workflow.IterationConfig{
+				ID: "each", Body: identity, BodyOutput: workflow.Output("value"),
+			},
+			want: workflow.ErrInvalidSpec,
+		},
+		"invalid body output": {
+			config: workflow.IterationConfig{
+				ID: "each", Input: workflow.Output("start"), Body: identity,
+			},
+			want: workflow.ErrInvalidSpec,
+		},
+		"negative concurrency": {
+			config: workflow.IterationConfig{
+				ID: "each", Input: workflow.Output("start"), Body: identity,
+				BodyOutput: workflow.Output("value"), Concurrency: -1,
+			},
+			want: flow.ErrInvalidConfig,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := workflow.Iteration(tt.config).Run(context.Background(), empty)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("err = %v; want %v", err, tt.want)
+			}
+			var stepErr *workflow.StepError
+			if !errors.As(err, &stepErr) || stepErr.Op != workflow.OpValidate {
+				t.Fatalf("err = %v; want validation StepError", err)
+			}
+		})
 	}
 }
 

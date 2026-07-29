@@ -40,6 +40,7 @@ func TestFactory(t *testing.T) {
 	}{
 		{name: "typed config", config: json.RawMessage(`{"n": 2}`), want: 3},
 		{name: "empty config", want: 1},
+		{name: "whitespace config", config: json.RawMessage(" \n\t"), want: 1},
 	}
 
 	for _, tt := range tests {
@@ -67,12 +68,27 @@ func TestFactory_rejectsUnknownConfigField(t *testing.T) {
 	}
 }
 
+func TestFactory_rejectsDuplicateConfigMembers(t *testing.T) {
+	_, err := addFactory()(wired("add", json.RawMessage(`{"n":1,"n":2}`)))
+	if !errors.Is(err, workflow.ErrInvalidSpec) {
+		t.Fatalf("err = %v; want ErrInvalidSpec", err)
+	}
+}
+
 func TestFactory_rejectsUnwiredDefaultPort(t *testing.T) {
 	// A Factory node always reads one port, so an unwired default port can never
 	// work and must be reported at build time rather than mid-run.
 	_, err := addFactory()(workflow.LeafSpec{ID: "add"})
 	if !errors.Is(err, workflow.ErrMissingPort) {
 		t.Fatalf("err = %v; want ErrMissingPort", err)
+	}
+}
+
+func TestFactory_rejectsPortsItCannotRead(t *testing.T) {
+	spec := wired("add", nil)
+	spec.Inputs["ignored"] = workflow.Output("other")
+	if _, err := addFactory()(spec); !errors.Is(err, workflow.ErrUnknownPort) {
+		t.Fatalf("err = %v; want ErrUnknownPort", err)
 	}
 }
 

@@ -38,7 +38,7 @@ func TestLoop_untilDone(t *testing.T) {
 
 func TestLoop_nilCondition(t *testing.T) {
 	body := workflow.Leaf("x",
-		workflow.From[int](workflow.Ref{NodeID: "start", Path: "output"}),
+		workflow.From[int](workflow.Ref{NodeID: "start", Path: "/output"}),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 
@@ -58,6 +58,20 @@ func TestLoop_maxIterations(t *testing.T) {
 	_, err := workflow.Loop("loop", body, done, workflow.LoopConfig{MaxIterations: 3}).Run(context.Background(), workflow.NewStore())
 	if !errors.Is(err, flow.ErrMaxIterations) {
 		t.Fatalf("err = %v; want ErrMaxIterations", err)
+	}
+}
+
+func TestLoop_rejectsNegativeMaxIterations(t *testing.T) {
+	body := workflow.Leaf("x",
+		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
+		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
+	)
+	done := func(context.Context, int, workflow.Store) (bool, error) { return true, nil }
+
+	_, err := workflow.Loop("loop", body, done, workflow.LoopConfig{MaxIterations: -1}).
+		Run(context.Background(), workflow.NewStore())
+	if !errors.Is(err, flow.ErrInvalidConfig) {
+		t.Fatalf("err = %v; want ErrInvalidConfig", err)
 	}
 }
 

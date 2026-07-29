@@ -19,32 +19,119 @@ import (
 // [Describer].
 type Step = flow.Node[Store, Store]
 
-// Ref points at a value in the [Store]: a node ID plus a path under it. The first
-// path segment is the key written by that node; further segments index into
-// nested data.
+// Ref points at a value in the [Store]: a node ID plus an RFC 6901 JSON Pointer
+// under it. The first pointer segment is the key written by that node; further
+// segments index into nested data.
 type Ref struct {
 	NodeID string `json:"nodeID"`
 	Path   string `json:"path"`
 }
 
-// At returns a reference to path under nodeID.
-func At(nodeID, path string) Ref { return Ref{NodeID: nodeID, Path: path} }
+// At returns a reference to key under nodeID, followed by any nested path. Each
+// argument is one literal segment; At performs JSON Pointer escaping, so keys
+// containing "/" or "~" need no special handling by the caller.
+func At(nodeID, key string, path ...string) Ref {
+	var pointer strings.Builder
+	writePointerSegment(&pointer, key)
+	for _, segment := range path {
+		writePointerSegment(&pointer, segment)
+	}
+	return Ref{NodeID: nodeID, Path: pointer.String()}
+}
 
-const outputKey = "output"
+const (
+	outputKey  = "output"
+	outputPath = "/" + outputKey
+)
 
 // Output returns a reference to a step's conventional output value.
-func Output(nodeID string) Ref { return At(nodeID, outputKey) }
+func Output(nodeID string) Ref { return Ref{NodeID: nodeID, Path: outputPath} }
 
-// String returns the reference in nodeID.path form.
-func (r Ref) String() string { return r.NodeID + "." + r.Path }
+// String returns the reference in nodeID#pointer form.
+func (r Ref) String() string { return r.NodeID + "#" + r.Path }
 
-// Child returns a reference below r. An empty path returns r unchanged.
-func (r Ref) Child(path string) Ref {
-	if path == "" {
+// Child returns a reference below r. Each argument is one literal path segment;
+// no arguments return r unchanged.
+func (r Ref) Child(path ...string) Ref {
+	if len(path) == 0 {
 		return r
 	}
-	r.Path = strings.Trim(r.Path+"."+path, ".")
+	r.Path += encodePointer(path)
 	return r
+}
+
+func encodePointer(segments []string) string {
+	var pointer strings.Builder
+	for _, segment := range segments {
+		writePointerSegment(&pointer, segment)
+	}
+	return pointer.String()
+}
+
+func writePointerSegment(pointer *strings.Builder, segment string) {
+	pointer.WriteByte('/')
+	for _, c := range segment {
+		switch c {
+		case '~':
+			pointer.WriteString("~0")
+		case '/':
+			pointer.WriteString("~1")
+		default:
+			pointer.WriteRune(c)
+		}
+	}
+}
+
+type pointerScanner struct {
+	rest string
+	more bool
+}
+
+func scanPointer(pointer string) (pointerScanner, bool) {
+	if pointer == "" || pointer[0] != '/' {
+		return pointerScanner{}, false
+	}
+	return pointerScanner{rest: pointer[1:], more: true}, true
+}
+
+// next returns one decoded pointer segment, whether one was present, and
+// whether its escaping was valid. Segments without "~" borrow the original
+// pointer string and allocate nothing.
+func (s *pointerScanner) next() (segment string, present, valid bool) {
+	if !s.more {
+		return "", false, true
+	}
+	encoded := s.rest
+	if slash := strings.IndexByte(encoded, '/'); slash >= 0 {
+		encoded, s.rest = encoded[:slash], encoded[slash+1:]
+	} else {
+		s.rest, s.more = "", false
+	}
+	if !strings.Contains(encoded, "~") {
+		return encoded, true, true
+	}
+
+	var decoded strings.Builder
+	decoded.Grow(len(encoded))
+	for i := 0; i < len(encoded); i++ {
+		if encoded[i] != '~' {
+			decoded.WriteByte(encoded[i])
+			continue
+		}
+		if i+1 == len(encoded) {
+			return "", true, false
+		}
+		i++
+		switch encoded[i] {
+		case '0':
+			decoded.WriteByte('~')
+		case '1':
+			decoded.WriteByte('/')
+		default:
+			return "", true, false
+		}
+	}
+	return decoded.String(), true, true
 }
 
 // Get reads the value at ref as a T. A value of exactly T is returned as-is;
@@ -141,9 +228,28 @@ type leafStep[I, O any] struct {
 }
 
 func (l leafStep[I, O]) Run(ctx context.Context, s Store) (Store, error) {
-	// Without an observer there is nothing to time, so the clock is never read.
 	run := runFrom(ctx)
 	journal := run.journal()
+
+	// Definition errors are checked before replay. A stale Journal entry must
+	// never make a broken workflow definition appear valid.
+	var (
+		validationOp  StepOp
+		validationErr error
+	)
+	switch {
+	case l.id == "":
+		validationOp, validationErr = OpValidate, ErrInvalidStepID
+	case l.bind == nil:
+		validationOp, validationErr = OpBind, flow.ErrNilFunc
+	case l.node == nil:
+		validationOp, validationErr = OpRun, flow.ErrNilNode
+	}
+	if validationErr != nil {
+		err := &StepError{ID: l.id, Op: validationOp, Err: validationErr}
+		run.emit(ctx, Event{Kind: EventFailed, ID: l.id, Err: err})
+		return s, err
+	}
 
 	// A journal from an earlier run already holds this step's result, so the work
 	// is not repeated. The record is keyed by scope as well as ID, which is what
@@ -157,6 +263,7 @@ func (l leafStep[I, O]) Run(ctx context.Context, s Store) (Store, error) {
 		}
 	}
 
+	// Without an observer there is nothing to time, so the clock is never read.
 	var started time.Time
 	if run.observing() {
 		started = time.Now()
@@ -193,18 +300,9 @@ func (l leafStep[I, O]) Run(ctx context.Context, s Store) (Store, error) {
 		return s, err
 	}
 
-	if l.id == "" {
-		return fail(OpValidate, ErrInvalidStepID)
-	}
-	if l.bind == nil {
-		return fail(OpBind, flow.ErrNilFunc)
-	}
 	in, err := l.bind(s)
 	if err != nil {
 		return fail(OpBind, err)
-	}
-	if l.node == nil {
-		return fail(OpRun, flow.ErrNilNode)
 	}
 	out, err := l.node.Run(ctx, in)
 	if err != nil {
@@ -228,7 +326,8 @@ func (l leafStep[I, O]) Describe() Description {
 	return Description{ID: l.id, Kind: "leaf"}
 }
 
-// Sequence runs steps in order, threading the Store through each.
+// Sequence runs steps in order, threading the Store through each. It rejects a
+// nil step before running any step.
 func Sequence(steps ...Step) Step {
 	return sequenceStep{steps: slices.Clone(steps)}
 }
@@ -239,6 +338,11 @@ type sequenceStep struct {
 }
 
 func (s sequenceStep) Run(ctx context.Context, st Store) (Store, error) {
+	for i, step := range s.steps {
+		if step == nil {
+			return st, &flow.IndexError{Index: i, Err: ErrNilStep}
+		}
+	}
 	return runSteps(ctx, s.steps, st)
 }
 

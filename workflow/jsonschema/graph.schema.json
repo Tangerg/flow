@@ -19,7 +19,12 @@
       "description": "A path into a graph node's stored value or an external seed value.",
       "properties": {
         "nodeID": { "type": "string", "minLength": 1 },
-        "path": { "type": "string", "minLength": 1 }
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^/(?:[^~/]|~[01])*(?:/(?:[^~/]|~[01])*)*$",
+          "description": "An RFC 6901 JSON Pointer below the node value."
+        }
       },
       "required": ["nodeID", "path"],
       "additionalProperties": false

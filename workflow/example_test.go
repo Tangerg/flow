@@ -74,8 +74,8 @@ func ExampleRegistry_CompileGraphJSON() {
 	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN)
 
 	graph := `{"nodes":[
-	  {"id":"a","type":"addN","input":{"nodeID":"start","path":"output"},"config":{"n":10}},
-	  {"id":"b","type":"addN","input":{"nodeID":"a","path":"output"},"config":{"n":5}}
+	  {"id":"a","type":"addN","input":{"nodeID":"start","path":"/output"},"config":{"n":10}},
+	  {"id":"b","type":"addN","input":{"nodeID":"a","path":"/output"},"config":{"n":5}}
 	]}`
 
 	step, err := reg.CompileGraphJSON([]byte(graph))
@@ -134,10 +134,10 @@ func ExampleBindFactory() {
 		})
 
 	graph := `{"nodes":[
-	  {"id":"twice","type":"double","input":{"nodeID":"start","path":"output"}},
+	  {"id":"twice","type":"double","input":{"nodeID":"start","path":"/output"}},
 	  {"id":"total","type":"sum","inputs":{
-	    "left":{"nodeID":"twice","path":"output"},
-	    "right":{"nodeID":"start","path":"output"}
+	    "left":{"nodeID":"twice","path":"/output"},
+	    "right":{"nodeID":"start","path":"/output"}
 	  }}
 	]}`
 
@@ -174,15 +174,15 @@ func ExampleGraphInputs() {
 	fmt.Println("missing:", workflow.MissingInputs(graph, store))
 
 	// Output:
-	// input: params.greeting
-	// input: params.name
-	// missing: [params.greeting]
+	// input: params#/greeting
+	// input: params#/name
+	// missing: [params#/greeting]
 }
 
 // This example records a run's steps from outside the package. Because an
 // Observer receives the Store a step produced, durability and tracing can be
 // built on top without workflow taking on either concern.
-func ExampleWithConfig() {
+func ExampleRun() {
 	step := workflow.Sequence(
 		workflow.Leaf("load", workflow.From[int](workflow.Output("start")),
 			flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil })),
@@ -201,15 +201,15 @@ func ExampleWithConfig() {
 		previous = event.Store
 	})
 
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Observer: journal})
-	if _, err := step.Run(ctx, previous); err != nil {
+	if _, err := workflow.Run(context.Background(), step, previous,
+		workflow.RunConfig{Observer: journal}); err != nil {
 		fmt.Println(err)
 		return
 	}
 
 	// Output:
-	// 2 load wrote load.output=2
-	// 4 save wrote save.output=20
+	// 2 load wrote load#/output=2
+	// 4 save wrote save#/output=20
 }
 
 // This example stops a workflow for a human decision and finishes it in what
@@ -234,8 +234,9 @@ func ExampleAwait() {
 
 	// First run: the draft is written, then the workflow waits.
 	journal := workflow.NewJournal()
-	paused, err := pipeline.Run(workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal}),
-		workflow.NewStore().WithOutput("topic", "ports"))
+	paused, err := workflow.Run(context.Background(), pipeline,
+		workflow.NewStore().WithOutput("topic", "ports"),
+		workflow.RunConfig{Journal: journal})
 	if !errors.Is(err, workflow.ErrSuspended) {
 		fmt.Println("unexpected:", err)
 		return
@@ -261,8 +262,9 @@ func ExampleAwait() {
 		return
 	}
 
-	out, err := pipeline.Run(workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: resumed}),
-		store.With("editor", "verdict", "approved"))
+	out, err := workflow.Run(context.Background(), pipeline,
+		store.With("editor", "verdict", "approved"),
+		workflow.RunConfig{Journal: resumed})
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -271,7 +273,7 @@ func ExampleAwait() {
 
 	// Output:
 	// writing the draft
-	// waiting: review needs editor.verdict
+	// waiting: review needs editor#/verdict
 	// published "ports" (800 words) <nil>
 }
 
@@ -291,9 +293,9 @@ func ExampleInterrupt() {
 		Actions:  []string{"approve", "reject"},
 	})
 	journal := workflow.NewJournal()
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
+	cfg := workflow.RunConfig{Journal: journal}
 
-	paused, err := step.Run(ctx, workflow.NewStore())
+	paused, err := workflow.Run(context.Background(), step, workflow.NewStore(), cfg)
 	if !errors.Is(err, workflow.ErrSuspended) {
 		fmt.Println("unexpected:", err)
 		return
@@ -306,7 +308,7 @@ func ExampleInterrupt() {
 		fmt.Println(err)
 		return
 	}
-	out, err := step.Run(ctx, paused)
+	out, err := workflow.Run(context.Background(), step, paused, cfg)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -328,16 +330,18 @@ func ExampleParallel_suspension() {
 	sign := workflow.Await("signoff", workflow.Output("signature"))
 
 	journal := workflow.NewJournal()
-	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
+	cfg := workflow.RunConfig{Journal: journal}
 	both := workflow.Parallel([]workflow.Step{report, sign}, workflow.ParallelConfig{})
 
-	paused, err := both.Run(ctx, workflow.NewStore().WithOutput("start", 21))
+	paused, err := workflow.Run(context.Background(), both,
+		workflow.NewStore().WithOutput("start", 21), cfg)
 	fmt.Println("suspended:", errors.Is(err, workflow.ErrSuspended))
 	// The finished branch is in the merged Store, not thrown away.
 	fmt.Println(workflow.Get[int](paused, workflow.Output("report")))
 
 	// Resuming does not rebuild the report.
-	out, err := both.Run(ctx, paused.WithOutput("signature", "ok"))
+	out, err := workflow.Run(context.Background(), both,
+		paused.WithOutput("signature", "ok"), cfg)
 	if err != nil {
 		fmt.Println(err)
 		return

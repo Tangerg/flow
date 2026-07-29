@@ -12,6 +12,9 @@ optional dynamic layer for building workflows from config or a visual editor.
 | [`workflow`](./workflow) | The dynamic layer: a variable pool (`Store`) threaded through nodes addressed by ID, plus config-driven construction. | `Node[Store, Store]` |
 | [`workflow/expr`](./workflow/expr) | Optional. Compiles a small expression over a `Store` into a `Condition` or `Resolver`, so branch and loop rules can live in config. | — |
 
+For a complete progression from one typed node to a JSON-defined, resumable
+workflow, see the executable [`example`](./example) package.
+
 ## Install
 
 ```sh
@@ -94,8 +97,8 @@ addN := workflow.Factory(func(cfg addConfig) (flow.Node[int, int], error) {
 reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN)
 
 graph := `{"nodes":[
-  {"id":"a","type":"addN","input":{"nodeID":"start","path":"output"},"config":{"n":10}},
-  {"id":"b","type":"addN","input":{"nodeID":"a","path":"output"},"config":{"n":5}}
+  {"id":"a","type":"addN","input":{"nodeID":"start","path":"/output"},"config":{"n":10}},
+  {"id":"b","type":"addN","input":{"nodeID":"a","path":"/output"},"config":{"n":5}}
 ]}`
 
 step, _ := reg.CompileGraphJSON([]byte(graph))
@@ -110,8 +113,8 @@ A node names every value it reads. `input` is sugar for the single default port;
 
 ```json
 {"id":"total","type":"sum","inputs":{
-  "left":  {"nodeID":"twice","path":"output"},
-  "right": {"nodeID":"start","path":"output"}
+  "left":  {"nodeID":"twice","path":"/output"},
+  "right": {"nodeID":"start","path":"/output"}
 }}
 ```
 
@@ -147,6 +150,26 @@ An unwired declared port is `ErrMissingPort`, a wired undeclared port is
 `ErrUnknownPort`, and `Registry.NodeTypes`/`Registry.NodeSchema` expose the
 registered vocabulary for an editor to render.
 
+### References
+
+`Ref` uses an RFC 6901 JSON Pointer under a node ID. Go callers pass literal
+segments and do not escape them:
+
+```go
+ref := workflow.Output("load").Child("items", "0", "display/name")
+// ref.Path == "/output/items/0/display~1name"
+```
+
+The JSON DSL writes the encoded pointer directly:
+
+```json
+{"nodeID":"load","path":"/output/items/0/display~1name"}
+```
+
+This makes every JSON object key representable, including empty keys and keys
+containing `.`, `/`, or `~`. Array tokens follow RFC 6901 (`0`, `1`, …; no sign
+or leading zero). `Ref.String` renders the diagnostic form `nodeID#pointer`.
+
 ### Branch and loop rules as data
 
 A serialized graph cannot carry closures, so `Spec` names its resolvers and
@@ -169,11 +192,12 @@ _ = bindings.Register(reg) // "converged" and "bySize" are now usable from a Spe
 
 Expressions are parsed with `go/parser` and compiled to closures, so the
 supported grammar *is* the compiler — there is no path that evaluates a construct
-`Parse` rejected. References are `node.path` (`load.output.items[0]`); operators
-are comparison, logical (short-circuiting), and arithmetic; the only functions are
-`len` and `has`. No assignment, no conversions, no user calls, no way to reach the
-host program. `Expr.Refs` reports what an expression reads, so a rule set can be
-checked against the values a graph actually produces.
+`Parse` rejected. Expressions use Go-like references (`load.output.items[0]`) and
+compile them to `Ref` JSON Pointers; operators are comparison, logical
+(short-circuiting), and arithmetic; the only functions are `len` and `has`. No
+assignment, no conversions, no user calls, no way to reach the host program.
+`Expr.Refs` reports what an expression reads, so a rule set can be checked against
+the values a graph actually produces.
 
 There is no implicit truthiness: a condition must evaluate to a `bool` and a
 resolver to a `string`. An expression that cannot be evaluated returns an error
@@ -198,24 +222,28 @@ For a Store gate, wait until an external producer writes the referenced value:
 pipeline := workflow.Sequence(write, workflow.Await("review", workflow.At("editor", "verdict")), publish)
 
 journal := workflow.NewJournal()
-ctx = workflow.WithConfig(ctx, workflow.RunConfig{Journal: journal})
+cfg := workflow.RunConfig{Journal: journal}
 
-paused, err := pipeline.Run(ctx, input)
+paused, err := workflow.Run(ctx, pipeline, input, cfg)
 if errors.Is(err, workflow.ErrSuspended) {
     for _, s := range workflow.Suspensions(err) {
-        log.Printf("%s needs %s", s.ID, s.Await) // review needs editor.verdict
+        log.Printf("%s needs %s", s.ID, s.Await) // review needs editor#/verdict
     }
     save(paused, journal) // both serialize
     return
 }
 ```
 
-Supply what was missing and run again — the `Journal` skips every step that
-already finished and restores its result, so a different process can pick the run
-up:
+Supply what was missing and run again — the `Journal` skips every completed leaf
+boundary and restores its result, so a different process can pick the run up:
 
 ```go
-out, err := pipeline.Run(ctx, restored.With("editor", "verdict", "approved"))
+out, err := workflow.Run(
+    ctx,
+    pipeline,
+    restored.With("editor", "verdict", "approved"),
+    cfg,
+)
 ```
 
 For request/response work, `Interrupt` is an explicit value-producing Step:
@@ -227,7 +255,7 @@ approval := workflow.Interrupt("approval", map[string]any{
 })
 pipeline := workflow.Sequence(write, approval, publish)
 
-paused, err := pipeline.Run(ctx, input)
+paused, err := workflow.Run(ctx, pipeline, input, cfg)
 if errors.Is(err, workflow.ErrSuspended) {
     wait := workflow.Suspensions(err)[0]
     // ID + Path identifies this exact parallel/iteration instance.
@@ -236,7 +264,7 @@ if errors.Is(err, workflow.ErrSuspended) {
     }
 }
 
-out, err := pipeline.Run(ctx, paused)
+out, err := workflow.Run(ctx, pipeline, paused, cfg)
 approved, err := workflow.Get[bool](out, workflow.Output("approval"))
 ```
 
@@ -314,7 +342,8 @@ reg.MustRegisterSchema("addN", workflow.NodeSchema{
 ```
 
 Schemas must be self-contained: external `$ref` loading is deliberately
-disabled so startup never performs hidden network or filesystem I/O. JSON
+disabled so startup never performs hidden network or filesystem I/O. Duplicate
+object members are rejected before a decoder can silently discard one. JSON
 Schema diagnostics retain their instance paths; `SpecError` and `GraphError`
 identify the JSON boundary, while `ErrInvalidSpec` and `ErrInvalidGraph` remain
 available through `errors.Is`.
@@ -341,8 +370,7 @@ Highlights:
 - **Persistent `Store`.** Every write returns a new structural snapshot. Values
   are shared as-is and must be treated as immutable after insertion.
 - **Serializable state.** `Store` implements `json.Marshaler` and
-  `json.Unmarshaler`; decoding is atomic and uses encoding/json's standard value
-  representation.
+  `json.Unmarshaler`; decoding is atomic and preserves numbers as `json.Number`.
 - **Composites on flow.** `Sequence`/`Branch`/`Loop`/`Parallel`/`Iteration` are
   built from root primitives; `Parallel` merges branch stores, `Iteration`
   scopes each element.
@@ -358,11 +386,11 @@ Highlights:
   `Registry.ValidateSpec` and `Registry.ValidateGraph` add registrations, config
   schemas, unique IDs, cycles, references, port completeness, and compatible edge
   types without running the workflow.
-- **One config per run.** `RunConfig` is a keyed struct holding everything a
-  single run needs — its `Observer` and its `Journal` — installed with one
-  `WithConfig` call. It lives in the context rather than in a `Step`, because it
-  belongs to the run and not to the definition: a compiled workflow is built once
-  and run many times, concurrently, each with its own journal.
+- **One config per run.** `workflow.Run` is the explicit execution boundary.
+  `RunConfig` holds that call's `Observer` and `Journal`; sequence numbers restart
+  while the Journal may deliberately carry completed work across calls. A
+  compiled workflow remains reusable and safe to run concurrently with independent
+  configurations.
 - **Observability.** Attach an `Observer` through `RunConfig` to receive typed
   step lifecycle events; ordinary functions can use `ObserverFunc`. Each `Event`
   carries a run sequence number, a scope path, elapsed time, and the `Store` the
@@ -430,8 +458,8 @@ deterministic in-process runtime over maximally eager DAG scheduling.
 Errors wrap their causes and are intended for `errors.Is` and `errors.As`, not
 string matching. In particular:
 
-- `flow.IndexError` identifies the failing item in `Map`, `Race`, and collected
-  result errors.
+- `flow.IndexError` identifies a failing ordered position in `Map`, `Race`,
+  `workflow.Sequence`, and `workflow.Parallel`.
 - `workflow.StepError` identifies the step ID and operation (`bind`, `run`, or
   `validate`).
 - `workflow.RefError`, `RegistrationError`, `GraphError`, and `SpecError`
@@ -457,6 +485,23 @@ fields be added in a minor release without breaking callers.
 
 Current rewrite migrations:
 
+- Run configured workflows with
+  `workflow.Run(ctx, step, input, workflow.RunConfig{...})`. The former
+  context-mutating `WithConfig` and configuration readback API were removed:
+  run internals no longer leak through a reusable context, and every call now
+  starts a fresh event sequence. Call `step.Run(ctx, input)` directly when no
+  run configuration is needed.
+- `Ref.Path` is an RFC 6901 JSON Pointer. In Go, replace dotted
+  `At("node", "output.items.0")` with
+  `At("node", "output", "items", "0")`; in JSON, replace
+  `"path":"output.items.0"` with `"path":"/output/items/0"`. `At` and
+  `Ref.Child` accept literal segments and escape them. Use `Child()` for no
+  change; `Child("")` addresses an empty object key.
+- Negative concurrency and iteration limits are invalid and match
+  `flow.ErrInvalidConfig`; zero retains each combinator's documented default.
+- `flow.Race` validates every node before starting any, cancels after the first
+  success, and waits for losing calls to stop before returning. Race nodes must
+  cooperate with context cancellation.
 - `Get[T]` now **converts** rather than asserts. A value of exactly `T` is still
   returned as-is; anything else is converted through its JSON representation, so a
   typed read survives a serialized `Store` at any path depth. Conversion never
@@ -553,12 +598,12 @@ exactly-once guarantee. A step that suspends after a side effect and before
 recording its result will repeat that effect. The unit of recovery is a step, not
 an instruction.
 
-Out of scope does not mean out of reach. An `Observer` receives, for every step,
-the run sequence number, the scope path, the elapsed time, and the `Store` the
-step produced — and `Store` is `json.Marshaler`, with `Store.Changes` narrowing a
-snapshot to a single step's writes. A tracker or a state persister keyed by
-`(partition, run, sequence, step)` is an ordinary `Observer` in your own code, not
-a feature this package has to own:
+Out of scope does not mean out of reach. An `Observer` receives, at every
+leaf/wait execution boundary, the run sequence number, scope path, elapsed time,
+and the `Store` that boundary produced — and `Store` is `json.Marshaler`, with
+`Store.Changes` narrowing a snapshot to its writes. A tracker or state persister
+keyed by `(partition, run, sequence, step)` is an ordinary `Observer` in your own
+code, not a feature this package has to own:
 
 ```go
 persist := workflow.ObserverFunc(func(ctx context.Context, e workflow.Event) {
@@ -568,10 +613,11 @@ persist := workflow.ObserverFunc(func(ctx context.Context, e workflow.Event) {
     _ = save(ctx, runID, e.Seq, e.ID, e.Store) // Store marshals to JSON
 })
 
-ctx = workflow.WithConfig(ctx, workflow.RunConfig{Observer: persist})
-out, err := step.Run(ctx, input)
+out, err := workflow.Run(ctx, step, input, workflow.RunConfig{
+    Observer: persist,
+})
 ```
 
-What is genuinely absent is suspension: a compiled workflow runs to completion or
-returns an error. There is no central driver to pause and resume, because that
-driver is what a scheduler-free design trades away.
+What is genuinely absent is a central driver: the package reports suspension and
+serializes the Store and Journal, while the application decides when and where to
+persist them, wait for an external result, and start the next run.

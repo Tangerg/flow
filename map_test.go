@@ -25,6 +25,13 @@ func TestMap(t *testing.T) {
 	}
 }
 
+func TestMap_rejectsANilNodeEvenForEmptyInput(t *testing.T) {
+	_, err := flow.Map[int, int](nil, flow.MapConfig{}).Run(context.Background(), nil)
+	if !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("err = %v; want ErrNilNode", err)
+	}
+}
+
 func TestMap_failFastCancelsSiblings(t *testing.T) {
 	boom := errors.New("boom")
 	var cancelledSeen atomic.Bool
@@ -81,15 +88,22 @@ func TestMapN_boundsConcurrency(t *testing.T) {
 	}
 }
 
-func TestMapN_nonPositiveIsUnbounded(t *testing.T) {
+func TestMap_zeroConcurrencyIsUnbounded(t *testing.T) {
 	node := flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
 		return value + 1, nil
 	})
-	for _, limit := range []int{0, -1} {
-		got, err := flow.Map(node, flow.MapConfig{Concurrency: limit}).Run(context.Background(), []int{1, 2})
-		if err != nil || len(got) != 2 || got[0] != 2 || got[1] != 3 {
-			t.Fatalf("MapN(%d) = %v, %v", limit, got, err)
-		}
+	got, err := flow.Map(node, flow.MapConfig{}).Run(context.Background(), []int{1, 2})
+	if err != nil || len(got) != 2 || got[0] != 2 || got[1] != 3 {
+		t.Fatalf("Map = %v, %v", got, err)
+	}
+}
+
+func TestMap_rejectsNegativeConcurrency(t *testing.T) {
+	node := flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+		return value, nil
+	})
+	if _, err := flow.Map(node, flow.MapConfig{Concurrency: -1}).Run(context.Background(), nil); !errors.Is(err, flow.ErrInvalidConfig) {
+		t.Fatalf("err = %v; want ErrInvalidConfig", err)
 	}
 }
 

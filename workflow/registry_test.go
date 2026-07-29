@@ -3,6 +3,7 @@ package workflow_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -29,8 +30,8 @@ func TestRegistry_compileSequenceJSON(t *testing.T) {
 	spec := `{
 	  "kind": "sequence",
 	  "steps": [
-	    {"kind":"leaf","id":"a","type":"addN","input":{"nodeID":"start","path":"output"},"config":{"n":10}},
-	    {"kind":"leaf","id":"b","type":"addN","input":{"nodeID":"a","path":"output"},"config":{"n":5}}
+	    {"kind":"leaf","id":"a","type":"addN","input":{"nodeID":"start","path":"/output"},"config":{"n":10}},
+	    {"kind":"leaf","id":"b","type":"addN","input":{"nodeID":"a","path":"/output"},"config":{"n":5}}
 	  ]
 	}`
 
@@ -64,8 +65,8 @@ func TestRegistry_compileBranch(t *testing.T) {
 		ID:       "route",
 		Resolver: "sign",
 		Cases: map[string]workflow.Spec{
-			"pos": {Kind: workflow.KindLeaf, ID: "p", Type: "addN", Input: &workflow.Ref{NodeID: "start", Path: "output"}, Config: json.RawMessage(`{"n":100}`)},
-			"neg": {Kind: workflow.KindLeaf, ID: "n", Type: "addN", Input: &workflow.Ref{NodeID: "start", Path: "output"}, Config: json.RawMessage(`{"n":-100}`)},
+			"pos": {Kind: workflow.KindLeaf, ID: "p", Type: "addN", Input: &workflow.Ref{NodeID: "start", Path: "/output"}, Config: json.RawMessage(`{"n":100}`)},
+			"neg": {Kind: workflow.KindLeaf, ID: "n", Type: "addN", Input: &workflow.Ref{NodeID: "start", Path: "/output"}, Config: json.RawMessage(`{"n":-100}`)},
 		},
 	}
 
@@ -88,7 +89,7 @@ func TestRegistry_compileIteration(t *testing.T) {
 	spec := workflow.Spec{
 		Kind:       workflow.KindIteration,
 		ID:         "iter",
-		Input:      &workflow.Ref{NodeID: "start", Path: "output"},
+		Input:      &workflow.Ref{NodeID: "start", Path: "/output"},
 		BodyOutput: refPtr(workflow.Output("el")),
 		Body: &workflow.Spec{
 			Kind: workflow.KindLeaf, ID: "el", Type: "addN",
@@ -176,6 +177,92 @@ func TestRegistry_rejectsNegativeConcurrency(t *testing.T) {
 	spec := workflow.Spec{Kind: workflow.KindParallel, Concurrency: -1}
 	if _, err := reg.CompileSpec(spec); err == nil {
 		t.Fatal("expected negative concurrency error")
+	}
+}
+
+func TestValidateSpec_rejectsFieldsItsKindWouldIgnore(t *testing.T) {
+	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	tests := map[string]struct {
+		spec  workflow.Spec
+		field string
+	}{
+		"sequence type": {
+			spec:  workflow.Spec{Kind: workflow.KindSequence, Type: "addN"},
+			field: "type",
+		},
+		"leaf concurrency": {
+			spec:  workflow.Spec{Kind: workflow.KindLeaf, ID: "a", Type: "addN", Concurrency: 1},
+			field: "concurrency",
+		},
+		"parallel condition": {
+			spec:  workflow.Spec{Kind: workflow.KindParallel, Condition: "ignored"},
+			field: "condition",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := reg.ValidateSpec(tt.spec)
+			var specErr *workflow.SpecError
+			if !errors.As(err, &specErr) || !errors.Is(err, workflow.ErrInvalidSpec) || specErr.Field != tt.field {
+				t.Fatalf("err = %v; want invalid field %q", err, tt.field)
+			}
+		})
+	}
+}
+
+func TestValidateSpec_rejectsMalformedConfigWithoutANodeSchema(t *testing.T) {
+	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	spec := workflow.Spec{
+		Kind:   workflow.KindLeaf,
+		ID:     "a",
+		Type:   "addN",
+		Config: json.RawMessage(`{"n":`),
+	}
+	if err := reg.ValidateSpec(spec); !errors.Is(err, workflow.ErrInvalidSpec) {
+		t.Fatalf("err = %v; want ErrInvalidSpec", err)
+	}
+}
+
+func TestValidateSpec_iterationBodyIDsAreLocalToEachElement(t *testing.T) {
+	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	spec := workflow.Spec{
+		Kind: workflow.KindSequence,
+		Steps: []workflow.Spec{
+			{
+				Kind: workflow.KindLeaf, ID: "value", Type: "addN",
+				Input: refPtr(workflow.Output("seed")),
+			},
+			{
+				Kind:       workflow.KindIteration,
+				ID:         "each",
+				Input:      refPtr(workflow.Output("items")),
+				BodyOutput: refPtr(workflow.Output("value")),
+				Body: &workflow.Spec{
+					Kind: workflow.KindLeaf, ID: "value", Type: "addN",
+					Input:  refPtr(workflow.Item("each")),
+					Config: json.RawMessage(`{"n":1}`),
+				},
+			},
+		},
+	}
+
+	step, err := reg.CompileSpec(spec)
+	if err != nil {
+		t.Fatalf("CompileSpec: %v", err)
+	}
+	in := workflow.NewStore().
+		WithOutput("seed", 10).
+		WithOutput("items", []any{1, 2})
+	out, err := step.Run(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, err := workflow.Get[int](out, workflow.Output("value")); err != nil || got != 10 {
+		t.Fatalf("outer value = %v, %v; want 10", got, err)
+	}
+	items, err := workflow.Get[[]int](out, workflow.Output("each"))
+	if err != nil || len(items) != 2 || items[0] != 2 || items[1] != 3 {
+		t.Fatalf("iteration output = %v, %v; want [2 3]", items, err)
 	}
 }
 

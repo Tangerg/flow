@@ -23,7 +23,7 @@ func TestCompileGraph_diamond(t *testing.T) {
 
 	ref := func(id string) *workflow.Ref { value := workflow.Output(id); return &value }
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
-		{ID: "a", Type: "addN", Input: &workflow.Ref{NodeID: "start", Path: "output"}, Config: json.RawMessage(`{"n":1}`)},
+		{ID: "a", Type: "addN", Input: &workflow.Ref{NodeID: "start", Path: "/output"}, Config: json.RawMessage(`{"n":1}`)},
 		{ID: "b", Type: "addN", Input: ref("a"), Config: json.RawMessage(`{"n":10}`)},
 		{ID: "c", Type: "addN", Input: ref("a"), Config: json.RawMessage(`{"n":100}`)},
 		// No DependsOn: wired ports are dependencies.
@@ -90,8 +90,8 @@ func TestCompileGraph_rejectsDuplicateDefaultPort(t *testing.T) {
 func TestCompileGraph_cycle(t *testing.T) {
 	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
-		{ID: "a", Type: "addN", Input: &workflow.Ref{NodeID: "b", Path: "output"}},
-		{ID: "b", Type: "addN", Input: &workflow.Ref{NodeID: "a", Path: "output"}},
+		{ID: "a", Type: "addN", Input: &workflow.Ref{NodeID: "b", Path: "/output"}},
+		{ID: "b", Type: "addN", Input: &workflow.Ref{NodeID: "a", Path: "/output"}},
 	}}
 	if _, err := reg.CompileGraph(g); err == nil {
 		t.Fatal("expected cycle error")
@@ -112,8 +112,8 @@ func TestCompileGraph_duplicateID(t *testing.T) {
 func TestCompileGraphJSON(t *testing.T) {
 	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
 	g := `{"nodes":[
-	  {"id":"a","type":"addN","input":{"nodeID":"start","path":"output"},"config":{"n":2}},
-	  {"id":"b","type":"addN","input":{"nodeID":"a","path":"output"},"config":{"n":3}}
+	  {"id":"a","type":"addN","input":{"nodeID":"start","path":"/output"},"config":{"n":2}},
+	  {"id":"b","type":"addN","input":{"nodeID":"a","path":"/output"},"config":{"n":3}}
 	]}`
 
 	step, err := reg.CompileGraphJSON([]byte(g))
@@ -141,6 +141,38 @@ func TestCompileGraphJSON_rejectsUnknownAndTrailingData(t *testing.T) {
 	}
 }
 
+func TestCompileGraph_keepsFactoryErrorsAtTheGraphBoundary(t *testing.T) {
+	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	g := workflow.Graph{Nodes: []workflow.NodeSpec{{
+		ID:     "a",
+		Type:   "addN",
+		Input:  refPtr(workflow.Output("start")),
+		Config: json.RawMessage(`{"unknown":true}`),
+	}}}
+
+	_, err := reg.CompileGraph(g)
+	var graphErr *workflow.GraphError
+	var specErr *workflow.SpecError
+	if !errors.As(err, &graphErr) || errors.As(err, &specErr) {
+		t.Fatalf("err = %v; want GraphError and no SpecError", err)
+	}
+	if graphErr.NodeID != "a" || graphErr.Field != "config" ||
+		!errors.Is(err, workflow.ErrInvalidGraph) ||
+		!errors.Is(err, workflow.ErrInvalidSpec) {
+		t.Fatalf("err = %v; want a/config with both invalid sentinels", err)
+	}
+}
+
+func TestCompileGraph_rejectsANilStepFromAFactory(t *testing.T) {
+	reg := workflow.NewRegistry().MustRegisterLeaf("broken", func(workflow.LeafSpec) (workflow.Step, error) {
+		return nil, nil
+	})
+	_, err := reg.CompileGraph(workflow.Graph{Nodes: []workflow.NodeSpec{{ID: "a", Type: "broken"}}})
+	if !errors.Is(err, workflow.ErrNilStep) || !errors.Is(err, workflow.ErrInvalidGraph) {
+		t.Fatalf("err = %v; want ErrNilStep and ErrInvalidGraph", err)
+	}
+}
+
 func TestCompileGraph_rejectsSelfDependency(t *testing.T) {
 	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
@@ -158,6 +190,45 @@ func TestCompileGraph_rejectsUnknownExplicitDependency(t *testing.T) {
 	}}
 	if _, err := reg.CompileGraph(g); err == nil {
 		t.Fatal("expected unknown dependency error")
+	}
+}
+
+func TestCompileGraph_programmaticValidationMatchesJSONSchema(t *testing.T) {
+	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	tests := map[string]workflow.NodeSpec{
+		"empty type": {
+			ID: "a",
+		},
+		"empty dependency": {
+			ID: "a", Type: "addN", DependsOn: []string{""},
+		},
+		"duplicate dependency": {
+			ID: "a", Type: "addN", DependsOn: []string{"parent", "parent"},
+		},
+		"empty port": {
+			ID: "a", Type: "addN", Inputs: workflow.Inputs{"": workflow.Output("start")},
+		},
+	}
+	for name, node := range tests {
+		t.Run(name, func(t *testing.T) {
+			g := workflow.Graph{Nodes: []workflow.NodeSpec{
+				{ID: "parent", Type: "addN"},
+				node,
+			}}
+			if err := reg.ValidateGraph(g); !errors.Is(err, workflow.ErrInvalidGraph) {
+				t.Fatalf("err = %v; want ErrInvalidGraph", err)
+			}
+		})
+	}
+}
+
+func TestValidateGraph_rejectsMalformedConfigWithoutANodeSchema(t *testing.T) {
+	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	g := workflow.Graph{Nodes: []workflow.NodeSpec{{
+		ID: "a", Type: "addN", Config: json.RawMessage(`{"n":`),
+	}}}
+	if err := reg.ValidateGraph(g); !errors.Is(err, workflow.ErrInvalidGraph) {
+		t.Fatalf("err = %v; want ErrInvalidGraph", err)
 	}
 }
 
@@ -210,7 +281,7 @@ func TestCompileGraph_reportsUnwiredAndUnknownPorts(t *testing.T) {
 func TestCompileGraph_rejectsMalformedPortRef(t *testing.T) {
 	reg := workflow.NewRegistry().MustRegisterLeaf("sum", sumPorts())
 	for name, ref := range map[string]workflow.Ref{
-		"empty nodeID": {Path: "output"},
+		"empty nodeID": {Path: "/output"},
 		"empty path":   {NodeID: "start"},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -2,14 +2,15 @@ package flow
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 )
 
 // MapConfig configures [Map]. Its zero value runs every element concurrently.
 type MapConfig struct {
-	// Concurrency caps the number of concurrent calls. A non-positive value is
-	// unbounded.
+	// Concurrency caps the number of concurrent calls. Zero is unbounded;
+	// negative values are invalid.
 	Concurrency int
 }
 
@@ -17,7 +18,8 @@ type MapConfig struct {
 // the outputs in input order. The first failure cancels the remaining calls and
 // is returned. A zero [MapConfig] runs every element concurrently; set
 // MapConfig.Concurrency to bound it. Cancellation is cooperative: calls already
-// running must honor their context; Map waits for them to return.
+// running must honor their context; Map waits for them to return. A nil node is
+// rejected even when the input is empty.
 //
 // Map is the concurrency primitive — fan-out, collecting a result per item, and
 // heterogeneous fan-in are derivable from it and live in higher-level packages
@@ -32,6 +34,12 @@ type mapNode[I, O any] struct {
 }
 
 func (m mapNode[I, O]) Run(ctx context.Context, in []I) ([]O, error) {
+	if m.node == nil {
+		return nil, ErrNilNode
+	}
+	if m.limit < 0 {
+		return nil, fmt.Errorf("%w: negative concurrency", ErrInvalidConfig)
+	}
 	out := make([]O, len(in))
 	err := m.forEach(ctx, len(in), func(ctx context.Context, i int) error {
 		v, err := run(ctx, m.node, in[i])
@@ -48,7 +56,7 @@ func (m mapNode[I, O]) Run(ctx context.Context, in []I) ([]O, error) {
 }
 
 // forEach calls fn(ctx, i) for each i in [0, n) with at most m.limit calls
-// running at once (unbounded when m.limit <= 0). The first non-nil error from fn
+// running at once (unbounded when m.limit == 0). The first non-nil error from fn
 // cancels the context for the remaining calls, stops new calls from starting,
 // and is returned (fail-fast); otherwise the returned error is the parent
 // context's error, if any. Parent cancellation takes precedence over an element
@@ -124,6 +132,9 @@ func (m mapNode[I, O]) forEach(parent context.Context, n int, fn func(ctx contex
 				break
 			}
 			wg.Go(func() {
+				if ctx.Err() != nil {
+					return
+				}
 				if err := fn(ctx, i); err != nil {
 					fail(err)
 				}
