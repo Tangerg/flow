@@ -60,12 +60,12 @@ func (l loopStep) Run(ctx context.Context, s Store) (Store, error) {
 	}
 
 	bodyNode := func(ctx context.Context, iter int, s Store) (Store, bool, error) {
-		scoped := WithScope(ctx, indexScope("", iter))
-		next, err := runStep(scoped, l.body, s)
+		runner := (stepRunner{ctx: ctx}).indexed("", iter)
+		next, err := runner.run(l.body, s)
 		if err != nil {
 			return s, false, err
 		}
-		stop, err := l.stop(scoped, iter, next)
+		stop, err := l.stop(runner.ctx, iter, next)
 		return next, stop, err
 	}
 	return flow.Loop(bodyNode, flow.LoopConfig{
@@ -92,8 +92,8 @@ func (l loopStep) stop(ctx context.Context, iter int, s Store) (bool, error) {
 
 	stop, err := l.done(ctx, iter, s)
 	if err != nil {
-		if suspensions, only := asSuspensions(err); only {
-			return false, joinSuspensions(identifySuspensions(suspensions, l.id, scope(ctx)))
+		if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
+			return false, suspensions.identify(l.id, scope(ctx)).err()
 		}
 		return false, &StepError{ID: l.id, Op: OpRun, Err: err}
 	}

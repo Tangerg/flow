@@ -64,7 +64,7 @@ func (b branchStep) Run(ctx context.Context, s Store) (Store, error) {
 	// unknown name would poison the Journal and make every later run fail before
 	// the resolver had a chance to recover.
 	runFrom(ctx).journal().record(scope(ctx), b.id, name)
-	return runStep(ctx, step, s)
+	return (stepRunner{ctx: ctx}).run(step, s)
 }
 
 // decide returns the branch to take, reusing the recorded decision when the run
@@ -86,8 +86,8 @@ func (b branchStep) decide(ctx context.Context, s Store) (string, error) {
 
 	name, err := b.resolve(ctx, s)
 	if err != nil {
-		if suspensions, only := asSuspensions(err); only {
-			return "", joinSuspensions(identifySuspensions(suspensions, b.id, scope(ctx)))
+		if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
+			return "", suspensions.identify(b.id, scope(ctx)).err()
 		}
 		return "", &StepError{ID: b.id, Op: OpRun, Err: err}
 	}

@@ -93,7 +93,7 @@ func Example_dag() {
 		},
 	}}
 
-	fmt.Println("missing:", workflow.MissingInputs(graph, workflow.NewStore()))
+	fmt.Println("missing:", graph.MissingInputs(workflow.NewStore()))
 	step, err := registry.CompileGraph(graph)
 	if err != nil {
 		fmt.Println("error:", err)

@@ -33,20 +33,18 @@ type ParallelConfig struct {
 // a same-cell conflict a later branch's value wins. A zero [ParallelConfig] runs
 // every branch concurrently. It rejects a nil branch before running any branch.
 func Parallel(branches []Step, cfg ParallelConfig) Step {
-	return parallelStep{branches: slices.Clone(branches), limit: cfg.Concurrency}
+	return parallelStep{branches: stepList(slices.Clone(branches)), limit: cfg.Concurrency}
 }
 
 // parallel is the [Step] produced by [Parallel].
 type parallelStep struct {
-	branches []Step
+	branches stepList
 	limit    int
 }
 
 func (p parallelStep) Run(ctx context.Context, s Store) (Store, error) {
-	for i, branch := range p.branches {
-		if branch == nil {
-			return s, &flow.IndexError{Index: i, Err: ErrNilStep}
-		}
+	if err := p.branches.validate(); err != nil {
+		return s, err
 	}
 	if p.limit < 0 {
 		return s, fmt.Errorf("%w: negative concurrency", flow.ErrInvalidConfig)
@@ -58,20 +56,20 @@ func (p parallelStep) Run(ctx context.Context, s Store) (Store, error) {
 	case 0:
 		return s, nil
 	case 1:
-		result, err := runStep(ctx, p.branches[0], s)
+		result, err := (stepRunner{ctx: ctx}).run(p.branches[0], s)
 		if err != nil {
 			if contextErr := ctx.Err(); contextErr != nil {
 				return s, contextErr
 			}
-			if suspensions, only := asSuspensions(err); only {
-				return mergeStores(s, result), joinSuspensions(suspensions)
+			if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
+				return s.merge(result), suspensions.err()
 			}
 			return s, &flow.IndexError{Index: 0, Err: err}
 		}
 		if err := ctx.Err(); err != nil {
 			return s, err
 		}
-		return mergeStores(s, result), nil
+		return s.merge(result), nil
 	}
 
 	branchInput := s
@@ -90,7 +88,7 @@ func (p parallelStep) Run(ctx context.Context, s Store) (Store, error) {
 
 	var (
 		completed   []Store
-		suspensions []*Suspension
+		suspensions suspensionList
 	)
 	for _, outcome := range outcomes {
 		completed = append(completed, outcome.store)
@@ -98,14 +96,14 @@ func (p parallelStep) Run(ctx context.Context, s Store) (Store, error) {
 	}
 	// Merge what finished even when something is still waiting, so the run that
 	// resumes sees the completed work instead of repeating it.
-	return mergeStores(branchInput, completed...), joinSuspensions(suspensions)
+	return branchInput.merge(completed...), suspensions.err()
 }
 
 // branchOutcome is one branch's result. A suspension travels as a value because
 // it is not a failure; anything else travels as this node's error.
 type branchOutcome struct {
 	store       Store
-	suspensions []*Suspension
+	suspensions suspensionList
 }
 
 type branchRunner struct {
@@ -113,80 +111,16 @@ type branchRunner struct {
 }
 
 func (r branchRunner) Run(ctx context.Context, branch Step) (branchOutcome, error) {
-	result, err := runStep(ctx, branch, r.input)
+	result, err := (stepRunner{ctx: ctx}).run(branch, r.input)
 	if err == nil {
 		return branchOutcome{store: result}, nil
 	}
-	if suspensions, only := asSuspensions(err); only {
+	if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
 		return branchOutcome{store: result, suspensions: suspensions}, nil
 	}
 	return branchOutcome{}, err
 }
 
 func (p parallelStep) Describe() Description {
-	return Description{Kind: "parallel", Children: describeAll(p.branches)}
-}
-
-// mergeStores returns a new Store containing base plus each branch's writes. On
-// a same-cell conflict a later branch wins.
-func mergeStores(base Store, others ...Store) Store {
-	out := base
-	var baseData map[storeKey]cell
-	for _, other := range others {
-		if other.snapshot == base.snapshot && other.delta != nil && other.delta.parent == base.delta {
-			if out.snapshot == base.snapshot && out.delta == base.delta {
-				out = other
-			} else {
-				out = out.withDelta(other.delta.key, other.delta.cell)
-			}
-			continue
-		}
-		if writes, ok := deltaWritesSince(base, other); ok {
-			for _, write := range writes {
-				out = out.withDelta(write.key, write.cell)
-			}
-			continue
-		}
-
-		// A branch may return a Store unrelated to its input or compact a long
-		// overlay. Fall back to revision comparison in that uncommon case.
-		if baseData == nil {
-			baseData = base.materialize()
-		}
-		for _, write := range changedStoreWrites(baseData, other.materialize()) {
-			out = out.withDelta(write.key, write.cell)
-		}
-	}
-	if out.depth > storeOverlayLimit*2 {
-		return out.compact()
-	}
-	return out
-}
-
-// deltaWritesSince returns the final write to each cell changed by other after
-// base. It succeeds when both Stores share a snapshot and other's overlay
-// descends from base's overlay.
-func deltaWritesSince(base, other Store) ([]*storeDelta, bool) {
-	if other.snapshot != base.snapshot {
-		return nil, false
-	}
-
-	var writes []*storeDelta
-	for delta := other.delta; delta != base.delta; delta = delta.parent {
-		if delta == nil {
-			return nil, false
-		}
-		seen := false
-		for _, write := range writes {
-			if write.key == delta.key {
-				seen = true
-				break
-			}
-		}
-		if !seen {
-			writes = append(writes, delta)
-		}
-	}
-	slices.Reverse(writes)
-	return writes, true
+	return Description{Kind: "parallel", Children: p.branches.describe()}
 }

@@ -119,7 +119,7 @@ func (a awaitStep) Run(ctx context.Context, s Store) (Store, error) {
 		run.emit(ctx, Event{Kind: EventFailed, ID: a.id, Err: err})
 		return s, err
 	}
-	if err := validateRef(a.ref, "await reference"); err != nil {
+	if err := a.ref.validate("await reference"); err != nil {
 		err := &StepError{
 			ID:  a.id,
 			Op:  OpValidate,
@@ -231,7 +231,7 @@ func InterruptFactory() LeafFactory {
 
 		var value any
 		if config := bytes.TrimSpace(spec.Config); len(config) > 0 {
-			decoded, err := decodeValue(config)
+			decoded, err := jsonDocument(config).value()
 			if err != nil {
 				return nil, fmt.Errorf("%w: decode config: %w", ErrInvalidSpec, err)
 			}
@@ -241,21 +241,27 @@ func InterruptFactory() LeafFactory {
 	}
 }
 
-// asSuspensions reports the suspension leaves in err and whether every leaf in
-// its error tree is a suspension. Composites use the second result to keep a
-// joined failure from being mistaken for "not yet".
-func asSuspensions(err error) ([]*Suspension, bool) {
-	suspensions, only := collectSuspensions(err)
+// suspensionTree owns classification of the standard Go error tree.
+type suspensionTree struct {
+	err error
+}
+
+// suspensions reports the suspension leaves and whether every error leaf is a
+// suspension. Composites use the second result to keep a joined failure from
+// being mistaken for "not yet".
+func (t suspensionTree) suspensions() (suspensionList, bool) {
+	suspensions, only := t.collect()
 	if len(suspensions) == 0 {
 		return nil, false
 	}
-	return normalizeSuspensions(suspensions), only
+	return suspensions.normalized(), only
 }
 
-// collectSuspensions walks both forms supported by the standard error tree:
+// collect walks both forms supported by the standard error tree:
 // Unwrap() error and Unwrap() []error. It returns copies so identifying a wait
 // at a workflow boundary never mutates an error owned by its caller.
-func collectSuspensions(err error) ([]*Suspension, bool) {
+func (t suspensionTree) collect() (suspensionList, bool) {
+	err := t.err
 	if err == nil {
 		return nil, false
 	}
@@ -266,14 +272,14 @@ func collectSuspensions(err error) ([]*Suspension, bool) {
 			// instead of normalizing it away into a nil error.
 			return []*Suspension{{}}, true
 		}
-		return []*Suspension{cloneSuspension(suspension)}, true
+		return suspensionList{suspension.clone()}, true
 	}
 	if err == ErrSuspended {
-		return []*Suspension{{}}, true
+		return suspensionList{{}}, true
 	}
 
 	if many, ok := err.(interface{ Unwrap() []error }); ok {
-		var suspensions []*Suspension
+		var suspensions suspensionList
 		only := true
 		children := 0
 		for _, child := range many.Unwrap() {
@@ -281,7 +287,7 @@ func collectSuspensions(err error) ([]*Suspension, bool) {
 				continue
 			}
 			children++
-			found, childOnly := collectSuspensions(child)
+			found, childOnly := (suspensionTree{err: child}).collect()
 			suspensions = append(suspensions, found...)
 			only = only && childOnly
 		}
@@ -290,22 +296,24 @@ func collectSuspensions(err error) ([]*Suspension, bool) {
 	if one, ok := err.(interface{ Unwrap() error }); ok {
 		child := one.Unwrap()
 		if child == ErrSuspended {
-			return []*Suspension{{Value: err.Error()}}, true
+			return suspensionList{{Value: err.Error()}}, true
 		}
-		return collectSuspensions(child)
+		return (suspensionTree{err: child}).collect()
 	}
 
 	// A custom error may participate in errors.Is without exposing an unwrap.
 	if errors.Is(err, ErrSuspended) {
-		return []*Suspension{{Value: err.Error()}}, true
+		return suspensionList{{Value: err.Error()}}, true
 	}
 	return nil, false
 }
 
-// identifySuspensions fills in the workflow boundary that owns an otherwise
+type suspensionList []*Suspension
+
+// identify fills in the workflow boundary that owns an otherwise
 // anonymous suspension. Already-identified nested waits keep their identity.
-func identifySuspensions(suspensions []*Suspension, id string, path []string) []*Suspension {
-	for _, suspension := range suspensions {
+func (l suspensionList) identify(id string, path []string) suspensionList {
+	for _, suspension := range l {
 		if suspension.ID == "" {
 			suspension.ID = id
 		}
@@ -313,63 +321,62 @@ func identifySuspensions(suspensions []*Suspension, id string, path []string) []
 			suspension.Path = slices.Clone(path)
 		}
 	}
-	return suspensions
+	return l
 }
 
-// joinSuspensions reports the suspensions of a fan-out as one error. Several
+// err reports the suspensions of a fan-out as one error. Several
 // branches may be waiting at once, and a caller needs every reason to know what
 // to supply before resuming.
-func joinSuspensions(suspensions []*Suspension) error {
-	suspensions = normalizeSuspensions(suspensions)
-	switch len(suspensions) {
+func (l suspensionList) err() error {
+	l = l.normalized()
+	switch len(l) {
 	case 0:
 		return nil
 	case 1:
-		return suspensions[0]
+		return l[0]
 	}
-	reasons := make([]string, 0, len(suspensions))
-	for _, s := range suspensions {
+	reasons := make([]string, 0, len(l))
+	for _, s := range l {
 		reasons = append(reasons, s.Error())
 	}
 	return &multiSuspension{
-		suspensions: suspensions,
-		message:     fmt.Sprintf("workflow: %d steps suspended: %s", len(suspensions), strings.Join(reasons, "; ")),
+		suspensions: l,
+		message:     fmt.Sprintf("workflow: %d steps suspended: %s", len(l), strings.Join(reasons, "; ")),
 	}
 }
 
-func normalizeSuspensions(suspensions []*Suspension) []*Suspension {
-	normalized := make([]*Suspension, 0, len(suspensions))
-	for _, suspension := range suspensions {
+func (l suspensionList) normalized() suspensionList {
+	normalized := make(suspensionList, 0, len(l))
+	for _, suspension := range l {
 		if suspension != nil {
-			normalized = append(normalized, cloneSuspension(suspension))
+			normalized = append(normalized, suspension.clone())
 		}
 	}
-	slices.SortStableFunc(normalized, compareSuspensions)
+	slices.SortStableFunc(normalized, func(a, b *Suspension) int {
+		return a.compare(b)
+	})
 	return normalized
 }
 
-func compareSuspensions(a, b *Suspension) int {
-	if c := strings.Compare(a.ID, b.ID); c != 0 {
+func (e *Suspension) compare(other *Suspension) int {
+	if c := strings.Compare(e.ID, other.ID); c != 0 {
 		return c
 	}
-	if c := slices.Compare(a.Path, b.Path); c != 0 {
+	if c := slices.Compare(e.Path, other.Path); c != 0 {
 		return c
 	}
-	if c := strings.Compare(a.Await.NodeID, b.Await.NodeID); c != 0 {
-		return c
-	}
-	if c := strings.Compare(a.Await.Path, b.Await.Path); c != 0 {
+	if c := e.Await.compare(other.Await); c != 0 {
 		return c
 	}
 	return 0
 }
 
-func cloneSuspension(suspension *Suspension) *Suspension {
-	if suspension == nil {
+func (e *Suspension) clone() *Suspension {
+	if e == nil {
 		return nil
 	}
-	clone := *suspension
-	clone.Path = slices.Clone(suspension.Path)
+	clone := *e
+	clone.Path = slices.Clone(e.Path)
 	return &clone
 }
 
@@ -396,6 +403,6 @@ func (e *multiSuspension) Unwrap() []error {
 // yield several. The returned Suspension values and their paths are copies;
 // application-owned mutable Values remain borrowed and must not be modified.
 func Suspensions(err error) []*Suspension {
-	suspensions, _ := asSuspensions(err)
+	suspensions, _ := (suspensionTree{err: err}).suspensions()
 	return suspensions
 }

@@ -158,7 +158,7 @@ func ExampleBindFactory() {
 
 // This example reports a graph's external inputs before running it, which is how
 // an editor renders a workflow's parameters and how a caller pre-flights a run.
-func ExampleGraphInputs() {
+func ExampleGraph_Inputs() {
 	graph := workflow.Graph{Nodes: []workflow.NodeSpec{
 		{ID: "greet", Type: "template", Inputs: workflow.Inputs{
 			"name":     workflow.At("params", "name"),
@@ -166,12 +166,12 @@ func ExampleGraphInputs() {
 		}},
 	}}
 
-	for _, ref := range workflow.GraphInputs(graph) {
+	for _, ref := range graph.Inputs() {
 		fmt.Println("input:", ref)
 	}
 
 	store := workflow.NewStore().With("params", "name", "Ada")
-	fmt.Println("missing:", workflow.MissingInputs(graph, store))
+	fmt.Println("missing:", graph.MissingInputs(store))
 
 	// Output:
 	// input: params#/greeting

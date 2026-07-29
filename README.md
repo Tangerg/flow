@@ -304,8 +304,8 @@ References that name no node in the graph are the workflow's parameters. Report
 them instead of discovering a missing value mid-run:
 
 ```go
-workflow.GraphInputs(g)             // every external Ref, deduplicated and sorted
-workflow.MissingInputs(g, store)    // the ones this Store cannot satisfy
+g.Inputs()               // every external Ref, deduplicated and sorted
+g.MissingInputs(store)   // the ones this Store cannot satisfy
 ```
 
 ### JSON DSL and Schema

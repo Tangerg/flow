@@ -39,8 +39,20 @@ func Parse(src string) (*Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	slices.SortFunc(c.refs, compareRefs)
-	return &Expr{source: src, eval: eval, refs: slices.Compact(c.refs)}, nil
+	refs := refSet(c.refs).normalized()
+	return &Expr{source: src, eval: eval, refs: refs}, nil
+}
+
+type refSet []workflow.Ref
+
+func (refs refSet) normalized() []workflow.Ref {
+	slices.SortFunc(refs, func(a, b workflow.Ref) int {
+		if order := strings.Compare(a.NodeID, b.NodeID); order != 0 {
+			return order
+		}
+		return strings.Compare(a.Path, b.Path)
+	})
+	return slices.Compact(refs)
 }
 
 // MustParse is like [Parse] but panics on error. Use it for expressions fixed at
@@ -80,7 +92,7 @@ func (e *Expr) Bool(s workflow.Store) (bool, error) {
 	}
 	b, ok := v.(bool)
 	if !ok {
-		return false, e.wrap(fmt.Errorf("%w: want bool, got %s", ErrType, typeName(v)))
+		return false, e.wrap(fmt.Errorf("%w: want bool, got %s", ErrType, (operand{raw: v}).typeName()))
 	}
 	return b, nil
 }
@@ -93,7 +105,7 @@ func (e *Expr) String(s workflow.Store) (string, error) {
 	}
 	str, ok := v.(string)
 	if !ok {
-		return "", e.wrap(fmt.Errorf("%w: want string, got %s", ErrType, typeName(v)))
+		return "", e.wrap(fmt.Errorf("%w: want string, got %s", ErrType, (operand{raw: v}).typeName()))
 	}
 	return str, nil
 }
@@ -149,11 +161,11 @@ func (c *compiler) compileLiteral(lit *ast.BasicLit) (evalFunc, error) {
 	case token.INT:
 		n, err := strconv.ParseInt(lit.Value, 0, 64)
 		if err == nil {
-			return constant(n), nil
+			return c.constant(n), nil
 		}
 		u, unsignedErr := strconv.ParseUint(lit.Value, 0, 64)
 		if unsignedErr == nil {
-			return constant(u), nil
+			return c.constant(u), nil
 		}
 		return nil, c.errorAt(lit, fmt.Errorf("%w: integer literal %s: %w", ErrSyntax, lit.Value, err))
 	case token.FLOAT:
@@ -161,13 +173,13 @@ func (c *compiler) compileLiteral(lit *ast.BasicLit) (evalFunc, error) {
 		if err != nil {
 			return nil, c.errorAt(lit, fmt.Errorf("%w: float literal %s: %w", ErrSyntax, lit.Value, err))
 		}
-		return constant(f), nil
+		return c.constant(f), nil
 	case token.STRING:
 		s, err := strconv.Unquote(lit.Value)
 		if err != nil {
 			return nil, c.errorAt(lit, fmt.Errorf("%w: string literal %s: %w", ErrSyntax, lit.Value, err))
 		}
-		return constant(s), nil
+		return c.constant(s), nil
 	default:
 		return nil, c.unsupported(lit, strings.ToLower(lit.Kind.String())+" literal")
 	}
@@ -178,11 +190,11 @@ func (c *compiler) compileLiteral(lit *ast.BasicLit) (evalFunc, error) {
 func (c *compiler) compileIdent(id *ast.Ident) (evalFunc, error) {
 	switch id.Name {
 	case "true":
-		return constant(true), nil
+		return c.constant(true), nil
 	case "false":
-		return constant(false), nil
+		return c.constant(false), nil
 	case "nil":
-		return constant(nil), nil
+		return c.constant(nil), nil
 	default:
 		return nil, c.errorAt(id, fmt.Errorf(
 			"%w: %q is not a reference; a reference needs a node ID and a path, as in %s.output",
@@ -200,7 +212,7 @@ func (c *compiler) compileRef(node ast.Expr) (evalFunc, error) {
 		if !ok {
 			return nil, fmt.Errorf("%w %s", ErrUndefined, ref)
 		}
-		return normalize(v), nil
+		return (operand{raw: v}).normalized(), nil
 	}, nil
 }
 
@@ -297,30 +309,30 @@ func (c *compiler) indexSegment(index ast.Expr) (string, error) {
 }
 
 func (c *compiler) compileUnary(n *ast.UnaryExpr) (evalFunc, error) {
-	operand, err := c.compile(n.X)
+	eval, err := c.compile(n.X)
 	if err != nil {
 		return nil, err
 	}
 	switch n.Op {
 	case token.NOT:
 		return func(s workflow.Store) (any, error) {
-			v, err := operand(s)
+			v, err := eval(s)
 			if err != nil {
 				return nil, err
 			}
 			b, ok := v.(bool)
 			if !ok {
-				return nil, fmt.Errorf("%w: ! wants bool, got %s", ErrType, typeName(v))
+				return nil, fmt.Errorf("%w: ! wants bool, got %s", ErrType, (operand{raw: v}).typeName())
 			}
 			return !b, nil
 		}, nil
 	case token.SUB:
 		return func(s workflow.Store) (any, error) {
-			v, err := operand(s)
+			v, err := eval(s)
 			if err != nil {
 				return nil, err
 			}
-			return negate(v)
+			return (operand{raw: v}).negate()
 		}, nil
 	default:
 		return nil, c.unsupported(n, "unary "+n.Op.String())
@@ -342,19 +354,19 @@ func (c *compiler) compileBinary(n *ast.BinaryExpr) (evalFunc, error) {
 	case token.LAND, token.LOR:
 		stopAt := n.Op == token.LOR
 		return func(s workflow.Store) (any, error) {
-			lv, err := boolOperand(s, left, n.Op)
+			lv, err := left.bool(s, n.Op)
 			if err != nil {
 				return nil, err
 			}
 			if lv == stopAt {
 				return stopAt, nil
 			}
-			return boolOperand(s, right, n.Op)
+			return right.bool(s, n.Op)
 		}, nil
 	}
 
 	op := n.Op
-	if !supportedBinaryOp(op) {
+	if !(binaryOperator{Token: op}).supported() {
 		return nil, c.unsupported(n, "operator "+op.String())
 	}
 	return func(s workflow.Store) (any, error) {
@@ -366,7 +378,7 @@ func (c *compiler) compileBinary(n *ast.BinaryExpr) (evalFunc, error) {
 		if err != nil {
 			return nil, err
 		}
-		return apply(op, lv, rv)
+		return (binaryOperator{Token: op}).apply(operand{raw: lv}, operand{raw: rv})
 	}, nil
 }
 
@@ -401,32 +413,25 @@ func (c *compiler) compileCall(n *ast.CallExpr) (evalFunc, error) {
 			if err != nil {
 				return nil, err
 			}
-			return length(v)
+			return (operand{raw: v}).length()
 		}, nil
 	default:
 		return nil, c.errorAt(n, fmt.Errorf("%w: unknown function %q; expr provides has and len", ErrUnsupported, name.Name))
 	}
 }
 
-func boolOperand(s workflow.Store, operand evalFunc, op token.Token) (bool, error) {
-	v, err := operand(s)
+func (eval evalFunc) bool(s workflow.Store, op token.Token) (bool, error) {
+	v, err := eval(s)
 	if err != nil {
 		return false, err
 	}
 	b, ok := v.(bool)
 	if !ok {
-		return false, fmt.Errorf("%w: %s wants bool, got %s", ErrType, op.String(), typeName(v))
+		return false, fmt.Errorf("%w: %s wants bool, got %s", ErrType, op.String(), (operand{raw: v}).typeName())
 	}
 	return b, nil
 }
 
-func constant(v any) evalFunc {
+func (*compiler) constant(v any) evalFunc {
 	return func(workflow.Store) (any, error) { return v, nil }
-}
-
-func compareRefs(a, b workflow.Ref) int {
-	if c := strings.Compare(a.NodeID, b.NodeID); c != 0 {
-		return c
-	}
-	return strings.Compare(a.Path, b.Path)
 }

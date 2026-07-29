@@ -295,20 +295,20 @@ func TestCompileGraph_rejectsMalformedPortRef(t *testing.T) {
 	}
 }
 
-func TestGraphInputs_skipsMalformedNodes(t *testing.T) {
-	// A node whose default port is wired twice cannot be resolved; GraphInputs
+func TestGraph_inputsSkipMalformedNodes(t *testing.T) {
+	// A node whose default port is wired twice cannot be resolved; Graph.Inputs
 	// reports what it can and leaves rejecting the graph to ValidateGraph.
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
 		{ID: "bad", Type: "addN", Input: refPtr(workflow.Output("x")),
 			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("y")}},
 		{ID: "ok", Type: "addN", Input: refPtr(workflow.Output("z"))},
 	}}
-	if got := workflow.GraphInputs(g); !slices.Equal(got, []workflow.Ref{workflow.Output("z")}) {
-		t.Fatalf("GraphInputs = %v; want [z.output]", got)
+	if got := g.Inputs(); !slices.Equal(got, []workflow.Ref{workflow.Output("z")}) {
+		t.Fatalf("Graph.Inputs = %v; want [z.output]", got)
 	}
 }
 
-func TestGraphInputs(t *testing.T) {
+func TestGraph_inputs(t *testing.T) {
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
 		{ID: "a", Type: "addN", Input: refPtr(workflow.Output("seed"))},
 		{ID: "b", Type: "sum", Inputs: workflow.Inputs{
@@ -318,20 +318,20 @@ func TestGraphInputs(t *testing.T) {
 		{ID: "c", Type: "addN", Input: refPtr(workflow.Output("seed"))}, // duplicate external
 	}}
 
-	got := workflow.GraphInputs(g)
+	got := g.Inputs()
 	want := []workflow.Ref{workflow.At("params", "rate"), workflow.Output("seed")}
 	if !slices.Equal(got, want) {
-		t.Fatalf("GraphInputs = %v; want %v", got, want)
+		t.Fatalf("Graph.Inputs = %v; want %v", got, want)
 	}
 
 	seeded := workflow.NewStore().WithOutput("seed", 1)
-	if missing := workflow.MissingInputs(g, seeded); !slices.Equal(missing, []workflow.Ref{workflow.At("params", "rate")}) {
-		t.Fatalf("MissingInputs = %v; want params.rate", missing)
+	if missing := g.MissingInputs(seeded); !slices.Equal(missing, []workflow.Ref{workflow.At("params", "rate")}) {
+		t.Fatalf("Graph.MissingInputs = %v; want params.rate", missing)
 	}
 
 	complete := seeded.With("params", "rate", 0.5)
-	if missing := workflow.MissingInputs(g, complete); len(missing) != 0 {
-		t.Fatalf("MissingInputs = %v; want none", missing)
+	if missing := g.MissingInputs(complete); len(missing) != 0 {
+		t.Fatalf("Graph.MissingInputs = %v; want none", missing)
 	}
 }
 

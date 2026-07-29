@@ -8,11 +8,17 @@ import (
 	"strconv"
 )
 
-func decodeStrict(data []byte, dst any) error {
-	if err := validateJSONNames(data); err != nil {
+// jsonDocument owns the package's strict JSON semantics: one complete value,
+// no duplicate object members, preserved numbers, and optional typed decoding.
+// Giving those rules one receiver keeps every persistence and DSL boundary on
+// the same parser.
+type jsonDocument []byte
+
+func (d jsonDocument) decode(dst any) error {
+	if _, err := d.value(); err != nil {
 		return err
 	}
-	dec := json.NewDecoder(bytes.NewReader(data))
+	dec := json.NewDecoder(bytes.NewReader(d))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		return err
@@ -26,25 +32,15 @@ func decodeStrict(data []byte, dst any) error {
 	return nil
 }
 
-// validateJSONNames rejects duplicate object members before encoding/json or
-// the JSON Schema implementation collapses them into one map entry. Accepting
-// duplicates would make configuration depend on a decoder's first/last-wins
-// policy and leave JSON Schema validating a different document than the caller
-// supplied.
-func validateJSONNames(data []byte) error {
-	_, err := decodeUniqueJSON(data)
-	return err
-}
-
-// decodeUniqueJSON decodes one JSON value into the ordinary JSON domain while
+// value decodes one JSON value into the ordinary JSON domain while
 // rejecting duplicate object members. The standard decoder otherwise silently
 // keeps the last value, which would make schema validation observe a different
 // document than the caller supplied.
-func decodeUniqueJSON(data []byte) (any, error) {
-	decoder := json.NewDecoder(bytes.NewReader(data))
+func (d jsonDocument) value() (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(d))
 	decoder.UseNumber()
-	var path []string
-	value, err := readJSONValue(decoder, &path)
+	reader := jsonReader{decoder: decoder}
+	value, err := reader.read()
 	if err != nil {
 		return nil, err
 	}
@@ -57,8 +53,15 @@ func decodeUniqueJSON(data []byte) (any, error) {
 	return value, nil
 }
 
-func readJSONValue(decoder *json.Decoder, path *[]string) (any, error) {
-	token, err := decoder.Token()
+// jsonReader owns the cursor and path of a recursive token walk. path always
+// identifies the value currently being read.
+type jsonReader struct {
+	decoder *json.Decoder
+	path    []string
+}
+
+func (r *jsonReader) read() (any, error) {
+	token, err := r.decoder.Token()
 	if err != nil {
 		return nil, err
 	}
@@ -70,8 +73,8 @@ func readJSONValue(decoder *json.Decoder, path *[]string) (any, error) {
 	switch delim {
 	case '{':
 		object := make(map[string]any)
-		for decoder.More() {
-			token, err := decoder.Token()
+		for r.decoder.More() {
+			token, err := r.decoder.Token()
 			if err != nil {
 				return nil, err
 			}
@@ -79,33 +82,33 @@ func readJSONValue(decoder *json.Decoder, path *[]string) (any, error) {
 			if !ok {
 				return nil, fmt.Errorf("object member name is %T, want string", token)
 			}
-			*path = append(*path, name)
+			r.path = append(r.path, name)
 			if _, duplicate := object[name]; duplicate {
-				return nil, fmt.Errorf("duplicate object member %q at %s", name, encodePointer(*path))
+				return nil, fmt.Errorf("duplicate object member %q at %s", name, pointerPath(r.path).encode())
 			}
-			value, err := readJSONValue(decoder, path)
+			value, err := r.read()
 			if err != nil {
 				return nil, err
 			}
 			object[name] = value
-			*path = (*path)[:len(*path)-1]
+			r.path = r.path[:len(r.path)-1]
 		}
-		if _, err := decoder.Token(); err != nil { // }
+		if _, err := r.decoder.Token(); err != nil { // }
 			return nil, err
 		}
 		return object, nil
 	case '[':
 		array := make([]any, 0)
-		for index := 0; decoder.More(); index++ {
-			*path = append(*path, strconv.Itoa(index))
-			value, err := readJSONValue(decoder, path)
+		for index := 0; r.decoder.More(); index++ {
+			r.path = append(r.path, strconv.Itoa(index))
+			value, err := r.read()
 			if err != nil {
 				return nil, err
 			}
 			array = append(array, value)
-			*path = (*path)[:len(*path)-1]
+			r.path = r.path[:len(r.path)-1]
 		}
-		if _, err := decoder.Token(); err != nil { // ]
+		if _, err := r.decoder.Token(); err != nil { // ]
 			return nil, err
 		}
 		return array, nil

@@ -47,7 +47,7 @@ type NodeSchema struct {
 
 type registeredNodeSchema struct {
 	schema          NodeSchema
-	configValidator jsonValidator
+	configValidator *compiledSchema
 }
 
 // RegisterSchema associates a [NodeSchema] with a node type. It compiles
@@ -58,14 +58,14 @@ func (r *Registry) RegisterSchema(nodeType string, schema NodeSchema) error {
 	switch {
 	case nodeType == "":
 		return &RegistrationError{Kind: "schema", Err: fmt.Errorf("%w: empty node type", ErrInvalidRegistration)}
-	case !validValueType(schema.Output):
+	case !schema.Output.valid():
 		return &RegistrationError{Kind: "schema", Name: nodeType, Err: fmt.Errorf("%w: invalid value type", ErrInvalidRegistration)}
 	}
 	for _, port := range slices.Sorted(maps.Keys(schema.Inputs)) {
 		if port == "" {
 			return &RegistrationError{Kind: "schema", Name: nodeType, Err: fmt.Errorf("%w: empty port name", ErrInvalidRegistration)}
 		}
-		if !validValueType(schema.Inputs[port]) {
+		if !schema.Inputs[port].valid() {
 			return &RegistrationError{
 				Kind: "schema",
 				Name: nodeType,
@@ -76,7 +76,10 @@ func (r *Registry) RegisterSchema(nodeType string, schema NodeSchema) error {
 
 	schema.Inputs = maps.Clone(schema.Inputs)
 	schema.ConfigSchema = bytes.Clone(schema.ConfigSchema)
-	validator, err := compileConfigSchema(schema.ConfigSchema)
+	validator, err := (schemaSource{
+		url:      configSchemaURL,
+		document: jsonDocument(schema.ConfigSchema),
+	}).compileOptional()
 	if err != nil {
 		return &RegistrationError{
 			Kind: "schema",
@@ -94,6 +97,10 @@ func (r *Registry) RegisterSchema(nodeType string, schema NodeSchema) error {
 	}
 	r.schemas[nodeType] = registeredNodeSchema{schema: schema, configValidator: validator}
 	return nil
+}
+
+func (s registeredNodeSchema) validateConfig(config json.RawMessage) error {
+	return s.configValidator.validateConfig(config)
 }
 
 // MustRegisterSchema is like [Registry.RegisterSchema] but panics on error.
@@ -130,7 +137,7 @@ func (r *Registry) NodeTypes() []string {
 	return slices.Sorted(maps.Keys(r.leaves))
 }
 
-func validValueType(t ValueType) bool {
+func (t ValueType) valid() bool {
 	switch t {
 	case "", TypeAny, TypeString, TypeNumber, TypeBool, TypeArray, TypeObject:
 		return true
@@ -139,39 +146,39 @@ func validValueType(t ValueType) bool {
 	}
 }
 
-// compatible reports whether a value of type out can feed a port of type in.
-// An empty or TypeAny type on either side is compatible with anything.
-func compatible(out, in ValueType) bool {
-	return out == in || out == "" || in == "" || out == TypeAny || in == TypeAny
+// accepts reports whether a value of type out can feed a port of type t. An
+// empty or TypeAny type on either side is compatible with anything.
+func (t ValueType) accepts(out ValueType) bool {
+	return out == t || out == "" || t == "" || out == TypeAny || t == TypeAny
 }
 
 // ValidateGraph checks a Graph without compiling it: unique IDs, known node
 // types, config schemas, cycles, fully wired input ports, and type-compatible
 // edges. It is intended to power a visual editor's live feedback.
 func (r *Registry) ValidateGraph(g Graph) error {
-	_, _, err := r.validateGraph(g)
+	_, err := r.validateGraph(g)
 	return err
 }
 
-func (r *Registry) validateGraph(g Graph) ([][]string, map[string]NodeSpec, error) {
-	layers, byID, wiring, err := r.plan(g) // duplicate IDs, cycles, and port wiring
+func (r *Registry) validateGraph(g Graph) (graphPlan, error) {
+	plan, err := g.plan() // duplicate IDs, cycles, and port wiring
 	if err != nil {
-		return nil, nil, err
+		return graphPlan{}, err
 	}
 
 	for _, n := range g.Nodes {
 		if _, ok := r.leafFactory(n.Type); !ok {
-			return nil, nil, &GraphError{NodeID: n.ID, Field: "type", Err: fmt.Errorf("%w %q", ErrUnknownNodeType, n.Type)}
+			return graphPlan{}, &GraphError{NodeID: n.ID, Field: "type", Err: fmt.Errorf("%w %q", ErrUnknownNodeType, n.Type)}
 		}
-		if err := validateConfig(r.registeredNodeSchema(n.Type).configValidator, n.Config); err != nil {
-			return nil, nil, &GraphError{
+		if err := r.registeredNodeSchema(n.Type).validateConfig(n.Config); err != nil {
+			return graphPlan{}, &GraphError{
 				NodeID: n.ID,
 				Field:  "config",
 				Err:    fmt.Errorf("%w: %w", ErrInvalidGraph, err),
 			}
 		}
-		if err := r.validatePorts(n.Type, wiring[n.ID], func(ref Ref) (ValueType, bool) {
-			producer, ok := byID[ref.NodeID]
+		if err := r.validatePorts(n.Type, plan.wiring[n.ID], func(ref Ref) (ValueType, bool) {
+			producer, ok := plan.byID[ref.NodeID]
 			if !ok {
 				return "", false // external input (the seed Store); nothing to check
 			}
@@ -184,10 +191,10 @@ func (r *Registry) validateGraph(g Graph) ([][]string, map[string]NodeSpec, erro
 			}
 			return r.nodeSchema(producer.Type).Output, true
 		}); err != nil {
-			return nil, nil, &GraphError{NodeID: n.ID, Field: "inputs", Err: err}
+			return graphPlan{}, &GraphError{NodeID: n.ID, Field: "inputs", Err: err}
 		}
 	}
-	return layers, byID, nil
+	return plan, nil
 }
 
 // validatePorts checks a node's wiring against its registered schema: every
@@ -218,7 +225,7 @@ func (r *Registry) validatePorts(nodeType string, inputs Inputs, producerOutput 
 		if !ok {
 			continue
 		}
-		if !compatible(out, want) {
+		if !want.accepts(out) {
 			return fmt.Errorf("%w: port %q reads %s whose output is %s, want %s",
 				ErrIncompatibleType, port, ref.NodeID, out, want)
 		}

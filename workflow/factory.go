@@ -60,7 +60,7 @@ func BindFactory[C, I, O any](bind func(cfg C, inputs Inputs) (BindFunc[I], erro
 
 		var cfg C
 		if config := bytes.TrimSpace(spec.Config); len(config) > 0 {
-			if err := decodeStrict(config, &cfg); err != nil {
+			if err := jsonDocument(config).decode(&cfg); err != nil {
 				return nil, fmt.Errorf("%w: decode config: %w", ErrInvalidSpec, err)
 			}
 		}

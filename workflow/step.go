@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,10 +32,10 @@ type Ref struct {
 // argument is one literal segment; At performs JSON Pointer escaping, so keys
 // containing "/" or "~" need no special handling by the caller.
 func At(nodeID, key string, path ...string) Ref {
-	var pointer strings.Builder
-	writePointerSegment(&pointer, key)
+	var pointer pointerEncoder
+	pointer.write(key)
 	for _, segment := range path {
-		writePointerSegment(&pointer, segment)
+		pointer.write(segment)
 	}
 	return Ref{NodeID: nodeID, Path: pointer.String()}
 }
@@ -50,25 +51,57 @@ func Output(nodeID string) Ref { return Ref{NodeID: nodeID, Path: outputPath} }
 // String returns the reference in nodeID#pointer form.
 func (r Ref) String() string { return r.NodeID + "#" + r.Path }
 
+func (r Ref) compare(other Ref) int {
+	if order := strings.Compare(r.NodeID, other.NodeID); order != 0 {
+		return order
+	}
+	return strings.Compare(r.Path, other.Path)
+}
+
+func (r Ref) validate(field string) error {
+	if r.NodeID == "" {
+		return fmt.Errorf("workflow: %s requires nodeID", field)
+	}
+	pointer, ok := encodedPointer(r.Path).scan()
+	if !ok {
+		return fmt.Errorf("workflow: %s path must be a non-empty JSON Pointer", field)
+	}
+	for {
+		_, present, valid := pointer.next()
+		if !valid {
+			return fmt.Errorf("workflow: %s path must be a non-empty JSON Pointer", field)
+		}
+		if !present {
+			return nil
+		}
+	}
+}
+
 // Child returns a reference below r. Each argument is one literal path segment;
 // no arguments return r unchanged.
 func (r Ref) Child(path ...string) Ref {
 	if len(path) == 0 {
 		return r
 	}
-	r.Path += encodePointer(path)
+	r.Path += pointerPath(path).encode()
 	return r
 }
 
-func encodePointer(segments []string) string {
-	var pointer strings.Builder
-	for _, segment := range segments {
-		writePointerSegment(&pointer, segment)
+type pointerPath []string
+
+func (path pointerPath) encode() string {
+	var pointer pointerEncoder
+	for _, segment := range path {
+		pointer.write(segment)
 	}
 	return pointer.String()
 }
 
-func writePointerSegment(pointer *strings.Builder, segment string) {
+type pointerEncoder struct {
+	strings.Builder
+}
+
+func (pointer *pointerEncoder) write(segment string) {
 	pointer.WriteByte('/')
 	for _, c := range segment {
 		switch c {
@@ -87,11 +120,13 @@ type pointerScanner struct {
 	more bool
 }
 
-func scanPointer(pointer string) (pointerScanner, bool) {
+type encodedPointer string
+
+func (pointer encodedPointer) scan() (pointerScanner, bool) {
 	if pointer == "" || pointer[0] != '/' {
 		return pointerScanner{}, false
 	}
-	return pointerScanner{rest: pointer[1:], more: true}, true
+	return pointerScanner{rest: string(pointer[1:]), more: true}, true
 }
 
 // next returns one decoded pointer segment, whether one was present, and
@@ -273,7 +308,7 @@ func (l leafStep[I, O]) Run(ctx context.Context, s Store) (Store, error) {
 	// A suspension is not a failure: it keeps its own shape, reports its own
 	// event, and is not wrapped in a StepError.
 	stop := func(suspensions []*Suspension) (Store, error) {
-		err := joinSuspensions(identifySuspensions(suspensions, l.id, scope(ctx)))
+		err := suspensionList(suspensions).identify(l.id, scope(ctx)).err()
 		if run.observing() {
 			run.emit(ctx, Event{
 				Kind:    EventSuspended,
@@ -285,7 +320,7 @@ func (l leafStep[I, O]) Run(ctx context.Context, s Store) (Store, error) {
 		return s, err
 	}
 	fail := func(op StepOp, err error) (Store, error) {
-		if suspensions, only := asSuspensions(err); only {
+		if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
 			return stop(suspensions)
 		}
 		err = &StepError{ID: l.id, Op: op, Err: err}
@@ -329,44 +364,72 @@ func (l leafStep[I, O]) Describe() Description {
 // Sequence runs steps in order, threading the Store through each. It rejects a
 // nil step before running any step.
 func Sequence(steps ...Step) Step {
-	return sequenceStep{steps: slices.Clone(steps)}
+	return sequenceStep{steps: stepList(slices.Clone(steps))}
 }
 
 // sequence is the [Step] produced by [Sequence].
 type sequenceStep struct {
-	steps []Step
+	steps stepList
 }
 
 func (s sequenceStep) Run(ctx context.Context, st Store) (Store, error) {
-	for i, step := range s.steps {
-		if step == nil {
-			return st, &flow.IndexError{Index: i, Err: ErrNilStep}
-		}
+	if err := s.steps.validate(); err != nil {
+		return st, err
 	}
-	return runSteps(ctx, s.steps, st)
+	return s.steps.run(stepRunner{ctx: ctx}, st)
 }
 
 func (s sequenceStep) Describe() Description {
-	return Description{Kind: "sequence", Children: describeAll(s.steps)}
+	return Description{Kind: "sequence", Children: s.steps.describe()}
 }
 
-// runStep runs step, guarding against a nil Step so composites fail with
-// [ErrNilStep] instead of panicking.
-func runStep(ctx context.Context, step Step, s Store) (Store, error) {
+type stepRunner struct {
+	ctx context.Context
+}
+
+// run guards the shared execution boundary against a nil Step.
+func (r stepRunner) run(step Step, s Store) (Store, error) {
 	if step == nil {
 		return s, ErrNilStep
 	}
-	return step.Run(ctx, s)
+	return step.Run(r.ctx, s)
 }
 
-func runSteps(ctx context.Context, steps []Step, s Store) (Store, error) {
+func (r stepRunner) scoped(segment string) stepRunner {
+	return stepRunner{ctx: WithScope(r.ctx, segment)}
+}
+
+func (r stepRunner) indexed(id string, index int) stepRunner {
+	return r.scoped(id + "[" + strconv.Itoa(index) + "]")
+}
+
+type stepList []Step
+
+func (steps stepList) validate() error {
+	for i, step := range steps {
+		if step == nil {
+			return &flow.IndexError{Index: i, Err: ErrNilStep}
+		}
+	}
+	return nil
+}
+
+func (steps stepList) run(runner stepRunner, s Store) (Store, error) {
 	current := s
 	for _, step := range steps {
 		var err error
-		current, err = runStep(ctx, step, current)
+		current, err = runner.run(step, current)
 		if err != nil {
 			return current, err
 		}
 	}
 	return current, nil
+}
+
+func (steps stepList) describe() []Description {
+	descriptions := make([]Description, len(steps))
+	for i, step := range steps {
+		descriptions[i] = Describe(step)
+	}
+	return descriptions
 }

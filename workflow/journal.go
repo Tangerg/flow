@@ -48,6 +48,22 @@ type JournalKey struct {
 	Path []string `json:"path,omitempty"`
 }
 
+func (k JournalKey) compare(other JournalKey) int {
+	if order := slices.Compare(k.Path, other.Path); order != 0 {
+		return order
+	}
+	return cmp.Compare(k.ID, other.ID)
+}
+
+type journalPath []string
+
+func (p journalPath) child(segment string) journalPath {
+	next := make(journalPath, len(p)+1)
+	copy(next, p)
+	next[len(p)] = segment
+	return next
+}
+
 // journalNode is a trie over scope segments. Keeping the path structured avoids
 // delimiter escaping entirely: every possible segment and step ID has one
 // unambiguous place in the tree.
@@ -167,7 +183,7 @@ func (j *Journal) Keys() []JournalKey {
 
 	keys := make([]JournalKey, 0, j.count)
 	j.root.appendKeys(nil, &keys)
-	slices.SortFunc(keys, compareJournalKeys)
+	slices.SortFunc(keys, JournalKey.compare)
 	return keys
 }
 
@@ -176,22 +192,8 @@ func (n *journalNode) appendKeys(path []string, keys *[]JournalKey) {
 		*keys = append(*keys, JournalKey{Path: slices.Clone(path), ID: id})
 	}
 	for segment, child := range n.children {
-		child.appendKeys(appendPath(path, segment), keys)
+		child.appendKeys(journalPath(path).child(segment), keys)
 	}
-}
-
-func appendPath(path []string, segment string) []string {
-	next := make([]string, len(path)+1)
-	copy(next, path)
-	next[len(path)] = segment
-	return next
-}
-
-func compareJournalKeys(a, b JournalKey) int {
-	if order := slices.Compare(a.Path, b.Path); order != 0 {
-		return order
-	}
-	return cmp.Compare(a.ID, b.ID)
 }
 
 // Reset removes every record, so the next run starts from the beginning.
@@ -275,7 +277,7 @@ func (j *Journal) MarshalJSON() ([]byte, error) {
 	j.mu.RUnlock()
 
 	slices.SortFunc(entries, func(a, b journalEntry) int {
-		return compareJournalKeys(a.key, b.key)
+		return a.key.compare(b.key)
 	})
 	records := make([]journalJSONRecord, 0, len(entries))
 	for _, entry := range entries {
@@ -301,7 +303,7 @@ func (n *journalNode) appendEntries(path []string, entries *[]journalEntry) {
 		})
 	}
 	for segment, child := range n.children {
-		child.appendEntries(appendPath(path, segment), entries)
+		child.appendEntries(journalPath(path).child(segment), entries)
 	}
 }
 
@@ -313,7 +315,7 @@ func (n *journalNode) appendEntries(path []string, entries *[]journalEntry) {
 // the type the reading step asks for.
 func (j *Journal) UnmarshalJSON(data []byte) error {
 	var document journalDocument
-	if err := decodeStrict(data, &document); err != nil {
+	if err := jsonDocument(data).decode(&document); err != nil {
 		return fmt.Errorf("workflow: unmarshal journal: %w", err)
 	}
 	if document.Version != journalJSONVersion {
@@ -329,7 +331,7 @@ func (j *Journal) UnmarshalJSON(data []byte) error {
 		if len(record.Value) == 0 {
 			return fmt.Errorf("workflow: unmarshal journal record %d: missing value", i)
 		}
-		value, err := decodeValue(record.Value)
+		value, err := jsonDocument(record.Value).value()
 		if err != nil {
 			return fmt.Errorf("workflow: unmarshal journal record %d (%q at %q): %w",
 				i, record.ID, record.Path, err)

@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"context"
-	"strconv"
 	"time"
 )
 
@@ -72,10 +71,4 @@ func (f ObserverFunc) Observe(ctx context.Context, event Event) {
 	if f != nil {
 		f(ctx, event)
 	}
-}
-
-// indexScope names one repetition of a scope. An empty id yields a bare index,
-// which is what a [Loop] iteration reports.
-func indexScope(id string, index int) string {
-	return id + "[" + strconv.Itoa(index) + "]"
 }

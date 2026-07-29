@@ -56,7 +56,7 @@ All notable changes to this project are documented here. The format follows
   per-port edge type mismatches. `inputs` is accepted by both JSON DSL shapes.
 - `workflow.BindFactory`, the typed factory adapter for a node that reads several
   ports; `workflow.OnePort` for the single-input schema.
-- `workflow.GraphInputs` and `MissingInputs` report the external references a
+- `Graph.Inputs` and `Graph.MissingInputs` report the external references a
   graph reads, so a run can be pre-flighted instead of failing mid-flight on a
   missing value.
 - `Registry.NodeTypes` and `Registry.NodeSchema` expose the registered node
@@ -78,6 +78,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Stateful implementation logic now lives with the values that own its
+  invariants: Graph planning, Spec validation, strict JSON reading, schema
+  compilation, Store merging and traversal, suspension error classification,
+  Step collection execution, and expression operands are receiver-driven
+  internal types rather than unrelated package-level helper functions.
 - `Ref.Path` is now an RFC 6901 JSON Pointer. `At` and `Ref.Child` take literal
   path segments and escape them, so empty object keys and keys containing `.`,
   `/`, or `~` are all representable. The JSON Schemas reject ambiguous legacy
@@ -197,6 +202,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Breaking
 
+- Graph input introspection now belongs to the graph value. Replace
+  `workflow.GraphInputs(g)` with `g.Inputs()` and
+  `workflow.MissingInputs(g, store)` with `g.MissingInputs(store)`.
 - `WithObserver`, `WithJournal`, `WithConfig`, and configuration readback were
   removed. Replace
   `step.Run(workflow.WithConfig(ctx, cfg), in)` with

@@ -103,7 +103,7 @@ func (r *Registry) build(spec Spec) (Step, error) {
 	case KindIteration:
 		return r.buildIteration(spec)
 	default:
-		return nil, specError(spec, "kind", fmt.Errorf("%w: unknown kind %q", ErrInvalidSpec, spec.Kind))
+		return nil, spec.err("kind", fmt.Errorf("%w: unknown kind %q", ErrInvalidSpec, spec.Kind))
 	}
 }
 
@@ -114,7 +114,7 @@ func (r *Registry) CompileSpecJSON(data []byte) (Step, error) {
 		return nil, err
 	}
 	var spec Spec
-	if err := decodeStrict(data, &spec); err != nil {
+	if err := jsonDocument(data).decode(&spec); err != nil {
 		return nil, &SpecError{Field: "json", Err: fmt.Errorf("%w: %w", ErrInvalidSpec, err)}
 	}
 	return r.CompileSpec(spec)
@@ -135,7 +135,7 @@ func (r *Registry) buildAll(specs []Spec) ([]Step, error) {
 func (r *Registry) buildLeaf(spec Spec) (Step, error) {
 	step, field, err := r.makeLeaf(spec)
 	if err != nil {
-		return nil, specError(spec, field, err)
+		return nil, spec.err(field, err)
 	}
 	return step, nil
 }
@@ -148,7 +148,7 @@ func (r *Registry) makeLeaf(spec Spec) (Step, string, error) {
 	if !ok {
 		return nil, "type", fmt.Errorf("%w %q", ErrUnknownNodeType, spec.Type)
 	}
-	inputs, err := resolveInputs(spec.Input, spec.Inputs)
+	inputs, err := spec.Inputs.withDefault(spec.Input)
 	if err != nil {
 		return nil, "inputs", err
 	}
@@ -158,7 +158,13 @@ func (r *Registry) makeLeaf(spec Spec) (Step, string, error) {
 		Config: bytes.Clone(spec.Config),
 	})
 	if err != nil {
-		return nil, factoryErrorField(err), err
+		field := "config"
+		if errors.Is(err, ErrMissingPort) ||
+			errors.Is(err, ErrUnknownPort) ||
+			errors.Is(err, ErrDuplicatePort) {
+			field = "inputs"
+		}
+		return nil, field, err
 	}
 	if step == nil {
 		return nil, "type", ErrNilStep
@@ -166,21 +172,10 @@ func (r *Registry) makeLeaf(spec Spec) (Step, string, error) {
 	return step, "", nil
 }
 
-// factoryErrorField names the Spec field a [LeafFactory] error belongs to, so a
-// wiring mistake is not reported against the node's config.
-func factoryErrorField(err error) string {
-	switch {
-	case errors.Is(err, ErrMissingPort), errors.Is(err, ErrUnknownPort), errors.Is(err, ErrDuplicatePort):
-		return "inputs"
-	default:
-		return "config"
-	}
-}
-
 func (r *Registry) buildBranch(spec Spec) (Step, error) {
 	resolve, ok := r.resolver(spec.Resolver)
 	if !ok {
-		return nil, specError(spec, "resolver", fmt.Errorf("%w: unknown resolver %q", ErrInvalidSpec, spec.Resolver))
+		return nil, spec.err("resolver", fmt.Errorf("%w: unknown resolver %q", ErrInvalidSpec, spec.Resolver))
 	}
 	cases := make(map[string]Step, len(spec.Cases))
 	for _, name := range slices.Sorted(maps.Keys(spec.Cases)) {
@@ -195,11 +190,11 @@ func (r *Registry) buildBranch(spec Spec) (Step, error) {
 
 func (r *Registry) buildLoop(spec Spec) (Step, error) {
 	if spec.Body == nil {
-		return nil, specError(spec, "body", fmt.Errorf("%w: required", ErrInvalidSpec))
+		return nil, spec.err("body", fmt.Errorf("%w: required", ErrInvalidSpec))
 	}
 	cond, ok := r.condition(spec.Condition)
 	if !ok {
-		return nil, specError(spec, "condition", fmt.Errorf("%w: unknown condition %q", ErrInvalidSpec, spec.Condition))
+		return nil, spec.err("condition", fmt.Errorf("%w: unknown condition %q", ErrInvalidSpec, spec.Condition))
 	}
 	body, err := r.build(*spec.Body)
 	if err != nil {
@@ -210,10 +205,10 @@ func (r *Registry) buildLoop(spec Spec) (Step, error) {
 
 func (r *Registry) buildIteration(spec Spec) (Step, error) {
 	if spec.Body == nil {
-		return nil, specError(spec, "body", fmt.Errorf("%w: required", ErrInvalidSpec))
+		return nil, spec.err("body", fmt.Errorf("%w: required", ErrInvalidSpec))
 	}
 	if spec.Input == nil || spec.BodyOutput == nil {
-		return nil, specError(spec, "iteration", fmt.Errorf("%w: input and bodyOutput are required", ErrInvalidSpec))
+		return nil, spec.err("iteration", fmt.Errorf("%w: input and bodyOutput are required", ErrInvalidSpec))
 	}
 	body, err := r.build(*spec.Body)
 	if err != nil {

@@ -51,29 +51,29 @@ type LeafSpec struct {
 	Config json.RawMessage
 }
 
-// resolveInputs merges the single-input "input" sugar into an explicit Inputs
-// map. It reports an error when both spell out the default port, since the
-// intent is then ambiguous.
-func resolveInputs(input *Ref, inputs Inputs) (Inputs, error) {
+// withDefault merges the single-input "input" sugar into the receiver. It
+// reports an error when both spell out the default port, since the intent is
+// then ambiguous. The receiver is never mutated.
+func (in Inputs) withDefault(input *Ref) (Inputs, error) {
 	if input == nil {
-		return maps.Clone(inputs), nil
+		return maps.Clone(in), nil
 	}
-	if _, duplicate := inputs[DefaultPort]; duplicate {
+	if _, duplicate := in[DefaultPort]; duplicate {
 		return nil, fmt.Errorf("%w: %q is set by both input and inputs", ErrDuplicatePort, DefaultPort)
 	}
-	resolved := make(Inputs, len(inputs)+1)
-	maps.Copy(resolved, inputs)
+	resolved := make(Inputs, len(in)+1)
+	maps.Copy(resolved, in)
 	resolved[DefaultPort] = *input
 	return resolved, nil
 }
 
-// validatePortRefs checks that every wired reference is well formed.
-func validatePortRefs(inputs Inputs, what string) error {
-	for _, port := range inputs.PortNames() {
+// validate checks that every port name and wired reference is well formed.
+func (in Inputs) validate(what string) error {
+	for _, port := range in.PortNames() {
 		if port == "" {
 			return fmt.Errorf("%s has an empty port name", what)
 		}
-		if err := validateRef(inputs[port], fmt.Sprintf("%s port %q", what, port)); err != nil {
+		if err := in[port].validate(fmt.Sprintf("%s port %q", what, port)); err != nil {
 			return err
 		}
 	}

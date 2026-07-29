@@ -31,8 +31,8 @@
 // [SpecJSONSchema] and [GraphJSONSchema] expose the Draft 2020-12 schemas for
 // the two JSON DSL shapes. [ValidateSpecJSON] and [ValidateGraphJSON] perform
 // portable structural checks; a Registry adds node, config, type, and graph
-// semantics when it validates or compiles the decoded workflow. [GraphInputs]
-// and [MissingInputs] report the external values a Graph reads, so a caller can
+// semantics when it validates or compiles the decoded workflow. [Graph.Inputs]
+// and [Graph.MissingInputs] report the external values a Graph reads, so a caller can
 // pre-flight a run instead of discovering a missing value mid-flight.
 //
 // # Configuring a run

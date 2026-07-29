@@ -25,11 +25,3 @@ func Describe(step Step) Description {
 	}
 	return Description{Kind: "opaque"}
 }
-
-func describeAll(steps []Step) []Description {
-	out := make([]Description, len(steps))
-	for i, s := range steps {
-		out[i] = Describe(s)
-	}
-	return out
-}

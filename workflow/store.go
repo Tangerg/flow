@@ -139,7 +139,7 @@ func (s Store) Lookup(ref Ref) (any, bool) {
 		return c.value, true
 	}
 
-	pointer, ok := scanPointer(ref.Path)
+	pointer, ok := encodedPointer(ref.Path).scan()
 	if !ok {
 		return nil, false
 	}
@@ -151,7 +151,7 @@ func (s Store) Lookup(ref Ref) (any, bool) {
 	if !ok {
 		return nil, false
 	}
-	return walk(c.value, &pointer)
+	return pointer.lookup(c.value)
 }
 
 // Write records one Store write: the cell it landed in and the value it wrote.
@@ -172,7 +172,7 @@ func (w Write) Ref() Ref { return At(w.NodeID, w.Key) }
 // Cells that base holds and s does not are not reported: a Store has no delete.
 // Values are borrowed views and must not be mutated.
 func (s Store) Changes(base Store) []Write {
-	if writes, ok := deltaWritesSince(base, s); ok {
+	if writes, ok := s.deltaSince(base); ok {
 		changes := make([]Write, 0, len(writes))
 		for _, write := range writes {
 			changes = append(changes, Write{NodeID: write.key.nodeID, Key: write.key.key, Value: write.cell.value})
@@ -182,7 +182,7 @@ func (s Store) Changes(base Store) []Write {
 
 	// s may be unrelated to base or may have compacted a long overlay. Compare
 	// write identities, then restore write order from the revision counter.
-	changed := changedStoreWrites(base.materialize(), s.materialize())
+	changed := s.changedWrites(base.materialize())
 	changes := make([]Write, 0, len(changed))
 	for _, write := range changed {
 		changes = append(changes, Write{
@@ -194,10 +194,11 @@ func (s Store) Changes(base Store) []Write {
 	return changes
 }
 
-// changedStoreWrites returns the cells in candidate that do not share the
-// corresponding cell identity in base. Revisions preserve write order; the key
-// is a deterministic tie-breaker for data restored from an external snapshot.
-func changedStoreWrites(base, candidate map[storeKey]cell) []storeWrite {
+// changedWrites returns the receiver's cells that do not share the
+// corresponding identity in base. Revisions preserve write order; the key is a
+// deterministic tie-breaker for data restored from an external snapshot.
+func (s Store) changedWrites(base map[storeKey]cell) []storeWrite {
+	candidate := s.materialize()
 	changed := make([]storeWrite, 0, len(candidate))
 	for identity, next := range candidate {
 		if current, ok := base[identity]; ok && next.revision == current.revision {
@@ -215,6 +216,70 @@ func changedStoreWrites(base, candidate map[storeKey]cell) []storeWrite {
 		return cmp.Compare(a.key.key, b.key.key)
 	})
 	return changed
+}
+
+// deltaSince returns the final write to each cell changed in s after base. It
+// succeeds when both Stores share a snapshot and s's overlay descends from
+// base's overlay.
+func (s Store) deltaSince(base Store) ([]*storeDelta, bool) {
+	if s.snapshot != base.snapshot {
+		return nil, false
+	}
+
+	var writes []*storeDelta
+	for delta := s.delta; delta != base.delta; delta = delta.parent {
+		if delta == nil {
+			return nil, false
+		}
+		seen := false
+		for _, write := range writes {
+			if write.key == delta.key {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			writes = append(writes, delta)
+		}
+	}
+	slices.Reverse(writes)
+	return writes, true
+}
+
+// merge returns a Store containing base plus each supplied Store's writes. On a
+// same-cell conflict a later Store wins.
+func (base Store) merge(others ...Store) Store {
+	out := base
+	var baseData map[storeKey]cell
+	for _, other := range others {
+		if other.snapshot == base.snapshot && other.delta != nil && other.delta.parent == base.delta {
+			if out.snapshot == base.snapshot && out.delta == base.delta {
+				out = other
+			} else {
+				out = out.withDelta(other.delta.key, other.delta.cell)
+			}
+			continue
+		}
+		if writes, ok := other.deltaSince(base); ok {
+			for _, write := range writes {
+				out = out.withDelta(write.key, write.cell)
+			}
+			continue
+		}
+
+		// A branch may return a Store unrelated to its input or compact a long
+		// overlay. Fall back to revision comparison in that uncommon case.
+		if baseData == nil {
+			baseData = base.materialize()
+		}
+		for _, write := range other.changedWrites(baseData) {
+			out = out.withDelta(write.key, write.cell)
+		}
+	}
+	if out.depth > storeOverlayLimit*2 {
+		return out.compact()
+	}
+	return out
 }
 
 // MarshalJSON serializes the Store as nodeID -> key -> value. It reports the
@@ -323,13 +388,13 @@ func (s Store) deltasOldestFirst() []*storeDelta {
 // trip. Read decoded values with [Get], which converts them to the type a caller
 // asks for; a bare [Store.Lookup] returns the JSON-domain value.
 func (s *Store) UnmarshalJSON(data []byte) error {
-	document, err := decodeUniqueJSON(data)
+	document, err := jsonDocument(data).value()
 	if err != nil {
 		return fmt.Errorf("workflow: unmarshal store: %w", err)
 	}
 	raw, ok := document.(map[string]any)
 	if !ok {
-		return fmt.Errorf("workflow: unmarshal store: expected object, got %s", jsonValueKind(document))
+		return fmt.Errorf("workflow: unmarshal store: expected object, got %s", (jsonValue{raw: document}).kind())
 	}
 
 	nodeIDs := make([]string, 0, len(raw))
@@ -339,7 +404,7 @@ func (s *Store) UnmarshalJSON(data []byte) error {
 		if !ok {
 			return fmt.Errorf(
 				"workflow: unmarshal store node %q: expected object, got %s",
-				nodeID, jsonValueKind(value),
+				nodeID, (jsonValue{raw: value}).kind(),
 			)
 		}
 		nodeIDs = append(nodeIDs, nodeID)
@@ -369,14 +434,12 @@ func (s *Store) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// decodeValue decodes one stored value into the JSON domain, keeping numbers as
-// [json.Number] so nothing is rounded on the way in.
-func decodeValue(encoded json.RawMessage) (any, error) {
-	return decodeUniqueJSON(encoded)
+type jsonValue struct {
+	raw any
 }
 
-func jsonValueKind(value any) string {
-	switch value.(type) {
+func (v jsonValue) kind() string {
+	switch v.raw.(type) {
 	case nil:
 		return "null"
 	case bool:
@@ -390,15 +453,15 @@ func jsonValueKind(value any) string {
 	case map[string]any:
 		return "object"
 	default:
-		return fmt.Sprintf("%T", value)
+		return fmt.Sprintf("%T", v.raw)
 	}
 }
 
-// walk descends through a pointer without first materializing its segments.
+// lookup descends through the receiver without first materializing its segments.
 // JSON-domain maps and arrays remain allocation-free. A typed Go value is
 // converted through JSON at most once, after which the rest of the walk stays
 // in the JSON domain.
-func walk(value any, pointer *pointerScanner) (any, bool) {
+func (pointer *pointerScanner) lookup(value any) (any, bool) {
 	jsonDomain := false
 	for {
 		key, present, valid := pointer.next()
@@ -417,7 +480,7 @@ func walk(value any, pointer *pointerScanner) (any, bool) {
 			}
 			value = next
 		case []any:
-			index, ok := parseArrayIndex(key, len(current))
+			index, ok := pointerToken(key).index(len(current))
 			if !ok {
 				return nil, false
 			}
@@ -430,7 +493,7 @@ func walk(value any, pointer *pointerScanner) (any, bool) {
 			if err != nil {
 				return nil, false
 			}
-			value, err = decodeValue(encoded)
+			value, err = jsonDocument(encoded).value()
 			if err != nil {
 				return nil, false
 			}
@@ -445,7 +508,7 @@ func walk(value any, pointer *pointerScanner) (any, bool) {
 				}
 				value = next
 			case []any:
-				index, ok := parseArrayIndex(key, len(current))
+				index, ok := pointerToken(key).index(len(current))
 				if !ok {
 					return nil, false
 				}
@@ -457,10 +520,12 @@ func walk(value any, pointer *pointerScanner) (any, bool) {
 	}
 }
 
-// parseArrayIndex implements RFC 6901's array-index grammar. strconv.Atoi alone
+type pointerToken string
+
+// index implements RFC 6901's array-index grammar. strconv.Atoi alone
 // would incorrectly accept tokens such as "+1" and "01", which are object keys
 // but not canonical array indexes.
-func parseArrayIndex(token string, length int) (int, bool) {
+func (token pointerToken) index(length int) (int, bool) {
 	if token == "" || (len(token) > 1 && token[0] == '0') {
 		return 0, false
 	}
@@ -469,6 +534,6 @@ func parseArrayIndex(token string, length int) (int, bool) {
 			return 0, false
 		}
 	}
-	index, err := strconv.Atoi(token)
+	index, err := strconv.Atoi(string(token))
 	return index, err == nil && index < length
 }

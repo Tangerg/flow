@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"strings"
 )
 
 // NodeSpec describes one node in a flat [Graph]: a leaf built by the registry
@@ -39,16 +38,16 @@ type Graph struct {
 // schemas, then runs each topological layer's nodes concurrently. Build errors
 // are reported as GraphError values at the graph node and field that caused them.
 func (r *Registry) CompileGraph(g Graph) (Step, error) {
-	layers, byID, err := r.validateGraph(g)
+	plan, err := r.validateGraph(g)
 	if err != nil {
 		return nil, err
 	}
 
 	var steps []Step
-	for _, layer := range layers {
+	for _, layer := range plan.layers {
 		branch := make([]Step, 0, len(layer))
 		for _, id := range layer {
-			leaf, field, err := r.makeLeaf(nodeToSpec(byID[id]))
+			leaf, field, err := r.makeLeaf(plan.byID[id].spec())
 			if err != nil {
 				return nil, &GraphError{
 					NodeID: id,
@@ -74,109 +73,146 @@ func (r *Registry) CompileGraphJSON(data []byte) (Step, error) {
 		return nil, err
 	}
 	var g Graph
-	if err := decodeStrict(data, &g); err != nil {
+	if err := jsonDocument(data).decode(&g); err != nil {
 		return nil, &GraphError{Field: "json", Err: fmt.Errorf("%w: %w", ErrInvalidGraph, err)}
 	}
 	return r.CompileGraph(g)
 }
 
-// plan validates the graph structurally (unique IDs, well-formed port wiring, no
-// cycles) and returns its topological layers, a lookup of nodes by ID, and each
-// node's resolved wiring. It is shared by Compile and ValidateGraph.
-func (r *Registry) plan(g Graph) (layers [][]string, byID map[string]NodeSpec, wiring map[string]Inputs, err error) {
-	byID = make(map[string]NodeSpec, len(g.Nodes))
-	wiring = make(map[string]Inputs, len(g.Nodes))
-	indexByID := make(map[string]int, len(g.Nodes))
-	for i, n := range g.Nodes {
+// plan validates the graph structurally. Registry-level semantic checks build
+// on the resulting plan.
+func (g Graph) plan() (graphPlan, error) {
+	plan := graphPlan{
+		graph:      g,
+		byID:       make(map[string]NodeSpec, len(g.Nodes)),
+		wiring:     make(map[string]Inputs, len(g.Nodes)),
+		indexByID:  make(map[string]int, len(g.Nodes)),
+		indegree:   make([]int, len(g.Nodes)),
+		dependents: make([][]int, len(g.Nodes)),
+	}
+	if err := plan.index(); err != nil {
+		return graphPlan{}, err
+	}
+	if err := plan.connect(); err != nil {
+		return graphPlan{}, err
+	}
+	var err error
+	plan.layers, err = plan.order()
+	if err != nil {
+		return graphPlan{}, err
+	}
+	return plan, nil
+}
+
+// graphPlan owns the mutable state of one planning pass. Keeping these related
+// indexes together makes it impossible to advance one phase with a mismatched
+// graph or dependency table.
+type graphPlan struct {
+	graph      Graph
+	byID       map[string]NodeSpec
+	wiring     map[string]Inputs
+	indexByID  map[string]int
+	indegree   []int
+	dependents [][]int
+	layers     [][]string
+}
+
+func (p *graphPlan) index() error {
+	for i, n := range p.graph.Nodes {
 		switch {
 		case n.ID == "":
-			return nil, nil, nil, &GraphError{Field: "id", Err: fmt.Errorf("%w: empty", ErrInvalidGraph)}
+			return &GraphError{Field: "id", Err: fmt.Errorf("%w: empty", ErrInvalidGraph)}
 		case n.Type == "":
-			return nil, nil, nil, &GraphError{NodeID: n.ID, Field: "type", Err: fmt.Errorf("%w: empty", ErrInvalidGraph)}
+			return &GraphError{NodeID: n.ID, Field: "type", Err: fmt.Errorf("%w: empty", ErrInvalidGraph)}
 		}
-		if _, dup := byID[n.ID]; dup {
-			return nil, nil, nil, &GraphError{NodeID: n.ID, Field: "id", Err: ErrDuplicateNode}
+		if _, duplicate := p.byID[n.ID]; duplicate {
+			return &GraphError{NodeID: n.ID, Field: "id", Err: ErrDuplicateNode}
 		}
-		inputs, err := resolveInputs(n.Input, n.Inputs)
+		inputs, err := n.Inputs.withDefault(n.Input)
 		if err != nil {
-			return nil, nil, nil, &GraphError{NodeID: n.ID, Field: "inputs", Err: err}
+			return &GraphError{NodeID: n.ID, Field: "inputs", Err: err}
 		}
-		if err := validatePortRefs(inputs, fmt.Sprintf("node %q", n.ID)); err != nil {
-			return nil, nil, nil, &GraphError{NodeID: n.ID, Field: "inputs", Err: fmt.Errorf("%w: %w", ErrInvalidGraph, err)}
+		if err := inputs.validate(fmt.Sprintf("node %q", n.ID)); err != nil {
+			return &GraphError{NodeID: n.ID, Field: "inputs", Err: fmt.Errorf("%w: %w", ErrInvalidGraph, err)}
 		}
-		wiring[n.ID] = inputs
-		byID[n.ID] = n
-		indexByID[n.ID] = i
+		p.wiring[n.ID] = inputs
+		p.byID[n.ID] = n
+		p.indexByID[n.ID] = i
 	}
+	return nil
+}
 
-	indegree := make([]int, len(g.Nodes))
-	dependents := make([][]int, len(g.Nodes))
-	for i, n := range g.Nodes {
+func (p *graphPlan) connect() error {
+	for i, n := range p.graph.Nodes {
 		seen := map[string]bool{}
-		addDep := func(dep string, allowExternal bool) error {
-			if dep == "" || seen[dep] {
-				return nil
-			}
-			if dep == n.ID {
-				return &GraphError{NodeID: n.ID, Field: "dependsOn", Err: fmt.Errorf("%w: self dependency", ErrCycle)}
-			}
-			depIndex, ok := indexByID[dep]
-			if !ok {
-				if allowExternal {
-					return nil
-				}
-				return &GraphError{NodeID: n.ID, Field: "dependsOn", Err: fmt.Errorf("%w %q", ErrUnknownNode, dep)}
-			}
-			seen[dep] = true
-			indegree[i]++
-			dependents[depIndex] = append(dependents[depIndex], i)
-			return nil
-		}
-		for _, ref := range wiring[n.ID].Refs() {
-			if err := addDep(ref.NodeID, true); err != nil {
-				return nil, nil, nil, err
+		for _, ref := range p.wiring[n.ID].Refs() {
+			if err := p.addDependency(i, n.ID, ref.NodeID, true, seen); err != nil {
+				return err
 			}
 		}
 		explicit := make(map[string]struct{}, len(n.DependsOn))
 		for _, d := range n.DependsOn {
 			if d == "" {
-				return nil, nil, nil, &GraphError{
+				return &GraphError{
 					NodeID: n.ID,
 					Field:  "dependsOn",
 					Err:    fmt.Errorf("%w: empty dependency", ErrInvalidGraph),
 				}
 			}
 			if _, duplicate := explicit[d]; duplicate {
-				return nil, nil, nil, &GraphError{
+				return &GraphError{
 					NodeID: n.ID,
 					Field:  "dependsOn",
 					Err:    fmt.Errorf("%w: duplicate dependency %q", ErrInvalidGraph, d),
 				}
 			}
 			explicit[d] = struct{}{}
-			if err := addDep(d, false); err != nil {
-				return nil, nil, nil, err
+			if err := p.addDependency(i, n.ID, d, false, seen); err != nil {
+				return err
 			}
 		}
 	}
+	return nil
+}
 
+func (p *graphPlan) addDependency(nodeIndex int, nodeID, dependency string, allowExternal bool, seen map[string]bool) error {
+	if dependency == "" || seen[dependency] {
+		return nil
+	}
+	if dependency == nodeID {
+		return &GraphError{NodeID: nodeID, Field: "dependsOn", Err: fmt.Errorf("%w: self dependency", ErrCycle)}
+	}
+	dependencyIndex, ok := p.indexByID[dependency]
+	if !ok {
+		if allowExternal {
+			return nil
+		}
+		return &GraphError{NodeID: nodeID, Field: "dependsOn", Err: fmt.Errorf("%w %q", ErrUnknownNode, dependency)}
+	}
+	seen[dependency] = true
+	p.indegree[nodeIndex]++
+	p.dependents[dependencyIndex] = append(p.dependents[dependencyIndex], nodeIndex)
+	return nil
+}
+
+func (p *graphPlan) order() ([][]string, error) {
 	// Kahn's algorithm computes each node's barrier level in O(V+E). Levels are
 	// materialized in a final spec-order pass so independent nodes retain the
 	// deterministic order in which the caller declared them.
-	queue := make([]int, 0, len(g.Nodes))
-	for i, degree := range indegree {
+	queue := make([]int, 0, len(p.graph.Nodes))
+	for i, degree := range p.indegree {
 		if degree == 0 {
 			queue = append(queue, i)
 		}
 	}
 
-	levels := make([]int, len(g.Nodes))
+	levels := make([]int, len(p.graph.Nodes))
 	processed := 0
 	maxLevel := 0
 	for head := 0; head < len(queue); head++ {
 		node := queue[head]
 		processed++
-		for _, dependent := range dependents[node] {
+		for _, dependent := range p.dependents[node] {
 			nextLevel := levels[node] + 1
 			if levels[dependent] < nextLevel {
 				levels[dependent] = nextLevel
@@ -184,38 +220,38 @@ func (r *Registry) plan(g Graph) (layers [][]string, byID map[string]NodeSpec, w
 					maxLevel = nextLevel
 				}
 			}
-			indegree[dependent]--
-			if indegree[dependent] == 0 {
+			p.indegree[dependent]--
+			if p.indegree[dependent] == 0 {
 				queue = append(queue, dependent)
 			}
 		}
 	}
-	if processed != len(g.Nodes) {
-		return nil, nil, nil, &GraphError{Err: ErrCycle}
+	if processed != len(p.graph.Nodes) {
+		return nil, &GraphError{Err: ErrCycle}
 	}
-	if len(g.Nodes) == 0 {
-		return nil, byID, wiring, nil
+	if len(p.graph.Nodes) == 0 {
+		return nil, nil
 	}
 
-	layers = make([][]string, maxLevel+1)
-	for i, n := range g.Nodes {
+	layers := make([][]string, maxLevel+1)
+	for i, n := range p.graph.Nodes {
 		layers[levels[i]] = append(layers[levels[i]], n.ID)
 	}
-	return layers, byID, wiring, nil
+	return layers, nil
 }
 
-func nodeToSpec(n NodeSpec) Spec {
+func (n NodeSpec) spec() Spec {
 	return Spec{Kind: KindLeaf, ID: n.ID, Type: n.Type, Input: n.Input, Inputs: n.Inputs, Config: n.Config}
 }
 
-// GraphInputs returns the external references a Graph reads: wired input ports
+// Inputs returns the external references the Graph reads: wired input ports
 // whose nodeID names no node in the graph. These are the values a caller must
 // seed into the [Store] before running, so an editor can render them as the
 // workflow's parameters.
 //
 // The result is deduplicated and ordered by reference. A malformed graph yields
 // the references it can still resolve; use [Registry.ValidateGraph] to reject it.
-func GraphInputs(g Graph) []Ref {
+func (g Graph) Inputs() []Ref {
 	internal := make(map[string]struct{}, len(g.Nodes))
 	for _, n := range g.Nodes {
 		internal[n.ID] = struct{}{}
@@ -224,7 +260,7 @@ func GraphInputs(g Graph) []Ref {
 	seen := make(map[Ref]struct{})
 	external := make([]Ref, 0, len(g.Nodes))
 	for _, n := range g.Nodes {
-		inputs, err := resolveInputs(n.Input, n.Inputs)
+		inputs, err := n.Inputs.withDefault(n.Input)
 		if err != nil {
 			continue
 		}
@@ -239,26 +275,18 @@ func GraphInputs(g Graph) []Ref {
 			external = append(external, ref)
 		}
 	}
-	slices.SortFunc(external, compareRefs)
+	slices.SortFunc(external, Ref.compare)
 	return external
 }
 
-// MissingInputs returns the references from [GraphInputs] that s does not
-// resolve. An empty result means the Store satisfies every external read, so no
-// step will fail for a missing input.
-func MissingInputs(g Graph, s Store) []Ref {
+// MissingInputs returns the references from [Graph.Inputs] that s does not
+// resolve. An empty result means the Store satisfies every external read.
+func (g Graph) MissingInputs(s Store) []Ref {
 	missing := make([]Ref, 0, len(g.Nodes))
-	for _, ref := range GraphInputs(g) {
+	for _, ref := range g.Inputs() {
 		if _, ok := s.Lookup(ref); !ok {
 			missing = append(missing, ref)
 		}
 	}
 	return missing
-}
-
-func compareRefs(a, b Ref) int {
-	if c := strings.Compare(a.NodeID, b.NodeID); c != 0 {
-		return c
-	}
-	return strings.Compare(a.Path, b.Path)
 }

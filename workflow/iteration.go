@@ -94,14 +94,14 @@ func (it iterationStep) Run(ctx context.Context, s Store) (Store, error) {
 			Err: fmt.Errorf("%w: negative concurrency", flow.ErrInvalidConfig),
 		}
 	}
-	if err := validateRef(it.input, "iteration input"); err != nil {
+	if err := it.input.validate("iteration input"); err != nil {
 		return s, &StepError{
 			ID:  it.id,
 			Op:  OpValidate,
 			Err: fmt.Errorf("%w: %w", ErrInvalidSpec, err),
 		}
 	}
-	if err := validateRef(it.bodyOutput, "iteration bodyOutput"); err != nil {
+	if err := it.bodyOutput.validate("iteration bodyOutput"); err != nil {
 		return s, &StepError{
 			ID:  it.id,
 			Op:  OpValidate,
@@ -121,11 +121,12 @@ func (it iterationStep) Run(ctx context.Context, s Store) (Store, error) {
 
 	apply := flow.NodeFunc[int, elementOutcome](func(ctx context.Context, i int) (elementOutcome, error) {
 		scoped := s.With(it.id, itemKey, items[i]).With(it.id, indexKey, i)
-		result, err := runStep(WithScope(ctx, indexScope(it.id, i)), it.body, scoped)
+		runner := (stepRunner{ctx: ctx}).indexed(it.id, i)
+		result, err := runner.run(it.body, scoped)
 		if err != nil {
 			// As in Parallel, a suspension travels as a value so the other
 			// elements finish and get recorded rather than being cancelled.
-			if suspensions, only := asSuspensions(err); only {
+			if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
 				return elementOutcome{suspensions: suspensions}, nil
 			}
 			return elementOutcome{}, err
@@ -151,7 +152,7 @@ func (it iterationStep) Run(ctx context.Context, s Store) (Store, error) {
 		// The collection is incomplete, so it is not written: a partial slice
 		// with holes would read as a finished result. The Journal holds what
 		// each element did finish, so resuming repeats only the waiting ones.
-		return s, joinSuspensions(suspensions)
+		return s, suspensionList(suspensions).err()
 	}
 	return s.WithOutput(it.id, outputs), nil
 }

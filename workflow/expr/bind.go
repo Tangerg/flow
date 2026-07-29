@@ -122,8 +122,7 @@ func (spec SwitchSpec) Refs() ([]workflow.Ref, error) {
 		}
 		refs = append(refs, e.Refs()...)
 	}
-	slices.SortFunc(refs, compareRefs)
-	return slices.Compact(refs), nil
+	return refSet(refs).normalized(), nil
 }
 
 // Bindings is a set of named expressions — the shape a config file carries so
@@ -225,6 +224,5 @@ func (b Bindings) Refs() ([]workflow.Ref, error) {
 		refs = append(refs, caseRefs...)
 	}
 
-	slices.SortFunc(refs, compareRefs)
-	return slices.Compact(refs), nil
+	return refSet(refs).normalized(), nil
 }

@@ -25,16 +25,23 @@ var (
 	//go:embed jsonschema/graph.schema.json
 	graphSchemaJSON []byte
 
-	loadSpecSchema = sync.OnceValues(func() (jsonValidator, error) {
-		return compileJSONSchema(specSchemaURL, specSchemaJSON)
+	loadSpecSchema = sync.OnceValues(func() (*compiledSchema, error) {
+		return (schemaSource{url: specSchemaURL, document: specSchemaJSON}).compile()
 	})
-	loadGraphSchema = sync.OnceValues(func() (jsonValidator, error) {
-		return compileJSONSchema(graphSchemaURL, graphSchemaJSON)
+	loadGraphSchema = sync.OnceValues(func() (*compiledSchema, error) {
+		return (schemaSource{url: graphSchemaURL, document: graphSchemaJSON}).compile()
 	})
 )
 
-type jsonValidator interface {
-	Validate(any) error
+type schemaSource struct {
+	url      string
+	document jsonDocument
+}
+
+type compiledSchema struct {
+	validator interface {
+		Validate(any) error
+	}
 }
 
 // SpecJSONSchema returns the Draft 2020-12 JSON Schema for serialized [Spec]
@@ -54,7 +61,7 @@ func GraphJSONSchema() json.RawMessage {
 // checks such as node types and config schemas are performed by
 // [Registry.ValidateSpec] and compilation.
 func ValidateSpecJSON(data []byte) error {
-	if err := validateJSON(data, loadSpecSchema); err != nil {
+	if err := schemaLoader(loadSpecSchema).validate(jsonDocument(data)); err != nil {
 		return &SpecError{Field: "json", Err: fmt.Errorf("%w: %w", ErrInvalidSpec, err)}
 	}
 	return nil
@@ -65,14 +72,14 @@ func ValidateSpecJSON(data []byte) error {
 // checks such as node types, cycles, and config schemas are performed by
 // [Registry.ValidateGraph] and compilation.
 func ValidateGraphJSON(data []byte) error {
-	if err := validateJSON(data, loadGraphSchema); err != nil {
+	if err := schemaLoader(loadGraphSchema).validate(jsonDocument(data)); err != nil {
 		return &GraphError{Field: "json", Err: fmt.Errorf("%w: %w", ErrInvalidGraph, err)}
 	}
 	return nil
 }
 
-func compileJSONSchema(resourceURL string, data []byte) (jsonValidator, error) {
-	doc, err := decodeUniqueJSON(data)
+func (s schemaSource) compile() (*compiledSchema, error) {
+	doc, err := s.document.value()
 	if err != nil {
 		return nil, fmt.Errorf("decode JSON Schema: %w", err)
 	}
@@ -81,18 +88,27 @@ func compileJSONSchema(resourceURL string, data []byte) (jsonValidator, error) {
 	// Schemas must be self-contained. In particular, registering a node must
 	// never perform network or filesystem I/O because of an external $ref.
 	compiler.UseLoader(jschema.SchemeURLLoader{})
-	if err := compiler.AddResource(resourceURL, doc); err != nil {
+	if err := compiler.AddResource(s.url, doc); err != nil {
 		return nil, fmt.Errorf("add JSON Schema resource: %w", err)
 	}
-	schema, err := compiler.Compile(resourceURL)
+	schema, err := compiler.Compile(s.url)
 	if err != nil {
 		return nil, fmt.Errorf("compile JSON Schema: %w", err)
 	}
-	return schema, nil
+	return &compiledSchema{validator: schema}, nil
 }
 
-func validateJSON(data []byte, load func() (jsonValidator, error)) error {
-	doc, err := decodeUniqueJSON(data)
+func (s schemaSource) compileOptional() (*compiledSchema, error) {
+	if len(bytes.TrimSpace(s.document)) == 0 {
+		return nil, nil
+	}
+	return s.compile()
+}
+
+type schemaLoader func() (*compiledSchema, error)
+
+func (load schemaLoader) validate(document jsonDocument) error {
+	doc, err := document.value()
 	if err != nil {
 		return err
 	}
@@ -100,36 +116,29 @@ func validateJSON(data []byte, load func() (jsonValidator, error)) error {
 	if err != nil {
 		return err
 	}
-	return validateDocument(schema, doc)
+	return schema.validate(doc)
 }
 
-func compileConfigSchema(data json.RawMessage) (jsonValidator, error) {
-	if len(bytes.TrimSpace(data)) == 0 {
-		return nil, nil
-	}
-	return compileJSONSchema(configSchemaURL, data)
-}
-
-func validateConfig(schema jsonValidator, config json.RawMessage) error {
+func (s *compiledSchema) validateConfig(config json.RawMessage) error {
 	data := bytes.TrimSpace(config)
 	if len(data) == 0 {
-		if schema == nil {
+		if s == nil {
 			return nil
 		}
 		data = json.RawMessage(`{}`)
 	}
-	doc, err := decodeUniqueJSON(data)
+	doc, err := jsonDocument(data).value()
 	if err != nil {
 		return err
 	}
-	if schema == nil {
+	if s == nil {
 		return nil
 	}
-	return validateDocument(schema, doc)
+	return s.validate(doc)
 }
 
-func validateDocument(schema jsonValidator, doc any) error {
-	err := schema.Validate(doc)
+func (s *compiledSchema) validate(doc any) error {
+	err := s.validator.Validate(doc)
 	if err == nil {
 		return nil
 	}
@@ -147,7 +156,7 @@ type jsonSchemaError struct {
 }
 
 func (e *jsonSchemaError) Error() string {
-	leaves := validationLeaves(e.err, nil)
+	leaves := e.leaves()
 	messages := make([]string, 0, len(leaves))
 	seen := make(map[string]struct{}, len(leaves))
 	for _, leaf := range leaves {
@@ -166,12 +175,18 @@ func (e *jsonSchemaError) Error() string {
 
 func (e *jsonSchemaError) Unwrap() error { return e.err }
 
-func validationLeaves(err *jschema.ValidationError, dst []*jschema.ValidationError) []*jschema.ValidationError {
-	if len(err.Causes) == 0 {
-		return append(dst, err)
+func (e *jsonSchemaError) leaves() []*jschema.ValidationError {
+	var leaves []*jschema.ValidationError
+	var visit func(*jschema.ValidationError)
+	visit = func(err *jschema.ValidationError) {
+		if len(err.Causes) == 0 {
+			leaves = append(leaves, err)
+			return
+		}
+		for _, cause := range err.Causes {
+			visit(cause)
+		}
 	}
-	for _, cause := range err.Causes {
-		dst = validationLeaves(cause, dst)
-	}
-	return dst
+	visit(e.err)
+	return leaves
 }
