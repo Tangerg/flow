@@ -177,7 +177,7 @@ func TestEvents_scopePathDistinguishesLoopIterations(t *testing.T) {
 		}
 	})})
 
-	if _, err := workflow.Loop("loop", body, done).Run(ctx, workflow.NewStore()); err != nil {
+	if _, err := workflow.Loop("loop", body, done, workflow.LoopConfig{}).Run(ctx, workflow.NewStore()); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if want := []string{"[0]", "[1]", "[2]"}; !slices.Equal(paths, want) {
@@ -209,6 +209,15 @@ func TestWithScope_nests(t *testing.T) {
 	// Deriving a sibling must not disturb the outer scope.
 	if !slices.Equal(workflow.Scope(outer), []string{"a"}) {
 		t.Fatalf("outer scope = %v; want [a]", workflow.Scope(outer))
+	}
+}
+
+func TestScope_returnsACopy(t *testing.T) {
+	ctx := workflow.WithScope(context.Background(), "original")
+	path := workflow.Scope(ctx)
+	path[0] = "changed"
+	if got := workflow.Scope(ctx); !slices.Equal(got, []string{"original"}) {
+		t.Fatalf("Scope leaked context-owned storage: %v", got)
 	}
 }
 

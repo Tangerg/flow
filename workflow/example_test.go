@@ -46,7 +46,7 @@ func ExampleSequence() {
 		workflow.Parallel([]workflow.Step{
 			add("save", "load", 10),
 			add("audit", "load", 100),
-		}),
+		}, workflow.ParallelConfig{}),
 	)
 
 	out, err := pipeline.Run(context.Background(), workflow.NewStore().WithOutput("input", 1))
@@ -275,6 +275,49 @@ func ExampleAwait() {
 	// published "ports" (800 words) <nil>
 }
 
+// Interrupt is a request/response Step. Its request is returned as structured
+// suspension data; recording a response completes that exact scoped Step.
+func ExampleInterrupt() {
+	type request struct {
+		Question string   `json:"question"`
+		Actions  []string `json:"actions"`
+	}
+	type response struct {
+		Approved bool `json:"approved"`
+	}
+
+	step := workflow.Interrupt("approval", request{
+		Question: "publish?",
+		Actions:  []string{"approve", "reject"},
+	})
+	journal := workflow.NewJournal()
+	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
+
+	paused, err := step.Run(ctx, workflow.NewStore())
+	if !errors.Is(err, workflow.ErrSuspended) {
+		fmt.Println("unexpected:", err)
+		return
+	}
+	wait := workflow.Suspensions(err)[0]
+	requestJSON, _ := json.Marshal(wait.Value)
+	fmt.Println(string(requestJSON))
+
+	if err := journal.Record(wait.Key(), response{Approved: true}); err != nil {
+		fmt.Println(err)
+		return
+	}
+	out, err := step.Run(ctx, paused)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(workflow.Get[response](out, workflow.Output("approval")))
+
+	// Output:
+	// {"question":"publish?","actions":["approve","reject"]}
+	// {true} <nil>
+}
+
 // This example shows that a branch waiting on one side does not cancel the other.
 func ExampleParallel_suspension() {
 	report := workflow.Leaf("report", workflow.From[int](workflow.Output("start")),
@@ -286,7 +329,7 @@ func ExampleParallel_suspension() {
 
 	journal := workflow.NewJournal()
 	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
-	both := workflow.Parallel([]workflow.Step{report, sign})
+	both := workflow.Parallel([]workflow.Step{report, sign}, workflow.ParallelConfig{})
 
 	paused, err := both.Run(ctx, workflow.NewStore().WithOutput("start", 21))
 	fmt.Println("suspended:", errors.Is(err, workflow.ErrSuspended))

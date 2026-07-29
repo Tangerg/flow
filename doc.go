@@ -7,7 +7,7 @@
 //   - [Node] and [NodeFunc]: the abstraction and its function adapter.
 //   - [Then]: sequential composition.
 //   - [Switch]: data-dependent selection.
-//   - [Loop]: bounded iteration (with an optional [LoopConfig] limit).
+//   - [Loop]: bounded iteration configured by [LoopConfig].
 //   - [Map]: concurrent execution over a collection — AND, wait for all.
 //   - [Race]: concurrent execution over one input — OR, first success wins.
 //

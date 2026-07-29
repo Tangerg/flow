@@ -56,7 +56,7 @@ func (r *Registry) CompileGraph(g Graph) (Step, error) {
 		if len(branch) == 1 {
 			steps = append(steps, branch[0])
 		} else {
-			steps = append(steps, Parallel(branch))
+			steps = append(steps, Parallel(branch, ParallelConfig{}))
 		}
 	}
 	return Sequence(steps...), nil

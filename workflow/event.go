@@ -36,8 +36,7 @@ type Event struct {
 
 	// Path is the chain of enclosing repeated scopes, outermost first: a [Loop]
 	// iteration or an [Iteration] element. It is empty for a step that runs at
-	// most once per run. The slice is shared with other events and must not be
-	// modified.
+	// most once per run. Each event owns its slice.
 	Path []string
 
 	// Seq numbers events within one run, starting at 1. Events are numbered in
@@ -53,8 +52,8 @@ type Event struct {
 	// [Store.Changes] to record just the step's writes.
 	Store Store
 
-	// Err is the failure on [EventFailed], or the [*Suspension] on
-	// [EventSuspended]. It is nil otherwise.
+	// Err is the failure on [EventFailed], or an error matching [ErrSuspended] on
+	// [EventSuspended]. Use [Suspensions] to read every wait. It is nil otherwise.
 	Err error
 }
 

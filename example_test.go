@@ -22,7 +22,7 @@ func ExampleThen() {
 func ExampleMap() {
 	square := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * x, nil })
 
-	out, _ := flow.Map(square).Run(context.Background(), []int{1, 2, 3, 4})
+	out, _ := flow.Map(square, flow.MapConfig{}).Run(context.Background(), []int{1, 2, 3, 4})
 	fmt.Println(out)
 	// Output: [1 4 9 16]
 }
@@ -47,7 +47,7 @@ func ExampleLoop() {
 	grow := flow.Loop(func(_ context.Context, _ int, x int) (int, bool, error) {
 		x *= 2
 		return x, x >= 100, nil
-	})
+	}, flow.LoopConfig{})
 
 	out, _ := grow.Run(context.Background(), 1)
 	fmt.Println(out)

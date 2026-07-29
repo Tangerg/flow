@@ -69,8 +69,8 @@ func Iteration(cfg IterationConfig) Step {
 			if err != nil {
 				// As in Parallel, a suspension travels as a value so the other
 				// elements finish and get recorded rather than being cancelled.
-				if suspension := suspensionOf(err); suspension != nil {
-					return elementOutcome{suspension: suspension}, nil
+				if suspensions, only := asSuspensions(err); only {
+					return elementOutcome{suspensions: suspensions}, nil
 				}
 				return elementOutcome{}, err
 			}
@@ -85,8 +85,8 @@ func Iteration(cfg IterationConfig) Step {
 		outputs := make([]any, len(outcomes))
 		var suspensions []*Suspension
 		for i, outcome := range outcomes {
-			if outcome.suspension != nil {
-				suspensions = append(suspensions, outcome.suspension)
+			if len(outcome.suspensions) > 0 {
+				suspensions = append(suspensions, outcome.suspensions...)
 				continue
 			}
 			outputs[i] = outcome.value
@@ -105,8 +105,8 @@ func Iteration(cfg IterationConfig) Step {
 // elementOutcome is one element's result. A suspension travels as a value
 // because it is not a failure; anything else travels as the mapper's error.
 type elementOutcome struct {
-	value      any
-	suspension *Suspension
+	value       any
+	suspensions []*Suspension
 }
 
 // iteration is the [Step] produced by [Iteration].

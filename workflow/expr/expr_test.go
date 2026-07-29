@@ -297,12 +297,206 @@ func TestEval_afterJSONRoundTrip(t *testing.T) {
 	}
 }
 
-func TestEval_hugeUnsignedBecomesFloat(t *testing.T) {
-	// Too large for int64: becoming a float loses precision but must not wrap to
-	// a negative number.
-	got, err := expr.MustParse("v.output > 0").Bool(store("v.output", uint64(math.MaxUint64)))
+func TestEval_mixedNumberComparisonIsExact(t *testing.T) {
+	s := store("v.output", int64(9_007_199_254_740_993))
+	tests := map[string]bool{
+		"v.output == 9007199254740992.0": false,
+		"9007199254740992.0 == v.output": false,
+		"v.output != 9007199254740992.0": true,
+		"9007199254740992.0 != v.output": true,
+		"v.output > 9007199254740992.0":  true,
+		"9007199254740992.0 < v.output":  true,
+	}
+	for src, want := range tests {
+		t.Run(src, func(t *testing.T) {
+			got, err := expr.MustParse(src).Bool(s)
+			if err != nil || got != want {
+				t.Fatalf("Bool = %v, %v; want %v", got, err, want)
+			}
+		})
+	}
+}
+
+func TestEval_containerEqualityIsSymmetric(t *testing.T) {
+	s := store(
+		"list.output", []any{},
+		"object.output", map[string]any{},
+	)
+	for _, src := range []string{
+		"nil == list.output",
+		"list.output == nil",
+		"list.output == list.output",
+		"nil == object.output",
+		"object.output == nil",
+		"object.output == object.output",
+	} {
+		t.Run(src, func(t *testing.T) {
+			if _, err := expr.MustParse(src).Eval(s); !errors.Is(err, expr.ErrType) {
+				t.Fatalf("err = %v; want ErrType", err)
+			}
+		})
+	}
+}
+
+func TestEval_lenAcceptsConcreteContainersBeforeAndAfterJSON(t *testing.T) {
+	type words []string
+	type object map[string]int
+	original := store(
+		"slice.output", words{"a", "b"},
+		"array.output", [3]int{1, 2, 3},
+		"object.output", object{"a": 1, "b": 2},
+	)
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var restored workflow.Store
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	for _, s := range []workflow.Store{original, restored} {
+		for src, want := range map[string]int64{
+			"len(slice.output)":  int64(2),
+			"len(array.output)":  int64(3),
+			"len(object.output)": int64(2),
+		} {
+			got, evalErr := expr.MustParse(src).Eval(s)
+			if evalErr != nil || got != want {
+				t.Fatalf("%s = %v, %v; want %d", src, got, evalErr, want)
+			}
+		}
+	}
+}
+
+func TestParse_quotedNodeID(t *testing.T) {
+	e := expr.MustParse(`node["load-user"].output == 7 && has(node["space id"].result)`)
+	s := workflow.NewStore().
+		WithOutput("load-user", 7).
+		With("space id", "result", true)
+	got, err := e.Bool(s)
 	if err != nil || !got {
 		t.Fatalf("Bool = %v, %v; want true", got, err)
+	}
+	want := []workflow.Ref{
+		workflow.Output("load-user"),
+		workflow.At("space id", "result"),
+	}
+	slices.SortFunc(want, func(a, b workflow.Ref) int {
+		if a.NodeID < b.NodeID {
+			return -1
+		}
+		if a.NodeID > b.NodeID {
+			return 1
+		}
+		return strings.Compare(a.Path, b.Path)
+	})
+	if refs := e.Refs(); !slices.Equal(refs, want) {
+		t.Fatalf("Refs = %v; want %v", refs, want)
+	}
+	for _, src := range []string{`node[""].output`, `node[1].output`, `node[id].output`} {
+		if _, parseErr := expr.Parse(src); !errors.Is(parseErr, expr.ErrUnsupported) {
+			t.Fatalf("Parse(%q) err = %v; want ErrUnsupported", src, parseErr)
+		}
+	}
+}
+
+func TestExprRefs_returnsACopy(t *testing.T) {
+	e := expr.MustParse("a.output == b.output")
+	refs := e.Refs()
+	refs[0] = workflow.Output("changed")
+	if got := e.Refs(); got[0].NodeID != "a" {
+		t.Fatalf("Refs leaked Expr storage: %v", got)
+	}
+}
+
+func TestEval_hugeUnsignedStaysExactAcrossJSON(t *testing.T) {
+	original := store("v.output", uint64(math.MaxUint64))
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var restored workflow.Store
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	for _, s := range []workflow.Store{original, restored} {
+		for src, want := range map[string]any{
+			"v.output":                          uint64(math.MaxUint64),
+			"v.output == 18446744073709551615":  true,
+			"v.output > 18446744073709551614":   true,
+			"v.output < 18446744073709551616.0": true,
+			"v.output % 2":                      uint64(1),
+		} {
+			got, evalErr := expr.MustParse(src).Eval(s)
+			if evalErr != nil || got != want {
+				t.Fatalf("%s = %#v, %v; want %#v", src, got, evalErr, want)
+			}
+		}
+	}
+
+	if got, evalErr := expr.MustParse("-9223372036854775808").Eval(workflow.NewStore()); evalErr != nil || got != int64(math.MinInt64) {
+		t.Fatalf("minimum int64 literal = %#v, %v", got, evalErr)
+	}
+	if _, evalErr := expr.MustParse("-18446744073709551615").Eval(workflow.NewStore()); !errors.Is(evalErr, expr.ErrType) {
+		t.Fatalf("negating MaxUint64 err = %v; want ErrType", evalErr)
+	}
+}
+
+func TestEval_unsignedArithmeticAndSpecialFloats(t *testing.T) {
+	maxUint := uint64(math.MaxUint64)
+	s := store(
+		"u.output", maxUint,
+		"v.output", maxUint-1,
+		"negative.output", int64(-1),
+		"zero.output", 0,
+		"nan.output", math.NaN(),
+		"inf.output", math.Inf(1),
+	)
+	tests := map[string]any{
+		"u.output + 1":                                 uint64(0),
+		"1 + u.output":                                 uint64(0),
+		"u.output - 1":                                 maxUint - 1,
+		"u.output * 2":                                 maxUint - 1,
+		"u.output / 2":                                 maxUint / 2,
+		"u.output % 2":                                 uint64(1),
+		"u.output > v.output":                          true,
+		"u.output >= v.output":                         true,
+		"v.output < u.output":                          true,
+		"v.output <= u.output":                         true,
+		"negative.output < u.output":                   true,
+		"u.output > negative.output":                   true,
+		"u.output < 18446744073709551616.0":            true,
+		"18446744073709551616.0 > u.output":            true,
+		"u.output < inf.output":                        true,
+		"nan.output == nan.output":                     false,
+		"nan.output != nan.output":                     true,
+		"nan.output < u.output":                        false,
+		"u.output >= nan.output":                       false,
+		"9223372036854775808 == 9223372036854775808.0": true,
+	}
+	for src, want := range tests {
+		t.Run(src, func(t *testing.T) {
+			got, err := expr.MustParse(src).Eval(s)
+			if err != nil || got != want {
+				t.Fatalf("Eval = %#v, %v; want %#v", got, err, want)
+			}
+		})
+	}
+
+	for _, src := range []string{
+		"u.output + negative.output",
+		"negative.output + u.output",
+	} {
+		if _, err := expr.MustParse(src).Eval(s); !errors.Is(err, expr.ErrType) {
+			t.Fatalf("%s err = %v; want ErrType", src, err)
+		}
+	}
+	for _, src := range []string{"u.output / zero.output", "u.output % zero.output"} {
+		if _, err := expr.MustParse(src).Eval(s); !errors.Is(err, expr.ErrDivideByZero) {
+			t.Fatalf("%s err = %v; want ErrDivideByZero", src, err)
+		}
 	}
 }
 

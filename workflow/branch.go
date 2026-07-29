@@ -58,7 +58,7 @@ func (b branchStep) Run(ctx context.Context, s Store) (Store, error) {
 func (b branchStep) decide(ctx context.Context, s Store) (string, error) {
 	journal := runFrom(ctx).journal()
 	if journal != nil {
-		if recorded, ok := journal.lookup(Scope(ctx), b.id); ok {
+		if recorded, ok := journal.lookup(scope(ctx), b.id); ok {
 			if name, ok := recorded.(string); ok {
 				return name, nil
 			}
@@ -72,14 +72,12 @@ func (b branchStep) decide(ctx context.Context, s Store) (string, error) {
 
 	name, err := b.resolve(ctx, s)
 	if err != nil {
-		if suspension := suspensionOf(err); suspension != nil {
-			suspension.ID = b.id
-			suspension.Path = Scope(ctx)
-			return "", suspension
+		if suspensions, only := asSuspensions(err); only {
+			return "", joinSuspensions(identifySuspensions(suspensions, b.id, scope(ctx)))
 		}
 		return "", &StepError{ID: b.id, Op: OpRun, Err: err}
 	}
-	journal.record(Scope(ctx), b.id, name)
+	journal.record(scope(ctx), b.id, name)
 	return name, nil
 }
 

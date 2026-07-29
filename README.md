@@ -36,7 +36,7 @@ type Node[I, O any] interface {
 | `NodeFunc` | adapt a plain function into a `Node` |
 | `Then` | sequence: run one node, feed its output to the next |
 | `Switch` | selection: route to a node chosen at runtime |
-| `Loop` | iteration: repeat until done, with an optional `LoopConfig` limit |
+| `Loop` | iteration: repeat until done, configured by `LoopConfig` |
 | `Map` | concurrency (AND): apply a node to every element and wait for all |
 | `Race` | concurrency (OR): run nodes on one input, first success wins |
 
@@ -182,7 +182,17 @@ rather than `false`, so a broken condition is never mistaken for "keep looping".
 ### Suspension and resumption
 
 A step can stop a run without failing it. `Await` waits for a value the workflow
-cannot produce itself; `Suspend` says so from inside any node:
+cannot produce itself; `Suspend` exposes a string or structured application value
+from inside any node:
+
+```go
+return false, workflow.Suspend(ApprovalRequest{
+    Document: document.ID,
+    Actions:  []string{"approve", "reject"},
+})
+```
+
+For a Store gate, wait until an external producer writes the referenced value:
 
 ```go
 pipeline := workflow.Sequence(write, workflow.Await("review", workflow.At("editor", "verdict")), publish)
@@ -207,6 +217,33 @@ up:
 ```go
 out, err := pipeline.Run(ctx, restored.With("editor", "verdict", "approved"))
 ```
+
+For request/response work, `Interrupt` is an explicit value-producing Step:
+
+```go
+approval := workflow.Interrupt("approval", map[string]any{
+    "question": "Publish this draft?",
+    "actions":  []string{"approve", "reject"},
+})
+pipeline := workflow.Sequence(write, approval, publish)
+
+paused, err := pipeline.Run(ctx, input)
+if errors.Is(err, workflow.ErrSuspended) {
+    wait := workflow.Suspensions(err)[0]
+    // ID + Path identifies this exact parallel/iteration instance.
+    if err := journal.Record(wait.Key(), true); err != nil {
+        return err
+    }
+}
+
+out, err := pipeline.Run(ctx, paused)
+approved, err := workflow.Get[bool](out, workflow.Output("approval"))
+```
+
+Unlike a function-local continuation, the Step is the replay boundary: no call
+stack is retained and no interrupt-call ordinal is matched. The structured
+`JournalKey` keeps repeated instances independent, and the response serializes
+with the Journal.
 
 Suspension is a **third outcome**, not a kind of failure, and the composites treat
 it that way:
@@ -289,7 +326,10 @@ a `Step`, so there is no final build call:
 pipeline := workflow.Sequence(
     load,
     validate,
-    workflow.Parallel([]workflow.Step{saveDB, writeAudit}),
+    workflow.Parallel(
+        []workflow.Step{saveDB, writeAudit},
+        workflow.ParallelConfig{},
+    ),
     reply,
 )
 
@@ -459,13 +499,17 @@ Current rewrite migrations:
   import `github.com/Tangerg/flow` and use the package name `flow`.
 - The former `core.Func` is now `flow.NodeFunc`, following the `http.HandlerFunc` adapter
   convention.
-- Bounded operations take a config struct, not `N` variants, and it is always
-  the last, optional argument: `flow.Map(node, cfg...)`,
-  `flow.Loop(body, cfg...)`, `flowx.FanOut(nodes, cfg...)`,
-  `workflow.Parallel(branches, cfg...)`, `workflow.Loop(id, body, done, cfg...)`.
-  Variadic subjects (FanOut, Parallel) take a slice so the config stays trailing.
+- Bounded operations take exactly one trailing config struct, not `N` variants
+  or a pseudo-optional variadic argument: `flow.Map(node, cfg)`,
+  `flow.Loop(body, cfg)`, `flowx.FanOut(nodes, cfg)`,
+  `workflow.Parallel(branches, cfg)`, `workflow.Loop(id, body, done, cfg)`.
+  The zero config selects the documented default. Variadic subjects (FanOut,
+  Parallel) take a slice so the config stays trailing.
   `workflow.Iteration(IterationConfig{...})` is fully config-defined, so its
   config is the single required argument.
+- `Journal.Keys` returns structured `JournalKey` values and `Journal.Forget`
+  accepts one. Journal JSON is a versioned list of `{path,id,value}` records;
+  scope and ID are never flattened into a delimiter-separated identity.
 - `flowx` provides control-flow sugar only, with one implementation per shape:
   `Chain`, `FanOut`, `Combine`, and `Fallback`. Resilience (retry, timeout) and
   observability are the caller's job — wrap a `Node`, or use a library.

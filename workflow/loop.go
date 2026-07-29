@@ -17,7 +17,8 @@ type LoopConfig struct {
 // Loop runs body repeatedly, threading the Store through each iteration, until
 // done reports true (checked after each run), ctx is cancelled, or the iteration
 // cap is reached. done receives the zero-based iteration index and the Store
-// produced by that iteration. The optional cfg is a single configuration.
+// produced by that iteration. A zero [LoopConfig] uses
+// [flow.DefaultMaxIterations].
 //
 // Because body runs more than once, each iteration adds a scope segment naming
 // its index, which is what lets an observer tell the iterations apart and a
@@ -29,7 +30,7 @@ type LoopConfig struct {
 //
 // id names the loop for those records and for [Describe]; it must be unique among
 // steps that can run in the same execution.
-func Loop(id string, body Step, done Condition, cfg ...LoopConfig) Step {
+func Loop(id string, body Step, done Condition, cfg LoopConfig) Step {
 	l := loopStep{id: id, body: body}
 	if done == nil {
 		l.node = flow.NodeFunc[Store, Store](func(_ context.Context, s Store) (Store, error) {
@@ -50,9 +51,7 @@ func Loop(id string, body Step, done Condition, cfg ...LoopConfig) Step {
 		return next, stop, err
 	}
 	var lc flow.LoopConfig
-	if len(cfg) > 0 {
-		lc.MaxIterations = cfg[0].MaxIterations
-	}
+	lc.MaxIterations = cfg.MaxIterations
 	l.node = flow.Loop(bodyNode, lc)
 	return l
 }
@@ -69,7 +68,7 @@ type loopStep struct {
 func (l loopStep) stop(ctx context.Context, iter int, s Store, done Condition) (bool, error) {
 	journal := runFrom(ctx).journal()
 	if journal != nil {
-		if recorded, ok := journal.lookup(Scope(ctx), l.id); ok {
+		if recorded, ok := journal.lookup(scope(ctx), l.id); ok {
 			if stop, ok := recorded.(bool); ok {
 				return stop, nil
 			}
@@ -83,14 +82,12 @@ func (l loopStep) stop(ctx context.Context, iter int, s Store, done Condition) (
 
 	stop, err := done(ctx, iter, s)
 	if err != nil {
-		if suspension := suspensionOf(err); suspension != nil {
-			suspension.ID = l.id
-			suspension.Path = Scope(ctx)
-			return false, suspension
+		if suspensions, only := asSuspensions(err); only {
+			return false, joinSuspensions(identifySuspensions(suspensions, l.id, scope(ctx)))
 		}
 		return false, &StepError{ID: l.id, Op: OpRun, Err: err}
 	}
-	journal.record(Scope(ctx), l.id, stop)
+	journal.record(scope(ctx), l.id, stop)
 	return stop, nil
 }
 

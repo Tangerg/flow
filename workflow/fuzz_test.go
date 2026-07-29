@@ -96,10 +96,11 @@ func FuzzStoreJSON(f *testing.F) {
 // FuzzJournalJSON checks the same properties for a Journal, which carries a run's
 // recorded results across a restart.
 func FuzzJournalJSON(f *testing.F) {
-	f.Add([]byte(`{}`))
-	f.Add([]byte(`{"a":1}`))
-	f.Add([]byte(`{"iter[0]/el":{"n":1}}`))
-	f.Add([]byte(`{"[0]/loop":true,"route":"case"}`))
+	f.Add([]byte(`{"version":1,"records":[]}`))
+	f.Add([]byte(`{"version":1,"records":[{"id":"a","value":1}]}`))
+	f.Add([]byte(`{"version":1,"records":[{"path":["iter[0]"],"id":"el","value":{"n":1}}]}`))
+	f.Add([]byte(`{"version":1,"records":[{"path":["[0]"],"id":"loop","value":true},{"id":"route","value":"case"}]}`))
+	f.Add([]byte(`{"version":1,"records":[{"path":["a/b"],"id":"c","value":1},{"path":["a"],"id":"b/c","value":2}]}`))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		journal := workflow.NewJournal()

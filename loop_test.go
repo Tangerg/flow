@@ -13,7 +13,7 @@ func TestLoop_untilDone(t *testing.T) {
 	node := flow.Loop(func(_ context.Context, _ int, x int) (int, bool, error) {
 		x *= 2
 		return x, x >= 100, nil
-	})
+	}, flow.LoopConfig{})
 
 	got, err := node.Run(context.Background(), 1)
 	if err != nil {
@@ -39,14 +39,14 @@ func TestLoop_maxIterations(t *testing.T) {
 	}
 }
 
-func TestLoopN_nonPositiveUsesDefault(t *testing.T) {
+func TestLoop_nonPositiveLimitUsesDefault(t *testing.T) {
 	for _, limit := range []int{0, -1} {
 		node := flow.Loop(func(_ context.Context, _ int, value int) (int, bool, error) {
 			return value + 1, false, nil
 		}, flow.LoopConfig{MaxIterations: limit})
 		got, err := node.Run(context.Background(), 0)
 		if !errors.Is(err, flow.ErrMaxIterations) || got != flow.DefaultMaxIterations {
-			t.Fatalf("LoopN(%d) = %d, %v", limit, got, err)
+			t.Fatalf("Loop limit %d = %d, %v", limit, got, err)
 		}
 	}
 }
@@ -58,7 +58,7 @@ func TestLoop_errorReturnsPreviousValue(t *testing.T) {
 			return 999, false, boom
 		}
 		return x + 1, false, nil
-	})
+	}, flow.LoopConfig{})
 
 	got, err := node.Run(context.Background(), 0)
 	if !errors.Is(err, boom) {
@@ -73,7 +73,7 @@ func TestLoop_respectsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	node := flow.Loop(func(_ context.Context, _ int, x int) (int, bool, error) { return x + 1, false, nil })
+	node := flow.Loop(func(_ context.Context, _ int, x int) (int, bool, error) { return x + 1, false, nil }, flow.LoopConfig{})
 
 	_, err := node.Run(ctx, 0)
 	if !errors.Is(err, context.Canceled) {
@@ -82,7 +82,7 @@ func TestLoop_respectsCancellation(t *testing.T) {
 }
 
 func TestLoop_nilBody(t *testing.T) {
-	_, err := flow.Loop[int](nil).Run(context.Background(), 0)
+	_, err := flow.Loop[int](nil, flow.LoopConfig{}).Run(context.Background(), 0)
 	if !errors.Is(err, flow.ErrNilFunc) {
 		t.Fatalf("error = %v, want ErrNilFunc", err)
 	}

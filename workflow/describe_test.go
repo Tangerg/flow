@@ -19,7 +19,7 @@ func leafStep(id string) workflow.Step {
 func TestDescribe_tree(t *testing.T) {
 	step := workflow.Sequence(
 		leafStep("a"),
-		workflow.Parallel([]workflow.Step{leafStep("b"), leafStep("c")}),
+		workflow.Parallel([]workflow.Step{leafStep("b"), leafStep("c")}, workflow.ParallelConfig{}),
 	)
 
 	d := workflow.Describe(step)
@@ -64,10 +64,11 @@ func TestDescribe_everyCompositeReportsItsID(t *testing.T) {
 	stop := func(context.Context, int, workflow.Store) (bool, error) { return true, nil }
 
 	steps := map[string]workflow.Step{
-		"leaf":   leafStep("leaf"),
-		"branch": workflow.Branch("branch", yes, map[string]workflow.Step{"yes": leafStep("y")}),
-		"loop":   workflow.Loop("loop", leafStep("body"), stop),
-		"await":  workflow.Await("await", workflow.Output("x")),
+		"leaf":      leafStep("leaf"),
+		"branch":    workflow.Branch("branch", yes, map[string]workflow.Step{"yes": leafStep("y")}),
+		"loop":      workflow.Loop("loop", leafStep("body"), stop, workflow.LoopConfig{}),
+		"await":     workflow.Await("await", workflow.Output("x")),
+		"interrupt": workflow.Interrupt("interrupt", "continue?"),
 		"iteration": workflow.Iteration(workflow.IterationConfig{
 			ID: "iteration", Input: workflow.Output("in"),
 			Body: leafStep("body"), BodyOutput: workflow.Output("body"),
@@ -90,7 +91,7 @@ func TestDescribe_everyCompositeReportsItsID(t *testing.T) {
 	// Sequence and parallel are structural and carry no ID.
 	for kind, step := range map[string]workflow.Step{
 		"sequence": workflow.Sequence(leafStep("a")),
-		"parallel": workflow.Parallel([]workflow.Step{leafStep("a")}),
+		"parallel": workflow.Parallel([]workflow.Step{leafStep("a")}, workflow.ParallelConfig{}),
 	} {
 		t.Run(kind, func(t *testing.T) {
 			if d := workflow.Describe(step); d.Kind != kind || d.ID != "" {
@@ -108,7 +109,7 @@ func TestBranchAndLoop_requireAnID(t *testing.T) {
 
 	for kind, step := range map[string]workflow.Step{
 		"branch": workflow.Branch("", yes, map[string]workflow.Step{"yes": leafStep("y")}),
-		"loop":   workflow.Loop("", body, stop),
+		"loop":   workflow.Loop("", body, stop, workflow.LoopConfig{}),
 	} {
 		t.Run(kind, func(t *testing.T) {
 			_, err := step.Run(context.Background(), workflow.NewStore())
@@ -132,8 +133,8 @@ func TestBranchAndLoop_propagateDecisionErrors(t *testing.T) {
 		t.Fatalf("branch err = %v; want a StepError for route wrapping boom", err)
 	}
 
-	_, err = workflow.Loop("repeat", body,
-		func(context.Context, int, workflow.Store) (bool, error) { return false, boom }).Run(context.Background(), workflow.NewStore())
+	_, err = workflow.Loop("repeat", body, func(context.Context, int, workflow.Store) (bool, error) { return false, boom }, workflow.LoopConfig{}).
+		Run(context.Background(), workflow.NewStore())
 	if !errors.As(err, &stepErr) || stepErr.ID != "repeat" || !errors.Is(err, boom) {
 		t.Fatalf("loop err = %v; want a StepError for repeat wrapping boom", err)
 	}
@@ -148,7 +149,8 @@ func TestBranchAndLoop_propagateDecisionErrors(t *testing.T) {
 
 	_, err = workflow.Loop("repeat", body, func(context.Context, int, workflow.Store) (bool, error) {
 		return false, workflow.Suspend("deciding needs a person")
-	}).Run(context.Background(), workflow.NewStore())
+	}, workflow.LoopConfig{}).
+		Run(context.Background(), workflow.NewStore())
 	if suspensions := workflow.Suspensions(err); len(suspensions) != 1 || suspensions[0].ID != "repeat" {
 		t.Fatalf("loop err = %v; want a suspension naming repeat", err)
 	}

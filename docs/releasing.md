@@ -6,7 +6,9 @@
    breaking changes explicitly.
 3. Move relevant entries from `Unreleased` in `CHANGELOG.md` into a dated release
    section and update comparison links.
-4. Verify the public API change is intentional and update the API snapshot.
+4. Verify every public API change is intentional. Once a release exists, run
+   `gorelease` against the latest tag; before the first tag, review `go doc` for
+   every package and record intentional breaks in `CHANGELOG.md`.
 5. Run the complete local gate:
 
    ```sh

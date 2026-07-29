@@ -9,13 +9,16 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - Suspension as a third outcome alongside success and failure. `Suspend` reports
-  from inside a node that work cannot proceed yet; `Await` is the common shape of a
-  wait, with `AwaitFactory` for the JSON DSL. A suspended run ends with an error
-  matching `ErrSuspended`; `Suspensions` reports every wait and what would satisfy
-  it. Because a suspension is not a failure, `Parallel` and `Iteration` let their
-  remaining work finish and merge it instead of cancelling it — cancelling would
-  discard the work and repeat its side effects on the run that resumes. Real errors
-  still fail fast.
+  from inside a node that work cannot proceed yet; `Await` is a Store gate, with
+  `AwaitFactory` for the JSON DSL; and `Interrupt` is an explicit request/response
+  Step, with `InterruptFactory` for the JSON DSL. A suspended run ends with an
+  error matching `ErrSuspended`; `Suspensions` reports every wait and its
+  scope-aware key. Record an Interrupt response with
+  `Journal.Record(wait.Key(), value)` and it becomes the Step's output on the next
+  run. Because a suspension is not a failure, `Parallel` and `Iteration` let
+  their remaining work finish and merge it instead of cancelling it — cancelling
+  would discard the work and repeat its side effects on the run that resumes.
+  Real errors still fail fast.
 - `RunConfig` and `WithConfig`: one keyed struct carries everything a single run
   needs — its `Observer` and its `Journal` — installed with one call instead of a
   chain of `WithXxx` wrappers, and extensible without breaking callers. `Config`
@@ -76,6 +79,25 @@ All notable changes to this project are documented here. The format follows
   therefore reads the same on a fresh Store and on one restored from JSON —
   including structs, typed slices, an `int64` beyond float64's exact range, and
   values nested under a path. Conversion never rounds or reinterprets.
+- Suspension aggregation walks the complete standard Go error tree. Nested
+  `Parallel` and `Iteration` compositions preserve every wait, distinguish a
+  pure suspension tree from a tree that also contains a real failure, and retain
+  completed nested branch writes in the returned Store.
+- `Suspension.Value` carries a string or structured application value rather
+  than restricting waits to a textual reason. `Suspension.Key` returns the
+  structured `ID + Path` identity used to resolve one repeated Interrupt without
+  positional matching or waking its siblings.
+- Journal identity is structured end to end. Internally it is a trie over scope
+  segments; `Journal.Keys` returns `JournalKey` values, `Forget` accepts one, and
+  the versioned JSON form stores `{path,id,value}` records. IDs and scope segments
+  may contain any delimiter without colliding.
+- Expression equality is symmetric and scalar-only, mixed integer/float
+  comparison does not round the integer, and `len` accepts concrete arrays,
+  slices, and maps before or after Store serialization. Unsigned integers above
+  `math.MaxInt64` remain exact as `uint64` across JSON. The quoted
+  `node["any ID"].path` form addresses workflow IDs that are not Go identifiers.
+- `Scope` and `Expr.Refs` return copies rather than context- or expression-owned
+  slices.
 - `WithScope` always maintains the scope, whether or not an observer is attached. A
   scope identifies a step rather than labelling it: a Journal keys its records by
   it, and tying it to the observer made a journaled `Loop` skip every iteration
@@ -114,8 +136,8 @@ All notable changes to this project are documented here. The format follows
 - Uniform style across the repo: private implementation types are named after
   the interface they satisfy — `thenNode`/`switchNode`/`mapNode`/`loopNode` for
   `flow.Node`, and `sequenceStep`/`branchStep`/`loopStep`/`parallelStep`/
-  `iterationStep`/`leafStep` for `Step`. Every config struct is now the last,
-  optional argument of its constructor.
+  `iterationStep`/`leafStep` for `Step`. Every constructor that has a config
+  takes exactly one trailing value; its zero value selects the default.
 
 ### Breaking
 
@@ -152,16 +174,29 @@ All notable changes to this project are documented here. The format follows
 - Configure bounded operations with config structs (`flow.MapConfig`,
   `flow.LoopConfig`, `workflow.ParallelConfig`, `workflow.IterationConfig`); the
   `XxxN` variants were removed.
+- `flow.Map`, `flow.Loop`, `flowx.FanOut`, `workflow.Parallel`, and
+  `workflow.Loop` now require exactly one trailing config value. Pass the zero
+  config for defaults. This replaces the former variadic shape, which allowed
+  several configurations to compile and silently ignored all but the first.
+- `Journal.Keys` returns `[]JournalKey` instead of encoded `[]string` values,
+  `Journal.Forget` accepts a `JournalKey`, and Journal JSON uses the versioned
+  structured-record format instead of a flat string-keyed object.
+- `Suspend` accepts `any`, and `Suspension.Value` replaces
+  `Suspension.Reason string`.
+- `Suspension` uses lower-case JSON fields (`id`, `path`, `await`, `value`);
+  zero-valued optional fields are omitted.
+- `AwaitFactory` rejects config and non-default input ports instead of silently
+  ignoring them. Use `InterruptFactory` when a serialized wait needs to expose a
+  request value.
 - `workflow.Pipeline` and `Pipe` were removed. Build sequential and parallel
   stages with `Sequence` and `Parallel`.
 - `flowx.Retry`, `Timeout`, and `Trace` were removed; `flowx` is now control-flow
   sugar only. Wrap a `Node` for resilience, or use a library. The `Binder`
   interface was removed; pass a `BindFunc` to `Leaf`.
 - `flowx.Race` moved to `flow.Race` (core primitive). Update the import path.
-- `flowx.FanOut` and `workflow.Parallel` now take their nodes/branches as a
-  slice with the config as a trailing optional argument —
-  `FanOut(nodes, cfg...)` and `Parallel(branches, cfg...)` — replacing the
-  previous required leading `cfg` and variadic nodes/branches.
+- `flowx.FanOut` and `workflow.Parallel` take their nodes/branches as a slice
+  with one trailing config value, replacing the previous required leading config
+  and variadic nodes/branches.
 - `flowx.FanOutAll`, `flowx.MapAll`, the `flowx.Result`/`Collect` collecting API,
   and `flowx.Identity` were removed. Use `flow.Race`/`flowx.FanOut` for control
   flow, aggregate errors yourself, and write a one-line `NodeFunc` (or
@@ -173,4 +208,4 @@ All notable changes to this project are documented here. The format follows
 - Use `workflow.NodeSchema` instead of the ambiguous `workflow.Schema` name.
 - See the migration list in `README.md` for the complete pre-v1 API rewrite.
 
-[Unreleased]: https://github.com/Tangerg/flow/commits/rewrite
+[Unreleased]: https://github.com/Tangerg/flow/commits/main

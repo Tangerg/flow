@@ -13,8 +13,9 @@ var ErrNilStep = errors.New("workflow: nil step")
 // empty ID.
 var ErrInvalidStepID = errors.New("workflow: empty step ID")
 
-// Stable sentinel errors returned by Store lookup, registration, and graph
-// validation. Use [errors.Is] rather than matching their text.
+// Stable sentinel errors returned by Store lookup, Journal mutation,
+// registration, and graph validation. Use [errors.Is] rather than matching
+// their text.
 var (
 	ErrNotFound              = errors.New("workflow: value not found")
 	ErrTypeMismatch          = errors.New("workflow: value type mismatch")
@@ -28,6 +29,7 @@ var (
 	ErrIncompatibleType      = errors.New("workflow: incompatible value type")
 	ErrInvalidSpec           = errors.New("workflow: invalid spec")
 	ErrDuplicateStep         = errors.New("workflow: duplicate step")
+	ErrJournalConflict       = errors.New("workflow: journal record already exists")
 	ErrMissingPort           = errors.New("workflow: unwired input port")
 	ErrUnknownPort           = errors.New("workflow: unknown input port")
 	ErrDuplicatePort         = errors.New("workflow: duplicate input port")

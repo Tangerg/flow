@@ -24,9 +24,11 @@
 // user-defined calls, no type conversions, and no way to reach the host program.
 //
 //   - References. A reference is a node ID followed by a path:
-//     "load.output", "load.output.items[0]", or "params[\"rate\"]". A bare name
-//     is not a reference, since a Store address needs both parts. Indexes must be
-//     literals because a Store path is text.
+//     "load.output", "load.output.items[0]", or "params[\"rate\"]". IDs that are
+//     not Go identifiers use the quoted root form, as in
+//     "node[\"load-user\"].output". A bare name is not a reference, since a
+//     Store address needs both parts. Indexes must be literals because a Store
+//     path is text.
 //   - Literals. Integers, floats, quoted strings, true, false, and nil.
 //   - Operators. Comparison (== != < <= > >=), logical (&& || !) with
 //     short-circuit evaluation, and arithmetic (+ - * / %). String operands
@@ -36,11 +38,18 @@
 //
 // # Values
 //
-// A Store holds values as any, so numbers are normalized on read: every integer
-// kind becomes int64 and every float becomes float64. A value written as a Go int
-// and the same value decoded from JSON as a float64 therefore compare equal.
-// Integer arithmetic stays exact and wraps on overflow as Go's does; division or
-// remainder by zero is [ErrDivideByZero] rather than an infinity.
+// A Store holds values as any, so scalar values are normalized on read: integer
+// kinds become int64 or uint64, floats become float64, and named bool and string
+// types become their underlying values. Integer comparison remains exact even
+// against a float outside float64's exact-integer range. Integer arithmetic stays
+// exact and wraps on overflow as Go's does; arithmetic involving a float uses
+// float64. Division or remainder by zero is [ErrDivideByZero] rather than an
+// infinity.
+//
+// len accepts strings, arrays, slices, and maps of any concrete Go type, so a
+// JSON-compatible value behaves the same before and after Store serialization.
+// Equality is deliberately scalar: arrays, slices, maps, structs, and other host
+// values report [ErrType] rather than silently choosing deep equality.
 //
 // There is no implicit truthiness and no implicit conversion. A condition must
 // evaluate to a bool and a resolver to a string, or the result is [ErrType].

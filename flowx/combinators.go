@@ -8,11 +8,10 @@ import (
 )
 
 // FanOut runs every node on the same input concurrently and returns their
-// outputs in argument order. The first failure cancels the rest. Bound
-// concurrency with the optional cfg (a single configuration; if several are
-// passed, the first applies). It is a thin convenience over flow.Map applied to
-// the nodes as data.
-func FanOut[I, O any](nodes []flow.Node[I, O], cfg ...flow.MapConfig) flow.Node[I, []O] {
+// outputs in argument order. The first failure cancels the rest. A zero
+// [flow.MapConfig] is unbounded. It is a thin convenience over flow.Map applied
+// to the nodes as data.
+func FanOut[I, O any](nodes []flow.Node[I, O], cfg flow.MapConfig) flow.Node[I, []O] {
 	nodes = slices.Clone(nodes)
 	return flow.NodeFunc[I, []O](func(ctx context.Context, in I) ([]O, error) {
 		apply := flow.NodeFunc[flow.Node[I, O], O](func(ctx context.Context, n flow.Node[I, O]) (O, error) {
@@ -22,7 +21,7 @@ func FanOut[I, O any](nodes []flow.Node[I, O], cfg ...flow.MapConfig) flow.Node[
 			}
 			return n.Run(ctx, in)
 		})
-		return flow.Map(apply, cfg...).Run(ctx, nodes)
+		return flow.Map(apply, cfg).Run(ctx, nodes)
 	})
 }
 
@@ -54,7 +53,7 @@ func Combine[I, A, B, O any](a flow.Node[I, A], b flow.Node[I, B], merge func(ct
 			}
 			return struct{}{}, err
 		})
-		if _, err := flow.Map(tasks).Run(ctx, []int{0, 1}); err != nil {
+		if _, err := flow.Map(tasks, flow.MapConfig{}).Run(ctx, []int{0, 1}); err != nil {
 			return zero, err
 		}
 		return merge(ctx, av, bv)

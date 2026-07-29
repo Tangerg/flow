@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"io"
 	"slices"
 	"strconv"
 	"strings"
@@ -302,6 +303,13 @@ func decodeValue(encoded json.RawMessage) (any, error) {
 	decoder.UseNumber()
 	var value any
 	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("multiple JSON values")
+		}
 		return nil, err
 	}
 	return value, nil

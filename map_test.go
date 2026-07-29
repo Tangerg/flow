@@ -13,7 +13,7 @@ import (
 func TestMap(t *testing.T) {
 	square := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * x, nil })
 
-	got, err := flow.Map(square).Run(context.Background(), []int{1, 2, 3, 4})
+	got, err := flow.Map(square, flow.MapConfig{}).Run(context.Background(), []int{1, 2, 3, 4})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestMap_failFastCancelsSiblings(t *testing.T) {
 		}
 	})
 
-	_, err := flow.Map(node).Run(context.Background(), []int{0, 1, 2})
+	_, err := flow.Map(node, flow.MapConfig{}).Run(context.Background(), []int{0, 1, 2})
 	if !errors.Is(err, boom) {
 		t.Fatalf("error = %v, want boom", err)
 	}
@@ -99,7 +99,7 @@ func TestMap_cancellation(t *testing.T) {
 
 	node := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil })
 
-	_, err := flow.Map(node).Run(ctx, []int{1, 2, 3})
+	_, err := flow.Map(node, flow.MapConfig{}).Run(ctx, []int{1, 2, 3})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
@@ -126,7 +126,7 @@ func TestMap_singleItemReportsCancellationAfterRun(t *testing.T) {
 		return in, nil
 	})
 
-	_, err := flow.Map(node).Run(ctx, []int{1})
+	_, err := flow.Map(node, flow.MapConfig{}).Run(ctx, []int{1})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v; want context.Canceled", err)
 	}

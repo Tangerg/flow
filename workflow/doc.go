@@ -53,11 +53,21 @@
 //
 // # Suspension and resumption
 //
-// A step can stop a run without failing it. [Suspend] and [Await] report that the
-// work cannot proceed yet — a person has to decide, an external job has to finish
-// — and the run ends with an error matching [ErrSuspended] that names what it is
-// waiting for. Suspension is a third outcome, not a kind of failure, so [Parallel]
-// and [Iteration] let their remaining work finish rather than cancelling it.
+// A step can stop a run without failing it. [Suspend], [Await], and [Interrupt]
+// report that the work cannot proceed yet — a person has to decide, an external
+// job has to finish — and the run ends with an error matching [ErrSuspended].
+// [Suspensions] returns every wait, including its structured application value
+// and its scope-aware [Suspension.Key]. Suspension is a third outcome, not a kind
+// of failure, so [Parallel] and [Iteration] let their remaining work finish
+// rather than cancelling it.
+//
+// Await is a Store gate: it passes through once its Ref exists. Interrupt is a
+// request/response Step: it exposes a value, then produces the response under
+// [Output] after the caller records it in the Journal:
+//
+//	wait := workflow.Suspensions(err)[0]
+//	if err := journal.Record(wait.Key(), response); err != nil { ... }
+//	out, err := pipeline.Run(ctx, paused)
 //
 // Attach a [Journal] through [RunConfig] and a later run continues instead of
 // starting over: every step it already completed is skipped and its result
@@ -65,7 +75,10 @@
 // where one step runs many times, and [Branch] and [Loop] also record the
 // decisions they made — a resolver that is not a pure function of the Store cannot
 // send a resumed run down the other branch. Both a [Store] and a Journal
-// serialize, so the run that resumes need not be the process that started.
+// serialize; the Journal uses versioned records with structured scope paths, so
+// the run that resumes need not be the process that started. Recording an
+// Interrupt response under its ID and path makes repeated instances independently
+// resumable without positional matching or delimiter-encoded keys.
 //
 // Suspension awareness lives in this package's composites. The generic
 // combinators in flow and flowx know nothing about a Store, so they treat a

@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"slices"
 	"sync/atomic"
 )
 
@@ -108,7 +109,7 @@ type scopeKey struct{}
 // by it, which is what keeps resumption correct where one step runs many times.
 // Each call copies the path, so concurrent branches never share a slice.
 func WithScope(ctx context.Context, segment string) context.Context {
-	current := Scope(ctx)
+	current := scope(ctx)
 	path := make([]string, len(current)+1)
 	copy(path, current)
 	path[len(current)] = segment
@@ -116,8 +117,14 @@ func WithScope(ctx context.Context, segment string) context.Context {
 }
 
 // Scope returns the scope path of a step running under ctx: its enclosing
-// repeated scopes, outermost first. The result must not be modified.
+// repeated scopes, outermost first. The returned slice is a copy.
 func Scope(ctx context.Context) []string {
+	return slices.Clone(scope(ctx))
+}
+
+// scope returns the context-owned path for internal reads. Callers that retain
+// or expose it must clone it.
+func scope(ctx context.Context) []string {
 	path, _ := ctx.Value(scopeKey{}).([]string)
 	return path
 }

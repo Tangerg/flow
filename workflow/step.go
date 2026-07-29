@@ -150,7 +150,7 @@ func (l leafStep[I, O]) Run(ctx context.Context, s Store) (Store, error) {
 	// makes this correct inside Loop and Iteration, where one step runs many
 	// times.
 	if journal != nil && l.id != "" {
-		if value, ok := journal.lookup(Scope(ctx), l.id); ok {
+		if value, ok := journal.lookup(scope(ctx), l.id); ok {
 			next := s.WithOutput(l.id, value)
 			run.emit(ctx, Event{Kind: EventSkipped, ID: l.id, Store: next})
 			return next, nil
@@ -165,23 +165,21 @@ func (l leafStep[I, O]) Run(ctx context.Context, s Store) (Store, error) {
 
 	// A suspension is not a failure: it keeps its own shape, reports its own
 	// event, and is not wrapped in a StepError.
-	stop := func(err error) (Store, error) {
-		suspension := suspensionOf(err)
-		suspension.ID = l.id
-		suspension.Path = Scope(ctx)
+	stop := func(suspensions []*Suspension) (Store, error) {
+		err := joinSuspensions(identifySuspensions(suspensions, l.id, scope(ctx)))
 		if run.observing() {
 			run.emit(ctx, Event{
 				Kind:    EventSuspended,
 				ID:      l.id,
 				Elapsed: time.Since(started),
-				Err:     suspension,
+				Err:     err,
 			})
 		}
-		return s, suspension
+		return s, err
 	}
 	fail := func(op StepOp, err error) (Store, error) {
-		if suspensionOf(err) != nil {
-			return stop(err)
+		if suspensions, only := asSuspensions(err); only {
+			return stop(suspensions)
 		}
 		err = &StepError{ID: l.id, Op: op, Err: err}
 		if run.observing() {
@@ -214,7 +212,7 @@ func (l leafStep[I, O]) Run(ctx context.Context, s Store) (Store, error) {
 	}
 
 	next := s.WithOutput(l.id, out)
-	journal.record(Scope(ctx), l.id, out)
+	journal.record(scope(ctx), l.id, out)
 	if run.observing() {
 		run.emit(ctx, Event{
 			Kind:    EventCompleted,

@@ -1,11 +1,11 @@
 package workflow
 
 import (
+	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"maps"
 	"slices"
-	"strings"
 	"sync"
 )
 
@@ -24,14 +24,33 @@ import (
 // graph would skip steps that never ran under it, or restore a value a renamed
 // step no longer produces, so store a Journal with the version of the definition
 // that produced it and discard it when that definition changes — the same
-// discipline a schema migration needs. [Journal.Reset] starts a run over and
-// [Journal.Forget] retries one step.
+// discipline a schema migration needs. [Journal.Record] supplies an external
+// [Interrupt] result, [Journal.Reset] starts a run over, and [Journal.Forget]
+// retries one step.
 //
 // A Journal is safe for concurrent use; concurrent branches record into the same
-// one. The zero Journal is empty and ready to use.
+// one. The zero Journal is empty and ready to use. A Journal must not be copied
+// after first use.
 type Journal struct {
-	mu      sync.RWMutex
-	records map[string]any
+	mu    sync.RWMutex
+	root  journalNode
+	count int
+}
+
+// JournalKey identifies one recorded execution of a step. ID is the step ID;
+// Path is the enclosing repeated scopes, outermost first. Construct JournalKey
+// values with keyed fields so the type can grow without breaking callers.
+type JournalKey struct {
+	ID   string   `json:"id"`
+	Path []string `json:"path,omitempty"`
+}
+
+// journalNode is a trie over scope segments. Keeping the path structured avoids
+// delimiter escaping entirely: every possible segment and step ID has one
+// unambiguous place in the tree.
+type journalNode struct {
+	records  map[string]any
+	children map[string]*journalNode
 }
 
 var (
@@ -42,14 +61,31 @@ var (
 // NewJournal returns an empty Journal.
 func NewJournal() *Journal { return &Journal{} }
 
-// recordKey joins a scope path and a step ID into one key. The path segments
-// already carry brackets, so "/" cannot be produced by an index and only
-// separates scopes.
-func recordKey(path []string, id string) string {
-	if len(path) == 0 {
-		return id
+// Record marks one step execution as completed with value as its result. It is
+// the resumption boundary for [Interrupt] and for a journaled boundary whose
+// [Suspend] represents an externally supplied result: record the response under
+// the suspension's [Suspension.Key], then run the same workflow again.
+//
+// Record rejects an empty step ID and an identity already present in the
+// Journal. A recorded value is held as-is; mutable values must not be modified
+// afterward. The method is safe for concurrent use.
+func (j *Journal) Record(key JournalKey, value any) error {
+	switch {
+	case j == nil:
+		return errors.New("workflow: record journal: nil Journal")
+	case key.ID == "":
+		return fmt.Errorf("workflow: record journal: %w", ErrInvalidStepID)
 	}
-	return strings.Join(path, "/") + "/" + id
+
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if _, exists := j.root.lookup(key.Path, key.ID); exists {
+		return fmt.Errorf("workflow: record journal step %q at %q: %w",
+			key.ID, key.Path, ErrJournalConflict)
+	}
+	j.root.record(key.Path, key.ID, value)
+	j.count++
+	return nil
 }
 
 // record stores a step's output. A nil Journal discards it, so callers need not
@@ -60,10 +96,29 @@ func (j *Journal) record(path []string, id string, value any) {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if j.records == nil {
-		j.records = make(map[string]any)
+	if j.root.record(path, id, value) {
+		j.count++
 	}
-	j.records[recordKey(path, id)] = value
+}
+
+func (n *journalNode) record(path []string, id string, value any) bool {
+	for _, segment := range path {
+		if n.children == nil {
+			n.children = make(map[string]*journalNode)
+		}
+		child := n.children[segment]
+		if child == nil {
+			child = new(journalNode)
+			n.children[segment] = child
+		}
+		n = child
+	}
+	if n.records == nil {
+		n.records = make(map[string]any)
+	}
+	_, replaced := n.records[id]
+	n.records[id] = value
+	return !replaced
 }
 
 func (j *Journal) lookup(path []string, id string) (any, bool) {
@@ -72,7 +127,17 @@ func (j *Journal) lookup(path []string, id string) (any, bool) {
 	}
 	j.mu.RLock()
 	defer j.mu.RUnlock()
-	value, ok := j.records[recordKey(path, id)]
+	return j.root.lookup(path, id)
+}
+
+func (n *journalNode) lookup(path []string, id string) (any, bool) {
+	for _, segment := range path {
+		n = n.children[segment]
+		if n == nil {
+			return nil, false
+		}
+	}
+	value, ok := n.records[id]
 	return value, ok
 }
 
@@ -83,18 +148,45 @@ func (j *Journal) Len() int {
 	}
 	j.mu.RLock()
 	defer j.mu.RUnlock()
-	return len(j.records)
+	return j.count
 }
 
-// Keys returns the recorded step keys in sorted order, each a scope path and step
-// ID joined by "/". It is meant for diagnostics and tests.
-func (j *Journal) Keys() []string {
+// Keys returns the identities of the recorded steps in path and ID order. Every
+// Path is a copy.
+func (j *Journal) Keys() []JournalKey {
 	if j == nil {
 		return nil
 	}
 	j.mu.RLock()
 	defer j.mu.RUnlock()
-	return slices.Sorted(maps.Keys(j.records))
+
+	keys := make([]JournalKey, 0, j.count)
+	j.root.appendKeys(nil, &keys)
+	slices.SortFunc(keys, compareJournalKeys)
+	return keys
+}
+
+func (n *journalNode) appendKeys(path []string, keys *[]JournalKey) {
+	for id := range n.records {
+		*keys = append(*keys, JournalKey{Path: slices.Clone(path), ID: id})
+	}
+	for segment, child := range n.children {
+		child.appendKeys(appendPath(path, segment), keys)
+	}
+}
+
+func appendPath(path []string, segment string) []string {
+	next := make([]string, len(path)+1)
+	copy(next, path)
+	next[len(path)] = segment
+	return next
+}
+
+func compareJournalKeys(a, b JournalKey) int {
+	if order := slices.Compare(a.Path, b.Path); order != 0 {
+		return order
+	}
+	return cmp.Compare(a.ID, b.ID)
 }
 
 // Reset removes every record, so the next run starts from the beginning.
@@ -104,40 +196,108 @@ func (j *Journal) Reset() {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	j.records = nil
+	j.root = journalNode{}
+	j.count = 0
 }
 
-// Forget removes the record for one step in one scope, so the next run repeats
-// it. Use it to retry a single step without discarding the rest of the run.
-func (j *Journal) Forget(path []string, id string) {
-	if j == nil {
+// Forget removes one recorded step, so the next run repeats it.
+func (j *Journal) Forget(key JournalKey) {
+	if j == nil || key.ID == "" {
 		return
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	delete(j.records, recordKey(path, id))
+	if j.root.forget(key.Path, key.ID) {
+		j.count--
+	}
 }
 
-// MarshalJSON serializes the Journal as key -> recorded value. It reports the
-// record holding a value that encoding/json cannot encode.
-func (j *Journal) MarshalJSON() ([]byte, error) {
-	j.mu.RLock()
-	records := maps.Clone(j.records)
-	j.mu.RUnlock()
+// forget reports whether it removed a record and prunes empty scope nodes on
+// the way back up.
+func (n *journalNode) forget(path []string, id string) bool {
+	if len(path) == 0 {
+		if _, ok := n.records[id]; !ok {
+			return false
+		}
+		delete(n.records, id)
+		if len(n.records) == 0 {
+			n.records = nil
+		}
+		return true
+	}
 
-	if records == nil {
-		records = map[string]any{}
+	child := n.children[path[0]]
+	if child == nil || !child.forget(path[1:], id) {
+		return false
 	}
-	encoded, err := json.Marshal(records)
-	if err == nil {
-		return encoded, nil
-	}
-	for _, key := range slices.Sorted(maps.Keys(records)) {
-		if _, recordErr := json.Marshal(records[key]); recordErr != nil {
-			return nil, fmt.Errorf("workflow: marshal journal %s: %w", key, recordErr)
+	if child.empty() {
+		delete(n.children, path[0])
+		if len(n.children) == 0 {
+			n.children = nil
 		}
 	}
-	return nil, fmt.Errorf("workflow: marshal journal: %w", err)
+	return true
+}
+
+func (n *journalNode) empty() bool {
+	return len(n.records) == 0 && len(n.children) == 0
+}
+
+const journalJSONVersion = 1
+
+type journalDocument struct {
+	Version int                 `json:"version"`
+	Records []journalJSONRecord `json:"records"`
+}
+
+type journalJSONRecord struct {
+	Path  []string        `json:"path,omitempty"`
+	ID    string          `json:"id"`
+	Value json.RawMessage `json:"value"`
+}
+
+type journalEntry struct {
+	key   JournalKey
+	value any
+}
+
+// MarshalJSON serializes the Journal as a versioned list of structured records.
+// It reports the record holding a value that encoding/json cannot encode.
+func (j *Journal) MarshalJSON() ([]byte, error) {
+	j.mu.RLock()
+	entries := make([]journalEntry, 0, j.count)
+	j.root.appendEntries(nil, &entries)
+	j.mu.RUnlock()
+
+	slices.SortFunc(entries, func(a, b journalEntry) int {
+		return compareJournalKeys(a.key, b.key)
+	})
+	records := make([]journalJSONRecord, 0, len(entries))
+	for _, entry := range entries {
+		encoded, err := json.Marshal(entry.value)
+		if err != nil {
+			return nil, fmt.Errorf("workflow: marshal journal record %q at %q: %w",
+				entry.key.ID, entry.key.Path, err)
+		}
+		records = append(records, journalJSONRecord{
+			Path:  entry.key.Path,
+			ID:    entry.key.ID,
+			Value: encoded,
+		})
+	}
+	return json.Marshal(journalDocument{Version: journalJSONVersion, Records: records})
+}
+
+func (n *journalNode) appendEntries(path []string, entries *[]journalEntry) {
+	for id, value := range n.records {
+		*entries = append(*entries, journalEntry{
+			key:   JournalKey{Path: slices.Clone(path), ID: id},
+			value: value,
+		})
+	}
+	for segment, child := range n.children {
+		child.appendEntries(appendPath(path, segment), entries)
+	}
 }
 
 // UnmarshalJSON atomically replaces the Journal's records. On failure the
@@ -147,22 +307,38 @@ func (j *Journal) MarshalJSON() ([]byte, error) {
 // skipped step's recorded value is read back through [Get], which converts it to
 // the type the reading step asks for.
 func (j *Journal) UnmarshalJSON(data []byte) error {
-	var raw map[string]json.RawMessage
-	if err := decodeStrict(data, &raw); err != nil {
+	var document journalDocument
+	if err := decodeStrict(data, &document); err != nil {
 		return fmt.Errorf("workflow: unmarshal journal: %w", err)
 	}
+	if document.Version != journalJSONVersion {
+		return fmt.Errorf("workflow: unmarshal journal: unsupported version %d", document.Version)
+	}
 
-	records := make(map[string]any, len(raw))
-	for key, encoded := range raw {
-		value, err := decodeValue(encoded)
-		if err != nil {
-			return fmt.Errorf("workflow: unmarshal journal %s: %w", key, err)
+	var root journalNode
+	count := 0
+	for i, record := range document.Records {
+		if record.ID == "" {
+			return fmt.Errorf("workflow: unmarshal journal record %d: empty step ID", i)
 		}
-		records[key] = value
+		if len(record.Value) == 0 {
+			return fmt.Errorf("workflow: unmarshal journal record %d: missing value", i)
+		}
+		value, err := decodeValue(record.Value)
+		if err != nil {
+			return fmt.Errorf("workflow: unmarshal journal record %d (%q at %q): %w",
+				i, record.ID, record.Path, err)
+		}
+		if inserted := root.record(record.Path, record.ID, value); !inserted {
+			return fmt.Errorf("workflow: unmarshal journal record %d: duplicate %q at %q",
+				i, record.ID, record.Path)
+		}
+		count++
 	}
 
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	j.records = records
+	j.root = root
+	j.count = count
 	return nil
 }

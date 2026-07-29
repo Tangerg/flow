@@ -23,15 +23,14 @@ type LoopConfig struct {
 // iteration (or the initial input on the first call). It returns the next value,
 // a done flag, and an error. On error, Loop returns the value from before the
 // failing iteration. Reaching the cap without done returns an error wrapping
-// [ErrMaxIterations]. The optional cfg is a single configuration; if several are
-// passed, the first applies.
+// [ErrMaxIterations]. A zero [LoopConfig] uses [DefaultMaxIterations].
 func Loop[T any](
 	body func(ctx context.Context, iter int, in T) (out T, done bool, err error),
-	cfg ...LoopConfig,
+	cfg LoopConfig,
 ) Node[T, T] {
 	max := DefaultMaxIterations
-	if len(cfg) > 0 && cfg[0].MaxIterations > 0 {
-		max = cfg[0].MaxIterations
+	if cfg.MaxIterations > 0 {
+		max = cfg.MaxIterations
 	}
 	return loopNode[T]{body: body, max: max}
 }

@@ -29,14 +29,10 @@ type ParallelConfig struct {
 //
 // Parallel merges only cells actually written by each branch; cells merely
 // inherited from the input snapshot cannot overwrite another branch's work. On
-// a same-cell conflict a later branch's value wins. The optional cfg is a single
-// configuration; if several are passed, the first applies.
-func Parallel(branches []Step, cfg ...ParallelConfig) Step {
-	limit := 0
-	if len(cfg) > 0 {
-		limit = cfg[0].Concurrency
-	}
-	return parallelStep{branches: slices.Clone(branches), limit: limit}
+// a same-cell conflict a later branch's value wins. A zero [ParallelConfig] runs
+// every branch concurrently.
+func Parallel(branches []Step, cfg ParallelConfig) Step {
+	return parallelStep{branches: slices.Clone(branches), limit: cfg.Concurrency}
 }
 
 // parallel is the [Step] produced by [Parallel].
@@ -58,8 +54,8 @@ func (p parallelStep) Run(ctx context.Context, s Store) (Store, error) {
 			if contextErr := ctx.Err(); contextErr != nil {
 				return s, contextErr
 			}
-			if suspension := suspensionOf(err); suspension != nil {
-				return s, suspension
+			if suspensions, only := asSuspensions(err); only {
+				return mergeStores(s, result), joinSuspensions(suspensions)
 			}
 			return s, &flow.IndexError{Index: 0, Err: err}
 		}
@@ -88,11 +84,8 @@ func (p parallelStep) Run(ctx context.Context, s Store) (Store, error) {
 		suspensions []*Suspension
 	)
 	for _, outcome := range outcomes {
-		if outcome.suspension != nil {
-			suspensions = append(suspensions, outcome.suspension)
-			continue
-		}
 		completed = append(completed, outcome.store)
+		suspensions = append(suspensions, outcome.suspensions...)
 	}
 	// Merge what finished even when something is still waiting, so the run that
 	// resumes sees the completed work instead of repeating it.
@@ -102,8 +95,8 @@ func (p parallelStep) Run(ctx context.Context, s Store) (Store, error) {
 // branchOutcome is one branch's result. A suspension travels as a value because
 // it is not a failure; anything else travels as this node's error.
 type branchOutcome struct {
-	store      Store
-	suspension *Suspension
+	store       Store
+	suspensions []*Suspension
 }
 
 type branchRunner struct {
@@ -115,8 +108,8 @@ func (r branchRunner) Run(ctx context.Context, branch Step) (branchOutcome, erro
 	if err == nil {
 		return branchOutcome{store: result}, nil
 	}
-	if suspension := suspensionOf(err); suspension != nil {
-		return branchOutcome{suspension: suspension}, nil
+	if suspensions, only := asSuspensions(err); only {
+		return branchOutcome{store: result, suspensions: suspensions}, nil
 	}
 	return branchOutcome{}, err
 }

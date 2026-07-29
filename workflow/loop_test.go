@@ -42,7 +42,7 @@ func TestLoop_nilCondition(t *testing.T) {
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 
-	_, err := workflow.Loop("loop", body, nil).Run(context.Background(), workflow.NewStore().WithOutput("start", 1))
+	_, err := workflow.Loop("loop", body, nil, workflow.LoopConfig{}).Run(context.Background(), workflow.NewStore().WithOutput("start", 1))
 	if !errors.Is(err, flow.ErrNilFunc) {
 		t.Fatalf("err = %v; want ErrNilFunc", err)
 	}
@@ -69,7 +69,7 @@ func TestLoop_conditionError(t *testing.T) {
 	)
 	done := func(context.Context, int, workflow.Store) (bool, error) { return false, boom }
 
-	_, err := workflow.Loop("loop", body, done).Run(context.Background(), workflow.NewStore())
+	_, err := workflow.Loop("loop", body, done, workflow.LoopConfig{}).Run(context.Background(), workflow.NewStore())
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v; want condition error", err)
 	}

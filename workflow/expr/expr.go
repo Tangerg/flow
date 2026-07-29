@@ -58,8 +58,8 @@ func (e *Expr) Source() string { return e.source }
 
 // Refs returns the Store references the expression reads, deduplicated and
 // sorted. References inside has() are included, since the expression still
-// depends on them. The result must not be modified.
-func (e *Expr) Refs() []workflow.Ref { return e.refs }
+// depends on them. The returned slice is a copy.
+func (e *Expr) Refs() []workflow.Ref { return slices.Clone(e.refs) }
 
 // Eval evaluates the expression against s.
 func (e *Expr) Eval(s workflow.Store) (any, error) {
@@ -148,10 +148,14 @@ func (c *compiler) compileLiteral(lit *ast.BasicLit) (evalFunc, error) {
 	switch lit.Kind {
 	case token.INT:
 		n, err := strconv.ParseInt(lit.Value, 0, 64)
-		if err != nil {
-			return nil, c.errorAt(lit, fmt.Errorf("%w: integer literal %s: %w", ErrSyntax, lit.Value, err))
+		if err == nil {
+			return constant(n), nil
 		}
-		return constant(n), nil
+		u, unsignedErr := strconv.ParseUint(lit.Value, 0, 64)
+		if unsignedErr == nil {
+			return constant(u), nil
+		}
+		return nil, c.errorAt(lit, fmt.Errorf("%w: integer literal %s: %w", ErrSyntax, lit.Value, err))
 	case token.FLOAT:
 		f, err := strconv.ParseFloat(lit.Value, 64)
 		if err != nil {
@@ -217,7 +221,8 @@ func (c *compiler) reference(node ast.Expr) (workflow.Ref, error) {
 }
 
 // flatten walks a chain such as a.output.items[0] into its root node ID and the
-// path segments below it.
+// path segments below it. node["any ID"] is the quoted root form for IDs that
+// are not Go identifiers.
 func (c *compiler) flatten(node ast.Expr) (root string, segments []string, err error) {
 	switch n := node.(type) {
 	case *ast.Ident:
@@ -233,6 +238,10 @@ func (c *compiler) flatten(node ast.Expr) (root string, segments []string, err e
 		}
 		return root, append(segments, n.Sel.Name), nil
 	case *ast.IndexExpr:
+		if namespace, ok := n.X.(*ast.Ident); ok && namespace.Name == "node" {
+			root, err := c.nodeID(n.Index)
+			return root, nil, err
+		}
 		root, segments, err = c.flatten(n.X)
 		if err != nil {
 			return "", nil, err
@@ -245,6 +254,21 @@ func (c *compiler) flatten(node ast.Expr) (root string, segments []string, err e
 	default:
 		return "", nil, c.unsupported(node, "reference may only use names and constant indexes")
 	}
+}
+
+func (c *compiler) nodeID(index ast.Expr) (string, error) {
+	lit, ok := index.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", c.unsupported(index, `node ID must be a non-empty string literal`)
+	}
+	id, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return "", c.errorAt(lit, fmt.Errorf("%w: node ID %s: %w", ErrSyntax, lit.Value, err))
+	}
+	if id == "" {
+		return "", c.errorAt(lit, fmt.Errorf("%w: node ID must not be empty", ErrUnsupported))
+	}
+	return id, nil
 }
 
 // indexSegment reads a constant index. A Store path is text, so an index must be

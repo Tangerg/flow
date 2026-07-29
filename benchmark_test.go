@@ -41,7 +41,7 @@ func BenchmarkMap(b *testing.B) {
 	for _, size := range []int{1, 16, 256} {
 		input := make([]int, size)
 		b.Run("unbounded/"+benchmarkSize(size), func(b *testing.B) {
-			mapped := flow.Map(node)
+			mapped := flow.Map(node, flow.MapConfig{})
 			b.ReportAllocs()
 			for b.Loop() {
 				_, _ = mapped.Run(ctx, input)

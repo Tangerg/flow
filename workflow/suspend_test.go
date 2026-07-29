@@ -65,6 +65,167 @@ func TestSuspend_sequenceResumesWithoutRepeatingWork(t *testing.T) {
 	}
 }
 
+func TestSuspend_structuredLeafValueCanBeResolved(t *testing.T) {
+	type approvalRequest struct {
+		Document string   `json:"document"`
+		Actions  []string `json:"actions"`
+	}
+	approval := workflow.Leaf("approval", workflow.From[string](workflow.Output("document")),
+		flow.NodeFunc[string, bool](func(_ context.Context, document string) (bool, error) {
+			return false, workflow.Suspend(approvalRequest{
+				Document: document,
+				Actions:  []string{"approve", "reject"},
+			})
+		}))
+
+	journal := workflow.NewJournal()
+	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
+	in := workflow.NewStore().WithOutput("document", "draft-42")
+	_, err := approval.Run(ctx, in)
+	waits := workflow.Suspensions(err)
+	if len(waits) != 1 {
+		t.Fatalf("Suspensions = %+v; want one", waits)
+	}
+	request, ok := waits[0].Value.(approvalRequest)
+	if !ok || request.Document != "draft-42" ||
+		!slices.Equal(request.Actions, []string{"approve", "reject"}) {
+		t.Fatalf("Value = %#v; want structured request", waits[0].Value)
+	}
+
+	if err := journal.Record(waits[0].Key(), true); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	out, err := approval.Run(ctx, in)
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if approved, err := workflow.Get[bool](out, workflow.Output("approval")); err != nil || !approved {
+		t.Fatalf("approval = %v, %v; want true", approved, err)
+	}
+}
+
+func TestInterrupt_resumesAsARecordedStepOutput(t *testing.T) {
+	type approvalRequest struct {
+		Question string   `json:"question"`
+		Actions  []string `json:"actions"`
+	}
+
+	var beforeRuns, afterRuns atomic.Int64
+	before := counting(&beforeRuns, "before", "start", 1)
+	approval := workflow.Interrupt("approval", approvalRequest{
+		Question: "publish?",
+		Actions:  []string{"approve", "reject"},
+	})
+	after := workflow.Leaf("after", workflow.From[bool](workflow.Output("approval")),
+		flow.NodeFunc[bool, string](func(_ context.Context, approved bool) (string, error) {
+			afterRuns.Add(1)
+			return strconv.FormatBool(approved), nil
+		}))
+	pipeline := workflow.Sequence(before, approval, after)
+
+	journal := workflow.NewJournal()
+	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
+	paused, err := pipeline.Run(ctx, workflow.NewStore().WithOutput("start", 1))
+	if !errors.Is(err, workflow.ErrSuspended) {
+		t.Fatalf("first run err = %v; want ErrSuspended", err)
+	}
+	waits := workflow.Suspensions(err)
+	if len(waits) != 1 || waits[0].ID != "approval" {
+		t.Fatalf("Suspensions = %+v; want approval", waits)
+	}
+	request, ok := waits[0].Value.(approvalRequest)
+	if !ok || request.Question != "publish?" || !slices.Equal(request.Actions, []string{"approve", "reject"}) {
+		t.Fatalf("Value = %#v; want structured approval request", waits[0].Value)
+	}
+	if got := waits[0].Key(); got.ID != "approval" || len(got.Path) != 0 {
+		t.Fatalf("Key = %+v; want approval at root", got)
+	}
+	if _, ok := paused.Lookup(workflow.Output("approval")); ok {
+		t.Fatal("an unresolved Interrupt wrote an output")
+	}
+
+	if err := journal.Record(waits[0].Key(), true); err != nil {
+		t.Fatalf("Record response: %v", err)
+	}
+	if err := journal.Record(waits[0].Key(), false); !errors.Is(err, workflow.ErrJournalConflict) {
+		t.Fatalf("duplicate Record error = %v; want ErrJournalConflict", err)
+	}
+
+	journalJSON, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatalf("Marshal Journal: %v", err)
+	}
+	resumedJournal := workflow.NewJournal()
+	if err := json.Unmarshal(journalJSON, resumedJournal); err != nil {
+		t.Fatalf("Unmarshal Journal: %v", err)
+	}
+	resumedCtx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: resumedJournal})
+
+	out, err := pipeline.Run(resumedCtx, paused)
+	if err != nil {
+		t.Fatalf("resumed run: %v", err)
+	}
+	if approved, err := workflow.Get[bool](out, workflow.Output("approval")); err != nil || !approved {
+		t.Fatalf("approval = %v, %v; want true", approved, err)
+	}
+	if result, err := workflow.Get[string](out, workflow.Output("after")); err != nil || result != "true" {
+		t.Fatalf("after = %q, %v; want true", result, err)
+	}
+	if beforeRuns.Load() != 1 || afterRuns.Load() != 1 {
+		t.Fatalf("runs = before:%d after:%d; want 1 and 1", beforeRuns.Load(), afterRuns.Load())
+	}
+}
+
+func TestInterrupt_resolvesRepeatedScopesIndependently(t *testing.T) {
+	step := workflow.Iteration(workflow.IterationConfig{
+		ID:          "items",
+		Input:       workflow.Output("start"),
+		Body:        workflow.Interrupt("approval", "approve item?"),
+		BodyOutput:  workflow.Output("approval"),
+		Concurrency: 1,
+	})
+	journal := workflow.NewJournal()
+	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
+	in := workflow.NewStore().WithOutput("start", []any{"a", "b", "c"})
+
+	_, err := step.Run(ctx, in)
+	waits := workflow.Suspensions(err)
+	if len(waits) != 3 {
+		t.Fatalf("first Suspensions = %+v; want three", waits)
+	}
+	if !slices.Equal(waits[0].Path, []string{"items[0]"}) ||
+		!slices.Equal(waits[1].Path, []string{"items[1]"}) ||
+		!slices.Equal(waits[2].Path, []string{"items[2]"}) {
+		t.Fatalf("paths = %v, %v, %v; want one per item", waits[0].Path, waits[1].Path, waits[2].Path)
+	}
+
+	if err := journal.Record(waits[1].Key(), false); err != nil {
+		t.Fatalf("resolve item 1: %v", err)
+	}
+	_, err = step.Run(ctx, in)
+	remaining := workflow.Suspensions(err)
+	if len(remaining) != 2 ||
+		!slices.Equal(remaining[0].Path, []string{"items[0]"}) ||
+		!slices.Equal(remaining[1].Path, []string{"items[2]"}) {
+		t.Fatalf("remaining = %+v; want only items 0 and 2", remaining)
+	}
+
+	if err := journal.Record(remaining[0].Key(), true); err != nil {
+		t.Fatalf("resolve item 0: %v", err)
+	}
+	if err := journal.Record(remaining[1].Key(), true); err != nil {
+		t.Fatalf("resolve item 2: %v", err)
+	}
+	out, err := step.Run(ctx, in)
+	if err != nil {
+		t.Fatalf("final run: %v", err)
+	}
+	got, err := workflow.Get[[]bool](out, workflow.Output("items"))
+	if err != nil || !slices.Equal(got, []bool{true, false, true}) {
+		t.Fatalf("items = %v, %v; want [true false true]", got, err)
+	}
+}
+
 // The Store a suspended run hands back is not needed to resume: the Journal
 // carries the completed work on its own, which is what makes a durable resume
 // possible and what saves Parallel's finished branches.
@@ -165,7 +326,7 @@ func TestSuspend_parallelLetsSiblingsFinish(t *testing.T) {
 
 	journal := workflow.NewJournal()
 	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
-	p := workflow.Parallel([]workflow.Step{slow, waiting})
+	p := workflow.Parallel([]workflow.Step{slow, waiting}, workflow.ParallelConfig{})
 
 	out, err := p.Run(ctx, workflow.NewStore().WithOutput("start", 1))
 	if !errors.Is(err, workflow.ErrSuspended) {
@@ -197,7 +358,7 @@ func TestSuspend_parallelReportsEverySuspension(t *testing.T) {
 		workflow.Await("first", workflow.Output("a")),
 		workflow.Await("second", workflow.Output("b")),
 		workflow.Await("third", workflow.Output("c")),
-	})
+	}, workflow.ParallelConfig{})
 
 	_, err := p.Run(context.Background(), workflow.NewStore())
 	if !errors.Is(err, workflow.ErrSuspended) {
@@ -219,6 +380,61 @@ func TestSuspend_parallelReportsEverySuspension(t *testing.T) {
 	}
 }
 
+func TestSuspend_nestedParallelPreservesSuspensionsAndCompletedWork(t *testing.T) {
+	completed := workflow.Leaf("done",
+		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+		flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) { return value, nil }),
+	)
+	inner := workflow.Parallel([]workflow.Step{
+		completed,
+		workflow.Await("a", workflow.Output("input-a")),
+		workflow.Await("b", workflow.Output("input-b")),
+	}, workflow.ParallelConfig{})
+	outer := workflow.Parallel([]workflow.Step{
+		inner,
+		workflow.Await("c", workflow.Output("input-c")),
+	}, workflow.ParallelConfig{})
+
+	out, err := outer.Run(context.Background(), workflow.NewStore())
+	if !errors.Is(err, workflow.ErrSuspended) {
+		t.Fatalf("err = %v; want ErrSuspended", err)
+	}
+	suspensions := workflow.Suspensions(err)
+	ids := make([]string, len(suspensions))
+	for i, suspension := range suspensions {
+		ids[i] = suspension.ID
+	}
+	if !slices.Equal(ids, []string{"a", "b", "c"}) {
+		t.Fatalf("suspended IDs = %v; want every nested wait", ids)
+	}
+	if got, getErr := workflow.Get[int](out, workflow.Output("done")); getErr != nil || got != 1 {
+		t.Fatalf("completed nested branch = %v, %v; want 1", got, getErr)
+	}
+}
+
+func TestSuspend_iterationPreservesNestedSuspensions(t *testing.T) {
+	body := workflow.Parallel([]workflow.Step{
+		workflow.Await("a", workflow.Output("input-a")),
+		workflow.Await("b", workflow.Output("input-b")),
+	}, workflow.ParallelConfig{})
+	iteration := workflow.Iteration(workflow.IterationConfig{
+		ID:         "iter",
+		Input:      workflow.Output("items"),
+		Body:       body,
+		BodyOutput: workflow.Output("unused"),
+	})
+
+	_, err := iteration.Run(context.Background(),
+		workflow.NewStore().WithOutput("items", []any{1}))
+	suspensions := workflow.Suspensions(err)
+	if len(suspensions) != 2 ||
+		suspensions[0].ID != "a" || suspensions[1].ID != "b" ||
+		!slices.Equal(suspensions[0].Path, []string{"iter[0]"}) ||
+		!slices.Equal(suspensions[1].Path, []string{"iter[0]"}) {
+		t.Fatalf("suspensions = %+v; want a and b in iter[0]", suspensions)
+	}
+}
+
 // A real failure must still fail fast. Suspension changed the "not yet" path, not
 // the error path.
 func TestSuspend_parallelStillFailsFastOnRealErrors(t *testing.T) {
@@ -229,13 +445,31 @@ func TestSuspend_parallelStillFailsFastOnRealErrors(t *testing.T) {
 	_, err := workflow.Parallel([]workflow.Step{
 		workflow.Await("waiting", workflow.Output("approval")),
 		bad,
-	}).Run(context.Background(), workflow.NewStore())
+	}, workflow.ParallelConfig{}).
+		Run(context.Background(), workflow.NewStore())
 
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v; want boom to dominate", err)
 	}
 	if errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("err = %v; a failure must not be reported as a suspension", err)
+	}
+}
+
+func TestSuspend_joinedFailureIsNotClassifiedAsPureSuspension(t *testing.T) {
+	boom := errors.New("boom")
+	mixed := flow.NodeFunc[workflow.Store, workflow.Store](func(_ context.Context, s workflow.Store) (workflow.Store, error) {
+		return s, errors.Join(workflow.Suspend("waiting"), boom)
+	})
+
+	_, err := workflow.Parallel([]workflow.Step{mixed}, workflow.ParallelConfig{}).
+		Run(context.Background(), workflow.NewStore())
+	var indexErr *flow.IndexError
+	if !errors.As(err, &indexErr) || indexErr.Index != 0 || !errors.Is(err, boom) {
+		t.Fatalf("err = %v; want branch failure at index 0", err)
+	}
+	if suspensions := workflow.Suspensions(err); len(suspensions) != 1 {
+		t.Fatalf("Suspensions = %v; joined wait detail should remain inspectable", suspensions)
 	}
 }
 
@@ -279,8 +513,12 @@ func TestSuspend_iterationResumesElementByElement(t *testing.T) {
 		t.Fatalf("body ran %d times; want 3 — a sibling element was cancelled", runs.Load())
 	}
 	// Each element's record is scoped, so they are distinct.
-	if keys := journal.Keys(); !slices.Equal(keys, []string{
-		"iter[0]/check", "iter[0]/double", "iter[1]/double", "iter[2]/check", "iter[2]/double",
+	if keys := journal.Keys(); !equalJournalKeys(keys, []workflow.JournalKey{
+		{Path: []string{"iter[0]"}, ID: "check"},
+		{Path: []string{"iter[0]"}, ID: "double"},
+		{Path: []string{"iter[1]"}, ID: "double"},
+		{Path: []string{"iter[2]"}, ID: "check"},
+		{Path: []string{"iter[2]"}, ID: "double"},
 	}) {
 		t.Fatalf("journal keys = %v", keys)
 	}
@@ -357,17 +595,22 @@ func TestSuspend_loopResumesAtTheWaitingIteration(t *testing.T) {
 	journal := workflow.NewJournal()
 	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
 
-	if _, err := workflow.Loop("loop", body, done).Run(ctx, workflow.NewStore()); !errors.Is(err, workflow.ErrSuspended) {
+	if _, err := workflow.Loop("loop", body, done, workflow.LoopConfig{}).Run(ctx, workflow.NewStore()); !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("err = %v; want ErrSuspended", err)
 	}
 	firstPass := runs.Load()
 	// Each completed iteration records both the body's output and the loop's own
 	// stop decision, so a resumed loop cannot stop somewhere else.
-	if keys := journal.Keys(); !slices.Equal(keys, []string{"[0]/loop", "[0]/tick", "[1]/loop", "[1]/tick"}) {
+	if keys := journal.Keys(); !equalJournalKeys(keys, []workflow.JournalKey{
+		{Path: []string{"[0]"}, ID: "loop"},
+		{Path: []string{"[0]"}, ID: "tick"},
+		{Path: []string{"[1]"}, ID: "loop"},
+		{Path: []string{"[1]"}, ID: "tick"},
+	}) {
 		t.Fatalf("journal keys = %v; want a body and a decision record per iteration", keys)
 	}
 
-	final, err := workflow.Loop("loop", body, done).Run(ctx, workflow.NewStore().WithOutput("approval", true))
+	final, err := workflow.Loop("loop", body, done, workflow.LoopConfig{}).Run(ctx, workflow.NewStore().WithOutput("approval", true))
 	if err != nil {
 		t.Fatalf("resumed run: %v", err)
 	}
@@ -426,9 +669,11 @@ func TestSuspend_emptyStepIDIsAnError(t *testing.T) {
 
 func TestSuspension_errorMessage(t *testing.T) {
 	tests := map[string]*workflow.Suspension{
-		`workflow: step "a" suspended: waiting on a person`: {ID: "a", Reason: "waiting on a person"},
+		`workflow: step "a" suspended: waiting on a person`: {ID: "a", Value: "waiting on a person"},
 		`workflow: step "a" suspended: awaiting x.output`:   {ID: "a", Await: workflow.Output("x")},
 		`workflow: step "a" in iter[2] suspended`:           {ID: "a", Path: []string{"iter[2]"}},
+		`workflow: step "a" suspended`:                      {ID: "a", Value: map[string]any{"private": "payload"}},
+		`workflow: suspended`:                               nil,
 	}
 	for want, suspension := range tests {
 		if got := suspension.Error(); got != want {
@@ -437,6 +682,38 @@ func TestSuspension_errorMessage(t *testing.T) {
 		if !errors.Is(suspension, workflow.ErrSuspended) {
 			t.Fatalf("%v does not match ErrSuspended", suspension)
 		}
+	}
+}
+
+func TestSuspension_keyAndJSONOwnTheirStructure(t *testing.T) {
+	suspension := &workflow.Suspension{
+		ID:    `approve"item`,
+		Path:  []string{"items/0"},
+		Value: map[string]any{"question": "approve?", "actions": []string{"yes", "no"}},
+	}
+	key := suspension.Key()
+	key.Path[0] = "changed"
+	if suspension.Path[0] != "items/0" {
+		t.Fatalf("Key leaked Suspension.Path: %+v", suspension)
+	}
+	if got := suspension.Error(); got != `workflow: step "approve\"item" in items/0 suspended` {
+		t.Fatalf("Error = %q", got)
+	}
+
+	data, err := json.Marshal(suspension)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded["id"] != `approve"item` {
+		t.Fatalf("JSON = %s; missing structured ID", data)
+	}
+	value, ok := decoded["value"].(map[string]any)
+	if !ok || value["question"] != "approve?" {
+		t.Fatalf("JSON value = %#v; want structured payload", decoded["value"])
 	}
 }
 
@@ -451,6 +728,20 @@ func TestSuspensions_ofOtherErrors(t *testing.T) {
 	wrapped := fmt.Errorf("outer: %w", workflow.ErrSuspended)
 	if got := workflow.Suspensions(wrapped); len(got) != 1 {
 		t.Fatalf("Suspensions(wrapped sentinel) = %v; want one", got)
+	}
+
+	joined := errors.Join(
+		&workflow.Suspension{ID: "b", Path: []string{"outer"}},
+		fmt.Errorf("wrapped: %w", &workflow.Suspension{ID: "a", Path: []string{"inner"}}),
+		errors.New("ordinary failure"),
+	)
+	got := workflow.Suspensions(joined)
+	if len(got) != 2 || got[0].ID != "a" || got[1].ID != "b" {
+		t.Fatalf("Suspensions(joined error tree) = %+v; want a and b", got)
+	}
+	got[0].Path[0] = "changed"
+	if again := workflow.Suspensions(joined); again[0].Path[0] != "inner" {
+		t.Fatalf("Suspensions leaked its internal path: %+v", again)
 	}
 }
 
@@ -483,6 +774,41 @@ func TestSuspend_eventsReportTheThirdOutcome(t *testing.T) {
 	}
 	if want := []string{"skipped:a", "completed:gate"}; !slices.Equal(kinds, want) {
 		t.Fatalf("resumed events = %v; want %v", kinds, want)
+	}
+}
+
+func TestInterrupt_eventsReportSuspensionThenReplay(t *testing.T) {
+	journal := workflow.NewJournal()
+	var events []workflow.Event
+	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{
+		Journal: journal,
+		Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
+			events = append(events, event)
+		}),
+	})
+	step := workflow.Interrupt("approval", map[string]any{"question": "approve?"})
+
+	_, err := step.Run(ctx, workflow.NewStore())
+	waits := workflow.Suspensions(err)
+	if len(events) != 1 || events[0].Kind != workflow.EventSuspended ||
+		len(waits) != 1 || events[0].Err == nil {
+		t.Fatalf("first events = %+v, waits = %+v", events, waits)
+	}
+	if err := journal.Record(waits[0].Key(), true); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	events = nil
+	out, err := step.Run(ctx, workflow.NewStore())
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if len(events) != 1 || events[0].Kind != workflow.EventSkipped ||
+		events[0].Err != nil {
+		t.Fatalf("resumed events = %+v; want one skipped event", events)
+	}
+	if approved, err := workflow.Get[bool](out, workflow.Output("approval")); err != nil || !approved {
+		t.Fatalf("approval = %v, %v; want true", approved, err)
 	}
 }
 
@@ -557,7 +883,7 @@ func TestSuspend_loopDecisionIsJournaled(t *testing.T) {
 
 	journal := workflow.NewJournal()
 	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
-	loop := workflow.Loop("loop", body, flaky)
+	loop := workflow.Loop("loop", body, flaky, workflow.LoopConfig{})
 
 	if _, err := loop.Run(ctx, workflow.NewStore()); !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("first run err = %v; want ErrSuspended", err)
@@ -578,7 +904,10 @@ func TestSuspend_journaledDecisionOfTheWrongTypeIsReported(t *testing.T) {
 	journal := workflow.NewJournal()
 	// A journal from a different definition could hold anything under these keys.
 	// A loop records one decision per iteration, so its key carries the scope.
-	if err := json.Unmarshal([]byte(`{"route":"not-a-case","[0]/repeat":"not-a-bool"}`), journal); err != nil {
+	if err := json.Unmarshal([]byte(`{"version":1,"records":[
+		{"id":"route","value":"not-a-case"},
+		{"path":["[0]"],"id":"repeat","value":"not-a-bool"}
+	]}`), journal); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	ctx := workflow.WithConfig(context.Background(), workflow.RunConfig{Journal: journal})
@@ -593,8 +922,8 @@ func TestSuspend_journaledDecisionOfTheWrongTypeIsReported(t *testing.T) {
 	// A recorded value of the wrong type is reported rather than ignored.
 	body := workflow.Leaf("b", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
-	_, err = workflow.Loop("repeat", body,
-		func(context.Context, int, workflow.Store) (bool, error) { return true, nil }).Run(ctx, workflow.NewStore())
+	_, err = workflow.Loop("repeat", body, func(context.Context, int, workflow.Store) (bool, error) { return true, nil }, workflow.LoopConfig{}).
+		Run(ctx, workflow.NewStore())
 	if !errors.Is(err, workflow.ErrTypeMismatch) {
 		t.Fatalf("loop err = %v; want ErrTypeMismatch", err)
 	}
