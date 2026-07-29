@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 )
 
 // ValueType describes the shape of a value flowing between nodes. It is used only
@@ -21,13 +23,24 @@ const (
 	TypeObject ValueType = "object"
 )
 
+// Ports declares a node type's input ports and the value type each accepts. It
+// is the schema-side counterpart of [Inputs], which wires those ports to
+// references.
+type Ports map[string]ValueType
+
+// OnePort returns the Ports of a node with a single input on [DefaultPort].
+func OnePort(t ValueType) Ports { return Ports{DefaultPort: t} }
+
 // NodeSchema describes a registered node type for validation and tooling.
-// Input and Output let editors check connections. ConfigSchema, when present,
-// is a self-contained Draft 2020-12 JSON Schema for the node's config; an
-// omitted config is validated as an empty object. External references are
-// rejected.
+// Inputs and Output let editors check connections and report incomplete wiring.
+// ConfigSchema, when present, is a self-contained Draft 2020-12 JSON Schema for
+// the node's config; an omitted config is validated as an empty object. External
+// references are rejected.
+//
+// An empty Inputs declares nothing, so a node's wiring is left unchecked. Use
+// [OnePort] for the common single-input node.
 type NodeSchema struct {
-	Input        ValueType       `json:"input"`
+	Inputs       Ports           `json:"inputs,omitempty"`
 	Output       ValueType       `json:"output"`
 	ConfigSchema json.RawMessage `json:"configSchema,omitempty"`
 }
@@ -44,10 +57,23 @@ func (r *Registry) RegisterSchema(nodeType string, schema NodeSchema) error {
 	switch {
 	case nodeType == "":
 		return &RegistrationError{Kind: "schema", Err: fmt.Errorf("%w: empty node type", ErrInvalidRegistration)}
-	case !validValueType(schema.Input) || !validValueType(schema.Output):
+	case !validValueType(schema.Output):
 		return &RegistrationError{Kind: "schema", Name: nodeType, Err: fmt.Errorf("%w: invalid value type", ErrInvalidRegistration)}
 	}
+	for _, port := range slices.Sorted(maps.Keys(schema.Inputs)) {
+		if port == "" {
+			return &RegistrationError{Kind: "schema", Name: nodeType, Err: fmt.Errorf("%w: empty port name", ErrInvalidRegistration)}
+		}
+		if !validValueType(schema.Inputs[port]) {
+			return &RegistrationError{
+				Kind: "schema",
+				Name: nodeType,
+				Err:  fmt.Errorf("%w: invalid value type on port %q", ErrInvalidRegistration, port),
+			}
+		}
+	}
 
+	schema.Inputs = maps.Clone(schema.Inputs)
 	schema.ConfigSchema = bytes.Clone(schema.ConfigSchema)
 	validator, err := compileConfigSchema(schema.ConfigSchema)
 	if err != nil {
@@ -77,6 +103,32 @@ func (r *Registry) MustRegisterSchema(nodeType string, schema NodeSchema) *Regis
 	return r
 }
 
+// NodeSchema returns the schema registered for nodeType. The bool reports
+// whether one was registered; an unregistered node type accepts any wiring and
+// config. The returned Inputs and ConfigSchema are copies.
+//
+// Together with [Registry.NodeTypes] this is what an editor reads to render a
+// node palette and to know which ports a node exposes.
+func (r *Registry) NodeSchema(nodeType string) (NodeSchema, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	registered, ok := r.schemas[nodeType]
+	if !ok {
+		return NodeSchema{}, false
+	}
+	schema := registered.schema
+	schema.Inputs = maps.Clone(schema.Inputs)
+	schema.ConfigSchema = bytes.Clone(schema.ConfigSchema)
+	return schema, true
+}
+
+// NodeTypes returns the registered leaf node type names in sorted order.
+func (r *Registry) NodeTypes() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return slices.Sorted(maps.Keys(r.leaves))
+}
+
 func validValueType(t ValueType) bool {
 	switch t {
 	case "", TypeAny, TypeString, TypeNumber, TypeBool, TypeArray, TypeObject:
@@ -93,15 +145,15 @@ func compatible(out, in ValueType) bool {
 }
 
 // ValidateGraph checks a Graph without compiling it: unique IDs, known node
-// types, config schemas, cycles, and type-compatible Input edges. It is
-// intended to power a visual editor's live feedback.
+// types, config schemas, cycles, fully wired input ports, and type-compatible
+// edges. It is intended to power a visual editor's live feedback.
 func (r *Registry) ValidateGraph(g Graph) error {
 	_, _, err := r.validateGraph(g)
 	return err
 }
 
 func (r *Registry) validateGraph(g Graph) ([][]string, map[string]NodeSpec, error) {
-	layers, byID, err := r.plan(g) // duplicate IDs and cycles
+	layers, byID, wiring, err := r.plan(g) // duplicate IDs, cycles, and port wiring
 	if err != nil {
 		return nil, nil, err
 	}
@@ -117,23 +169,51 @@ func (r *Registry) validateGraph(g Graph) ([][]string, map[string]NodeSpec, erro
 				Err:    fmt.Errorf("%w: %w", ErrInvalidGraph, err),
 			}
 		}
-		if n.Input == nil {
-			continue
-		}
-		producer, ok := byID[n.Input.NodeID]
-		if !ok {
-			continue // external input (the seed Store); nothing to check
-		}
-		out := r.nodeSchema(producer.Type).Output
-		in := r.nodeSchema(n.Type).Input
-		if !compatible(out, in) {
-			return nil, nil, &GraphError{
-				NodeID: n.ID,
-				Field:  "input",
-				Err: fmt.Errorf("%w: %s.output is %s, want %s",
-					ErrIncompatibleType, producer.ID, out, in),
+		if err := r.validatePorts(n.Type, wiring[n.ID], func(producerID string) (ValueType, bool) {
+			producer, ok := byID[producerID]
+			if !ok {
+				return "", false // external input (the seed Store); nothing to check
 			}
+			return r.nodeSchema(producer.Type).Output, true
+		}); err != nil {
+			return nil, nil, &GraphError{NodeID: n.ID, Field: "inputs", Err: err}
 		}
 	}
 	return layers, byID, nil
+}
+
+// validatePorts checks a node's wiring against its registered schema: every
+// declared port is wired, no undeclared port is wired, and each wired port's
+// type is compatible with its producer's output. producerOutput reports a
+// producing node's output type, or false when the reference is external.
+//
+// A node type with no declared ports is left unchecked, so nodes may be
+// registered without a schema.
+func (r *Registry) validatePorts(nodeType string, inputs Inputs, producerOutput func(string) (ValueType, bool)) error {
+	declared := r.nodeSchema(nodeType).Inputs
+	if len(declared) == 0 {
+		return nil
+	}
+
+	for _, port := range slices.Sorted(maps.Keys(declared)) {
+		if _, wired := inputs[port]; !wired {
+			return fmt.Errorf("%w %q", ErrMissingPort, port)
+		}
+	}
+	for _, port := range inputs.PortNames() {
+		want, ok := declared[port]
+		if !ok {
+			return fmt.Errorf("%w %q", ErrUnknownPort, port)
+		}
+		ref := inputs[port]
+		out, ok := producerOutput(ref.NodeID)
+		if !ok {
+			continue
+		}
+		if !compatible(out, want) {
+			return fmt.Errorf("%w: port %q reads %s whose output is %s, want %s",
+				ErrIncompatibleType, port, ref.NodeID, out, want)
+		}
+	}
+	return nil
 }

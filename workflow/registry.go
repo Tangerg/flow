@@ -2,15 +2,15 @@ package workflow
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 )
 
-// LeafFactory builds a leaf [Step] from its ID, input reference, and raw config.
-// The factory knows the leaf's concrete input/output types and typically ends in
-// a call to [Leaf].
-type LeafFactory func(id string, input Ref, config json.RawMessage) (Step, error)
+// LeafFactory builds a leaf [Step] from a [LeafSpec]. The factory knows the
+// leaf's concrete input/output types and typically ends in a call to [Leaf].
+// [Factory] covers the common single-input case; write a LeafFactory directly
+// when a node reads several ports.
+type LeafFactory func(LeafSpec) (Step, error)
 
 // Resolver picks a branch name from the Store (see [Branch]).
 type Resolver func(ctx context.Context, s Store) (string, error)

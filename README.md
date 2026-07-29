@@ -10,6 +10,7 @@ optional dynamic layer for building workflows from config or a visual editor.
 | [`flow`](.) | The minimal, atomic composition primitives. Compile-time typed, zero third-party dependencies. | `Node[I, O]` |
 | [`flowx`](./flowx) | Derived control-flow sugar (`FanOut`, `Combine`, `Chain`, `Fallback`) built on `flow`. | `Node[I, O]` |
 | [`workflow`](./workflow) | The dynamic layer: a variable pool (`Store`) threaded through nodes addressed by ID, plus config-driven construction. | `Node[Store, Store]` |
+| [`workflow/expr`](./workflow/expr) | Optional. Compiles a small expression over a `Store` into a `Condition` or `Resolver`, so branch and loop rules can live in config. | — |
 
 ## Install
 
@@ -102,6 +103,146 @@ out, _ := step.Run(ctx, workflow.NewStore().WithOutput("start", 1))
 v, _ := workflow.Get[int](out, workflow.Output("b")) // 16
 ```
 
+### Named input ports
+
+A node names every value it reads. `input` is sugar for the single default port;
+`inputs` wires ports by name:
+
+```json
+{"id":"total","type":"sum","inputs":{
+  "left":  {"nodeID":"twice","path":"output"},
+  "right": {"nodeID":"start","path":"output"}
+}}
+```
+
+Naming inputs is what keeps the data flow visible to the layer above: a flat
+`Graph` derives its execution order from the wired ports (no hand-written
+`dependsOn`), and validation reports both incomplete wiring and incompatible
+edges before anything runs. A node that instead reads extra references out of its
+own `config` is invisible to both.
+
+`Factory` binds the default port. `BindFactory` builds the `BindFunc` from the
+wired ports, so a multi-input node stays statically typed:
+
+```go
+sum := workflow.BindFactory(
+    func(_ struct{}, in workflow.Inputs) (workflow.BindFunc[[2]int], error) {
+        left, leftOK := in.Ref("left")
+        right, rightOK := in.Ref("right")
+        if !leftOK || !rightOK {
+            return nil, fmt.Errorf("%w: want left and right", workflow.ErrMissingPort)
+        }
+        return func(s workflow.Store) ([2]int, error) { /* read both */ }, nil
+    },
+    func(struct{}) (flow.Node[[2]int, int], error) { /* … */ },
+)
+
+reg.MustRegisterSchema("sum", workflow.NodeSchema{
+    Inputs: workflow.Ports{"left": workflow.TypeNumber, "right": workflow.TypeNumber},
+    Output: workflow.TypeNumber,
+})
+```
+
+An unwired declared port is `ErrMissingPort`, a wired undeclared port is
+`ErrUnknownPort`, and `Registry.NodeTypes`/`Registry.NodeSchema` expose the
+registered vocabulary for an editor to render.
+
+### Branch and loop rules as data
+
+A serialized graph cannot carry closures, so `Spec` names its resolvers and
+conditions and the `Registry` supplies the code — which means changing a threshold
+means changing Go. The optional `workflow/expr` package closes that gap:
+
+```go
+config := []byte(`{
+  "conditions": {"converged": "refine.output >= 100"},
+  "switches": {"bySize": {
+    "cases": [{"when": "refine.output > 500", "then": "large"}],
+    "fallback": "small"
+  }}
+}`)
+
+var bindings expr.Bindings
+_ = json.Unmarshal(config, &bindings)
+_ = bindings.Register(reg) // "converged" and "bySize" are now usable from a Spec
+```
+
+Expressions are parsed with `go/parser` and compiled to closures, so the
+supported grammar *is* the compiler — there is no path that evaluates a construct
+`Parse` rejected. References are `node.path` (`load.output.items[0]`); operators
+are comparison, logical (short-circuiting), and arithmetic; the only functions are
+`len` and `has`. No assignment, no conversions, no user calls, no way to reach the
+host program. `Expr.Refs` reports what an expression reads, so a rule set can be
+checked against the values a graph actually produces.
+
+There is no implicit truthiness: a condition must evaluate to a `bool` and a
+resolver to a `string`. An expression that cannot be evaluated returns an error
+rather than `false`, so a broken condition is never mistaken for "keep looping".
+
+### Suspension and resumption
+
+A step can stop a run without failing it. `Await` waits for a value the workflow
+cannot produce itself; `Suspend` says so from inside any node:
+
+```go
+pipeline := workflow.Sequence(write, workflow.Await("review", workflow.At("editor", "verdict")), publish)
+
+journal := workflow.NewJournal()
+ctx = workflow.WithConfig(ctx, workflow.RunConfig{Journal: journal})
+
+paused, err := pipeline.Run(ctx, input)
+if errors.Is(err, workflow.ErrSuspended) {
+    for _, s := range workflow.Suspensions(err) {
+        log.Printf("%s needs %s", s.ID, s.Await) // review needs editor.verdict
+    }
+    save(paused, journal) // both serialize
+    return
+}
+```
+
+Supply what was missing and run again — the `Journal` skips every step that
+already finished and restores its result, so a different process can pick the run
+up:
+
+```go
+out, err := pipeline.Run(ctx, restored.With("editor", "verdict", "approved"))
+```
+
+Suspension is a **third outcome**, not a kind of failure, and the composites treat
+it that way:
+
+| | on a failure | on a suspension |
+| --- | --- | --- |
+| `Sequence` | stops, returns the partial `Store` | stops, returns the partial `Store` |
+| `Parallel` | fail-fast, cancels siblings | siblings **run to completion**, their writes merge, every suspension is reported |
+| `Iteration` | fail-fast | remaining elements finish; no partial collection is written |
+| `Loop` | stops | stops; completed iterations replay from the `Journal` |
+
+Cancelling a sibling because another branch is waiting would discard its work and
+repeat its side effects on the run that resumes.
+
+`Journal` records are keyed by **scope path plus step ID**, which is what keeps
+this correct where one step runs many times — element 2 of an `Iteration` is never
+mistaken for element 1. `Branch` and `Loop` additionally record the decisions they
+made, so a resolver that is not a pure function of the `Store` (a classifier, a
+model) cannot send a resumed run down the other branch — and is not called twice.
+
+**What this is not**: a durable workflow engine. There is no scheduler, no timer,
+and no exactly-once guarantee — a step that suspends after a side effect and
+before recording its result will repeat that effect. This is
+checkpoint-and-restart at step granularity, which fits an approval, a callback, or
+a retry window. For sagas and durable timers, use Temporal.
+
+### External inputs
+
+References that name no node in the graph are the workflow's parameters. Report
+them instead of discovering a missing value mid-run:
+
+```go
+workflow.GraphInputs(g)             // every external Ref, deduplicated and sorted
+workflow.MissingInputs(g, store)    // the ones this Store cannot satisfy
+```
+
 ### JSON DSL and Schema
 
 `Spec` is the nested control-flow form; `Graph` is the flat DAG form. Both JSON
@@ -123,7 +264,7 @@ treated as `{}` so `required` remains meaningful:
 
 ```go
 reg.MustRegisterSchema("addN", workflow.NodeSchema{
-    Input:  workflow.TypeNumber,
+    Inputs: workflow.OnePort(workflow.TypeNumber),
     Output: workflow.TypeNumber,
     ConfigSchema: json.RawMessage(`{
       "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -167,25 +308,37 @@ Highlights:
   scopes each element.
 - **Config-driven.** A nested `Spec` or a flat, arbitrarily wired `Graph`
   (topologically layered, cycle-checked) compiles to a runnable `Step`.
+- **Named ports.** `Inputs` wires a node's inputs by port name and `NodeSchema`
+  declares them, so execution order and edge types both derive from the graph
+  rather than from a node's private config.
 - **Typed factories.** `Factory` strictly decodes JSON config and adapts a typed
-  node constructor into the common `LeafFactory` shape.
+  node constructor into the common `LeafFactory` shape; `BindFactory` does the
+  same for a node reading several ports.
 - **Validation.** Embedded JSON Schemas check both DSL shapes;
   `Registry.ValidateSpec` and `Registry.ValidateGraph` add registrations, config
-  schemas, unique IDs, cycles, references, and compatible edge types without
-  running the workflow.
-- **Observability.** Attach an `Observer` with `WithObserver` to receive typed
-  step lifecycle events; ordinary functions can use `ObserverFunc`.
+  schemas, unique IDs, cycles, references, port completeness, and compatible edge
+  types without running the workflow.
+- **One config per run.** `RunConfig` is a keyed struct holding everything a
+  single run needs — its `Observer` and its `Journal` — installed with one
+  `WithConfig` call. It lives in the context rather than in a `Step`, because it
+  belongs to the run and not to the definition: a compiled workflow is built once
+  and run many times, concurrently, each with its own journal.
+- **Observability.** Attach an `Observer` through `RunConfig` to receive typed
+  step lifecycle events; ordinary functions can use `ObserverFunc`. Each `Event`
+  carries a run sequence number, a scope path, elapsed time, and the `Store` the
+  step produced.
 - **Introspection.** Every composite describes its own structure via `Describe`,
-  leaving rendering and presentation to callers.
+  and `Registry.NodeTypes`/`Registry.NodeSchema` expose the registered node
+  vocabulary, leaving rendering and presentation to callers.
 
 ## Architecture
 
 Dependencies point inward, toward the stable root package:
 
 ```
-workflow ─┐
-          ├─► flow   (zero dependencies)
-flowx ────┘
+workflow/expr ─► workflow ─┐
+                           ├─► flow   (zero dependencies)
+flowx ─────────────────────┘
 ```
 
 - `flow` is the domain kernel: minimal, and already rich — behavior lives on
@@ -197,6 +350,10 @@ flowx ────┘
   composite domain types (`Sequence`, `Branch`, `Loop`, `Parallel`, `Iteration`)
   that own their behavior and describe themselves, and a `Registry` that compiles
   serialized graphs into runnable steps.
+- `workflow/expr` is an optional adapter, not a layer anything depends on: it
+  produces ordinary `Condition` and `Resolver` values. Keeping the interpreter
+  out here is what lets the core stay reflection-light and free of an expression
+  language.
 
 ## Design principles
 
@@ -209,6 +366,10 @@ flowx ────┘
   library.
 - **Persistent state in `workflow`.** Store structure is copy-on-write; inserted
   values follow an explicit caller-owned immutability contract.
+- **Out of scope, not out of reach.** Where a concern is deliberately excluded,
+  the API still carries what an external implementation needs — an `Event` holds
+  the sequence number, scope path, and produced `Store` a tracker or persister
+  would record.
 
 ## Execution model
 
@@ -236,6 +397,9 @@ string matching. In particular:
 - `workflow.RefError`, `RegistrationError`, `GraphError`, and `SpecError`
   identify the exact reference, registry entry, graph field, or specification
   field that failed.
+- `workflow.ErrMissingPort`, `ErrUnknownPort`, and `ErrDuplicatePort` identify a
+  wiring mistake; port errors are reported against the `inputs` field, never
+  against `config`.
 - Sentinel errors such as `flow.ErrNilNode`, `flow.ErrNoCase`, and
   `flow.ErrMaxIterations` remain discoverable through wrapping.
 
@@ -253,6 +417,44 @@ fields be added in a minor release without breaking callers.
 
 Current rewrite migrations:
 
+- `Get[T]` now **converts** rather than asserts. A value of exactly `T` is still
+  returned as-is; anything else is converted through its JSON representation, so a
+  typed read survives a serialized `Store` at any path depth. Conversion never
+  rounds or reinterprets — reading `42.5` as an `int` still fails.
+- `Store.UnmarshalJSON` decodes numbers as `json.Number` instead of `float64`, so
+  nothing is rounded on the way in and an `int64` beyond float64's exact range
+  survives a round trip. Code that reads a decoded `Store` with `Lookup` and a
+  `float64` type assertion must switch to `Get[T]`. A number too large for any Go
+  type is now accepted on decode and reported on read rather than failing the whole
+  decode.
+- `Branch` and `Loop` take an `id` as their first argument, and `branch` and `loop`
+  require `"id"` in the JSON DSL. They record their decisions in the `Journal`
+  under that ID; without one a resumed run could take a different branch or stop at
+  a different iteration.
+- `WithScope` is no longer a no-op when there is no observer. A scope identifies a
+  step rather than labelling it, so it is always maintained — a `Journal` keys its
+  records by it.
+- `Event` gained the `EventSuspended` and `EventSkipped` kinds. An observer that
+  switches exhaustively on `Event.Kind` needs to handle them.
+- `LeafFactory` takes a single `LeafSpec` instead of positional
+  `(id, input, config)` arguments, so a node receives all its wired ports and new
+  fields can be added without breaking callers:
+  `func(spec workflow.LeafSpec) (workflow.Step, error)`.
+- `NodeSchema.Input ValueType` became `NodeSchema.Inputs Ports`, keyed by port
+  name. Use `workflow.OnePort(t)` for a single-input node. A schema that declares
+  ports now also makes wiring mandatory: an unwired declared port is
+  `ErrMissingPort`.
+- `Factory` reports `ErrMissingPort` when the default port is unwired. Such a node
+  could never have run, so the failure moved from run time to compile time. Nodes
+  that legitimately take no input should use a custom `LeafFactory` with their own
+  `BindFunc`.
+- Multi-input nodes should declare ports (`inputs` in JSON, `BindFactory` in Go)
+  rather than carrying extra `Ref` values in their config. Config-carried
+  references still work, but the graph cannot infer dependency order or check edge
+  types for them, so `dependsOn` has to be written by hand.
+- `Event` gained `Path`, `Seq`, `Elapsed`, and `Store`. Existing observers keep
+  compiling; the new fields are what make an external tracker or persister
+  possible.
 - The former `github.com/Tangerg/flow/core` package now lives at the module root:
   import `github.com/Tangerg/flow` and use the package name `flow`.
 - The former `core.Func` is now `flow.NodeFunc`, following the `http.HandlerFunc` adapter
@@ -260,7 +462,7 @@ Current rewrite migrations:
 - Bounded operations take a config struct, not `N` variants, and it is always
   the last, optional argument: `flow.Map(node, cfg...)`,
   `flow.Loop(body, cfg...)`, `flowx.FanOut(nodes, cfg...)`,
-  `workflow.Parallel(branches, cfg...)`, `workflow.Loop(body, done, cfg...)`.
+  `workflow.Parallel(branches, cfg...)`, `workflow.Loop(id, body, done, cfg...)`.
   Variadic subjects (FanOut, Parallel) take a slice so the config stays trailing.
   `workflow.Iteration(IterationConfig{...})` is fully config-defined, so its
   config is the single required argument.
@@ -297,7 +499,35 @@ Current rewrite migrations:
 
 ## Non-goals
 
-Durability (surviving restarts / resuming from a checkpoint), distribution
-(running one flow across machines), and deterministic replay are out of scope.
-For those, use a workflow engine such as [Temporal](https://temporal.io). Keeping
-them out is what lets `flow` stay small, fast, and easy to reason about.
+Distribution (running one flow across machines) and deterministic replay are out
+of scope. For those, use a workflow engine such as [Temporal](https://temporal.io).
+Keeping them out is what lets `flow` stay small, fast, and easy to reason about.
+
+Suspension and checkpointed resumption **are** supported (see above), but they are
+not a durable workflow engine: there is no scheduler, no timer, and no
+exactly-once guarantee. A step that suspends after a side effect and before
+recording its result will repeat that effect. The unit of recovery is a step, not
+an instruction.
+
+Out of scope does not mean out of reach. An `Observer` receives, for every step,
+the run sequence number, the scope path, the elapsed time, and the `Store` the
+step produced — and `Store` is `json.Marshaler`, with `Store.Changes` narrowing a
+snapshot to a single step's writes. A tracker or a state persister keyed by
+`(partition, run, sequence, step)` is an ordinary `Observer` in your own code, not
+a feature this package has to own:
+
+```go
+persist := workflow.ObserverFunc(func(ctx context.Context, e workflow.Event) {
+    if e.Kind != workflow.EventCompleted {
+        return
+    }
+    _ = save(ctx, runID, e.Seq, e.ID, e.Store) // Store marshals to JSON
+})
+
+ctx = workflow.WithConfig(ctx, workflow.RunConfig{Observer: persist})
+out, err := step.Run(ctx, input)
+```
+
+What is genuinely absent is suspension: a compiled workflow runs to completion or
+returns an error. There is no central driver to pause and resume, because that
+driver is what a scheduler-free design trades away.

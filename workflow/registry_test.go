@@ -61,6 +61,7 @@ func TestRegistry_compileBranch(t *testing.T) {
 
 	spec := workflow.Spec{
 		Kind:     workflow.KindBranch,
+		ID:       "route",
 		Resolver: "sign",
 		Cases: map[string]workflow.Spec{
 			"pos": {Kind: workflow.KindLeaf, ID: "p", Type: "addN", Input: &workflow.Ref{NodeID: "start", Path: "output"}, Config: json.RawMessage(`{"n":100}`)},
@@ -196,7 +197,8 @@ func TestRegistry_zeroValueIsUsable(t *testing.T) {
 	if err := reg.RegisterLeaf("addN", addN()); err != nil {
 		t.Fatalf("zero Registry: %v", err)
 	}
-	if _, err := reg.CompileSpec(workflow.Spec{Kind: workflow.KindLeaf, ID: "a", Type: "addN"}); err != nil {
+	spec := workflow.Spec{Kind: workflow.KindLeaf, ID: "a", Type: "addN", Input: refPtr(workflow.Output("start"))}
+	if _, err := reg.CompileSpec(spec); err != nil {
 		t.Fatalf("zero Registry Build: %v", err)
 	}
 }

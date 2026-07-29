@@ -28,6 +28,9 @@ var (
 	ErrIncompatibleType      = errors.New("workflow: incompatible value type")
 	ErrInvalidSpec           = errors.New("workflow: invalid spec")
 	ErrDuplicateStep         = errors.New("workflow: duplicate step")
+	ErrMissingPort           = errors.New("workflow: unwired input port")
+	ErrUnknownPort           = errors.New("workflow: unknown input port")
+	ErrDuplicatePort         = errors.New("workflow: duplicate input port")
 )
 
 // StepOp identifies the phase of a [Leaf] that failed.

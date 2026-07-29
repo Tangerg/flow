@@ -3,16 +3,24 @@ package workflow
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 )
 
 // NodeSpec describes one node in a flat [Graph]: a leaf built by the registry
-// plus the edges into it. Dependencies are inferred from Input (when it points
-// at another graph node) and from DependsOn. Input may reference an external
-// seed Store value; every explicit DependsOn entry must name a graph node.
+// plus the edges into it. Dependencies are inferred from every wired input port
+// that points at another graph node, and from DependsOn. An input may reference
+// an external seed Store value; every explicit DependsOn entry must name a graph
+// node.
+//
+// Input wires [DefaultPort] and is sugar for the common single-input node;
+// Inputs wires ports by name. Setting the default port both ways is rejected as
+// [ErrDuplicatePort].
 type NodeSpec struct {
 	ID        string          `json:"id"`
 	Type      string          `json:"type"`
 	Input     *Ref            `json:"input,omitempty"`
+	Inputs    Inputs          `json:"inputs,omitempty"`
 	Config    json.RawMessage `json:"config,omitempty"`
 	DependsOn []string        `json:"dependsOn,omitempty"`
 }
@@ -67,24 +75,28 @@ func (r *Registry) CompileGraphJSON(data []byte) (Step, error) {
 	return r.CompileGraph(g)
 }
 
-// plan validates the graph structurally (unique IDs, no cycles) and returns its
-// topological layers along with a lookup of nodes by ID. It is shared by Compile
-// and ValidateGraph.
-func (r *Registry) plan(g Graph) (layers [][]string, byID map[string]NodeSpec, err error) {
+// plan validates the graph structurally (unique IDs, well-formed port wiring, no
+// cycles) and returns its topological layers, a lookup of nodes by ID, and each
+// node's resolved wiring. It is shared by Compile and ValidateGraph.
+func (r *Registry) plan(g Graph) (layers [][]string, byID map[string]NodeSpec, wiring map[string]Inputs, err error) {
 	byID = make(map[string]NodeSpec, len(g.Nodes))
+	wiring = make(map[string]Inputs, len(g.Nodes))
 	indexByID := make(map[string]int, len(g.Nodes))
 	for i, n := range g.Nodes {
 		if n.ID == "" {
-			return nil, nil, &GraphError{Field: "id", Err: fmt.Errorf("%w: empty", ErrInvalidGraph)}
+			return nil, nil, nil, &GraphError{Field: "id", Err: fmt.Errorf("%w: empty", ErrInvalidGraph)}
 		}
 		if _, dup := byID[n.ID]; dup {
-			return nil, nil, &GraphError{NodeID: n.ID, Field: "id", Err: ErrDuplicateNode}
+			return nil, nil, nil, &GraphError{NodeID: n.ID, Field: "id", Err: ErrDuplicateNode}
 		}
-		if n.Input != nil {
-			if err := validateRef(*n.Input, fmt.Sprintf("node %q input", n.ID)); err != nil {
-				return nil, nil, &GraphError{NodeID: n.ID, Field: "input", Err: fmt.Errorf("%w: %w", ErrInvalidGraph, err)}
-			}
+		inputs, err := resolveInputs(n.Input, n.Inputs)
+		if err != nil {
+			return nil, nil, nil, &GraphError{NodeID: n.ID, Field: "inputs", Err: err}
 		}
+		if err := validatePortRefs(inputs, fmt.Sprintf("node %q", n.ID)); err != nil {
+			return nil, nil, nil, &GraphError{NodeID: n.ID, Field: "inputs", Err: fmt.Errorf("%w: %w", ErrInvalidGraph, err)}
+		}
+		wiring[n.ID] = inputs
 		byID[n.ID] = n
 		indexByID[n.ID] = i
 	}
@@ -112,14 +124,14 @@ func (r *Registry) plan(g Graph) (layers [][]string, byID map[string]NodeSpec, e
 			dependents[depIndex] = append(dependents[depIndex], i)
 			return nil
 		}
-		if n.Input != nil {
-			if err := addDep(n.Input.NodeID, true); err != nil {
-				return nil, nil, err
+		for _, ref := range wiring[n.ID].Refs() {
+			if err := addDep(ref.NodeID, true); err != nil {
+				return nil, nil, nil, err
 			}
 		}
 		for _, d := range n.DependsOn {
 			if err := addDep(d, false); err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 		}
 	}
@@ -155,19 +167,74 @@ func (r *Registry) plan(g Graph) (layers [][]string, byID map[string]NodeSpec, e
 		}
 	}
 	if processed != len(g.Nodes) {
-		return nil, nil, &GraphError{Err: ErrCycle}
+		return nil, nil, nil, &GraphError{Err: ErrCycle}
 	}
 	if len(g.Nodes) == 0 {
-		return nil, byID, nil
+		return nil, byID, wiring, nil
 	}
 
 	layers = make([][]string, maxLevel+1)
 	for i, n := range g.Nodes {
 		layers[levels[i]] = append(layers[levels[i]], n.ID)
 	}
-	return layers, byID, nil
+	return layers, byID, wiring, nil
 }
 
 func nodeToSpec(n NodeSpec) Spec {
-	return Spec{Kind: KindLeaf, ID: n.ID, Type: n.Type, Input: n.Input, Config: n.Config}
+	return Spec{Kind: KindLeaf, ID: n.ID, Type: n.Type, Input: n.Input, Inputs: n.Inputs, Config: n.Config}
+}
+
+// GraphInputs returns the external references a Graph reads: wired input ports
+// whose nodeID names no node in the graph. These are the values a caller must
+// seed into the [Store] before running, so an editor can render them as the
+// workflow's parameters.
+//
+// The result is deduplicated and ordered by reference. A malformed graph yields
+// the references it can still resolve; use [Registry.ValidateGraph] to reject it.
+func GraphInputs(g Graph) []Ref {
+	internal := make(map[string]struct{}, len(g.Nodes))
+	for _, n := range g.Nodes {
+		internal[n.ID] = struct{}{}
+	}
+
+	seen := make(map[Ref]struct{})
+	external := make([]Ref, 0, len(g.Nodes))
+	for _, n := range g.Nodes {
+		inputs, err := resolveInputs(n.Input, n.Inputs)
+		if err != nil {
+			continue
+		}
+		for _, ref := range inputs.Refs() {
+			if _, ok := internal[ref.NodeID]; ok {
+				continue
+			}
+			if _, duplicate := seen[ref]; duplicate {
+				continue
+			}
+			seen[ref] = struct{}{}
+			external = append(external, ref)
+		}
+	}
+	slices.SortFunc(external, compareRefs)
+	return external
+}
+
+// MissingInputs returns the references from [GraphInputs] that s does not
+// resolve. An empty result means the Store satisfies every external read, so no
+// step will fail for a missing input.
+func MissingInputs(g Graph, s Store) []Ref {
+	missing := make([]Ref, 0, len(g.Nodes))
+	for _, ref := range GraphInputs(g) {
+		if _, ok := s.Lookup(ref); !ok {
+			missing = append(missing, ref)
+		}
+	}
+	return missing
+}
+
+func compareRefs(a, b Ref) int {
+	if c := strings.Compare(a.NodeID, b.NodeID); c != 0 {
+		return c
+	}
+	return strings.Compare(a.Path, b.Path)
 }

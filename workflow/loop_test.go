@@ -25,7 +25,7 @@ func TestLoop_untilDone(t *testing.T) {
 		return v.(int) >= 3, nil
 	}
 
-	loop := workflow.Loop(body, done, workflow.LoopConfig{MaxIterations: 10})
+	loop := workflow.Loop("loop", body, done, workflow.LoopConfig{MaxIterations: 10})
 
 	out, err := loop.Run(context.Background(), workflow.NewStore().WithOutput("start", 0))
 	if err != nil {
@@ -42,7 +42,7 @@ func TestLoop_nilCondition(t *testing.T) {
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 
-	_, err := workflow.Loop(body, nil).Run(context.Background(), workflow.NewStore().WithOutput("start", 1))
+	_, err := workflow.Loop("loop", body, nil).Run(context.Background(), workflow.NewStore().WithOutput("start", 1))
 	if !errors.Is(err, flow.ErrNilFunc) {
 		t.Fatalf("err = %v; want ErrNilFunc", err)
 	}
@@ -55,7 +55,7 @@ func TestLoop_maxIterations(t *testing.T) {
 	)
 	done := func(context.Context, int, workflow.Store) (bool, error) { return false, nil } // never done
 
-	_, err := workflow.Loop(body, done, workflow.LoopConfig{MaxIterations: 3}).Run(context.Background(), workflow.NewStore())
+	_, err := workflow.Loop("loop", body, done, workflow.LoopConfig{MaxIterations: 3}).Run(context.Background(), workflow.NewStore())
 	if !errors.Is(err, flow.ErrMaxIterations) {
 		t.Fatalf("err = %v; want ErrMaxIterations", err)
 	}
@@ -69,7 +69,7 @@ func TestLoop_conditionError(t *testing.T) {
 	)
 	done := func(context.Context, int, workflow.Store) (bool, error) { return false, boom }
 
-	_, err := workflow.Loop(body, done).Run(context.Background(), workflow.NewStore())
+	_, err := workflow.Loop("loop", body, done).Run(context.Background(), workflow.NewStore())
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v; want condition error", err)
 	}

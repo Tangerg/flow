@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -26,15 +27,21 @@ const (
 type Spec struct {
 	Kind SpecKind `json:"kind"`
 
-	// Leaf and iteration node ID.
+	// Node ID, required by every kind that records something under its own name:
+	// leaf, branch, loop, and iteration. Sequence and parallel are purely
+	// structural and take none.
 	ID string `json:"id,omitempty"`
 
 	// Leaf: registered type and its raw config.
 	Type   string          `json:"type,omitempty"`
 	Config json.RawMessage `json:"config,omitempty"`
 
-	// Leaf input, and iteration array input.
+	// Leaf [DefaultPort] input, and iteration array input.
 	Input *Ref `json:"input,omitempty"`
+
+	// Leaf inputs wired by port name. For the default port this is equivalent to
+	// Input; setting it both ways is rejected as [ErrDuplicatePort].
+	Inputs Inputs `json:"inputs,omitempty"`
 
 	// Sequence and parallel children.
 	Steps []Spec `json:"steps,omitempty"`
@@ -129,15 +136,26 @@ func (r *Registry) buildLeaf(spec Spec) (Step, error) {
 	if !ok {
 		return nil, specError(spec, "type", fmt.Errorf("%w %q", ErrUnknownNodeType, spec.Type))
 	}
-	var input Ref
-	if spec.Input != nil {
-		input = *spec.Input
-	}
-	step, err := f(spec.ID, input, spec.Config)
+	inputs, err := resolveInputs(spec.Input, spec.Inputs)
 	if err != nil {
-		return nil, specError(spec, "config", err)
+		return nil, specError(spec, "inputs", err)
+	}
+	step, err := f(LeafSpec{ID: spec.ID, Inputs: inputs, Config: spec.Config})
+	if err != nil {
+		return nil, specError(spec, factoryErrorField(err), err)
 	}
 	return step, nil
+}
+
+// factoryErrorField names the Spec field a [LeafFactory] error belongs to, so a
+// wiring mistake is not reported against the node's config.
+func factoryErrorField(err error) string {
+	switch {
+	case errors.Is(err, ErrMissingPort), errors.Is(err, ErrUnknownPort), errors.Is(err, ErrDuplicatePort):
+		return "inputs"
+	default:
+		return "config"
+	}
 }
 
 func (r *Registry) buildBranch(spec Spec) (Step, error) {
@@ -153,7 +171,7 @@ func (r *Registry) buildBranch(spec Spec) (Step, error) {
 		}
 		cases[name] = step
 	}
-	return Branch(resolve, cases), nil
+	return Branch(spec.ID, resolve, cases), nil
 }
 
 func (r *Registry) buildLoop(spec Spec) (Step, error) {
@@ -168,7 +186,7 @@ func (r *Registry) buildLoop(spec Spec) (Step, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Loop(body, cond, LoopConfig{MaxIterations: spec.MaxIterations}), nil
+	return Loop(spec.ID, body, cond, LoopConfig{MaxIterations: spec.MaxIterations}), nil
 }
 
 func (r *Registry) buildIteration(spec Spec) (Step, error) {

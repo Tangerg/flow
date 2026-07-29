@@ -205,7 +205,7 @@ func BenchmarkParallelBaseScaling(b *testing.B) {
 func BenchmarkCompileGraphScaling(b *testing.B) {
 	registry := workflow.NewRegistry().MustRegisterLeaf(
 		"noop",
-		func(_ string, _ workflow.Ref, _ json.RawMessage) (workflow.Step, error) {
+		func(workflow.LeafSpec) (workflow.Step, error) {
 			return flow.NodeFunc[workflow.Store, workflow.Store](func(_ context.Context, store workflow.Store) (workflow.Store, error) {
 				return store, nil
 			}), nil

@@ -1,10 +1,14 @@
 package workflow
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Tangerg/flow"
 )
@@ -43,8 +47,16 @@ func (r Ref) Child(path string) Ref {
 	return r
 }
 
-// Get loads and type-checks the value at ref. A missing value, nil assigned to
-// a non-nilable T, or a type mismatch is returned as an error.
+// Get reads the value at ref as a T. A value of exactly T is returned as-is;
+// otherwise Get converts it through its JSON representation, which is what makes
+// a typed read survive a serialized Store. Reading 42 back as an int works even
+// though JSON only has numbers, and the same holds at any path depth and for
+// structs and typed slices.
+//
+// A missing value, nil assigned to a non-nilable T, or a value that cannot be
+// converted to T is returned as an error wrapping [ErrNotFound] or
+// [ErrTypeMismatch]. Conversion never rounds or reinterprets: reading 42.5 as an
+// int fails, as does reading a number as a string.
 func Get[T any](s Store, ref Ref) (T, error) {
 	var zero T
 	target := reflect.TypeFor[T]()
@@ -61,9 +73,41 @@ func Get[T any](s Store, ref Ref) (T, error) {
 			return zero, &RefError{Ref: ref, Want: want, Err: ErrTypeMismatch}
 		}
 	}
-	v, ok := raw.(T)
-	if !ok {
-		return zero, &RefError{Ref: ref, Want: want, Got: reflect.TypeOf(raw).String(), Err: ErrTypeMismatch}
+	if v, ok := raw.(T); ok {
+		return v, nil
+	}
+
+	v, err := convert[T](raw)
+	if err != nil {
+		return zero, &RefError{
+			Ref:  ref,
+			Want: want,
+			Got:  reflect.TypeOf(raw).String(),
+			Err:  fmt.Errorf("%w: %w", ErrTypeMismatch, err),
+		}
+	}
+	return v, nil
+}
+
+// convert adapts a value to T through JSON. It is the read half of the Store's
+// serialization contract: a Store that has been through JSON holds JSON-domain
+// values — [json.Number], string, bool, []any, map[string]any — and a typed read
+// has to convert rather than assert. Routing every conversion through JSON keeps
+// one rule for every depth and shape instead of a table of special cases.
+//
+// Callers reach this only after an exact type assertion has failed, so the cost
+// falls on resumed and deserialized workflows rather than on ordinary runs.
+func convert[T any](raw any) (T, error) {
+	var zero T
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return zero, fmt.Errorf("value is not JSON-representable: %w", err)
+	}
+	var v T
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	if err := decoder.Decode(&v); err != nil {
+		return zero, err
 	}
 	return v, nil
 }
@@ -79,8 +123,8 @@ func From[I any](ref Ref) BindFunc[I] {
 
 // Leaf turns a statically typed node into a [Step]. On each run it binds the
 // node's input from the Store, runs it, and writes the result under
-// [Output]. Errors are tagged with the step id, and lifecycle events are
-// emitted (see [WithObserver]).
+// [Output]. Errors are tagged with the step id, lifecycle events are emitted, and
+// a run's [Journal] can replay the step instead of repeating it (see [RunConfig]).
 //
 // This is the prep/exec/post split: bind reads the pool, node computes, the Step
 // writes back — the node itself stays free of any Store knowledge and is unit
@@ -97,10 +141,57 @@ type leafStep[I, O any] struct {
 }
 
 func (l leafStep[I, O]) Run(ctx context.Context, s Store) (Store, error) {
-	emit(ctx, Event{Kind: EventStarted, ID: l.id})
+	// Without an observer there is nothing to time, so the clock is never read.
+	run := runFrom(ctx)
+	journal := run.journal()
+
+	// A journal from an earlier run already holds this step's result, so the work
+	// is not repeated. The record is keyed by scope as well as ID, which is what
+	// makes this correct inside Loop and Iteration, where one step runs many
+	// times.
+	if journal != nil && l.id != "" {
+		if value, ok := journal.lookup(Scope(ctx), l.id); ok {
+			next := s.WithOutput(l.id, value)
+			run.emit(ctx, Event{Kind: EventSkipped, ID: l.id, Store: next})
+			return next, nil
+		}
+	}
+
+	var started time.Time
+	if run.observing() {
+		started = time.Now()
+		run.emit(ctx, Event{Kind: EventStarted, ID: l.id})
+	}
+
+	// A suspension is not a failure: it keeps its own shape, reports its own
+	// event, and is not wrapped in a StepError.
+	stop := func(err error) (Store, error) {
+		suspension := suspensionOf(err)
+		suspension.ID = l.id
+		suspension.Path = Scope(ctx)
+		if run.observing() {
+			run.emit(ctx, Event{
+				Kind:    EventSuspended,
+				ID:      l.id,
+				Elapsed: time.Since(started),
+				Err:     suspension,
+			})
+		}
+		return s, suspension
+	}
 	fail := func(op StepOp, err error) (Store, error) {
+		if suspensionOf(err) != nil {
+			return stop(err)
+		}
 		err = &StepError{ID: l.id, Op: op, Err: err}
-		emit(ctx, Event{Kind: EventFailed, ID: l.id, Err: err})
+		if run.observing() {
+			run.emit(ctx, Event{
+				Kind:    EventFailed,
+				ID:      l.id,
+				Elapsed: time.Since(started),
+				Err:     err,
+			})
+		}
 		return s, err
 	}
 
@@ -122,8 +213,17 @@ func (l leafStep[I, O]) Run(ctx context.Context, s Store) (Store, error) {
 		return fail(OpRun, err)
 	}
 
-	emit(ctx, Event{Kind: EventCompleted, ID: l.id})
-	return s.WithOutput(l.id, out), nil
+	next := s.WithOutput(l.id, out)
+	journal.record(Scope(ctx), l.id, out)
+	if run.observing() {
+		run.emit(ctx, Event{
+			Kind:    EventCompleted,
+			ID:      l.id,
+			Elapsed: time.Since(started),
+			Store:   next,
+		})
+	}
+	return next, nil
 }
 
 func (l leafStep[I, O]) Describe() Description {

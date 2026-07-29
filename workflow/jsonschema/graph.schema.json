@@ -24,12 +24,19 @@
       "required": ["nodeID", "path"],
       "additionalProperties": false
     },
+    "inputs": {
+      "type": "object",
+      "description": "Input references wired by port name.",
+      "propertyNames": { "minLength": 1 },
+      "additionalProperties": { "$ref": "#/$defs/ref" }
+    },
     "node": {
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1 },
         "type": { "type": "string", "minLength": 1 },
         "input": { "$ref": "#/$defs/ref" },
+        "inputs": { "$ref": "#/$defs/inputs" },
         "config": {},
         "dependsOn": {
           "type": "array",

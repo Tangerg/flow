@@ -61,6 +61,57 @@ func TestJSONSchemasAcceptMarshalableZeroValueComposites(t *testing.T) {
 	}
 }
 
+func TestJSONSchemasValidateNamedInputs(t *testing.T) {
+	tests := map[string]struct {
+		data    string
+		graph   bool
+		wantErr bool
+	}{
+		"graph named ports": {
+			data:  `{"nodes":[{"id":"a","type":"t","inputs":{"left":{"nodeID":"x","path":"output"}}}]}`,
+			graph: true,
+		},
+		"graph empty port name": {
+			data:    `{"nodes":[{"id":"a","type":"t","inputs":{"":{"nodeID":"x","path":"output"}}}]}`,
+			graph:   true,
+			wantErr: true,
+		},
+		"graph port is not a ref": {
+			data:    `{"nodes":[{"id":"a","type":"t","inputs":{"left":"x.output"}}]}`,
+			graph:   true,
+			wantErr: true,
+		},
+		"graph port with unknown ref field": {
+			data:    `{"nodes":[{"id":"a","type":"t","inputs":{"left":{"nodeID":"x","path":"output","extra":1}}}]}`,
+			graph:   true,
+			wantErr: true,
+		},
+		"spec named ports": {
+			data: `{"kind":"leaf","id":"a","type":"t","inputs":{"left":{"nodeID":"x","path":"output"}}}`,
+		},
+		"spec port is not a ref": {
+			data:    `{"kind":"leaf","id":"a","type":"t","inputs":{"left":3}}`,
+			wantErr: true,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			validate := workflow.ValidateSpecJSON
+			if tt.graph {
+				validate = workflow.ValidateGraphJSON
+			}
+			err := validate([]byte(tt.data))
+			if tt.wantErr && err == nil {
+				t.Fatalf("validate(%s) unexpectedly succeeded", tt.data)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("validate(%s): %v", tt.data, err)
+			}
+		})
+	}
+}
+
 func TestCompileSpecJSONAcceptsEveryKind(t *testing.T) {
 	reg := workflow.NewRegistry().
 		MustRegisterLeaf("addN", addN()).
@@ -79,11 +130,11 @@ func TestCompileSpecJSONAcceptsEveryKind(t *testing.T) {
 		"sequence": `{"kind":"sequence","steps":[]}`,
 		"parallel": `{"kind":"parallel","steps":[],"concurrency":2}`,
 		"branch": `{
-			"kind":"branch", "resolver":"pick",
+			"kind":"branch", "id":"route", "resolver":"pick",
 			"cases":{"yes":{"kind":"sequence","steps":[]}}
 		}`,
 		"loop": `{
-			"kind":"loop", "condition":"done", "maxIterations":2,
+			"kind":"loop", "id":"repeat", "condition":"done", "maxIterations":2,
 			"body":{"kind":"sequence","steps":[]}
 		}`,
 		"iteration": `{
@@ -198,10 +249,14 @@ func TestRegisterSchemaValidatesNodeConfig(t *testing.T) {
 	reg := workflow.NewRegistry().
 		MustRegisterLeaf("addN", addN()).
 		MustRegisterSchema("addN", workflow.NodeSchema{
-			Input: workflow.TypeNumber, Output: workflow.TypeNumber, ConfigSchema: configSchema,
+			Inputs: workflow.OnePort(workflow.TypeNumber), Output: workflow.TypeNumber, ConfigSchema: configSchema,
 		})
 
-	valid := workflow.Spec{Kind: workflow.KindLeaf, ID: "ok", Type: "addN", Config: json.RawMessage(`{"n":2}`)}
+	valid := workflow.Spec{
+		Kind: workflow.KindLeaf, ID: "ok", Type: "addN",
+		Input:  refPtr(workflow.Output("start")),
+		Config: json.RawMessage(`{"n":2}`),
+	}
 	if err := reg.ValidateSpec(valid); err != nil {
 		t.Fatalf("valid config: %v", err)
 	}

@@ -3,49 +3,31 @@ package workflow_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"slices"
 	"testing"
 
 	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
 )
 
-// sum2 reads two refs named in its config and adds them.
-func sum2() workflow.LeafFactory {
-	return func(id string, _ workflow.Ref, config json.RawMessage) (workflow.Step, error) {
-		var cfg struct {
-			A workflow.Ref `json:"a"`
-			B workflow.Ref `json:"b"`
-		}
-		if err := json.Unmarshal(config, &cfg); err != nil {
-			return nil, err
-		}
-		bind := workflow.BindFunc[[2]int](func(s workflow.Store) ([2]int, error) {
-			av, _ := s.Lookup(cfg.A)
-			bv, _ := s.Lookup(cfg.B)
-			return [2]int{av.(int), bv.(int)}, nil
-		})
-		leaf := flow.NodeFunc[[2]int, int](func(_ context.Context, p [2]int) (int, error) { return p[0] + p[1], nil })
-		return workflow.Leaf(id, bind, leaf), nil
-	}
-}
-
 func TestCompileGraph_diamond(t *testing.T) {
 	// start=0
 	//   a = start + 1        (= 1)
 	//   b = a + 10           (= 11)
 	//   c = a + 100          (= 101)
-	//   d = b + c            (= 112)   <- fan-in
+	//   d = b + c            (= 112)   <- fan-in through two named ports
 	reg := workflow.NewRegistry().
 		MustRegisterLeaf("addN", addN()).
-		MustRegisterLeaf("sum2", sum2())
+		MustRegisterLeaf("sum", sumPorts())
 
 	ref := func(id string) *workflow.Ref { value := workflow.Output(id); return &value }
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
 		{ID: "a", Type: "addN", Input: &workflow.Ref{NodeID: "start", Path: "output"}, Config: json.RawMessage(`{"n":1}`)},
 		{ID: "b", Type: "addN", Input: ref("a"), Config: json.RawMessage(`{"n":10}`)},
 		{ID: "c", Type: "addN", Input: ref("a"), Config: json.RawMessage(`{"n":100}`)},
-		{ID: "d", Type: "sum2", DependsOn: []string{"b", "c"},
-			Config: json.RawMessage(`{"a":{"nodeID":"b","path":"output"},"b":{"nodeID":"c","path":"output"}}`)},
+		// No DependsOn: wired ports are dependencies.
+		{ID: "d", Type: "sum", Inputs: workflow.Inputs{"a": workflow.Output("b"), "b": workflow.Output("c")}},
 	}}
 
 	step, err := reg.CompileGraph(g)
@@ -58,6 +40,50 @@ func TestCompileGraph_diamond(t *testing.T) {
 	}
 	if v, ok := out.Lookup(workflow.Output("d")); !ok || v.(int) != 112 {
 		t.Fatalf("d = %v, %v; want 112", v, ok)
+	}
+
+	// The fan-in node must be layered after both producers.
+	description := workflow.Describe(step)
+	last := description.Children[len(description.Children)-1]
+	if last.ID != "d" {
+		t.Fatalf("last layer = %+v; want the fan-in node d", last)
+	}
+}
+
+func TestCompileGraph_portsInferDependencies(t *testing.T) {
+	reg := workflow.NewRegistry().
+		MustRegisterLeaf("addN", addN()).
+		MustRegisterLeaf("sum", sumPorts())
+
+	// b is declared before its producer a; layering must still order them.
+	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+		{ID: "b", Type: "sum", Inputs: workflow.Inputs{"a": workflow.Output("a"), "b": workflow.Output("start")}},
+		{ID: "a", Type: "addN", Input: refPtr(workflow.Output("start")), Config: json.RawMessage(`{"n":1}`)},
+	}}
+
+	step, err := reg.CompileGraph(g)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	out, err := step.Run(context.Background(), workflow.NewStore().WithOutput("start", 5))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if v, err := workflow.Get[int](out, workflow.Output("b")); err != nil || v != 11 {
+		t.Fatalf("b = %v, %v; want 11", v, err) // (5+1) + 5
+	}
+}
+
+func TestCompileGraph_rejectsDuplicateDefaultPort(t *testing.T) {
+	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	g := workflow.Graph{Nodes: []workflow.NodeSpec{{
+		ID:     "a",
+		Type:   "addN",
+		Input:  refPtr(workflow.Output("start")),
+		Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("other")},
+	}}}
+	if err := reg.ValidateGraph(g); !errors.Is(err, workflow.ErrDuplicatePort) {
+		t.Fatalf("err = %v; want ErrDuplicatePort", err)
 	}
 }
 
@@ -138,22 +164,110 @@ func TestCompileGraph_rejectsUnknownExplicitDependency(t *testing.T) {
 func TestCompileGraph_runsSchemaValidation(t *testing.T) {
 	reg := workflow.NewRegistry().
 		MustRegisterLeaf("addN", addN()).
-		MustRegisterSchema("addN", workflow.NodeSchema{Input: workflow.TypeNumber, Output: workflow.TypeNumber}).
+		MustRegisterSchema("addN", workflow.NodeSchema{Inputs: workflow.OnePort(workflow.TypeNumber), Output: workflow.TypeNumber}).
 		MustRegisterLeaf("stringNode", addN()).
-		MustRegisterSchema("stringNode", workflow.NodeSchema{Input: workflow.TypeString, Output: workflow.TypeString})
+		MustRegisterSchema("stringNode", workflow.NodeSchema{Inputs: workflow.OnePort(workflow.TypeString), Output: workflow.TypeString})
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
-		{ID: "a", Type: "addN"},
+		{ID: "a", Type: "addN", Input: refPtr(workflow.Output("start"))},
 		{ID: "b", Type: "stringNode", Input: refPtr(workflow.Output("a"))},
 	}}
-	if _, err := reg.CompileGraph(g); err == nil {
-		t.Fatal("expected incompatible schema error")
+	if _, err := reg.CompileGraph(g); !errors.Is(err, workflow.ErrIncompatibleType) {
+		t.Fatalf("err = %v; want ErrIncompatibleType", err)
+	}
+}
+
+func TestCompileGraph_reportsUnwiredAndUnknownPorts(t *testing.T) {
+	reg := workflow.NewRegistry().
+		MustRegisterLeaf("sum", sumPorts()).
+		MustRegisterSchema("sum", workflow.NodeSchema{
+			Inputs: workflow.Ports{"a": workflow.TypeNumber, "b": workflow.TypeNumber},
+			Output: workflow.TypeNumber,
+		})
+
+	tests := map[string]struct {
+		inputs workflow.Inputs
+		want   error
+	}{
+		"unwired": {
+			inputs: workflow.Inputs{"a": workflow.Output("start")},
+			want:   workflow.ErrMissingPort,
+		},
+		"unknown": {
+			inputs: workflow.Inputs{"a": workflow.Output("start"), "b": workflow.Output("start"), "c": workflow.Output("start")},
+			want:   workflow.ErrUnknownPort,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			g := workflow.Graph{Nodes: []workflow.NodeSpec{{ID: "n", Type: "sum", Inputs: tt.inputs}}}
+			if err := reg.ValidateGraph(g); !errors.Is(err, tt.want) {
+				t.Fatalf("err = %v; want %v", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestCompileGraph_rejectsMalformedPortRef(t *testing.T) {
+	reg := workflow.NewRegistry().MustRegisterLeaf("sum", sumPorts())
+	for name, ref := range map[string]workflow.Ref{
+		"empty nodeID": {Path: "output"},
+		"empty path":   {NodeID: "start"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := workflow.Graph{Nodes: []workflow.NodeSpec{
+				{ID: "n", Type: "sum", Inputs: workflow.Inputs{"a": ref, "b": workflow.Output("start")}},
+			}}
+			if err := reg.ValidateGraph(g); !errors.Is(err, workflow.ErrInvalidGraph) {
+				t.Fatalf("err = %v; want ErrInvalidGraph", err)
+			}
+		})
+	}
+}
+
+func TestGraphInputs_skipsMalformedNodes(t *testing.T) {
+	// A node whose default port is wired twice cannot be resolved; GraphInputs
+	// reports what it can and leaves rejecting the graph to ValidateGraph.
+	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+		{ID: "bad", Type: "addN", Input: refPtr(workflow.Output("x")),
+			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("y")}},
+		{ID: "ok", Type: "addN", Input: refPtr(workflow.Output("z"))},
+	}}
+	if got := workflow.GraphInputs(g); !slices.Equal(got, []workflow.Ref{workflow.Output("z")}) {
+		t.Fatalf("GraphInputs = %v; want [z.output]", got)
+	}
+}
+
+func TestGraphInputs(t *testing.T) {
+	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+		{ID: "a", Type: "addN", Input: refPtr(workflow.Output("seed"))},
+		{ID: "b", Type: "sum", Inputs: workflow.Inputs{
+			"a": workflow.Output("a"),          // internal
+			"b": workflow.At("params", "rate"), // external
+		}},
+		{ID: "c", Type: "addN", Input: refPtr(workflow.Output("seed"))}, // duplicate external
+	}}
+
+	got := workflow.GraphInputs(g)
+	want := []workflow.Ref{workflow.At("params", "rate"), workflow.Output("seed")}
+	if !slices.Equal(got, want) {
+		t.Fatalf("GraphInputs = %v; want %v", got, want)
+	}
+
+	seeded := workflow.NewStore().WithOutput("seed", 1)
+	if missing := workflow.MissingInputs(g, seeded); !slices.Equal(missing, []workflow.Ref{workflow.At("params", "rate")}) {
+		t.Fatalf("MissingInputs = %v; want params.rate", missing)
+	}
+
+	complete := seeded.With("params", "rate", 0.5)
+	if missing := workflow.MissingInputs(g, complete); len(missing) != 0 {
+		t.Fatalf("MissingInputs = %v; want none", missing)
 	}
 }
 
 func TestCompileGraph_preservesSpecOrderWithinLayer(t *testing.T) {
-	constant := func(id string, _ workflow.Ref, _ json.RawMessage) (workflow.Step, error) {
+	constant := func(spec workflow.LeafSpec) (workflow.Step, error) {
 		return workflow.Leaf(
-			id,
+			spec.ID,
 			workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
 			flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) { return value, nil }),
 		), nil

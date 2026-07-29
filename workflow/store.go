@@ -1,8 +1,11 @@
 package workflow
 
 import (
+	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -18,6 +21,13 @@ import (
 // would mutate every Store snapshot that shares it and may introduce a data
 // race. Lookup walks into map[string]any and []any, so JSON-shaped data can be
 // addressed by path such as "result.items.0".
+//
+// A Store holds arbitrary Go values, but a Store that has been serialized holds
+// JSON-domain values: [json.Number], string, bool, nil, []any, and
+// map[string]any. Reading with [Get] hides that difference — it converts to the
+// type asked for — so a typed step works the same on a fresh Store and on one
+// restored from JSON. Reading with Lookup does not: it returns whatever is
+// stored, which after a round trip is the JSON-domain value.
 //
 // The zero Store is empty and ready to use; prefer [NewStore] for clarity.
 type Store struct {
@@ -113,6 +123,58 @@ func (s Store) Lookup(ref Ref) (any, bool) {
 	return walk(c.value, rest)
 }
 
+// Write records one Store write: the cell it landed in and the value it wrote.
+type Write struct {
+	NodeID string
+	Key    string
+	Value  any
+}
+
+// Ref returns a reference to the written cell.
+func (w Write) Ref() Ref { return At(w.NodeID, w.Key) }
+
+// Changes returns the writes that distinguish s from base, oldest first, keeping
+// only the final write to each cell. It is the delta an audit log or an external
+// persister records instead of a whole snapshot; pair it with the [Store] on an
+// [EventCompleted] event.
+//
+// Cells that base holds and s does not are not reported: a Store has no delete.
+// Values are borrowed views and must not be mutated.
+func (s Store) Changes(base Store) []Write {
+	if writes, ok := deltaWritesSince(base, s); ok {
+		changes := make([]Write, 0, len(writes))
+		for _, write := range writes {
+			changes = append(changes, Write{NodeID: write.key.nodeID, Key: write.key.key, Value: write.cell.value})
+		}
+		return changes
+	}
+
+	// s may be unrelated to base or may have compacted a long overlay. Compare
+	// write identities, then restore write order from the revision counter.
+	baseData := base.materialize()
+	type revisioned struct {
+		write    Write
+		revision uint64
+	}
+	changed := make([]revisioned, 0, len(baseData))
+	for identity, candidate := range s.materialize() {
+		if original, existed := baseData[identity]; existed && candidate.revision == original.revision {
+			continue
+		}
+		changed = append(changed, revisioned{
+			write:    Write{NodeID: identity.nodeID, Key: identity.key, Value: candidate.value},
+			revision: candidate.revision,
+		})
+	}
+	slices.SortFunc(changed, func(a, b revisioned) int { return cmp.Compare(a.revision, b.revision) })
+
+	changes := make([]Write, 0, len(changed))
+	for _, c := range changed {
+		changes = append(changes, c.write)
+	}
+	return changes
+}
+
 // MarshalJSON serializes the Store as nodeID -> key -> value. It reports the
 // cell containing a value that encoding/json cannot encode.
 func (s Store) MarshalJSON() ([]byte, error) {
@@ -196,8 +258,12 @@ func (s Store) deltasOldestFirst() []*storeDelta {
 }
 
 // UnmarshalJSON atomically replaces the Store from nodeID -> key -> value JSON.
-// On failure the receiver is unchanged. Values follow encoding/json's standard
-// representation, including float64 for JSON numbers.
+// On failure the receiver is unchanged.
+//
+// Numbers decode as [json.Number] rather than float64, so a decoded Store loses
+// no precision and an int64 beyond float64's exact range survives the round
+// trip. Read decoded values with [Get], which converts them to the type a caller
+// asks for; a bare [Store.Lookup] returns the JSON-domain value.
 func (s *Store) UnmarshalJSON(data []byte) error {
 	var raw map[string]map[string]json.RawMessage
 	if err := decodeStrict(data, &raw); err != nil {
@@ -211,8 +277,8 @@ func (s *Store) UnmarshalJSON(data []byte) error {
 	nextData := make(map[storeKey]cell, size)
 	for nodeID, inner := range raw {
 		for key, encoded := range inner {
-			var value any
-			if err := json.Unmarshal(encoded, &value); err != nil {
+			value, err := decodeValue(encoded)
+			if err != nil {
 				return fmt.Errorf("workflow: unmarshal store %s.%s: %w", nodeID, key, err)
 			}
 			nextData[storeKey{nodeID: nodeID, key: key}] = cell{
@@ -227,6 +293,18 @@ func (s *Store) UnmarshalJSON(data []byte) error {
 		*s = Store{snapshot: &storeSnapshot{data: nextData}}
 	}
 	return nil
+}
+
+// decodeValue decodes one stored value into the JSON domain, keeping numbers as
+// [json.Number] so nothing is rounded on the way in.
+func decodeValue(encoded json.RawMessage) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	return value, nil
 }
 
 // walk descends into v following a dot-separated path over map[string]any and

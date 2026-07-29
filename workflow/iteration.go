@@ -40,6 +40,16 @@ type IterationConfig struct {
 // For element i, Body runs on a scoped Store that adds the element under
 // [Item](cfg.ID) and its index via [Index](cfg.ID). The value at cfg.Input must
 // be a []any. The first element to fail cancels the rest.
+//
+// Because Body runs once per element, each element adds an [Event.Path] segment
+// naming the iteration node and the element index, so an observer can tell the
+// elements' steps apart. That segment is also what lets a [Journal] resume an
+// iteration element by element.
+//
+// A suspended element does not cancel the others: they run to completion and are
+// recorded, and the suspensions are returned together. The collected output is
+// written only once every element has produced one, since a slice with holes
+// would read as a finished result.
 func Iteration(cfg IterationConfig) Step {
 	it := iterationStep{id: cfg.ID, body: cfg.Body}
 	it.node = flow.NodeFunc[Store, Store](func(ctx context.Context, s Store) (Store, error) {
@@ -53,22 +63,50 @@ func Iteration(cfg IterationConfig) Step {
 			indexes[i] = i
 		}
 
-		apply := flow.NodeFunc[int, any](func(ctx context.Context, i int) (any, error) {
+		apply := flow.NodeFunc[int, elementOutcome](func(ctx context.Context, i int) (elementOutcome, error) {
 			scoped := s.With(cfg.ID, itemKey, items[i]).With(cfg.ID, indexKey, i)
-			result, err := runStep(ctx, cfg.Body, scoped)
+			result, err := runStep(WithScope(ctx, indexScope(cfg.ID, i)), cfg.Body, scoped)
 			if err != nil {
-				return nil, err
+				// As in Parallel, a suspension travels as a value so the other
+				// elements finish and get recorded rather than being cancelled.
+				if suspension := suspensionOf(err); suspension != nil {
+					return elementOutcome{suspension: suspension}, nil
+				}
+				return elementOutcome{}, err
 			}
-			return Get[any](result, cfg.BodyOutput)
+			value, err := Get[any](result, cfg.BodyOutput)
+			return elementOutcome{value: value}, err
 		})
-		outputs, err := flow.Map(apply, flow.MapConfig{Concurrency: cfg.Concurrency}).Run(ctx, indexes)
+		outcomes, err := flow.Map(apply, flow.MapConfig{Concurrency: cfg.Concurrency}).Run(ctx, indexes)
 		if err != nil {
 			return s, fmt.Errorf("workflow: iteration %q: %w", cfg.ID, err)
 		}
 
+		outputs := make([]any, len(outcomes))
+		var suspensions []*Suspension
+		for i, outcome := range outcomes {
+			if outcome.suspension != nil {
+				suspensions = append(suspensions, outcome.suspension)
+				continue
+			}
+			outputs[i] = outcome.value
+		}
+		if len(suspensions) > 0 {
+			// The collection is incomplete, so it is not written: a partial slice
+			// with holes would read as a finished result. The Journal holds what
+			// each element did finish, so resuming repeats only the waiting ones.
+			return s, joinSuspensions(suspensions)
+		}
 		return s.WithOutput(cfg.ID, outputs), nil
 	})
 	return it
+}
+
+// elementOutcome is one element's result. A suspension travels as a value
+// because it is not a failure; anything else travels as the mapper's error.
+type elementOutcome struct {
+	value      any
+	suspension *Suspension
 }
 
 // iteration is the [Step] produced by [Iteration].
