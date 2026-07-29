@@ -55,8 +55,8 @@ type LeafSpec struct {
 // withDefault merges the single-input "input" sugar into the receiver. It
 // reports an error when both spell out the default port, since the intent is
 // then ambiguous. The receiver is never mutated.
-func (in Inputs) withDefault(input *Ref) (Inputs, error) {
-	if input == nil {
+func (in Inputs) withDefault(input Ref) (Inputs, error) {
+	if input == (Ref{}) {
 		return maps.Clone(in), nil
 	}
 	if _, duplicate := in[DefaultPort]; duplicate {
@@ -64,7 +64,7 @@ func (in Inputs) withDefault(input *Ref) (Inputs, error) {
 	}
 	resolved := make(Inputs, len(in)+1)
 	maps.Copy(resolved, in)
-	resolved[DefaultPort] = *input
+	resolved[DefaultPort] = input
 	return resolved, nil
 }
 

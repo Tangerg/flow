@@ -202,7 +202,7 @@ func (v specValidator) validateIteration(spec Spec, stepIDs map[string]struct{})
 	if err := spec.claimID(stepIDs); err != nil {
 		return err
 	}
-	if spec.Input == nil {
+	if spec.Input == (Ref{}) {
 		return spec.fieldError(
 			"input",
 			fmt.Errorf("%w: iteration input is required", ErrInvalidSpec),
@@ -214,7 +214,7 @@ func (v specValidator) validateIteration(spec Spec, stepIDs map[string]struct{})
 			fmt.Errorf("%w: iteration body is required", ErrInvalidSpec),
 		)
 	}
-	if spec.BodyOutput == nil {
+	if spec.BodyOutput == (Ref{}) {
 		return spec.fieldError(
 			"bodyOutput",
 			fmt.Errorf("%w: iteration body output is required", ErrInvalidSpec),
@@ -285,7 +285,7 @@ func (spec Spec) populatedFields() []string {
 		{name: "id", populated: spec.ID != ""},
 		{name: "type", populated: spec.Type != ""},
 		{name: "config", populated: len(spec.Config) > 0},
-		{name: "input", populated: spec.Input != nil},
+		{name: "input", populated: spec.Input != (Ref{})},
 		{name: "inputs", populated: len(spec.Inputs) > 0},
 		{name: "steps", populated: len(spec.Steps) > 0},
 		{name: "resolver", populated: spec.Resolver != ""},
@@ -293,7 +293,7 @@ func (spec Spec) populatedFields() []string {
 		{name: "body", populated: spec.Body != nil},
 		{name: "condition", populated: spec.Condition != ""},
 		{name: "maxIterations", populated: spec.MaxIterations != 0},
-		{name: "bodyOutput", populated: spec.BodyOutput != nil},
+		{name: "bodyOutput", populated: spec.BodyOutput != (Ref{})},
 		{name: "concurrency", populated: spec.Concurrency != 0},
 	} {
 		if field.populated {

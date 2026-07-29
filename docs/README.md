@@ -33,6 +33,8 @@ go doc github.com/Tangerg/flow/workflow/expr
 
 ## Project
 
+- [Roadmap](./roadmap.md) records planned work in priority order, the reasoning
+  behind each item, and the decisions that belong before v1.
 - [Changelog](../CHANGELOG.md) records unreleased work and breaking migrations.
 - [Contributing](../CONTRIBUTING.md) defines the development and API review
   requirements.

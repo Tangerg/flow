@@ -12,22 +12,20 @@ import (
 // in the Store. The Emitter is run-scoped, so the same compiled Step can be
 // reused with different destinations.
 func Example_streamingOutput() {
-	generate := workflow.StreamLeaf(
+	generate := workflow.StreamLeafFunc(
 		"generate",
-		workflow.From[string](workflow.Output("name")),
-		workflow.StreamNodeFunc[string, string, string](
-			func(ctx context.Context, name string, yield func(string) bool) (string, error) {
-				tokens := []string{"hello", ", ", name}
-				var answer strings.Builder
-				for _, token := range tokens {
-					if !yield(token) {
-						return "", context.Cause(ctx)
-					}
-					answer.WriteString(token)
+		workflow.Output("name"),
+		func(ctx context.Context, name string, yield func(string) bool) (string, error) {
+			tokens := []string{"hello", ", ", name}
+			var answer strings.Builder
+			for _, token := range tokens {
+				if !yield(token) {
+					return "", context.Cause(ctx)
 				}
-				return answer.String(), nil
-			},
-		),
+				answer.WriteString(token)
+			}
+			return answer.String(), nil
+		},
 	)
 
 	out, err := workflow.Run(

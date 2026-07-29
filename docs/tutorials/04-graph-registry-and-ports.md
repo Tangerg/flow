@@ -127,21 +127,17 @@ domain type aligned; they are two views of the same boundary.
 ## 4. Describe data flow with a Graph
 
 ```go
-graph := workflow.Graph{Nodes: []workflow.NodeSpec{
+graph := workflow.Graph{Concurrency: 2, Nodes: []workflow.NodeSpec{
 	{
-		ID:     "twice",
-		Type:   "multiply",
-		Inputs: workflow.Inputs{
-			workflow.DefaultPort: workflow.Output("start"),
-		},
+		ID:    "twice",
+		Type:  "multiply",
+		Input: workflow.Output("start"),
 		Config: json.RawMessage(`{"value":2}`),
 	},
 	{
-		ID:     "plusTen",
-		Type:   "add",
-		Inputs: workflow.Inputs{
-			workflow.DefaultPort: workflow.Output("start"),
-		},
+		ID:    "plusTen",
+		Type:  "add",
+		Input: workflow.Output("start"),
 		Config: json.RawMessage(`{"value":10}`),
 	},
 	{
@@ -164,7 +160,8 @@ start --> twice -----\
 
 `twice` and `plusTen` share a layer and may run concurrently; `total` waits for
 both. Compilation turns the DAG into topological layers equivalent to
-`Sequence(Parallel(layer), ...)`.
+`Sequence(Parallel(layer), ...)`. `Graph.Concurrency` bounds each layer; zero
+leaves it unbounded.
 
 Use `DependsOn` for a pure control dependency. Ordinary data dependencies
 belong in ports. If a factory hides Store references inside its config, graph

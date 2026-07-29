@@ -32,7 +32,10 @@ func (r *Registry) CompileGraph(graph Graph) (Step, error) {
 		if len(steps) == 1 {
 			layerSteps = append(layerSteps, steps[0])
 		} else {
-			layerSteps = append(layerSteps, Parallel(steps, ParallelConfig{}))
+			layerSteps = append(layerSteps, Parallel(
+				steps,
+				ParallelConfig{Concurrency: graph.Concurrency},
+			))
 		}
 	}
 	return Sequence(layerSteps...), nil

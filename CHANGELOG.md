@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `workflow.LeafFunc` and `workflow.StreamLeafFunc`, concise adapters for the
+  common case of lifting an ordinary typed function with one referenced input.
+- `workflow.FirstOf`, a tolerant binder that reads the first available
+  reference in declaration order, for mutually exclusive merge paths.
+- `Graph.Concurrency`, which bounds the number of nodes running concurrently in
+  each topological layer; zero retains unbounded execution.
 - First-class streaming output for Go-defined workflow leaves.
   `StreamNode[I, O, C]` and `StreamNodeFunc` model a typed producer with a
   synchronous, stoppable yield callback; `StreamLeaf` gives it the same binding,
@@ -89,6 +95,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `Spec.Input`, `Spec.BodyOutput`, and `NodeSpec.Input` are now `Ref` values
+  rather than pointers. Callers can write `Input: workflow.Output("source")`
+  directly; a zero `Ref` remains omitted from JSON and means the field is unset.
 - `RunConfig` now includes an `Emitter`. Callers should continue to construct
   `RunConfig` with keyed fields; unkeyed composite literals must be updated.
 - `Event.Seq` now shares one run-wide ordering with streaming `Chunk` values.

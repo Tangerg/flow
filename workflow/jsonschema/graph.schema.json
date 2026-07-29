@@ -9,6 +9,11 @@
       "type": ["array", "null"],
       "description": "Nodes in stable declaration order.",
       "items": { "$ref": "#/$defs/node" }
+    },
+    "concurrency": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Maximum nodes running concurrently in one layer; zero is unbounded."
     }
   },
   "required": ["nodes"],

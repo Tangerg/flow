@@ -52,7 +52,7 @@ func TestValidateSpec_branchCasesMayShareAStepID(t *testing.T) {
 	leaf := func(n string) workflow.Spec {
 		return workflow.Spec{
 			Kind: workflow.KindLeaf, ID: "out", Type: "addN",
-			Input:  refPtr(workflow.Output("start")),
+			Input:  workflow.Output("start"),
 			Config: json.RawMessage(`{"n":` + n + `}`),
 		}
 	}
@@ -68,7 +68,7 @@ func TestValidateSpec_branchCasesMayShareAStepID(t *testing.T) {
 			// Reads the branch's output without knowing which case produced it.
 			{
 				Kind: workflow.KindLeaf, ID: "after", Type: "addN",
-				Input:  refPtr(workflow.Output("out")),
+				Input:  workflow.Output("out"),
 				Config: json.RawMessage(`{"n":10}`),
 			},
 		},
@@ -93,7 +93,7 @@ func TestValidateSpec_stillRejectsIDsThatCanCollide(t *testing.T) {
 		MustRegisterResolver("pick", func(context.Context, workflow.Store) (string, error) { return "a", nil })
 
 	leaf := func(id string) workflow.Spec {
-		return workflow.Spec{Kind: workflow.KindLeaf, ID: id, Type: "addN", Input: refPtr(workflow.Output("start"))}
+		return workflow.Spec{Kind: workflow.KindLeaf, ID: id, Type: "addN", Input: workflow.Output("start")}
 	}
 	branch := func(cases map[string]workflow.Spec) workflow.Spec {
 		return workflow.Spec{Kind: workflow.KindBranch, ID: "route", Resolver: "pick", Cases: cases}

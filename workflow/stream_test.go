@@ -93,6 +93,38 @@ func TestStreamLeaf_emitsChunksAndPublishesFinalOutput(t *testing.T) {
 	}
 }
 
+func TestStreamLeafFunc(t *testing.T) {
+	step := workflow.StreamLeafFunc(
+		"stream",
+		workflow.Output("start"),
+		func(_ context.Context, input int, yield func(string) bool) (int, error) {
+			yield(fmt.Sprintf("value=%d", input))
+			return input * 2, nil
+		},
+	)
+	var chunks []workflow.Chunk
+	out, err := workflow.Run(
+		context.Background(),
+		step,
+		workflow.NewStore().WithOutput("start", 21),
+		workflow.RunConfig{Emitter: workflow.EmitterFunc(
+			func(_ context.Context, chunk workflow.Chunk) error {
+				chunks = append(chunks, chunk)
+				return nil
+			},
+		)},
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(chunks) != 1 || chunks[0].Value != "value=21" {
+		t.Fatalf("chunks = %+v; want value=21", chunks)
+	}
+	if got, err := workflow.Get[int](out, workflow.Output("stream")); err != nil || got != 42 {
+		t.Fatalf("output = %d, %v; want 42, nil", got, err)
+	}
+}
+
 func TestStreamLeaf_emitterErrorStopsAndFailsTheLeaf(t *testing.T) {
 	emitErr := errors.New("sink unavailable")
 	var attempted atomic.Int64

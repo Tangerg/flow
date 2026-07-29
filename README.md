@@ -124,23 +124,19 @@ once fails with `workflow.ErrDuplicateStep`.
 values through `Ref` and returns a new persistent Store snapshot.
 
 ```go
-clean := workflow.Leaf(
+clean := workflow.LeafFunc(
 	"clean",
-	workflow.From[string](workflow.Output("input")),
-	flow.NodeFunc[string, string](
-		func(_ context.Context, in string) (string, error) {
-			return strings.TrimSpace(in), nil
-		},
-	),
+	workflow.Output("input"),
+	func(_ context.Context, in string) (string, error) {
+		return strings.TrimSpace(in), nil
+	},
 )
-greet := workflow.Leaf(
+greet := workflow.LeafFunc(
 	"greet",
-	workflow.From[string](workflow.Output("clean")),
-	flow.NodeFunc[string, string](
-		func(_ context.Context, name string) (string, error) {
-			return "hello, " + name, nil
-		},
-	),
+	workflow.Output("clean"),
+	func(_ context.Context, name string) (string, error) {
+		return "hello, " + name, nil
+	},
 )
 
 pipeline := workflow.Sequence(clean, greet)
@@ -173,25 +169,23 @@ after a Store has been serialized and restored.
 
 ## Streaming output
 
-Use `StreamLeaf` when a named step has a final result but also produces
+Use `StreamLeafFunc` when a named step has a final result but also produces
 incremental values such as model tokens, progress updates, or rows:
 
 ```go
-generate := workflow.StreamLeaf(
+generate := workflow.StreamLeafFunc(
 	"generate",
-	workflow.From[string](workflow.Output("prompt")),
-	workflow.StreamNodeFunc[string, string, string](
-		func(ctx context.Context, prompt string, yield func(string) bool) (string, error) {
-			var answer strings.Builder
-			for _, token := range []string{"hello", ", ", prompt} {
-				if !yield(token) {
-					return "", context.Cause(ctx)
-				}
-				answer.WriteString(token)
+	workflow.Output("prompt"),
+	func(ctx context.Context, prompt string, yield func(string) bool) (string, error) {
+		var answer strings.Builder
+		for _, token := range []string{"hello", ", ", prompt} {
+			if !yield(token) {
+				return "", context.Cause(ctx)
 			}
-			return answer.String(), nil
-		},
-	),
+			answer.WriteString(token)
+		}
+		return answer.String(), nil
+	},
 )
 
 out, err := workflow.Run(ctx, generate, in, workflow.RunConfig{

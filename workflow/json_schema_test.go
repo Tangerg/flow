@@ -47,6 +47,10 @@ func TestJSONSchemasAcceptMarshalableZeroValueComposites(t *testing.T) {
 		"empty sequence": {workflow.Spec{Kind: workflow.KindSequence}, workflow.ValidateSpecJSON},
 		"empty parallel": {workflow.Spec{Kind: workflow.KindParallel}, workflow.ValidateSpecJSON},
 		"empty graph":    {workflow.Graph{}, workflow.ValidateGraphJSON},
+		"bounded graph": {
+			workflow.Graph{Concurrency: 2},
+			workflow.ValidateGraphJSON,
+		},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -56,6 +60,31 @@ func TestJSONSchemasAcceptMarshalableZeroValueComposites(t *testing.T) {
 			}
 			if err := test.validate(data); err != nil {
 				t.Fatalf("validate Marshal output %s: %v", data, err)
+			}
+		})
+	}
+}
+
+func TestSpecAndNodeSpecOmitZeroReferences(t *testing.T) {
+	for name, value := range map[string]any{
+		"spec": workflow.Spec{
+			Kind: workflow.KindLeaf,
+			ID:   "leaf",
+			Type: "node",
+		},
+		"node": workflow.NodeSpec{
+			ID:   "leaf",
+			Type: "node",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			data, err := json.Marshal(value)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			if strings.Contains(string(data), `"input"`) ||
+				strings.Contains(string(data), `"bodyOutput"`) {
+				t.Fatalf("zero reference was not omitted: %s", data)
 			}
 		})
 	}
@@ -249,6 +278,7 @@ func TestValidateGraphJSONRejectsSchemaViolations(t *testing.T) {
 		"missing node type":    `{"nodes":[{"id":"x"}]}`,
 		"empty node id":        `{"nodes":[{"id":"","type":"x"}]}`,
 		"duplicate dependency": `{"nodes":[{"id":"x","type":"x","dependsOn":["a","a"]}]}`,
+		"negative concurrency": `{"nodes":[],"concurrency":-1}`,
 		"unknown field":        `{"nodes":[],"unknown":true}`,
 	}
 	for name, data := range tests {
@@ -303,7 +333,7 @@ func TestRegisterSchemaValidatesNodeConfig(t *testing.T) {
 
 	valid := workflow.Spec{
 		Kind: workflow.KindLeaf, ID: "ok", Type: "addN",
-		Input:  refPtr(workflow.Output("start")),
+		Input:  workflow.Output("start"),
 		Config: json.RawMessage(`{"n":2}`),
 	}
 	if err := reg.ValidateSpec(valid); err != nil {

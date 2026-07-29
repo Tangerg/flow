@@ -30,8 +30,9 @@ type Spec struct {
 	Type   string          `json:"type,omitempty"`
 	Config json.RawMessage `json:"config,omitempty"`
 
-	// Leaf [DefaultPort] input, and iteration array input.
-	Input *Ref `json:"input,omitempty"`
+	// Leaf [DefaultPort] input, and iteration array input. A zero Ref means the
+	// field is absent.
+	Input Ref `json:"input,omitzero"`
 
 	// Leaf inputs wired by port name. For the default port this is equivalent to
 	// Input; setting it both ways is rejected as [ErrDuplicatePort].
@@ -52,7 +53,8 @@ type Spec struct {
 	MaxIterations int    `json:"maxIterations,omitempty"`
 
 	// Iteration: where to read each element's result in the post-run Store.
-	BodyOutput *Ref `json:"bodyOutput,omitempty"`
+	// A zero Ref means the field is absent.
+	BodyOutput Ref `json:"bodyOutput,omitzero"`
 
 	// Parallel and iteration concurrency limit (0 = unbounded).
 	Concurrency int `json:"concurrency,omitempty"`

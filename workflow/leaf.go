@@ -2,6 +2,9 @@ package workflow
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"slices"
 	"time"
 
 	"github.com/Tangerg/flow"
@@ -14,6 +17,31 @@ type BindFunc[I any] func(Store) (I, error)
 // From returns a BindFunc that reads a value of type I from ref.
 func From[I any](ref Ref) BindFunc[I] {
 	return func(store Store) (I, error) { return Get[I](store, ref) }
+}
+
+// FirstOf returns a BindFunc that reads the first reference that resolves.
+// Missing references are skipped in argument order. Once a reference resolves,
+// its conversion error is returned rather than trying a later reference. If no
+// reference resolves, the result wraps [ErrNotFound].
+//
+// FirstOf is useful at a merge point whose mutually exclusive upstream paths
+// write the same logical input under different step IDs.
+func FirstOf[I any](refs ...Ref) BindFunc[I] {
+	refs = slices.Clone(refs)
+	return func(store Store) (I, error) {
+		for _, ref := range refs {
+			value, err := Get[I](store, ref)
+			if err == nil {
+				return value, nil
+			}
+			if !errors.Is(err, ErrNotFound) {
+				var zero I
+				return zero, err
+			}
+		}
+		var zero I
+		return zero, fmt.Errorf("%w: none of %d references resolve", ErrNotFound, len(refs))
+	}
 }
 
 // Leaf turns a statically typed node into a [Step]. On each run it binds the
@@ -33,6 +61,16 @@ func Leaf[I, O any](id string, bind BindFunc[I], node flow.Node[I, O]) Step {
 		bind:   bind,
 		runner: nodeRunner[I, O]{node: node},
 	}
+}
+
+// LeafFunc lifts an ordinary function into a [Step] that reads its input from
+// ref. It is the concise form of combining [Leaf], [From], and [flow.NodeFunc].
+func LeafFunc[I, O any](
+	id string,
+	ref Ref,
+	fn func(context.Context, I) (O, error),
+) Step {
+	return Leaf(id, From[I](ref), flow.NodeFunc[I, O](fn))
 }
 
 // leafStep is the [Step] produced by [Leaf].

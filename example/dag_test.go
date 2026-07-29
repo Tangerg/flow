@@ -73,15 +73,15 @@ func Example_dag() {
 			Output: workflow.TypeNumber,
 		})
 
-	graph := workflow.Graph{Nodes: []workflow.NodeSpec{
+	graph := workflow.Graph{Concurrency: 2, Nodes: []workflow.NodeSpec{
 		{
 			ID: "twice", Type: "multiply",
-			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
+			Input:  workflow.Output("start"),
 			Config: json.RawMessage(`{"value":2}`),
 		},
 		{
 			ID: "plusTen", Type: "add",
-			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
+			Input:  workflow.Output("start"),
 			Config: json.RawMessage(`{"value":10}`),
 		},
 		{

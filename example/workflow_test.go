@@ -5,26 +5,25 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
 )
 
 // Workflow lifts typed Nodes into named Steps. Each Step reads a Ref from the
 // immutable Store and writes its conventional output under its own ID.
 func Example_workflow() {
-	clean := workflow.Leaf(
+	clean := workflow.LeafFunc(
 		"clean",
-		workflow.From[string](workflow.Output("input")),
-		flow.NodeFunc[string, string](func(_ context.Context, in string) (string, error) {
+		workflow.Output("input"),
+		func(_ context.Context, in string) (string, error) {
 			return strings.TrimSpace(in), nil
-		}),
+		},
 	)
-	greet := workflow.Leaf(
+	greet := workflow.LeafFunc(
 		"greet",
-		workflow.From[string](workflow.Output("clean")),
-		flow.NodeFunc[string, string](func(_ context.Context, name string) (string, error) {
+		workflow.Output("clean"),
+		func(_ context.Context, name string) (string, error) {
 			return "hello, " + name, nil
-		}),
+		},
 	)
 
 	pipeline := workflow.Sequence(clean, greet)

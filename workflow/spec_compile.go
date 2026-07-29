@@ -166,7 +166,7 @@ func (compiler specCompiler) compileLoop(spec Spec) (Step, error) {
 
 func (compiler specCompiler) compileIteration(spec Spec) (Step, error) {
 	switch {
-	case spec.Input == nil:
+	case spec.Input == (Ref{}):
 		return nil, spec.fieldError(
 			"input",
 			fmt.Errorf("%w: iteration input is required", ErrInvalidSpec),
@@ -176,7 +176,7 @@ func (compiler specCompiler) compileIteration(spec Spec) (Step, error) {
 			"body",
 			fmt.Errorf("%w: iteration body is required", ErrInvalidSpec),
 		)
-	case spec.BodyOutput == nil:
+	case spec.BodyOutput == (Ref{}):
 		return nil, spec.fieldError(
 			"bodyOutput",
 			fmt.Errorf("%w: iteration body output is required", ErrInvalidSpec),
@@ -188,9 +188,9 @@ func (compiler specCompiler) compileIteration(spec Spec) (Step, error) {
 	}
 	return Iteration(IterationConfig{
 		ID:          spec.ID,
-		Input:       *spec.Input,
+		Input:       spec.Input,
 		Body:        body,
-		BodyOutput:  *spec.BodyOutput,
+		BodyOutput:  spec.BodyOutput,
 		Concurrency: spec.Concurrency,
 	}), nil
 }

@@ -115,7 +115,6 @@ func TestSpecCompiler_defendsItsValidatedInputContract(t *testing.T) {
 			return false, nil
 		})
 	compiler := specCompiler{leafCompiler: leafCompiler{registry: registry}}
-	ref := func(value Ref) *Ref { return &value }
 	broken := Spec{Kind: KindLeaf, ID: "broken", Type: "broken"}
 
 	tests := map[string]Spec{
@@ -133,7 +132,7 @@ func TestSpecCompiler_defendsItsValidatedInputContract(t *testing.T) {
 		},
 		"duplicate default input": {
 			Kind: KindLeaf, ID: "leaf", Type: "broken",
-			Input:  ref(Output("a")),
+			Input:  Output("a"),
 			Inputs: Inputs{DefaultPort: Output("b")},
 		},
 		"unknown resolver": {
@@ -158,15 +157,15 @@ func TestSpecCompiler_defendsItsValidatedInputContract(t *testing.T) {
 			Kind: KindIteration, ID: "each",
 		},
 		"missing iteration body": {
-			Kind: KindIteration, ID: "each", Input: ref(Output("items")),
+			Kind: KindIteration, ID: "each", Input: Output("items"),
 		},
 		"missing iteration output": {
-			Kind: KindIteration, ID: "each", Input: ref(Output("items")),
+			Kind: KindIteration, ID: "each", Input: Output("items"),
 			Body: &Spec{Kind: KindSequence},
 		},
 		"iteration body": {
-			Kind: KindIteration, ID: "each", Input: ref(Output("items")),
-			Body: &broken, BodyOutput: ref(Output("value")),
+			Kind: KindIteration, ID: "each", Input: Output("items"),
+			Body: &broken, BodyOutput: Output("value"),
 		},
 	}
 

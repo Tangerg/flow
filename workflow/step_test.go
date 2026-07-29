@@ -43,6 +43,60 @@ func TestLeaf_missingInput(t *testing.T) {
 	}
 }
 
+func TestLeafFunc_andFirstOf(t *testing.T) {
+	refs := []workflow.Ref{workflow.Output("missing"), workflow.Output("input")}
+	step := workflow.LeafFunc(
+		"double",
+		refs[0],
+		func(_ context.Context, value int) (int, error) {
+			return value * 2, nil
+		},
+	)
+	if _, err := step.Run(
+		context.Background(),
+		workflow.NewStore().WithOutput("input", 21),
+	); !errors.Is(err, workflow.ErrNotFound) {
+		t.Fatalf("LeafFunc missing input error = %v; want ErrNotFound", err)
+	}
+
+	bind := workflow.FirstOf[int](refs...)
+	refs[1] = workflow.Output("changed")
+	value, err := bind(workflow.NewStore().WithOutput("input", 21))
+	if err != nil || value != 21 {
+		t.Fatalf("FirstOf = %d, %v; want 21, nil", value, err)
+	}
+
+	out, err := workflow.Leaf(
+		"double",
+		bind,
+		flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+			return value * 2, nil
+		}),
+	).Run(context.Background(), workflow.NewStore().WithOutput("input", 21))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, err := workflow.Get[int](out, workflow.Output("double")); err != nil || got != 42 {
+		t.Fatalf("output = %d, %v; want 42, nil", got, err)
+	}
+}
+
+func TestFirstOf_reportsConversionAndMissingErrors(t *testing.T) {
+	bind := workflow.FirstOf[int](
+		workflow.Output("wrong"),
+		workflow.Output("valid"),
+	)
+	store := workflow.NewStore().
+		WithOutput("wrong", "not an integer").
+		WithOutput("valid", 42)
+	if _, err := bind(store); !errors.Is(err, workflow.ErrTypeMismatch) {
+		t.Fatalf("conversion error = %v; want ErrTypeMismatch", err)
+	}
+	if _, err := workflow.FirstOf[int]()(store); !errors.Is(err, workflow.ErrNotFound) {
+		t.Fatalf("empty FirstOf error = %v; want ErrNotFound", err)
+	}
+}
+
 func TestLeaf_propagatesLeafError(t *testing.T) {
 	boom := errors.New("boom")
 	leaf := flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom })

@@ -36,6 +36,16 @@ type graphPlanner struct {
 }
 
 func (planner *graphPlanner) build() (graphPlan, error) {
+	if planner.graph.Concurrency < 0 {
+		return graphPlan{}, &GraphError{
+			Field: "concurrency",
+			Err: fmt.Errorf(
+				"%w: concurrency must be non-negative, got %d",
+				ErrInvalidGraph,
+				planner.graph.Concurrency,
+			),
+		}
+	}
 	if err := planner.indexNodes(); err != nil {
 		return graphPlan{}, err
 	}

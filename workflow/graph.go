@@ -11,13 +11,13 @@ import (
 // an external seed Store value; every explicit DependsOn entry must name a graph
 // node.
 //
-// Input wires [DefaultPort] and is sugar for the common single-input node;
-// Inputs wires ports by name. Setting the default port both ways is rejected as
-// [ErrDuplicatePort].
+// Input wires [DefaultPort] and is sugar for the common single-input node; its
+// zero value means absent. Inputs wires ports by name. Setting the default port
+// both ways is rejected as [ErrDuplicatePort].
 type NodeSpec struct {
 	ID        string          `json:"id"`
 	Type      string          `json:"type"`
-	Input     *Ref            `json:"input,omitempty"`
+	Input     Ref             `json:"input,omitzero"`
 	Inputs    Inputs          `json:"inputs,omitempty"`
 	Config    json.RawMessage `json:"config,omitempty"`
 	DependsOn []string        `json:"dependsOn,omitempty"`
@@ -26,9 +26,11 @@ type NodeSpec struct {
 // Graph is a flat, arbitrarily wired DAG of leaf nodes — the shape a visual
 // editor produces. Unlike a nested [Spec], any node may depend on any other as
 // long as the result is acyclic. [Registry.CompileGraph] topologically layers it
-// and builds Sequence(Parallel(layer)...) so independent nodes run concurrently.
+// and runs independent nodes concurrently. Concurrency limits each layer; zero
+// means unbounded.
 type Graph struct {
-	Nodes []NodeSpec `json:"nodes"`
+	Nodes       []NodeSpec `json:"nodes"`
+	Concurrency int        `json:"concurrency,omitempty"`
 }
 
 // Inputs returns the external references the Graph reads: wired input ports

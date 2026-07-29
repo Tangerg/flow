@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
@@ -22,11 +23,10 @@ func TestCompileGraph_diamond(t *testing.T) {
 		MustRegisterLeaf("addN", addN()).
 		MustRegisterLeaf("sum", sumPorts())
 
-	ref := func(id string) *workflow.Ref { value := workflow.Output(id); return &value }
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
-		{ID: "a", Type: "addN", Input: &workflow.Ref{NodeID: "start", Path: "/output"}, Config: json.RawMessage(`{"n":1}`)},
-		{ID: "b", Type: "addN", Input: ref("a"), Config: json.RawMessage(`{"n":10}`)},
-		{ID: "c", Type: "addN", Input: ref("a"), Config: json.RawMessage(`{"n":100}`)},
+		{ID: "a", Type: "addN", Input: workflow.Output("start"), Config: json.RawMessage(`{"n":1}`)},
+		{ID: "b", Type: "addN", Input: workflow.Output("a"), Config: json.RawMessage(`{"n":10}`)},
+		{ID: "c", Type: "addN", Input: workflow.Output("a"), Config: json.RawMessage(`{"n":100}`)},
 		// No DependsOn: wired ports are dependencies.
 		{ID: "d", Type: "sum", Inputs: workflow.Inputs{"a": workflow.Output("b"), "b": workflow.Output("c")}},
 	}}
@@ -59,7 +59,7 @@ func TestCompileGraph_portsInferDependencies(t *testing.T) {
 	// b is declared before its producer a; layering must still order them.
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
 		{ID: "b", Type: "sum", Inputs: workflow.Inputs{"a": workflow.Output("a"), "b": workflow.Output("start")}},
-		{ID: "a", Type: "addN", Input: refPtr(workflow.Output("start")), Config: json.RawMessage(`{"n":1}`)},
+		{ID: "a", Type: "addN", Input: workflow.Output("start"), Config: json.RawMessage(`{"n":1}`)},
 	}}
 
 	step, err := reg.CompileGraph(g)
@@ -75,14 +75,84 @@ func TestCompileGraph_portsInferDependencies(t *testing.T) {
 	}
 }
 
+func TestCompileGraph_limitsLayerConcurrency(t *testing.T) {
+	started := make(chan struct{}, 3)
+	release := make(chan struct{})
+	registry := workflow.NewRegistry().MustRegisterLeaf(
+		"blocking",
+		workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
+			return flow.NodeFunc[int, int](
+				func(ctx context.Context, input int) (int, error) {
+					started <- struct{}{}
+					select {
+					case <-release:
+						return input, nil
+					case <-ctx.Done():
+						return 0, ctx.Err()
+					}
+				},
+			), nil
+		}),
+	)
+	graph := workflow.Graph{
+		Concurrency: 2,
+		Nodes: []workflow.NodeSpec{
+			{ID: "a", Type: "blocking", Input: workflow.Output("start")},
+			{ID: "b", Type: "blocking", Input: workflow.Output("start")},
+			{ID: "c", Type: "blocking", Input: workflow.Output("start")},
+		},
+	}
+	step, err := registry.CompileGraph(graph)
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+
+	done := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		_, err := step.Run(
+			ctx,
+			workflow.NewStore().WithOutput("start", 1),
+		)
+		done <- err
+	}()
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("two nodes did not fill the available concurrency slots")
+		}
+	}
+	select {
+	case <-started:
+		t.Fatal("third node started before a concurrency slot was released")
+	default:
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
+func TestCompileGraph_rejectsNegativeConcurrency(t *testing.T) {
+	err := workflow.NewRegistry().ValidateGraph(workflow.Graph{Concurrency: -1})
+	var graphErr *workflow.GraphError
+	if !errors.Is(err, workflow.ErrInvalidGraph) ||
+		!errors.As(err, &graphErr) ||
+		graphErr.Field != "concurrency" {
+		t.Fatalf("error = %v; want concurrency GraphError", err)
+	}
+}
+
 func TestCompileGraph_deduplicatesExplicitAndInferredDependency(t *testing.T) {
 	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
 	graph := workflow.Graph{Nodes: []workflow.NodeSpec{
-		{ID: "a", Type: "addN", Input: refPtr(workflow.Output("start"))},
+		{ID: "a", Type: "addN", Input: workflow.Output("start")},
 		{
 			ID:        "b",
 			Type:      "addN",
-			Input:     refPtr(workflow.Output("a")),
+			Input:     workflow.Output("a"),
 			DependsOn: []string{"a"},
 		},
 	}}
@@ -96,7 +166,7 @@ func TestCompileGraph_rejectsDuplicateDefaultPort(t *testing.T) {
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{{
 		ID:     "a",
 		Type:   "addN",
-		Input:  refPtr(workflow.Output("start")),
+		Input:  workflow.Output("start"),
 		Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("other")},
 	}}}
 	if err := reg.ValidateGraph(g); !errors.Is(err, workflow.ErrDuplicatePort) {
@@ -107,8 +177,8 @@ func TestCompileGraph_rejectsDuplicateDefaultPort(t *testing.T) {
 func TestCompileGraph_cycle(t *testing.T) {
 	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
-		{ID: "a", Type: "addN", Input: &workflow.Ref{NodeID: "b", Path: "/output"}},
-		{ID: "b", Type: "addN", Input: &workflow.Ref{NodeID: "a", Path: "/output"}},
+		{ID: "a", Type: "addN", Input: workflow.Output("b")},
+		{ID: "b", Type: "addN", Input: workflow.Output("a")},
 	}}
 	if _, err := reg.CompileGraph(g); err == nil {
 		t.Fatal("expected cycle error")
@@ -163,7 +233,7 @@ func TestCompileGraph_keepsFactoryErrorsAtTheGraphBoundary(t *testing.T) {
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{{
 		ID:     "a",
 		Type:   "addN",
-		Input:  refPtr(workflow.Output("start")),
+		Input:  workflow.Output("start"),
 		Config: json.RawMessage(`{"unknown":true}`),
 	}}}
 
@@ -207,7 +277,7 @@ func TestCompileGraph_reportsSelfInputAsInputError(t *testing.T) {
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{{
 		ID:    "a",
 		Type:  "addN",
-		Input: &workflow.Ref{NodeID: "a", Path: "/output"},
+		Input: workflow.Output("a"),
 	}}}
 	_, err := reg.CompileGraph(g)
 	var graphErr *workflow.GraphError
@@ -272,8 +342,8 @@ func TestCompileGraph_runsSchemaValidation(t *testing.T) {
 		MustRegisterLeaf("stringNode", addN()).
 		MustRegisterSchema("stringNode", workflow.NodeSchema{Inputs: workflow.OnePort(workflow.TypeString), Output: workflow.TypeString})
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
-		{ID: "a", Type: "addN", Input: refPtr(workflow.Output("start"))},
-		{ID: "b", Type: "stringNode", Input: refPtr(workflow.Output("a"))},
+		{ID: "a", Type: "addN", Input: workflow.Output("start")},
+		{ID: "b", Type: "stringNode", Input: workflow.Output("a")},
 	}}
 	if _, err := reg.CompileGraph(g); !errors.Is(err, workflow.ErrIncompatibleType) {
 		t.Fatalf("err = %v; want ErrIncompatibleType", err)
@@ -347,9 +417,9 @@ func TestGraph_inputsSkipMalformedNodes(t *testing.T) {
 	// A node whose default port is wired twice cannot be resolved; Graph.Inputs
 	// reports what it can and leaves rejecting the graph to ValidateGraph.
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
-		{ID: "bad", Type: "addN", Input: refPtr(workflow.Output("x")),
+		{ID: "bad", Type: "addN", Input: workflow.Output("x"),
 			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("y")}},
-		{ID: "ok", Type: "addN", Input: refPtr(workflow.Output("z"))},
+		{ID: "ok", Type: "addN", Input: workflow.Output("z")},
 	}}
 	if got := g.Inputs(); !slices.Equal(got, []workflow.Ref{workflow.Output("z")}) {
 		t.Fatalf("Graph.Inputs = %v; want [z.output]", got)
@@ -358,12 +428,12 @@ func TestGraph_inputsSkipMalformedNodes(t *testing.T) {
 
 func TestGraph_inputs(t *testing.T) {
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
-		{ID: "a", Type: "addN", Input: refPtr(workflow.Output("seed"))},
+		{ID: "a", Type: "addN", Input: workflow.Output("seed")},
 		{ID: "b", Type: "sum", Inputs: workflow.Inputs{
 			"a": workflow.Output("a"),          // internal
 			"b": workflow.At("params", "rate"), // external
 		}},
-		{ID: "c", Type: "addN", Input: refPtr(workflow.Output("seed"))}, // duplicate external
+		{ID: "c", Type: "addN", Input: workflow.Output("seed")}, // duplicate external
 	}}
 
 	got := g.Inputs()

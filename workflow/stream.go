@@ -97,6 +97,17 @@ func StreamLeaf[I, O, C any](
 	}
 }
 
+// StreamLeafFunc lifts an ordinary streaming function into a [Step] that reads
+// its input from ref. It is the concise form of combining [StreamLeaf], [From],
+// and [StreamNodeFunc].
+func StreamLeafFunc[I, O, C any](
+	id string,
+	ref Ref,
+	fn func(context.Context, I, func(C) bool) (O, error),
+) Step {
+	return StreamLeaf(id, From[I](ref), StreamNodeFunc[I, O, C](fn))
+}
+
 type streamRunner[I, O, C any] struct {
 	node StreamNode[I, O, C]
 }

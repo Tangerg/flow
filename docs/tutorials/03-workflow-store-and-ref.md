@@ -18,20 +18,18 @@ It still follows `Run(ctx, in) (out, error)`. The difference is that every step
 has the same input and output type, `Store`, and references describe the edges
 instead of generic type parameters.
 
-## 2. Lift a typed node with `Leaf`
+## 2. Lift a typed function with `LeafFunc`
 
 This leaf reads a string from `input#/output`, trims it, and writes the result
 under `clean#/output`:
 
 ```go
-clean := workflow.Leaf(
+clean := workflow.LeafFunc(
 	"clean",
-	workflow.From[string](workflow.Output("input")),
-	flow.NodeFunc[string, string](
-		func(_ context.Context, in string) (string, error) {
-			return strings.TrimSpace(in), nil
-		},
-	),
+	workflow.Output("input"),
+	func(_ context.Context, in string) (string, error) {
+		return strings.TrimSpace(in), nil
+	},
 )
 ```
 
@@ -40,22 +38,23 @@ Each argument has one responsibility:
 | Argument | Responsibility |
 | --- | --- |
 | `"clean"` | Stable step ID and owner of the conventional output |
-| `From[string](ref)` | Read and convert the input from the Store |
-| `Node[string, string]` | Perform the typed domain operation |
+| `Output("input")` | Reference to read and convert from the Store |
+| Typed function | Perform the domain operation |
 
 Now define a step that consumes the first result:
 
 ```go
-greet := workflow.Leaf(
+greet := workflow.LeafFunc(
 	"greet",
-	workflow.From[string](workflow.Output("clean")),
-	flow.NodeFunc[string, string](
-		func(_ context.Context, name string) (string, error) {
-			return "hello, " + name, nil
-		},
-	),
+	workflow.Output("clean"),
+	func(_ context.Context, name string) (string, error) {
+		return "hello, " + name, nil
+	},
 )
 ```
+
+Use the lower-level `Leaf(id, bind, node)` form when binding needs several
+references or an existing typed `flow.Node` already carries decorators.
 
 ## 3. Sequence and persistent state
 
