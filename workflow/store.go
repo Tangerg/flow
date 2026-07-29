@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"cmp"
+	"maps"
 	"slices"
 	"sync/atomic"
 )
@@ -94,6 +95,9 @@ func (s Store) withDelta(key storeKey, value cell) Store {
 	}
 }
 
+// compact flattens a Store that carries an overlay. Callers reach it only for a
+// Store whose depth is above a threshold, which implies a non-nil delta; calling
+// it on a delta-free Store would copy the snapshot to no effect.
 func (s Store) compact() Store {
 	return Store{snapshot: &storeSnapshot{data: s.materialize()}}
 }
@@ -184,8 +188,11 @@ func (s Store) Changes(base Store) []Write {
 }
 
 // changedWrites returns the receiver's cells that do not share the
-// corresponding identity in base. Globally unique revisions preserve write
-// order, including for data restored from an external snapshot.
+// corresponding identity in base. Every write takes a globally unique revision,
+// so ordering by revision reproduces write order and needs no tie-breaker. A
+// Store restored from an external snapshot has no original write order to
+// recover; [Store.UnmarshalJSON] assigns its revisions by sorted cell, which
+// makes the resulting order deterministic rather than chronological.
 func (s Store) changedWrites(base map[storeKey]cell) []storeWrite {
 	candidate := s.materialize()
 	changed := make([]storeWrite, 0, len(candidate))
@@ -313,9 +320,7 @@ func (s Store) materialize() map[storeKey]cell {
 	}
 	data := make(map[storeKey]cell, capacity+s.depth)
 	if s.snapshot != nil {
-		for key, value := range s.snapshot.data {
-			data[key] = value
-		}
+		maps.Copy(data, s.snapshot.data)
 	}
 
 	for _, write := range s.deltasOldestFirst() {

@@ -49,15 +49,18 @@ func (suspension *Suspension) Error() string {
 		message.WriteString(strconv.Quote(suspension.ID))
 	}
 	if len(suspension.Path) > 0 {
-		message.WriteString(" in " + strings.Join(suspension.Path, "/"))
+		message.WriteString(" in ")
+		message.WriteString(strings.Join(suspension.Path, "/"))
 	}
 	message.WriteString(" suspended")
 	reason, _ := suspension.Value.(string)
 	switch {
 	case reason != "":
-		message.WriteString(": " + reason)
+		message.WriteString(": ")
+		message.WriteString(reason)
 	case suspension.Await != (Ref{}):
-		message.WriteString(": awaiting " + suspension.Await.String())
+		message.WriteString(": awaiting ")
+		message.WriteString(suspension.Await.String())
 	}
 	return message.String()
 }
@@ -233,6 +236,9 @@ func (suspension *Suspension) compare(other *Suspension) int {
 	return suspension.Await.compare(other.Await)
 }
 
+// clone copies a suspension and its path so identifying a wait at a workflow
+// boundary never mutates an error owned by a caller. Callers filter nil entries
+// first, so the receiver is never nil.
 func (suspension *Suspension) clone() *Suspension {
 	clone := *suspension
 	clone.Path = slices.Clone(suspension.Path)

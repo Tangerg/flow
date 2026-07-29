@@ -171,6 +171,8 @@ type jsonSchemaError struct {
 	err *jschema.ValidationError
 }
 
+// Error reports the deduplicated leaf diagnostics. leaves always yields at least
+// the root error, so the joined message is never empty.
 func (e *jsonSchemaError) Error() string {
 	leaves := e.leaves()
 	messages := make([]string, 0, len(leaves))

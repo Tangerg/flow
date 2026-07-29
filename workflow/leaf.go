@@ -137,7 +137,8 @@ func (execution *leafExecution[I, O]) execute(ctx context.Context) (Store, error
 }
 
 // validate runs before replay so stale Journal data cannot hide an invalid
-// workflow definition.
+// workflow definition. [Leaf] and [StreamLeaf] always install a runner, so only
+// the computation it holds can be nil, which runner.validate reports.
 func (execution *leafExecution[I, O]) validate(ctx context.Context) error {
 	switch {
 	case execution.leaf.id == "":

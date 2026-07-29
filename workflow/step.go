@@ -21,6 +21,8 @@ type scopedStep struct {
 	segment string
 }
 
+// run invokes the child under its scope. Composites validate their body before
+// constructing a scopedStep, so step is never nil here.
 func (scoped scopedStep) run(ctx context.Context, store Store) (Store, error) {
 	return scoped.step.Run(scoped.childContext(ctx), store)
 }

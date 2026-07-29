@@ -166,6 +166,13 @@ func (r *runState) claim(path []string, id string) error {
 	return nil
 }
 
+// validateDefinition checks the static workflow shape once per run and caches
+// the verdict, so nested composites reuse the outermost validation instead of
+// repeating it.
+//
+// Unlike the other runState methods it has no nil receiver guard: every
+// composite calls [ensureRun] before reaching it, which guarantees a run is
+// installed. A composite added later must do the same.
 func (r *runState) validateDefinition(step Step) error {
 	r.definitionOnce.Do(func() {
 		r.definitionErr = (definitionValidator{}).validate(step)

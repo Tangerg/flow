@@ -105,7 +105,10 @@ func (p parallelStep) runMany(ctx context.Context, s Store) (Store, error) {
 	// A suspension comes back as a value so it does not cancel the siblings; a
 	// real failure is still returned as an error, which keeps flow.Map's
 	// fail-fast cancellation exactly as it was.
-	mapper := flow.Map[Step, branchOutcome](branchRunner{input: branchInput}, flow.MapConfig{Concurrency: p.limit})
+	mapper := flow.Map(
+		branchRunner{input: branchInput},
+		flow.MapConfig{Concurrency: p.limit},
+	)
 	outcomes, err := mapper.Run(ctx, p.branches)
 	if err != nil {
 		return s, err

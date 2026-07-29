@@ -84,6 +84,9 @@ func (r *jsonReader) read() (any, error) {
 	}
 	defer r.leave()
 
+	// A closing delimiter cannot appear where a value is expected: the top level
+	// starts a document, an object member follows its name, and an array element
+	// is only read while More reports one. So the delimiter here is '{' or '['.
 	if delim == '{' {
 		return r.readObject()
 	}

@@ -108,9 +108,17 @@ func (j *Journal) UnmarshalJSON(data []byte) error {
 		)
 	}
 
-	// Typed decoding above proves these shapes whenever there is a record. Keep
-	// the semantic tree only to distinguish an absent value from an explicit
-	// null without parsing each RawMessage again.
+	// Keep the semantic tree only to distinguish an absent value from an explicit
+	// null, which a json.RawMessage would otherwise have to be parsed again to
+	// tell apart.
+	//
+	// Each assertion below depends on a check that precedes it, so reordering
+	// them would turn malformed input into a panic. A document that is not an
+	// object — including a bare null, which decodes into the zero struct rather
+	// than failing — is rejected by the version check. A non-empty Records slice
+	// means typed decoding accepted "records" as an array. A null array element
+	// also decodes into a zero record, so it is the empty-ID check inside the
+	// loop that rejects it before its element is asserted to be an object.
 	var decodedRecords []any
 	if len(document.Records) > 0 {
 		decodedRecords = decoded.(map[string]any)["records"].([]any)

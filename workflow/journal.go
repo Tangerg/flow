@@ -156,6 +156,9 @@ func (n *journalNode) record(path []string, id string, value journalValue) bool 
 	return true
 }
 
+// lookupAt returns a record no newer than revision, which is how a run replays
+// only work that predates it. The receiver is never nil: [runState.replay]
+// resolves a nil Journal to "no record" before calling.
 func (j *Journal) lookupAt(path []string, id string, revision uint64) (any, bool) {
 	j.mu.RLock()
 	defer j.mu.RUnlock()
