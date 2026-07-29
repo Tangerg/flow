@@ -27,9 +27,9 @@ func (s switchNode[K, I, O]) Run(ctx context.Context, in I) (O, error) {
 	if s.resolve == nil {
 		return zero, ErrNilNode
 	}
-	for _, node := range s.cases {
+	for key, node := range s.cases {
 		if node == nil {
-			return zero, ErrNilNode
+			return zero, fmt.Errorf("case %v: %w", key, ErrNilNode)
 		}
 	}
 	key, err := run(ctx, s.resolve, in)
@@ -38,7 +38,7 @@ func (s switchNode[K, I, O]) Run(ctx context.Context, in I) (O, error) {
 	}
 	node, ok := s.cases[key]
 	if !ok {
-		return zero, fmt.Errorf("%w: %v", ErrNoCase, key)
+		return zero, fmt.Errorf("%w: key %v", ErrNoCase, key)
 	}
 	return run(ctx, node, in)
 }

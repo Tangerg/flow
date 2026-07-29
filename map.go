@@ -33,121 +33,165 @@ type mapNode[I, O any] struct {
 	limit int
 }
 
-func (m mapNode[I, O]) Run(ctx context.Context, in []I) ([]O, error) {
+func (m mapNode[I, O]) Run(ctx context.Context, input []I) ([]O, error) {
 	if m.node == nil {
 		return nil, ErrNilNode
 	}
 	if m.limit < 0 {
-		return nil, fmt.Errorf("%w: negative concurrency", ErrInvalidConfig)
+		return nil, fmt.Errorf(
+			"%w: concurrency must be non-negative, got %d",
+			ErrInvalidConfig,
+			m.limit,
+		)
 	}
-	out := make([]O, len(in))
-	err := m.forEach(ctx, len(in), func(ctx context.Context, i int) error {
-		v, err := run(ctx, m.node, in[i])
-		if err != nil {
-			return &IndexError{Index: i, Err: err}
-		}
-		out[i] = v
-		return nil
-	})
-	if err != nil {
+	outputs := make([]O, len(input))
+	group := indexGroup{
+		count: len(input),
+		limit: m.limit,
+		call: func(ctx context.Context, index int) error {
+			value, err := run(ctx, m.node, input[index])
+			if err != nil {
+				return &IndexError{Index: index, Err: err}
+			}
+			outputs[index] = value
+			return nil
+		},
+	}
+	if err := group.run(ctx); err != nil {
 		return nil, err
 	}
-	return out, nil
+	return outputs, nil
 }
 
-// forEach calls fn(ctx, i) for each i in [0, n) with at most m.limit calls
-// running at once (unbounded when m.limit == 0). The first non-nil error from fn
-// cancels the context for the remaining calls, stops new calls from starting,
-// and is returned (fail-fast); otherwise the returned error is the parent
-// context's error, if any. Parent cancellation takes precedence over an element
-// error observed at the same time.
-func (m mapNode[I, O]) forEach(parent context.Context, n int, fn func(ctx context.Context, i int) error) error {
-	if n <= 0 {
+// indexGroup owns one bounded or unbounded fan-out over [0, count).
+type indexGroup struct {
+	count int
+	limit int
+	call  func(context.Context, int) error
+}
+
+func (group indexGroup) run(parent context.Context) error {
+	if group.count <= 0 {
 		return parent.Err()
 	}
-	if n == 1 {
+	switch {
+	case group.count == 1:
+		return group.runOne(parent)
+	case group.limit == 1:
+		return group.runSequential(parent)
+	default:
+		return group.runConcurrent(parent)
+	}
+}
+
+func (group indexGroup) runOne(parent context.Context) error {
+	if err := parent.Err(); err != nil {
+		return err
+	}
+	err := group.call(parent, 0)
+	if parentErr := parent.Err(); parentErr != nil {
+		return parentErr
+	}
+	return err
+}
+
+func (group indexGroup) runSequential(parent context.Context) error {
+	for index := range group.count {
 		if err := parent.Err(); err != nil {
 			return err
 		}
-		if err := fn(parent, 0); err != nil {
+		if err := group.call(parent, index); err != nil {
 			if parentErr := parent.Err(); parentErr != nil {
 				return parentErr
 			}
 			return err
 		}
-		return parent.Err()
 	}
-	if m.limit == 1 {
-		for i := range n {
-			if err := parent.Err(); err != nil {
-				return err
-			}
-			if err := fn(parent, i); err != nil {
-				if parentErr := parent.Err(); parentErr != nil {
-					return parentErr
-				}
-				return err
-			}
-		}
-		return parent.Err()
-	}
+	return parent.Err()
+}
 
+func (group indexGroup) runConcurrent(parent context.Context) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
-	var (
-		wg       sync.WaitGroup
-		once     sync.Once
-		firstErr error
-	)
-	fail := func(err error) {
-		once.Do(func() {
-			firstErr = err
-			cancel()
-		})
-	}
-
-	if m.limit > 1 && m.limit < n {
-		var next atomic.Int64
-		for range m.limit {
-			wg.Go(func() {
-				for {
-					if ctx.Err() != nil {
-						return
-					}
-					i := int(next.Add(1) - 1)
-					if i >= n || ctx.Err() != nil {
-						return
-					}
-					if err := fn(ctx, i); err != nil {
-						fail(err)
-						return
-					}
-				}
-			})
-		}
+	failure := firstFailure{cancel: cancel}
+	var workers sync.WaitGroup
+	if group.bounded() {
+		group.startWorkers(ctx, &workers, &failure)
 	} else {
-		for i := range n {
-			if ctx.Err() != nil {
-				break
-			}
-			wg.Go(func() {
-				if ctx.Err() != nil {
-					return
-				}
-				if err := fn(ctx, i); err != nil {
-					fail(err)
-				}
-			})
-		}
+		group.startCalls(ctx, &workers, &failure)
 	}
+	workers.Wait()
 
-	wg.Wait()
 	if err := parent.Err(); err != nil {
 		return err
 	}
-	if firstErr != nil {
-		return firstErr
+	if failure.err != nil {
+		return failure.err
 	}
 	return ctx.Err()
+}
+
+func (group indexGroup) bounded() bool {
+	return group.limit > 1 && group.limit < group.count
+}
+
+func (group indexGroup) startWorkers(
+	ctx context.Context,
+	workers *sync.WaitGroup,
+	failure *firstFailure,
+) {
+	var next atomic.Int64
+	count, call := group.count, group.call
+	for range group.limit {
+		workers.Go(func() {
+			for {
+				if ctx.Err() != nil {
+					return
+				}
+				index := int(next.Add(1) - 1)
+				if index >= count || ctx.Err() != nil {
+					return
+				}
+				if err := call(ctx, index); err != nil {
+					failure.record(err)
+					return
+				}
+			}
+		})
+	}
+}
+
+func (group indexGroup) startCalls(
+	ctx context.Context,
+	workers *sync.WaitGroup,
+	failure *firstFailure,
+) {
+	call := group.call
+	for index := range group.count {
+		if ctx.Err() != nil {
+			return
+		}
+		workers.Go(func() {
+			if ctx.Err() != nil {
+				return
+			}
+			if err := call(ctx, index); err != nil {
+				failure.record(err)
+			}
+		})
+	}
+}
+
+type firstFailure struct {
+	once   sync.Once
+	err    error
+	cancel context.CancelFunc
+}
+
+func (failure *firstFailure) record(err error) {
+	failure.once.Do(func() {
+		failure.err = err
+		failure.cancel()
+	})
 }

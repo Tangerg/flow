@@ -1,13 +1,6 @@
 package workflow
 
-import (
-	"bytes"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"maps"
-	"slices"
-)
+import "encoding/json"
 
 // SpecKind identifies the shape of a [Spec].
 type SpecKind string
@@ -22,9 +15,9 @@ const (
 	KindIteration SpecKind = "iteration"
 )
 
-// Spec is a serializable description of a workflow graph. Its Kind selects which
-// fields apply; [Registry.CompileSpec] compiles it into a [Step]. Behavior (leaf types,
-// resolvers, conditions) is referenced by name and resolved through the Registry.
+// Spec is a serializable description of a workflow graph. Its Kind selects
+// which fields apply; [Registry.CompileSpec] compiles it into a [Step].
+// Behavior is referenced by name and resolved through the Registry.
 type Spec struct {
 	Kind SpecKind `json:"kind"`
 
@@ -63,162 +56,4 @@ type Spec struct {
 
 	// Parallel and iteration concurrency limit (0 = unbounded).
 	Concurrency int `json:"concurrency,omitempty"`
-}
-
-// CompileSpec compiles a Spec into a Step using the registered building blocks.
-func (r *Registry) CompileSpec(spec Spec) (Step, error) {
-	if err := r.validateSpec(spec); err != nil {
-		return nil, err
-	}
-	return r.build(spec)
-}
-
-// ValidateSpec checks a nested Spec without building it. It verifies its
-// structure, registrations, references, unique IDs, registered node config
-// schemas, and that each kind carries only fields meaningful to that kind.
-func (r *Registry) ValidateSpec(spec Spec) error {
-	return r.validateSpec(spec)
-}
-
-func (r *Registry) build(spec Spec) (Step, error) {
-	switch spec.Kind {
-	case KindLeaf:
-		return r.buildLeaf(spec)
-	case KindSequence:
-		steps, err := r.buildAll(spec.Steps)
-		if err != nil {
-			return nil, err
-		}
-		return Sequence(steps...), nil
-	case KindParallel:
-		steps, err := r.buildAll(spec.Steps)
-		if err != nil {
-			return nil, err
-		}
-		return Parallel(steps, ParallelConfig{Concurrency: spec.Concurrency}), nil
-	case KindBranch:
-		return r.buildBranch(spec)
-	case KindLoop:
-		return r.buildLoop(spec)
-	case KindIteration:
-		return r.buildIteration(spec)
-	default:
-		return nil, spec.err("kind", fmt.Errorf("%w: unknown kind %q", ErrInvalidSpec, spec.Kind))
-	}
-}
-
-// CompileSpecJSON validates data against [SpecJSONSchema], strictly unmarshals
-// it into a Spec, and compiles it.
-func (r *Registry) CompileSpecJSON(data []byte) (Step, error) {
-	if err := ValidateSpecJSON(data); err != nil {
-		return nil, err
-	}
-	var spec Spec
-	if err := jsonDocument(data).decode(&spec); err != nil {
-		return nil, &SpecError{Field: "json", Err: fmt.Errorf("%w: %w", ErrInvalidSpec, err)}
-	}
-	return r.CompileSpec(spec)
-}
-
-func (r *Registry) buildAll(specs []Spec) ([]Step, error) {
-	steps := make([]Step, len(specs))
-	for i, sp := range specs {
-		step, err := r.build(sp)
-		if err != nil {
-			return nil, err
-		}
-		steps[i] = step
-	}
-	return steps, nil
-}
-
-func (r *Registry) buildLeaf(spec Spec) (Step, error) {
-	step, field, err := r.makeLeaf(spec)
-	if err != nil {
-		return nil, spec.err(field, err)
-	}
-	return step, nil
-}
-
-// makeLeaf builds one leaf without attaching a nested-Spec or flat-Graph error
-// boundary. The two compilers share the construction logic but report failures
-// in their own vocabulary.
-func (r *Registry) makeLeaf(spec Spec) (Step, string, error) {
-	f, ok := r.leafFactory(spec.Type)
-	if !ok {
-		return nil, "type", fmt.Errorf("%w %q", ErrUnknownNodeType, spec.Type)
-	}
-	inputs, err := spec.Inputs.withDefault(spec.Input)
-	if err != nil {
-		return nil, "inputs", err
-	}
-	step, err := f(LeafSpec{
-		ID:     spec.ID,
-		Inputs: inputs,
-		Config: bytes.Clone(spec.Config),
-	})
-	if err != nil {
-		field := "config"
-		if errors.Is(err, ErrMissingPort) ||
-			errors.Is(err, ErrUnknownPort) ||
-			errors.Is(err, ErrDuplicatePort) {
-			field = "inputs"
-		}
-		return nil, field, err
-	}
-	if step == nil {
-		return nil, "type", ErrNilStep
-	}
-	return step, "", nil
-}
-
-func (r *Registry) buildBranch(spec Spec) (Step, error) {
-	resolve, ok := r.resolver(spec.Resolver)
-	if !ok {
-		return nil, spec.err("resolver", fmt.Errorf("%w: unknown resolver %q", ErrInvalidSpec, spec.Resolver))
-	}
-	cases := make(map[string]Step, len(spec.Cases))
-	for _, name := range slices.Sorted(maps.Keys(spec.Cases)) {
-		step, err := r.build(spec.Cases[name])
-		if err != nil {
-			return nil, err
-		}
-		cases[name] = step
-	}
-	return Branch(spec.ID, resolve, cases), nil
-}
-
-func (r *Registry) buildLoop(spec Spec) (Step, error) {
-	if spec.Body == nil {
-		return nil, spec.err("body", fmt.Errorf("%w: required", ErrInvalidSpec))
-	}
-	cond, ok := r.condition(spec.Condition)
-	if !ok {
-		return nil, spec.err("condition", fmt.Errorf("%w: unknown condition %q", ErrInvalidSpec, spec.Condition))
-	}
-	body, err := r.build(*spec.Body)
-	if err != nil {
-		return nil, err
-	}
-	return Loop(spec.ID, body, cond, LoopConfig{MaxIterations: spec.MaxIterations}), nil
-}
-
-func (r *Registry) buildIteration(spec Spec) (Step, error) {
-	if spec.Body == nil {
-		return nil, spec.err("body", fmt.Errorf("%w: required", ErrInvalidSpec))
-	}
-	if spec.Input == nil || spec.BodyOutput == nil {
-		return nil, spec.err("iteration", fmt.Errorf("%w: input and bodyOutput are required", ErrInvalidSpec))
-	}
-	body, err := r.build(*spec.Body)
-	if err != nil {
-		return nil, err
-	}
-	return Iteration(IterationConfig{
-		ID:          spec.ID,
-		Input:       *spec.Input,
-		Body:        body,
-		BodyOutput:  *spec.BodyOutput,
-		Concurrency: spec.Concurrency,
-	}), nil
 }

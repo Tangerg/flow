@@ -25,7 +25,7 @@ func Index(id string) Ref { return Ref{NodeID: id, Path: indexPath} }
 type IterationConfig struct {
 	// ID names the node; each element's result is collected under Output(ID).
 	ID string
-	// Input references the []any to iterate over.
+	// Input references the JSON-compatible array to iterate over.
 	Input Ref
 	// Body runs once per element on a scoped Store (see [Item] and [Index]).
 	Body Step
@@ -38,7 +38,7 @@ type IterationConfig struct {
 
 // Iteration runs cfg.Body once per element of the array at cfg.Input,
 // concurrently, and collects each run's cfg.BodyOutput into a []any written at
-// Output(cfg.ID).
+// Output(cfg.ID). Typed slices are accepted through [Get]'s JSON conversion.
 //
 // For element i, Body runs on a scoped Store that adds the element under
 // [Item](cfg.ID) and its index via [Index](cfg.ID). The value at cfg.Input must
@@ -69,10 +69,10 @@ func Iteration(cfg IterationConfig) Step {
 // because it is not a failure; anything else travels as the mapper's error.
 type elementOutcome struct {
 	value       any
-	suspensions []*Suspension
+	suspensions suspensionList
 }
 
-// iteration is the [Step] produced by [Iteration].
+// iterationStep is the [Step] produced by [Iteration].
 type iterationStep struct {
 	id         string
 	input      Ref
@@ -82,47 +82,68 @@ type iterationStep struct {
 }
 
 func (it iterationStep) Run(ctx context.Context, s Store) (Store, error) {
-	switch {
-	case it.id == "":
-		return s, &StepError{ID: it.id, Op: OpValidate, Err: ErrInvalidStepID}
-	case it.body == nil:
-		return s, &StepError{ID: it.id, Op: OpValidate, Err: ErrNilStep}
-	case it.limit < 0:
-		return s, &StepError{
-			ID:  it.id,
-			Op:  OpValidate,
-			Err: fmt.Errorf("%w: negative concurrency", flow.ErrInvalidConfig),
-		}
+	if err := it.validate(); err != nil {
+		return s, err
 	}
-	if err := it.input.validate("iteration input"); err != nil {
-		return s, &StepError{
-			ID:  it.id,
-			Op:  OpValidate,
-			Err: fmt.Errorf("%w: %w", ErrInvalidSpec, err),
-		}
-	}
-	if err := it.bodyOutput.validate("iteration bodyOutput"); err != nil {
-		return s, &StepError{
-			ID:  it.id,
-			Op:  OpValidate,
-			Err: fmt.Errorf("%w: %w", ErrInvalidSpec, err),
-		}
-	}
-
 	items, err := Get[[]any](s, it.input)
 	if err != nil {
 		return s, fmt.Errorf("workflow: iteration %q input: %w", it.id, err)
 	}
+	outcomes, err := it.runElements(ctx, s, items)
+	if err != nil {
+		return s, fmt.Errorf("workflow: iteration %q: %w", it.id, err)
+	}
+	return it.collect(s, outcomes)
+}
 
-	indexes := make([]int, len(items))
-	for i := range items {
-		indexes[i] = i
+func (it iterationStep) validate() error {
+	switch {
+	case it.id == "":
+		return &StepError{ID: it.id, Op: OpValidate, Err: ErrInvalidStepID}
+	case it.body == nil:
+		return &StepError{ID: it.id, Op: OpValidate, Err: ErrNilStep}
+	case it.limit < 0:
+		return &StepError{
+			ID: it.id,
+			Op: OpValidate,
+			Err: fmt.Errorf(
+				"%w: concurrency must be non-negative, got %d",
+				flow.ErrInvalidConfig,
+				it.limit,
+			),
+		}
+	}
+	if err := it.input.validate(); err != nil {
+		return &StepError{
+			ID:  it.id,
+			Op:  OpValidate,
+			Err: fmt.Errorf("%w: iteration input: %w", ErrInvalidSpec, err),
+		}
+	}
+	if err := it.bodyOutput.validate(); err != nil {
+		return &StepError{
+			ID:  it.id,
+			Op:  OpValidate,
+			Err: fmt.Errorf("%w: iteration body output: %w", ErrInvalidSpec, err),
+		}
+	}
+	return nil
+}
+
+func (it iterationStep) runElements(
+	ctx context.Context,
+	s Store,
+	items []any,
+) ([]elementOutcome, error) {
+	elementIndexes := make([]int, len(items))
+	for index := range items {
+		elementIndexes[index] = index
 	}
 
-	apply := flow.NodeFunc[int, elementOutcome](func(ctx context.Context, i int) (elementOutcome, error) {
-		scoped := s.With(it.id, itemKey, items[i]).With(it.id, indexKey, i)
-		runner := (stepRunner{ctx: ctx}).indexed(it.id, i)
-		result, err := runner.run(it.body, scoped)
+	apply := flow.NodeFunc[int, elementOutcome](func(ctx context.Context, index int) (elementOutcome, error) {
+		scoped := s.With(it.id, itemKey, items[index]).With(it.id, indexKey, index)
+		body := (scopedStep{step: it.body}).indexed(it.id, index)
+		result, err := body.run(ctx, scoped)
 		if err != nil {
 			// As in Parallel, a suspension travels as a value so the other
 			// elements finish and get recorded rather than being cancelled.
@@ -132,27 +153,29 @@ func (it iterationStep) Run(ctx context.Context, s Store) (Store, error) {
 			return elementOutcome{}, err
 		}
 		value, err := Get[any](result, it.bodyOutput)
-		return elementOutcome{value: value}, err
+		if err != nil {
+			return elementOutcome{}, fmt.Errorf("read body output %s: %w", it.bodyOutput, err)
+		}
+		return elementOutcome{value: value}, nil
 	})
-	outcomes, err := flow.Map(apply, flow.MapConfig{Concurrency: it.limit}).Run(ctx, indexes)
-	if err != nil {
-		return s, fmt.Errorf("workflow: iteration %q: %w", it.id, err)
-	}
+	return flow.Map(apply, flow.MapConfig{Concurrency: it.limit}).Run(ctx, elementIndexes)
+}
 
+func (it iterationStep) collect(s Store, outcomes []elementOutcome) (Store, error) {
 	outputs := make([]any, len(outcomes))
-	var suspensions []*Suspension
-	for i, outcome := range outcomes {
+	var suspensions suspensionList
+	for index, outcome := range outcomes {
 		if len(outcome.suspensions) > 0 {
 			suspensions = append(suspensions, outcome.suspensions...)
 			continue
 		}
-		outputs[i] = outcome.value
+		outputs[index] = outcome.value
 	}
 	if len(suspensions) > 0 {
 		// The collection is incomplete, so it is not written: a partial slice
 		// with holes would read as a finished result. The Journal holds what
 		// each element did finish, so resuming repeats only the waiting ones.
-		return s, suspensionList(suspensions).err()
+		return s, suspensions.err()
 	}
 	return s.WithOutput(it.id, outputs), nil
 }

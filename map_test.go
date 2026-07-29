@@ -35,11 +35,18 @@ func TestMap_rejectsANilNodeEvenForEmptyInput(t *testing.T) {
 func TestMap_failFastCancelsSiblings(t *testing.T) {
 	boom := errors.New("boom")
 	var cancelledSeen atomic.Bool
+	siblingsReady := make(chan struct{}, 2)
 
 	node := flow.NodeFunc[int, int](func(ctx context.Context, x int) (int, error) {
 		if x == 0 {
+			// Do not fail until both siblings are running. Without this barrier,
+			// a valid fail-fast implementation may stop before starting either
+			// sibling, leaving the test dependent on goroutine scheduling.
+			<-siblingsReady
+			<-siblingsReady
 			return 0, boom
 		}
+		siblingsReady <- struct{}{}
 		select {
 		case <-ctx.Done():
 			cancelledSeen.Store(true)
@@ -58,18 +65,18 @@ func TestMap_failFastCancelsSiblings(t *testing.T) {
 	}
 }
 
-func TestMapN_boundsConcurrency(t *testing.T) {
+func TestMap_boundsConcurrency(t *testing.T) {
 	const limit = 3
 	var (
 		current atomic.Int32
-		max     atomic.Int32
+		peak    atomic.Int32
 	)
 
 	node := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
 		c := current.Add(1)
 		for {
-			old := max.Load()
-			if c <= old || max.CompareAndSwap(old, c) {
+			old := peak.Load()
+			if c <= old || peak.CompareAndSwap(old, c) {
 				break
 			}
 		}
@@ -83,7 +90,7 @@ func TestMapN_boundsConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := max.Load(); got > limit {
+	if got := peak.Load(); got > limit {
 		t.Fatalf("observed %d concurrent, want <= %d", got, limit)
 	}
 }
@@ -121,7 +128,7 @@ func TestMap_cancellation(t *testing.T) {
 
 func TestMap_parentCancellationIsNotIndexWrapped(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	node := flow.NodeFunc[int, int](func(ctx context.Context, in int) (int, error) {
+	node := flow.NodeFunc[int, int](func(ctx context.Context, _ int) (int, error) {
 		cancel()
 		return 0, ctx.Err()
 	})

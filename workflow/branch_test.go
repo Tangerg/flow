@@ -132,8 +132,12 @@ func TestBranch_noCase(t *testing.T) {
 	resolve := func(_ context.Context, _ workflow.Store) (string, error) { return "missing", nil }
 
 	_, err := workflow.Branch("route", resolve, map[string]workflow.Step{}).Run(context.Background(), workflow.NewStore())
-	if !errors.Is(err, flow.ErrNoCase) {
-		t.Fatalf("error = %v, want flow.ErrNoCase", err)
+	var stepErr *workflow.StepError
+	if !errors.Is(err, flow.ErrNoCase) ||
+		!errors.As(err, &stepErr) ||
+		stepErr.ID != "route" ||
+		stepErr.Op != workflow.OpRun {
+		t.Fatalf("error = %v, want route StepError wrapping flow.ErrNoCase", err)
 	}
 }
 

@@ -415,6 +415,14 @@ func TestStore_UnmarshalIsAtomic(t *testing.T) {
 	}
 }
 
+func TestStore_UnmarshalRejectsNilReceiver(t *testing.T) {
+	var store *workflow.Store
+	if err := store.UnmarshalJSON([]byte(`{}`)); err == nil ||
+		!strings.Contains(err.Error(), "nil store") {
+		t.Fatalf("UnmarshalJSON err = %v; want nil store", err)
+	}
+}
+
 func TestStore_UnmarshalEmptyReplacesStore(t *testing.T) {
 	store := workflow.NewStore().WithOutput("old", 1)
 	if err := json.Unmarshal([]byte(`{}`), &store); err != nil {

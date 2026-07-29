@@ -134,16 +134,19 @@ func TestSwitch_withoutFallbackFailsOnNoMatch(t *testing.T) {
 }
 
 func TestSwitch_rejectsInvalidSpecs(t *testing.T) {
-	specs := map[string]expr.SwitchSpec{
-		"no cases":   {},
-		"no branch":  {Cases: []expr.Case{{When: "true"}}},
-		"bad when":   {Cases: []expr.Case{{When: "counter", Then: "a"}}},
-		"empty when": {Cases: []expr.Case{{When: "", Then: "a"}}},
+	specs := map[string]struct {
+		spec expr.SwitchSpec
+		want error
+	}{
+		"no cases":   {want: workflow.ErrInvalidSpec},
+		"no branch":  {spec: expr.SwitchSpec{Cases: []expr.Case{{When: "true"}}}, want: workflow.ErrInvalidSpec},
+		"bad when":   {spec: expr.SwitchSpec{Cases: []expr.Case{{When: "counter", Then: "a"}}}, want: expr.ErrUnsupported},
+		"empty when": {spec: expr.SwitchSpec{Cases: []expr.Case{{When: "", Then: "a"}}}, want: expr.ErrSyntax},
 	}
-	for name, spec := range specs {
+	for name, test := range specs {
 		t.Run(name, func(t *testing.T) {
-			if _, err := expr.Switch(spec); err == nil {
-				t.Fatal("Switch unexpectedly succeeded")
+			if _, err := expr.Switch(test.spec); !errors.Is(err, test.want) {
+				t.Fatalf("Switch err = %v; want %v", err, test.want)
 			}
 		})
 	}
@@ -247,11 +250,11 @@ func TestBindings_rejectsNameUsedTwiceAndNilRegistry(t *testing.T) {
 		Resolvers: map[string]string{"pick": "a.output"},
 		Switches:  map[string]expr.SwitchSpec{"pick": {Cases: []expr.Case{{When: "true", Then: "x"}}}},
 	}
-	if err := clash.Register(workflow.NewRegistry()); !errors.Is(err, expr.ErrUnsupported) {
-		t.Fatalf("err = %v; want ErrUnsupported", err)
+	if err := clash.Register(workflow.NewRegistry()); !errors.Is(err, workflow.ErrInvalidSpec) {
+		t.Fatalf("err = %v; want ErrInvalidSpec", err)
 	}
-	if err := (expr.Bindings{}).Register(nil); !errors.Is(err, expr.ErrUnsupported) {
-		t.Fatalf("nil registry err = %v; want ErrUnsupported", err)
+	if err := (expr.Bindings{}).Register(nil); !errors.Is(err, workflow.ErrInvalidRegistration) {
+		t.Fatalf("nil registry err = %v; want ErrInvalidRegistration", err)
 	}
 }
 

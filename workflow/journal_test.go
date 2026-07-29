@@ -33,6 +33,25 @@ func TestJournal_recordsOnlyCompletedSteps(t *testing.T) {
 	}
 }
 
+func TestNilJournalJSONMethods(t *testing.T) {
+	var journal *workflow.Journal
+	data, err := journal.MarshalJSON()
+	if err != nil {
+		t.Fatalf("MarshalJSON: %v", err)
+	}
+	var restored workflow.Journal
+	if err := restored.UnmarshalJSON(data); err != nil {
+		t.Fatalf("UnmarshalJSON encoded nil Journal: %v", err)
+	}
+	if restored.Len() != 0 {
+		t.Fatalf("restored Len = %d; want 0", restored.Len())
+	}
+	if err := journal.UnmarshalJSON(data); err == nil ||
+		!strings.Contains(err.Error(), "nil journal") {
+		t.Fatalf("nil receiver UnmarshalJSON err = %v; want nil journal", err)
+	}
+}
+
 func equalJournalKeys(a, b []workflow.JournalKey) bool {
 	return slices.EqualFunc(a, b, func(a, b workflow.JournalKey) bool {
 		return a.ID == b.ID && slices.Equal(a.Path, b.Path)

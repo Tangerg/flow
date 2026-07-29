@@ -12,7 +12,7 @@ import (
 )
 
 func TestValidateGraph_compatible(t *testing.T) {
-	reg := workflow.NewRegistry().
+	registry := workflow.NewRegistry().
 		MustRegisterLeaf("toNumber", addN()).
 		MustRegisterSchema("toNumber", workflow.NodeSchema{Inputs: workflow.OnePort(workflow.TypeNumber), Output: workflow.TypeNumber})
 
@@ -21,7 +21,7 @@ func TestValidateGraph_compatible(t *testing.T) {
 		{ID: "b", Type: "toNumber", Input: &workflow.Ref{NodeID: "a", Path: "/output"}},
 	}}
 
-	if err := reg.ValidateGraph(g); err != nil {
+	if err := registry.ValidateGraph(g); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 }

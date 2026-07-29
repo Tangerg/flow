@@ -78,6 +78,27 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Internal code is organized by domain responsibility rather than historical
+  growth: references, leaves, sequences, strict JSON decoding, JSON Pointers,
+  Store persistence, Journal persistence, awaits, interrupts, suspensions, graph
+  planning, and graph validation each own a focused file and receiver-driven
+  model. Receiver names are consistent for every type.
+- Graph planning now separates the mutable `graphPlanner` from its stable
+  `graphPlan`, so traversal counters cannot leak into validation or compilation.
+  Leaf and Spec compilation similarly live on dedicated internal compiler
+  objects rather than accumulating unrelated private methods on `Registry`.
+- Error diagnostics now name the invalid setting, value, path, node index, or
+  journal record involved. An unmatched `Branch` result is a structured
+  `StepError` that still wraps `flow.ErrNoCase`. Unmarshaling into a nil Store
+  or Journal receiver returns an error instead of panicking; marshaling a nil
+  Journal remains equivalent to marshaling an empty Journal.
+- Strict typed JSON decoding now preserves numbers as `json.Number` when the
+  destination contains `any`, matching Store, Journal, schema-validation, and
+  interrupt decoding semantics without losing integers above 2^53.
+- `flow.Map`, `flow.Race`, workflow leaf execution, JSON Pointer traversal,
+  Parallel, and Iteration now use focused execution objects with smaller
+  lifecycle methods. This keeps cancellation, replay, suspension, and merge
+  state together while preserving their public behavior.
 - Stateful implementation logic now lives with the values that own its
   invariants: Graph planning, Spec validation, strict JSON reading, schema
   compilation, Store merging and traversal, suspension error classification,
@@ -202,6 +223,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Breaking
 
+- Invalid `expr.SwitchSpec` values and conflicting `expr.Bindings` names now
+  match `workflow.ErrInvalidSpec`; registering bindings into a nil Registry
+  matches `workflow.ErrInvalidRegistration`. `expr.ErrUnsupported` is reserved
+  for expression grammar rejected by `Parse`, as its documentation promises.
 - Graph input introspection now belongs to the graph value. Replace
   `workflow.GraphInputs(g)` with `g.Inputs()` and
   `workflow.MissingInputs(g, store)` with `g.MissingInputs(store)`.

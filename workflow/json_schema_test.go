@@ -11,12 +11,12 @@ import (
 )
 
 func TestJSONSchemasAreDraft2020AndReturnedByValue(t *testing.T) {
-	for name, get := range map[string]func() json.RawMessage{
+	for name, schema := range map[string]func() json.RawMessage{
 		"spec":  workflow.SpecJSONSchema,
 		"graph": workflow.GraphJSONSchema,
 	} {
 		t.Run(name, func(t *testing.T) {
-			first := get()
+			first := schema()
 			var header struct {
 				Schema string `json:"$schema"`
 				ID     string `json:"$id"`
@@ -32,7 +32,7 @@ func TestJSONSchemasAreDraft2020AndReturnedByValue(t *testing.T) {
 			}
 
 			first[0] = 'x'
-			if next := get(); len(next) == 0 || next[0] != '{' {
+			if next := schema(); len(next) == 0 || next[0] != '{' {
 				t.Fatal("caller mutation changed embedded schema")
 			}
 		})

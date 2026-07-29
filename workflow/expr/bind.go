@@ -74,23 +74,30 @@ type SwitchSpec struct {
 // low" — becomes a branch without a Go redeploy.
 func Switch(spec SwitchSpec) (workflow.Resolver, error) {
 	if len(spec.Cases) == 0 {
-		return nil, fmt.Errorf("%w: switch requires at least one case", ErrUnsupported)
+		return nil, fmt.Errorf(
+			"%w: switch requires at least one case",
+			workflow.ErrInvalidSpec,
+		)
 	}
 
-	type compiled struct {
+	type compiledCase struct {
 		when *Expr
 		then string
 	}
-	cases := make([]compiled, 0, len(spec.Cases))
-	for i, c := range spec.Cases {
-		if c.Then == "" {
-			return nil, fmt.Errorf("%w: case %d has no branch name", ErrUnsupported, i)
+	cases := make([]compiledCase, 0, len(spec.Cases))
+	for index, specCase := range spec.Cases {
+		if specCase.Then == "" {
+			return nil, fmt.Errorf(
+				"%w: switch case %d has an empty branch name",
+				workflow.ErrInvalidSpec,
+				index,
+			)
 		}
-		when, err := Parse(c.When)
+		when, err := Parse(specCase.When)
 		if err != nil {
 			return nil, err
 		}
-		cases = append(cases, compiled{when: when, then: c.Then})
+		cases = append(cases, compiledCase{when: when, then: specCase.Then})
 	}
 
 	fallback := spec.Fallback
@@ -122,7 +129,7 @@ func (spec SwitchSpec) Refs() ([]workflow.Ref, error) {
 		}
 		refs = append(refs, e.Refs()...)
 	}
-	return refSet(refs).normalized(), nil
+	return refList(refs).sortedUnique(), nil
 }
 
 // Bindings is a set of named expressions — the shape a config file carries so
@@ -147,48 +154,88 @@ type Bindings struct {
 //
 // Names are registered in sorted order, and a name already present in reg is
 // reported as a duplicate registration.
-func (b Bindings) Register(reg *workflow.Registry) error {
-	if reg == nil {
-		return fmt.Errorf("%w: nil registry", ErrUnsupported)
+func (b Bindings) Register(registry *workflow.Registry) error {
+	if registry == nil {
+		return fmt.Errorf("%w: registry is nil", workflow.ErrInvalidRegistration)
 	}
+	registrar := bindingRegistrar{
+		bindings:   b,
+		registry:   registry,
+		conditions: make(map[string]workflow.Condition, len(b.Conditions)),
+		resolvers:  make(map[string]workflow.Resolver, len(b.Resolvers)+len(b.Switches)),
+	}
+	return registrar.register()
+}
 
-	conditions := make(map[string]workflow.Condition, len(b.Conditions))
-	for _, name := range slices.Sorted(maps.Keys(b.Conditions)) {
-		condition, err := Condition(b.Conditions[name])
+// bindingRegistrar owns the compile-before-mutate transaction for one set of
+// bindings. It keeps partially compiled functions private until all expressions
+// have succeeded.
+type bindingRegistrar struct {
+	bindings   Bindings
+	registry   *workflow.Registry
+	conditions map[string]workflow.Condition
+	resolvers  map[string]workflow.Resolver
+}
+
+func (registrar *bindingRegistrar) register() error {
+	if err := registrar.compileConditions(); err != nil {
+		return err
+	}
+	if err := registrar.compileResolvers(); err != nil {
+		return err
+	}
+	if err := registrar.compileSwitches(); err != nil {
+		return err
+	}
+	for _, name := range slices.Sorted(maps.Keys(registrar.conditions)) {
+		if err := registrar.registry.RegisterCondition(name, registrar.conditions[name]); err != nil {
+			return err
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(registrar.resolvers)) {
+		if err := registrar.registry.RegisterResolver(name, registrar.resolvers[name]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (registrar *bindingRegistrar) compileConditions() error {
+	for _, name := range slices.Sorted(maps.Keys(registrar.bindings.Conditions)) {
+		condition, err := Condition(registrar.bindings.Conditions[name])
 		if err != nil {
 			return fmt.Errorf("condition %q: %w", name, err)
 		}
-		conditions[name] = condition
+		registrar.conditions[name] = condition
 	}
+	return nil
+}
 
-	resolvers := make(map[string]workflow.Resolver, len(b.Resolvers)+len(b.Switches))
-	for _, name := range slices.Sorted(maps.Keys(b.Resolvers)) {
-		resolver, err := Resolver(b.Resolvers[name])
+func (registrar *bindingRegistrar) compileResolvers() error {
+	for _, name := range slices.Sorted(maps.Keys(registrar.bindings.Resolvers)) {
+		resolver, err := Resolver(registrar.bindings.Resolvers[name])
 		if err != nil {
 			return fmt.Errorf("resolver %q: %w", name, err)
 		}
-		resolvers[name] = resolver
+		registrar.resolvers[name] = resolver
 	}
-	for _, name := range slices.Sorted(maps.Keys(b.Switches)) {
-		if _, duplicate := resolvers[name]; duplicate {
-			return fmt.Errorf("%w: %q is both a resolver and a switch", ErrUnsupported, name)
+	return nil
+}
+
+func (registrar *bindingRegistrar) compileSwitches() error {
+	for _, name := range slices.Sorted(maps.Keys(registrar.bindings.Switches)) {
+		if _, duplicate := registrar.resolvers[name]; duplicate {
+			return fmt.Errorf(
+				"%w: name %q is used by both a resolver and a switch",
+				workflow.ErrInvalidSpec,
+				name,
+			)
 		}
-		resolver, err := Switch(b.Switches[name])
+		resolver, err := Switch(registrar.bindings.Switches[name])
 		if err != nil {
 			return fmt.Errorf("switch %q: %w", name, err)
 		}
-		resolvers[name] = resolver
-	}
-
-	for _, name := range slices.Sorted(maps.Keys(conditions)) {
-		if err := reg.RegisterCondition(name, conditions[name]); err != nil {
-			return err
-		}
-	}
-	for _, name := range slices.Sorted(maps.Keys(resolvers)) {
-		if err := reg.RegisterResolver(name, resolvers[name]); err != nil {
-			return err
-		}
+		registrar.resolvers[name] = resolver
 	}
 	return nil
 }
@@ -224,5 +271,5 @@ func (b Bindings) Refs() ([]workflow.Ref, error) {
 		refs = append(refs, caseRefs...)
 	}
 
-	return refSet(refs).normalized(), nil
+	return refList(refs).sortedUnique(), nil
 }

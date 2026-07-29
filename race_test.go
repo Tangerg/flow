@@ -132,6 +132,10 @@ func TestRace_rejectsNilBeforeRunningAnyNode(t *testing.T) {
 	if !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("err = %v; want ErrNilNode", err)
 	}
+	var indexErr *flow.IndexError
+	if !errors.As(err, &indexErr) || indexErr.Index != 0 {
+		t.Fatalf("err = %v; want IndexError at index 0", err)
+	}
 	if ran.Load() {
 		t.Fatal("valid sibling ran before the invalid composition was rejected")
 	}

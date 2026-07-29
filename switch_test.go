@@ -43,6 +43,9 @@ func TestSwitch_noCase(t *testing.T) {
 	if !errors.Is(err, flow.ErrNoCase) {
 		t.Fatalf("error = %v, want ErrNoCase", err)
 	}
+	if got, want := err.Error(), "flow: no matching case: key missing"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
 }
 
 func TestSwitch_resolveError(t *testing.T) {
@@ -75,6 +78,9 @@ func TestSwitch_validatesCasesBeforeRunningResolver(t *testing.T) {
 	}).Run(context.Background(), 1)
 	if !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("err = %v; want ErrNilNode", err)
+	}
+	if got, want := err.Error(), "case invalid: flow: nil node"; got != want {
+		t.Fatalf("err = %q; want %q", got, want)
 	}
 	if ran {
 		t.Fatal("resolver ran before the invalid cases were rejected")

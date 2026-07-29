@@ -24,7 +24,12 @@ type (
 	signedNumber   int64
 	unsignedNumber uint64
 	floatNumber    float64
-	encodedNumber  json.Number
+	jsonNumber     json.Number
+	integerOperand struct {
+		value    uint64
+		unsigned bool
+		negative bool
+	}
 )
 
 // normalized maps every numeric type a Store may hold onto int64, uint64, or
@@ -36,7 +41,7 @@ type (
 // the same on a fresh Store and on a restored one.
 func (o operand) normalized() any {
 	if number, ok := o.raw.(json.Number); ok {
-		return encodedNumber(number).normalized()
+		return jsonNumber(number).normalized()
 	}
 	if o.raw == nil {
 		return nil
@@ -69,10 +74,10 @@ func (n unsignedNumber) normalized() any {
 	if n > math.MaxInt64 {
 		return uint64(n)
 	}
-	return int64(n)
+	return int64(n) // #nosec G115 -- guarded by the MaxInt64 check above.
 }
 
-// normalizeFloat erases a Go numeric distinction that JSON cannot preserve:
+// normalized erases a Go numeric distinction that JSON cannot preserve:
 // an integral float is encoded as an integer token. It derives that integer from
 // encoding/json's actual decimal representation rather than converting the
 // binary float directly. Near the integer limits those values can differ (for
@@ -96,10 +101,10 @@ func (n floatNumber) normalized() any {
 	return float64(n)
 }
 
-// normalizeNumber prefers an exact signed or unsigned integer and falls back to
+// normalized prefers an exact signed or unsigned integer and falls back to
 // float64. A literal that is none of those is left as-is so comparing it reports
 // a type error rather than silently reading as zero.
-func (n encodedNumber) normalized() any {
+func (n jsonNumber) normalized() any {
 	text := json.Number(n).String()
 	if i, err := strconv.ParseInt(text, 10, 64); err == nil {
 		return i
@@ -173,21 +178,34 @@ func (o operand) length() (any, error) {
 
 // apply evaluates a binary operator over two normalized values.
 func (op binaryOperator) apply(left, right operand) (any, error) {
-	switch op.Token {
-	case token.EQL:
-		return op.equal(left, right)
-	case token.NEQ:
-		eq, err := op.equal(left, right)
-		if err != nil {
-			return nil, err
-		}
-		return !eq.(bool), nil
+	if result, handled, err := op.applyEquality(left, right); handled {
+		return result, err
 	}
-
 	if order, unordered, ok := left.compareNumber(right); ok && op.ordering() {
 		return op.applyOrder(order, unordered), nil
 	}
+	return op.applyArithmetic(left, right)
+}
 
+func (op binaryOperator) applyEquality(
+	left, right operand,
+) (result any, handled bool, err error) {
+	switch op.Token {
+	case token.EQL:
+		result, err = op.equal(left, right)
+		return result, true, err
+	case token.NEQ:
+		equal, err := op.equal(left, right)
+		if err != nil {
+			return nil, true, err
+		}
+		return !equal.(bool), true, nil
+	default:
+		return nil, false, nil
+	}
+}
+
+func (op binaryOperator) applyArithmetic(left, right operand) (any, error) {
 	// String concatenation and string ordering are the only non-numeric
 	// arithmetic; everything else needs two numbers.
 	if ls, ok := left.raw.(string); ok {
@@ -200,16 +218,16 @@ func (op binaryOperator) apply(left, right operand) (any, error) {
 			return op.applyInt(li, ri)
 		}
 	}
-	if value, err, ok := op.applyUnsigned(left, right); ok {
+	if value, ok, err := op.applyUnsigned(left, right); ok {
 		return value, err
 	}
-	lf, lok := left.float()
-	rf, rok := right.float()
-	if !lok || !rok {
+	leftFloat, leftOK := left.asFloat()
+	rightFloat, rightOK := right.asFloat()
+	if !leftOK || !rightOK {
 		return nil, fmt.Errorf("%w: %s wants two numbers or two strings, got %s and %s",
 			ErrType, op.String(), left.typeName(), right.typeName())
 	}
-	return op.applyFloat(lf, rf)
+	return op.applyFloat(leftFloat, rightFloat)
 }
 
 // equal compares two values for identity of kind and value. Slices and maps are
@@ -223,19 +241,7 @@ func (op binaryOperator) equal(left, right operand) (any, error) {
 	if order, unordered, ok := left.compareNumber(right); ok {
 		return !unordered && order == 0, nil
 	}
-
-	switch l := left.raw.(type) {
-	case nil:
-		return right.raw == nil, nil
-	case bool:
-		r, ok := right.raw.(bool)
-		return ok && l == r, nil
-	case string:
-		r, ok := right.raw.(string)
-		return ok && l == r, nil
-	default:
-		return false, nil
-	}
+	return left.raw == right.raw, nil
 }
 
 func (o operand) scalar() bool {
@@ -274,53 +280,72 @@ func (op binaryOperator) applyOrder(order int, unordered bool) bool {
 	}
 }
 
-// compareNumbers compares normalized numeric values without converting an
+// compareNumber compares normalized numeric values without converting an
 // integer to float64. The second result reports an unordered NaN comparison;
 // the third reports whether both operands are numbers.
 func (o operand) compareNumber(other operand) (order int, unordered, ok bool) {
 	switch left := o.raw.(type) {
 	case int64:
-		switch right := other.raw.(type) {
-		case int64:
-			return cmp.Compare(left, right), false, true
-		case uint64:
-			return signedNumber(left).compareUnsigned(unsignedNumber(right)), false, true
-		case float64:
-			order, unordered = signedNumber(left).compareFloat(floatNumber(right))
-			return order, unordered, true
-		}
+		return signedNumber(left).compareOperand(other.raw)
 	case uint64:
-		switch right := other.raw.(type) {
-		case int64:
-			return -signedNumber(right).compareUnsigned(unsignedNumber(left)), false, true
-		case uint64:
-			return cmp.Compare(left, right), false, true
-		case float64:
-			order, unordered = unsignedNumber(left).compareFloat(floatNumber(right))
-			return order, unordered, true
-		}
+		return unsignedNumber(left).compareOperand(other.raw)
 	case float64:
-		switch right := other.raw.(type) {
-		case int64:
-			order, unordered = signedNumber(right).compareFloat(floatNumber(left))
-			return -order, unordered, true
-		case uint64:
-			order, unordered = unsignedNumber(right).compareFloat(floatNumber(left))
-			return -order, unordered, true
-		case float64:
-			if math.IsNaN(left) || math.IsNaN(right) {
-				return 0, true, true
-			}
-			return cmp.Compare(left, right), false, true
-		}
+		return floatNumber(left).compareOperand(other.raw)
 	}
 	return 0, false, false
+}
+
+func (n signedNumber) compareOperand(other any) (order int, unordered, ok bool) {
+	switch other := other.(type) {
+	case int64:
+		return cmp.Compare(int64(n), other), false, true
+	case uint64:
+		return n.compareUnsigned(unsignedNumber(other)), false, true
+	case float64:
+		order, unordered = n.compareFloat(floatNumber(other))
+		return order, unordered, true
+	default:
+		return 0, false, false
+	}
+}
+
+func (n unsignedNumber) compareOperand(other any) (order int, unordered, ok bool) {
+	switch other := other.(type) {
+	case int64:
+		return -signedNumber(other).compareUnsigned(n), false, true
+	case uint64:
+		return cmp.Compare(uint64(n), other), false, true
+	case float64:
+		order, unordered = n.compareFloat(floatNumber(other))
+		return order, unordered, true
+	default:
+		return 0, false, false
+	}
+}
+
+func (n floatNumber) compareOperand(other any) (order int, unordered, ok bool) {
+	switch other := other.(type) {
+	case int64:
+		order, unordered = signedNumber(other).compareFloat(n)
+		return -order, unordered, true
+	case uint64:
+		order, unordered = unsignedNumber(other).compareFloat(n)
+		return -order, unordered, true
+	case float64:
+		if math.IsNaN(float64(n)) || math.IsNaN(other) {
+			return 0, true, true
+		}
+		return cmp.Compare(float64(n), other), false, true
+	default:
+		return 0, false, false
+	}
 }
 
 func (n signedNumber) compareUnsigned(other unsignedNumber) int {
 	if n < 0 {
 		return -1
 	}
+	// #nosec G115 -- negative values return above.
 	return cmp.Compare(uint64(n), uint64(other))
 }
 
@@ -422,61 +447,68 @@ func (op binaryOperator) applyInt(left, right int64) (any, error) {
 // applyUnsigned handles arithmetic when at least one integer needs uint64's
 // range. Small unsigned values normalize to int64, so a mixed pair can be
 // converted without loss only when its signed operand is non-negative.
-func (op binaryOperator) applyUnsigned(left, right operand) (any, error, bool) {
-	var l, r uint64
-	switch value := left.raw.(type) {
-	case uint64:
-		l = value
-	case int64:
-		if value < 0 {
-			if _, ok := right.raw.(uint64); ok {
-				return nil, fmt.Errorf("%w: %s cannot mix a negative integer with uint64", ErrType, op), true
-			}
-			return nil, nil, false
-		}
-		l = uint64(value)
-	default:
-		return nil, nil, false
+func (op binaryOperator) applyUnsigned(left, right operand) (any, bool, error) {
+	leftInteger, leftOK := left.integer()
+	rightInteger, rightOK := right.integer()
+	if !leftOK || !rightOK {
+		return nil, false, nil
 	}
-	switch value := right.raw.(type) {
-	case uint64:
-		r = value
-	case int64:
-		if value < 0 {
-			if _, ok := left.raw.(uint64); ok {
-				return nil, fmt.Errorf("%w: %s cannot mix uint64 with a negative integer", ErrType, op), true
-			}
-			return nil, nil, false
-		}
-		r = uint64(value)
-	default:
-		return nil, nil, false
+	if !leftInteger.unsigned && !rightInteger.unsigned {
+		return nil, false, nil
 	}
-	if _, leftUnsigned := left.raw.(uint64); !leftUnsigned {
-		if _, rightUnsigned := right.raw.(uint64); !rightUnsigned {
-			return nil, nil, false
-		}
+	if leftInteger.negative {
+		return nil, true, fmt.Errorf(
+			"%w: %s cannot mix a negative integer with uint64",
+			ErrType,
+			op,
+		)
+	}
+	if rightInteger.negative {
+		return nil, true, fmt.Errorf(
+			"%w: %s cannot mix uint64 with a negative integer",
+			ErrType,
+			op,
+		)
 	}
 
+	value, err := op.applyUint(leftInteger.value, rightInteger.value)
+	return value, true, err
+}
+
+func (o operand) integer() (integerOperand, bool) {
+	switch value := o.raw.(type) {
+	case int64:
+		if value < 0 {
+			return integerOperand{negative: true}, true
+		}
+		return integerOperand{value: uint64(value)}, true
+	case uint64:
+		return integerOperand{value: value, unsigned: true}, true
+	default:
+		return integerOperand{}, false
+	}
+}
+
+func (op binaryOperator) applyUint(left, right uint64) (any, error) {
 	switch op.Token {
 	case token.ADD:
-		return l + r, nil, true
+		return left + right, nil
 	case token.SUB:
-		return l - r, nil, true
+		return left - right, nil
 	case token.MUL:
-		return l * r, nil, true
+		return left * right, nil
 	case token.QUO:
-		if r == 0 {
-			return nil, ErrDivideByZero, true
+		if right == 0 {
+			return nil, ErrDivideByZero
 		}
-		return l / r, nil, true
+		return left / right, nil
 	case token.REM:
-		if r == 0 {
-			return nil, ErrDivideByZero, true
+		if right == 0 {
+			return nil, ErrDivideByZero
 		}
-		return l % r, nil, true
+		return left % right, nil
 	default:
-		return nil, fmt.Errorf("%w: %s does not accept numbers", ErrType, op), true
+		return nil, fmt.Errorf("%w: %s does not accept numbers", ErrType, op)
 	}
 }
 
@@ -500,7 +532,7 @@ func (op binaryOperator) applyFloat(left, right float64) (any, error) {
 	}
 }
 
-func (o operand) float() (float64, bool) {
+func (o operand) asFloat() (float64, bool) {
 	switch n := o.raw.(type) {
 	case int64:
 		return float64(n), true

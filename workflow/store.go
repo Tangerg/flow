@@ -2,10 +2,7 @@ package workflow
 
 import (
 	"cmp"
-	"encoding/json"
-	"fmt"
 	"slices"
-	"strconv"
 	"sync/atomic"
 )
 
@@ -23,7 +20,7 @@ import (
 // so every possible object key is representable without ambiguity.
 //
 // A Store holds arbitrary Go values, but a Store that has been serialized holds
-// JSON-domain values: [json.Number], string, bool, nil, []any, and
+// JSON-domain values: json.Number, string, bool, nil, []any, and
 // map[string]any. Reading with [Get] hides that difference — it converts to the
 // type asked for — so a typed step works the same on a fresh Store and on one
 // restored from JSON. Reading with Lookup does not: it returns whatever is
@@ -67,11 +64,6 @@ type storeWrite struct {
 	key  storeKey
 	cell cell
 }
-
-var (
-	_ json.Marshaler   = Store{}
-	_ json.Unmarshaler = (*Store)(nil)
-)
 
 // NewStore returns an empty Store.
 func NewStore() Store {
@@ -248,91 +240,64 @@ func (s Store) deltaSince(base Store) ([]*storeDelta, bool) {
 
 // merge returns a Store containing base plus each supplied Store's writes. On a
 // same-cell conflict a later Store wins.
-func (base Store) merge(others ...Store) Store {
-	out := base
-	var baseData map[storeKey]cell
+func (s Store) merge(others ...Store) Store {
+	merger := storeMerger{base: s, result: s}
 	for _, other := range others {
-		if other.snapshot == base.snapshot && other.delta != nil && other.delta.parent == base.delta {
-			if out.snapshot == base.snapshot && out.delta == base.delta {
-				out = other
-			} else {
-				out = out.withDelta(other.delta.key, other.delta.cell)
-			}
-			continue
-		}
-		if writes, ok := other.deltaSince(base); ok {
-			for _, write := range writes {
-				out = out.withDelta(write.key, write.cell)
-			}
-			continue
-		}
-
-		// A branch may return a Store unrelated to its input or compact a long
-		// overlay. Fall back to revision comparison in that uncommon case.
-		if baseData == nil {
-			baseData = base.materialize()
-		}
-		for _, write := range other.changedWrites(baseData) {
-			out = out.withDelta(write.key, write.cell)
-		}
+		merger.add(other)
 	}
-	if out.depth > storeOverlayLimit*2 {
-		return out.compact()
+	if merger.result.depth > storeOverlayLimit*2 {
+		return merger.result.compact()
 	}
-	return out
+	return merger.result
 }
 
-// MarshalJSON serializes the Store as nodeID -> key -> value. It reports the
-// cell containing a value that encoding/json cannot encode.
-func (s Store) MarshalJSON() ([]byte, error) {
-	raw := make(map[string]map[string]any)
-	put := func(identity storeKey, c cell) {
-		inner := raw[identity.nodeID]
-		if inner == nil {
-			inner = make(map[string]any)
-			raw[identity.nodeID] = inner
-		}
-		inner[identity.key] = c.value
+// storeMerger owns the lazy fallback state needed while combining branches.
+// The common descendant-overlay path never materializes the base Store.
+type storeMerger struct {
+	base     Store
+	result   Store
+	baseData map[storeKey]cell
+}
+
+func (merger *storeMerger) add(other Store) {
+	if merger.addDirectChild(other) {
+		return
 	}
-	if s.snapshot != nil {
-		for identity, c := range s.snapshot.data {
-			put(identity, c)
-		}
-	}
-	for _, delta := range s.deltasOldestFirst() {
-		put(delta.key, delta.cell)
+	if writes, ok := other.deltaSince(merger.base); ok {
+		merger.addWrites(writes)
+		return
 	}
 
-	encoded, err := json.Marshal(raw)
-	if err == nil {
-		return encoded, nil
+	// A branch may return a Store unrelated to its input or compact a long
+	// overlay. Fall back to revision comparison in that uncommon case.
+	if merger.baseData == nil {
+		merger.baseData = merger.base.materialize()
 	}
+	for _, write := range other.changedWrites(merger.baseData) {
+		merger.result = merger.result.withDelta(write.key, write.cell)
+	}
+}
 
-	// Keep the successful path to one encoding pass. On failure, isolate the
-	// offending cell so callers retain the more useful Store path in the error.
-	nodeIDs := make([]string, 0, len(raw))
-	for nodeID := range raw {
-		nodeIDs = append(nodeIDs, nodeID)
+func (merger *storeMerger) addDirectChild(other Store) bool {
+	delta := other.delta
+	if other.snapshot != merger.base.snapshot ||
+		delta == nil ||
+		delta.parent != merger.base.delta {
+		return false
 	}
-	slices.Sort(nodeIDs)
-	for _, nodeID := range nodeIDs {
-		inner := raw[nodeID]
-		keys := make([]string, 0, len(inner))
-		for key := range inner {
-			keys = append(keys, key)
-		}
-		slices.Sort(keys)
-		for _, key := range keys {
-			value := inner[key]
-			if _, cellErr := json.Marshal(value); cellErr != nil {
-				return nil, fmt.Errorf(
-					"workflow: marshal store node %q key %q: %w",
-					nodeID, key, cellErr,
-				)
-			}
-		}
+	if merger.result.snapshot == merger.base.snapshot &&
+		merger.result.delta == merger.base.delta {
+		merger.result = other
+	} else {
+		merger.result = merger.result.withDelta(delta.key, delta.cell)
 	}
-	return nil, fmt.Errorf("workflow: marshal store: %w", err)
+	return true
+}
+
+func (merger *storeMerger) addWrites(writes []*storeDelta) {
+	for _, write := range writes {
+		merger.result = merger.result.withDelta(write.key, write.cell)
+	}
 }
 
 func (s Store) lookupCell(nodeID, key string) (cell, bool) {
@@ -377,163 +342,4 @@ func (s Store) deltasOldestFirst() []*storeDelta {
 		writes[left], writes[right] = writes[right], writes[left]
 	}
 	return writes
-}
-
-// UnmarshalJSON atomically replaces the Store from nodeID -> key -> value JSON.
-// The top level and each node must be objects; null and duplicate object members
-// are rejected. On failure the receiver is unchanged.
-//
-// Numbers decode as [json.Number] rather than float64, so a decoded Store loses
-// no precision and an int64 beyond float64's exact range survives the round
-// trip. Read decoded values with [Get], which converts them to the type a caller
-// asks for; a bare [Store.Lookup] returns the JSON-domain value.
-func (s *Store) UnmarshalJSON(data []byte) error {
-	document, err := jsonDocument(data).value()
-	if err != nil {
-		return fmt.Errorf("workflow: unmarshal store: %w", err)
-	}
-	raw, ok := document.(map[string]any)
-	if !ok {
-		return fmt.Errorf("workflow: unmarshal store: expected object, got %s", (jsonValue{raw: document}).kind())
-	}
-
-	nodeIDs := make([]string, 0, len(raw))
-	size := 0
-	for nodeID, value := range raw {
-		inner, ok := value.(map[string]any)
-		if !ok {
-			return fmt.Errorf(
-				"workflow: unmarshal store node %q: expected object, got %s",
-				nodeID, (jsonValue{raw: value}).kind(),
-			)
-		}
-		nodeIDs = append(nodeIDs, nodeID)
-		size += len(inner)
-	}
-	slices.Sort(nodeIDs)
-	nextData := make(map[storeKey]cell, size)
-	for _, nodeID := range nodeIDs {
-		inner := raw[nodeID].(map[string]any)
-		keys := make([]string, 0, len(inner))
-		for key := range inner {
-			keys = append(keys, key)
-		}
-		slices.Sort(keys)
-		for _, key := range keys {
-			nextData[storeKey{nodeID: nodeID, key: key}] = cell{
-				value:    inner[key],
-				revision: revisionCounter.Add(1),
-			}
-		}
-	}
-	if len(nextData) == 0 {
-		*s = Store{}
-	} else {
-		*s = Store{snapshot: &storeSnapshot{data: nextData}}
-	}
-	return nil
-}
-
-type jsonValue struct {
-	raw any
-}
-
-func (v jsonValue) kind() string {
-	switch v.raw.(type) {
-	case nil:
-		return "null"
-	case bool:
-		return "boolean"
-	case json.Number:
-		return "number"
-	case string:
-		return "string"
-	case []any:
-		return "array"
-	case map[string]any:
-		return "object"
-	default:
-		return fmt.Sprintf("%T", v.raw)
-	}
-}
-
-// lookup descends through the receiver without first materializing its segments.
-// JSON-domain maps and arrays remain allocation-free. A typed Go value is
-// converted through JSON at most once, after which the rest of the walk stays
-// in the JSON domain.
-func (pointer *pointerScanner) lookup(value any) (any, bool) {
-	jsonDomain := false
-	for {
-		key, present, valid := pointer.next()
-		if !valid {
-			return nil, false
-		}
-		if !present {
-			return value, true
-		}
-
-		switch current := value.(type) {
-		case map[string]any:
-			next, ok := current[key]
-			if !ok {
-				return nil, false
-			}
-			value = next
-		case []any:
-			index, ok := pointerToken(key).index(len(current))
-			if !ok {
-				return nil, false
-			}
-			value = current[index]
-		default:
-			if jsonDomain {
-				return nil, false
-			}
-			encoded, err := json.Marshal(value)
-			if err != nil {
-				return nil, false
-			}
-			value, err = jsonDocument(encoded).value()
-			if err != nil {
-				return nil, false
-			}
-			jsonDomain = true
-
-			// Reprocess this segment against the converted value.
-			switch current := value.(type) {
-			case map[string]any:
-				next, ok := current[key]
-				if !ok {
-					return nil, false
-				}
-				value = next
-			case []any:
-				index, ok := pointerToken(key).index(len(current))
-				if !ok {
-					return nil, false
-				}
-				value = current[index]
-			default:
-				return nil, false
-			}
-		}
-	}
-}
-
-type pointerToken string
-
-// index implements RFC 6901's array-index grammar. strconv.Atoi alone
-// would incorrectly accept tokens such as "+1" and "01", which are object keys
-// but not canonical array indexes.
-func (token pointerToken) index(length int) (int, bool) {
-	if token == "" || (len(token) > 1 && token[0] == '0') {
-		return 0, false
-	}
-	for i := range len(token) {
-		if token[i] < '0' || token[i] > '9' {
-			return 0, false
-		}
-	}
-	index, err := strconv.Atoi(string(token))
-	return index, err == nil && index < length
 }

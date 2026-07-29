@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Tangerg/flow"
@@ -178,8 +179,24 @@ func TestCompileGraph_rejectsSelfDependency(t *testing.T) {
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
 		{ID: "a", Type: "addN", DependsOn: []string{"a"}},
 	}}
-	if _, err := reg.CompileGraph(g); err == nil {
-		t.Fatal("expected self-dependency error")
+	_, err := reg.CompileGraph(g)
+	var graphErr *workflow.GraphError
+	if !errors.As(err, &graphErr) || graphErr.Field != "dependsOn" {
+		t.Fatalf("err = %v; want dependsOn GraphError", err)
+	}
+}
+
+func TestCompileGraph_reportsSelfInputAsInputError(t *testing.T) {
+	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	g := workflow.Graph{Nodes: []workflow.NodeSpec{{
+		ID:    "a",
+		Type:  "addN",
+		Input: &workflow.Ref{NodeID: "a", Path: "/output"},
+	}}}
+	_, err := reg.CompileGraph(g)
+	var graphErr *workflow.GraphError
+	if !errors.As(err, &graphErr) || graphErr.Field != "inputs" {
+		t.Fatalf("err = %v; want inputs GraphError", err)
 	}
 }
 
@@ -292,6 +309,21 @@ func TestCompileGraph_rejectsMalformedPortRef(t *testing.T) {
 				t.Fatalf("err = %v; want ErrInvalidGraph", err)
 			}
 		})
+	}
+}
+
+func TestValidateGraph_identifiesEmptyNodeIDByIndex(t *testing.T) {
+	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	err := reg.ValidateGraph(workflow.Graph{Nodes: []workflow.NodeSpec{
+		{ID: "valid", Type: "addN"},
+		{Type: "addN"},
+	}})
+	var graphErr *workflow.GraphError
+	if !errors.Is(err, workflow.ErrInvalidGraph) ||
+		!errors.As(err, &graphErr) ||
+		graphErr.Field != "id" ||
+		!strings.Contains(err.Error(), "index 1") {
+		t.Fatalf("err = %v; want empty node ID at index 1", err)
 	}
 }
 

@@ -36,18 +36,15 @@ func Parallel(branches []Step, cfg ParallelConfig) Step {
 	return parallelStep{branches: stepList(slices.Clone(branches)), limit: cfg.Concurrency}
 }
 
-// parallel is the [Step] produced by [Parallel].
+// parallelStep is the [Step] produced by [Parallel].
 type parallelStep struct {
 	branches stepList
 	limit    int
 }
 
 func (p parallelStep) Run(ctx context.Context, s Store) (Store, error) {
-	if err := p.branches.validate(); err != nil {
+	if err := p.validate(); err != nil {
 		return s, err
-	}
-	if p.limit < 0 {
-		return s, fmt.Errorf("%w: negative concurrency", flow.ErrInvalidConfig)
 	}
 	if err := ctx.Err(); err != nil {
 		return s, err
@@ -56,22 +53,44 @@ func (p parallelStep) Run(ctx context.Context, s Store) (Store, error) {
 	case 0:
 		return s, nil
 	case 1:
-		result, err := (stepRunner{ctx: ctx}).run(p.branches[0], s)
-		if err != nil {
-			if contextErr := ctx.Err(); contextErr != nil {
-				return s, contextErr
-			}
-			if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
-				return s.merge(result), suspensions.err()
-			}
-			return s, &flow.IndexError{Index: 0, Err: err}
-		}
-		if err := ctx.Err(); err != nil {
-			return s, err
-		}
-		return s.merge(result), nil
+		return p.runOne(ctx, s)
+	default:
+		return p.runMany(ctx, s)
 	}
+}
 
+func (p parallelStep) validate() error {
+	if err := p.branches.validate(); err != nil {
+		return err
+	}
+	if p.limit < 0 {
+		return fmt.Errorf(
+			"%w: concurrency must be non-negative, got %d",
+			flow.ErrInvalidConfig,
+			p.limit,
+		)
+	}
+	return nil
+}
+
+func (p parallelStep) runOne(ctx context.Context, s Store) (Store, error) {
+	result, err := p.branches[0].Run(ctx, s)
+	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return s, contextErr
+		}
+		if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
+			return s.merge(result), suspensions.err()
+		}
+		return s, &flow.IndexError{Index: 0, Err: err}
+	}
+	if err := ctx.Err(); err != nil {
+		return s, err
+	}
+	return s.merge(result), nil
+}
+
+func (p parallelStep) runMany(ctx context.Context, s Store) (Store, error) {
 	branchInput := s
 	if branchInput.depth >= storeOverlayLimit {
 		branchInput = branchInput.compact()
@@ -86,10 +105,8 @@ func (p parallelStep) Run(ctx context.Context, s Store) (Store, error) {
 		return s, err
 	}
 
-	var (
-		completed   []Store
-		suspensions suspensionList
-	)
+	completed := make([]Store, 0, len(outcomes))
+	var suspensions suspensionList
 	for _, outcome := range outcomes {
 		completed = append(completed, outcome.store)
 		suspensions = append(suspensions, outcome.suspensions...)
@@ -111,7 +128,7 @@ type branchRunner struct {
 }
 
 func (r branchRunner) Run(ctx context.Context, branch Step) (branchOutcome, error) {
-	result, err := (stepRunner{ctx: ctx}).run(branch, r.input)
+	result, err := branch.Run(ctx, r.input)
 	if err == nil {
 		return branchOutcome{store: result}, nil
 	}

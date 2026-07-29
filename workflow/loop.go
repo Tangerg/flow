@@ -35,7 +35,7 @@ func Loop(id string, body Step, done Condition, cfg LoopConfig) Step {
 	return loopStep{id: id, body: body, done: done, config: cfg}
 }
 
-// loop is the [Step] produced by [Loop].
+// loopStep is the [Step] produced by [Loop].
 type loopStep struct {
 	id     string
 	body   Step
@@ -53,19 +53,23 @@ func (l loopStep) Run(ctx context.Context, s Store) (Store, error) {
 		return s, &StepError{ID: l.id, Op: OpValidate, Err: flow.ErrNilFunc}
 	case l.config.MaxIterations < 0:
 		return s, &StepError{
-			ID:  l.id,
-			Op:  OpValidate,
-			Err: fmt.Errorf("%w: negative max iterations", flow.ErrInvalidConfig),
+			ID: l.id,
+			Op: OpValidate,
+			Err: fmt.Errorf(
+				"%w: max iterations must be non-negative, got %d",
+				flow.ErrInvalidConfig,
+				l.config.MaxIterations,
+			),
 		}
 	}
 
 	bodyNode := func(ctx context.Context, iter int, s Store) (Store, bool, error) {
-		runner := (stepRunner{ctx: ctx}).indexed("", iter)
-		next, err := runner.run(l.body, s)
+		body := (scopedStep{step: l.body}).indexed("", iter)
+		next, err := body.run(ctx, s)
 		if err != nil {
 			return s, false, err
 		}
-		stop, err := l.stop(runner.ctx, iter, next)
+		stop, err := l.stop(body.childContext(ctx), iter, next)
 		return next, stop, err
 	}
 	return flow.Loop(bodyNode, flow.LoopConfig{
@@ -83,9 +87,13 @@ func (l loopStep) stop(ctx context.Context, iter int, s Store) (bool, error) {
 				return stop, nil
 			}
 			return false, &StepError{
-				ID:  l.id,
-				Op:  OpRun,
-				Err: fmt.Errorf("%w: journaled loop decision is %T, want bool", ErrTypeMismatch, recorded),
+				ID: l.id,
+				Op: OpRun,
+				Err: fmt.Errorf(
+					"%w: journaled loop decision has type %T; want bool",
+					ErrTypeMismatch,
+					recorded,
+				),
 			}
 		}
 	}

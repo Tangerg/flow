@@ -106,7 +106,7 @@ func TestCombine(t *testing.T) {
 	length := flow.NodeFunc[string, int](func(_ context.Context, s string) (int, error) { return len(s), nil })
 	upper := flow.NodeFunc[string, string](func(_ context.Context, s string) (string, error) { return s + "!", nil })
 
-	node := flowx.Combine(length, upper, func(_ context.Context, n int, s string) (string, error) {
+	node := flowx.Combine(length, upper, func(_ context.Context, _ int, s string) (string, error) {
 		return s, nil
 	})
 	got, err := node.Run(context.Background(), "hi")

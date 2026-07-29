@@ -24,9 +24,9 @@ func addFactory() workflow.LeafFactory {
 }
 
 // wired returns the LeafSpec of a node whose default port reads input.output.
-func wired(id string, config json.RawMessage) workflow.LeafSpec {
+func wired(config json.RawMessage) workflow.LeafSpec {
 	return workflow.LeafSpec{
-		ID:     id,
+		ID:     "add",
 		Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("input")},
 		Config: config,
 	}
@@ -45,7 +45,7 @@ func TestFactory(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			step, err := addFactory()(wired("add", tt.config))
+			step, err := addFactory()(wired(tt.config))
 			if err != nil {
 				t.Fatalf("Factory: %v", err)
 			}
@@ -61,15 +61,37 @@ func TestFactory(t *testing.T) {
 	}
 }
 
+func TestFactory_preservesNumbersInAnyConfig(t *testing.T) {
+	var captured any
+	factory := workflow.Factory(func(config any) (flow.Node[int, int], error) {
+		captured = config
+		return flow.NodeFunc[int, int](func(_ context.Context, input int) (int, error) {
+			return input, nil
+		}), nil
+	})
+
+	if _, err := factory(wired(json.RawMessage(`{"n":9007199254740993}`))); err != nil {
+		t.Fatalf("Factory: %v", err)
+	}
+	object, ok := captured.(map[string]any)
+	if !ok {
+		t.Fatalf("config type = %T; want map[string]any", captured)
+	}
+	number, ok := object["n"].(json.Number)
+	if !ok || number.String() != "9007199254740993" {
+		t.Fatalf("config number = %#v (%T); want exact json.Number", object["n"], object["n"])
+	}
+}
+
 func TestFactory_rejectsUnknownConfigField(t *testing.T) {
-	_, err := addFactory()(wired("add", json.RawMessage(`{"unknown": true}`)))
+	_, err := addFactory()(wired(json.RawMessage(`{"unknown": true}`)))
 	if !errors.Is(err, workflow.ErrInvalidSpec) {
 		t.Fatalf("err = %v; want ErrInvalidSpec", err)
 	}
 }
 
 func TestFactory_rejectsDuplicateConfigMembers(t *testing.T) {
-	_, err := addFactory()(wired("add", json.RawMessage(`{"n":1,"n":2}`)))
+	_, err := addFactory()(wired(json.RawMessage(`{"n":1,"n":2}`)))
 	if !errors.Is(err, workflow.ErrInvalidSpec) {
 		t.Fatalf("err = %v; want ErrInvalidSpec", err)
 	}
@@ -85,7 +107,7 @@ func TestFactory_rejectsUnwiredDefaultPort(t *testing.T) {
 }
 
 func TestFactory_rejectsPortsItCannotRead(t *testing.T) {
-	spec := wired("add", nil)
+	spec := wired(nil)
 	spec.Inputs["ignored"] = workflow.Output("other")
 	if _, err := addFactory()(spec); !errors.Is(err, workflow.ErrUnknownPort) {
 		t.Fatalf("err = %v; want ErrUnknownPort", err)
@@ -94,12 +116,12 @@ func TestFactory_rejectsPortsItCannotRead(t *testing.T) {
 
 func TestFactory_rejectsNilFunctionsAndNodes(t *testing.T) {
 	var build func(addConfig) (flow.Node[int, int], error)
-	if _, err := workflow.Factory(build)(wired("add", nil)); !errors.Is(err, flow.ErrNilFunc) {
+	if _, err := workflow.Factory(build)(wired(nil)); !errors.Is(err, flow.ErrNilFunc) {
 		t.Fatalf("nil build err = %v; want ErrNilFunc", err)
 	}
 
 	nilNode := workflow.Factory(func(addConfig) (flow.Node[int, int], error) { return nil, nil })
-	if _, err := nilNode(wired("add", nil)); !errors.Is(err, flow.ErrNilNode) {
+	if _, err := nilNode(wired(nil)); !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("nil node err = %v; want ErrNilNode", err)
 	}
 }

@@ -16,7 +16,7 @@ func FuzzStoreLookupPath(f *testing.F) {
 		"items": []any{map[string]any{"name": "first"}},
 	}
 	store := workflow.NewStore().WithOutput("node", value)
-	f.Fuzz(func(t *testing.T, path string) {
+	f.Fuzz(func(_ *testing.T, path string) {
 		_, _ = store.Lookup(workflow.At("node", path))
 	})
 }
@@ -26,7 +26,7 @@ func FuzzCompileGraphJSON(f *testing.F) {
 	f.Add([]byte(`{"nodes":[{"id":"a","type":"addN"}]}`))
 	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
 
-	f.Fuzz(func(t *testing.T, data []byte) {
+	f.Fuzz(func(_ *testing.T, data []byte) {
 		_, _ = reg.CompileGraphJSON(data)
 	})
 }
@@ -36,7 +36,7 @@ func FuzzCompileSpecJSON(f *testing.F) {
 	f.Add([]byte(`{"kind":"leaf","id":"a","type":"addN"}`))
 	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
 
-	f.Fuzz(func(t *testing.T, data []byte) {
+	f.Fuzz(func(_ *testing.T, data []byte) {
 		_, _ = reg.CompileSpecJSON(data)
 	})
 }

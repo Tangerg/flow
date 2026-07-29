@@ -34,23 +34,24 @@ func Parse(src string) (*Expr, error) {
 		return nil, &Error{Source: src, Err: fmt.Errorf("%w: %w", ErrSyntax, err)}
 	}
 
-	c := compiler{source: src}
-	eval, err := c.compile(node)
+	compiler := compiler{source: src}
+	eval, err := compiler.compile(node)
 	if err != nil {
 		return nil, err
 	}
-	refs := refSet(c.refs).normalized()
+	refs := refList(compiler.refs).sortedUnique()
 	return &Expr{source: src, eval: eval, refs: refs}, nil
 }
 
-type refSet []workflow.Ref
+type refList []workflow.Ref
 
-func (refs refSet) normalized() []workflow.Ref {
-	slices.SortFunc(refs, func(a, b workflow.Ref) int {
-		if order := strings.Compare(a.NodeID, b.NodeID); order != 0 {
+func (refs refList) sortedUnique() []workflow.Ref {
+	refs = slices.Clone(refs)
+	slices.SortFunc(refs, func(left, right workflow.Ref) int {
+		if order := strings.Compare(left.NodeID, right.NodeID); order != 0 {
 			return order
 		}
-		return strings.Compare(a.Path, b.Path)
+		return strings.Compare(left.Path, right.Path)
 	})
 	return slices.Compact(refs)
 }
@@ -235,37 +236,53 @@ func (c *compiler) reference(node ast.Expr) (workflow.Ref, error) {
 // flatten walks a chain such as a.output.items[0] into its root node ID and the
 // path segments below it. node["any ID"] is the quoted root form for IDs that
 // are not Go identifiers.
-func (c *compiler) flatten(node ast.Expr) (root string, segments []string, err error) {
+func (c *compiler) flatten(node ast.Expr) (string, []string, error) {
 	switch n := node.(type) {
 	case *ast.Ident:
-		switch n.Name {
-		case "true", "false", "nil":
-			return "", nil, c.errorAt(n, fmt.Errorf("%w: cannot select into %s", ErrUnsupported, n.Name))
-		}
-		return n.Name, nil, nil
+		return c.flattenIdent(n)
 	case *ast.SelectorExpr:
-		root, segments, err = c.flatten(n.X)
-		if err != nil {
-			return "", nil, err
-		}
-		return root, append(segments, n.Sel.Name), nil
+		return c.flattenSelector(n)
 	case *ast.IndexExpr:
-		if namespace, ok := n.X.(*ast.Ident); ok && namespace.Name == "node" {
-			root, err := c.nodeID(n.Index)
-			return root, nil, err
-		}
-		root, segments, err = c.flatten(n.X)
-		if err != nil {
-			return "", nil, err
-		}
-		segment, err := c.indexSegment(n.Index)
-		if err != nil {
-			return "", nil, err
-		}
-		return root, append(segments, segment), nil
+		return c.flattenIndex(n)
 	default:
 		return "", nil, c.unsupported(node, "reference may only use names and constant indexes")
 	}
+}
+
+func (c *compiler) flattenIdent(node *ast.Ident) (string, []string, error) {
+	switch node.Name {
+	case "true", "false", "nil":
+		return "", nil, c.errorAt(
+			node,
+			fmt.Errorf("%w: cannot select into %s", ErrUnsupported, node.Name),
+		)
+	default:
+		return node.Name, nil, nil
+	}
+}
+
+func (c *compiler) flattenSelector(node *ast.SelectorExpr) (string, []string, error) {
+	root, segments, err := c.flatten(node.X)
+	if err != nil {
+		return "", nil, err
+	}
+	return root, append(segments, node.Sel.Name), nil
+}
+
+func (c *compiler) flattenIndex(node *ast.IndexExpr) (string, []string, error) {
+	if namespace, ok := node.X.(*ast.Ident); ok && namespace.Name == "node" {
+		root, err := c.nodeID(node.Index)
+		return root, nil, err
+	}
+	root, segments, err := c.flatten(node.X)
+	if err != nil {
+		return "", nil, err
+	}
+	segment, err := c.indexSegment(node.Index)
+	if err != nil {
+		return "", nil, err
+	}
+	return root, append(segments, segment), nil
 }
 
 func (c *compiler) nodeID(index ast.Expr) (string, error) {

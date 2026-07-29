@@ -17,79 +17,114 @@ import (
 // of [Map]'s "wait for all". It cannot be expressed by a wait-for-all map, so it
 // is a primitive rather than a derived helper.
 func Race[I, O any](nodes ...Node[I, O]) Node[I, O] {
-	nodes = slices.Clone(nodes)
-	return NodeFunc[I, O](func(ctx context.Context, in I) (O, error) {
-		var zero O
-		if len(nodes) == 0 {
-			return zero, ErrNoNodes
-		}
-		for _, node := range nodes {
-			if node == nil {
-				return zero, ErrNilNode
-			}
-		}
-		if err := ctx.Err(); err != nil {
-			return zero, err
-		}
+	return raceNode[I, O]{nodes: slices.Clone(nodes)}
+}
 
-		parent := ctx
-		ctx, cancel := context.WithCancel(parent)
-		defer cancel()
+type raceNode[I, O any] struct {
+	nodes []Node[I, O]
+}
 
-		type result struct {
-			index int
-			val   O
-			err   error
-		}
-		ch := make(chan result, len(nodes))
-		for i, n := range nodes {
-			go func() {
-				r := result{index: i}
-				r.val, r.err = n.Run(ctx, in)
-				ch <- r
-			}()
-		}
+func (race raceNode[I, O]) Run(ctx context.Context, input I) (O, error) {
+	var zero O
+	if err := race.validate(); err != nil {
+		return zero, err
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
 
-		errs := make([]error, len(nodes))
-		var (
-			winner    O
-			won       bool
-			parentErr error
-		)
-		for remaining := len(nodes); remaining > 0; remaining-- {
-			var r result
-			if won || parentErr != nil {
-				// A winner or parent cancellation has already stopped the
-				// operation. Drain every result so Run owns the complete
-				// lifetime of the goroutines it started.
-				r = <-ch
-			} else {
-				select {
-				case r = <-ch:
-				case <-parent.Done():
-					parentErr = parent.Err()
-					cancel()
-					r = <-ch
-				}
-			}
-			if r.err == nil && !won && parentErr == nil {
-				winner, won = r.val, true
-				cancel()
-				continue
-			}
-			if !won && parentErr == nil {
-				errs[r.index] = &IndexError{Index: r.index, Err: r.err}
-			}
+	raceCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	run := raceRun[O]{
+		cancel:  cancel,
+		results: race.startNodes(raceCtx, input),
+		errs:    make([]error, len(race.nodes)),
+	}
+	return run.waitForAll(ctx)
+}
+
+func (race raceNode[I, O]) validate() error {
+	if len(race.nodes) == 0 {
+		return ErrNoNodes
+	}
+	for index, node := range race.nodes {
+		if node == nil {
+			return &IndexError{Index: index, Err: ErrNilNode}
 		}
-		if err := parent.Err(); err != nil {
-			return zero, err
-		}
-		if parentErr != nil {
-			return zero, parentErr
-		}
-		if won {
-			return winner, nil
-		}
-		return zero, errors.Join(errs...)
-	})
+	}
+	return nil
+}
+
+func (race raceNode[I, O]) startNodes(ctx context.Context, input I) <-chan raceResult[O] {
+	results := make(chan raceResult[O], len(race.nodes))
+	for index, node := range race.nodes {
+		go func() {
+			value, err := run(ctx, node, input)
+			results <- raceResult[O]{index: index, value: value, err: err}
+		}()
+	}
+	return results
+}
+
+type raceResult[O any] struct {
+	index int
+	value O
+	err   error
+}
+
+// raceRun owns result collection for one race. It drains every started node,
+// even after a winner or parent cancellation, so Run owns every goroutine it
+// started.
+type raceRun[O any] struct {
+	cancel    context.CancelFunc
+	results   <-chan raceResult[O]
+	errs      []error
+	winner    O
+	won       bool
+	parentErr error
+}
+
+func (run *raceRun[O]) waitForAll(parent context.Context) (O, error) {
+	for range len(run.errs) {
+		run.record(run.nextResult(parent))
+	}
+
+	var zero O
+	if err := parent.Err(); err != nil {
+		return zero, err
+	}
+	if run.parentErr != nil {
+		return zero, run.parentErr
+	}
+	if run.won {
+		return run.winner, nil
+	}
+	return zero, errors.Join(run.errs...)
+}
+
+func (run *raceRun[O]) nextResult(parent context.Context) raceResult[O] {
+	if run.won || run.parentErr != nil {
+		return <-run.results
+	}
+	select {
+	case result := <-run.results:
+		return result
+	case <-parent.Done():
+		run.parentErr = parent.Err()
+		run.cancel()
+		return <-run.results
+	}
+}
+
+func (run *raceRun[O]) record(result raceResult[O]) {
+	if result.err == nil && !run.won && run.parentErr == nil {
+		run.winner = result.value
+		run.won = true
+		run.cancel()
+		return
+	}
+	if !run.won && run.parentErr == nil {
+		run.errs[result.index] = &IndexError{Index: result.index, Err: result.err}
+	}
 }

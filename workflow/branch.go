@@ -28,7 +28,7 @@ func Branch(id string, resolve Resolver, cases map[string]Step) Step {
 	return branchStep{id: id, resolve: resolve, cases: maps.Clone(cases)}
 }
 
-// branch is the [Step] produced by [Branch].
+// branchStep is the [Step] produced by [Branch].
 type branchStep struct {
 	id      string
 	resolve Resolver
@@ -58,13 +58,17 @@ func (b branchStep) Run(ctx context.Context, s Store) (Store, error) {
 	}
 	step, ok := b.cases[name]
 	if !ok {
-		return s, fmt.Errorf("%w: %q", flow.ErrNoCase, name)
+		return s, &StepError{
+			ID:  b.id,
+			Op:  OpRun,
+			Err: fmt.Errorf("%w: resolver selected %q", flow.ErrNoCase, name),
+		}
 	}
 	// A decision is durable only after it names an actual case. Recording an
 	// unknown name would poison the Journal and make every later run fail before
 	// the resolver had a chance to recover.
 	runFrom(ctx).journal().record(scope(ctx), b.id, name)
-	return (stepRunner{ctx: ctx}).run(step, s)
+	return step.Run(ctx, s)
 }
 
 // decide returns the branch to take, reusing the recorded decision when the run
@@ -77,9 +81,13 @@ func (b branchStep) decide(ctx context.Context, s Store) (string, error) {
 				return name, nil
 			}
 			return "", &StepError{
-				ID:  b.id,
-				Op:  OpRun,
-				Err: fmt.Errorf("%w: journaled branch decision is %T, want string", ErrTypeMismatch, recorded),
+				ID: b.id,
+				Op: OpRun,
+				Err: fmt.Errorf(
+					"%w: journaled branch decision has type %T; want string",
+					ErrTypeMismatch,
+					recorded,
+				),
 			}
 		}
 	}

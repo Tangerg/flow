@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -68,13 +69,13 @@ func (in Inputs) withDefault(input *Ref) (Inputs, error) {
 }
 
 // validate checks that every port name and wired reference is well formed.
-func (in Inputs) validate(what string) error {
+func (in Inputs) validate() error {
 	for _, port := range in.PortNames() {
 		if port == "" {
-			return fmt.Errorf("%s has an empty port name", what)
+			return errors.New("input port name is empty")
 		}
-		if err := in[port].validate(fmt.Sprintf("%s port %q", what, port)); err != nil {
-			return err
+		if err := in[port].validate(); err != nil {
+			return fmt.Errorf("input port %q: %w", port, err)
 		}
 	}
 	return nil

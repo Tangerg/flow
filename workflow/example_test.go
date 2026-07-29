@@ -246,8 +246,16 @@ func ExampleAwait() {
 	}
 
 	// Persist both halves of the run, as a durable resume would.
-	storeJSON, _ := json.Marshal(paused)
-	journalJSON, _ := json.Marshal(journal)
+	storeJSON, err := json.Marshal(paused)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	journalJSON, err := json.Marshal(journal)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 
 	// Second run: reload, supply the verdict, and finish. "writing the draft" is
 	// not printed again.
@@ -301,7 +309,11 @@ func ExampleInterrupt() {
 		return
 	}
 	wait := workflow.Suspensions(err)[0]
-	requestJSON, _ := json.Marshal(wait.Value)
+	requestJSON, err := json.Marshal(wait.Value)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 	fmt.Println(string(requestJSON))
 
 	if err := journal.Record(wait.Key(), response{Approved: true}); err != nil {

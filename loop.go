@@ -28,17 +28,16 @@ func Loop[T any](
 	body func(ctx context.Context, iter int, in T) (out T, done bool, err error),
 	cfg LoopConfig,
 ) Node[T, T] {
-	max := DefaultMaxIterations
-	if cfg.MaxIterations > 0 {
-		max = cfg.MaxIterations
+	maxIterations := cfg.MaxIterations
+	if maxIterations == 0 {
+		maxIterations = DefaultMaxIterations
 	}
-	return loopNode[T]{body: body, max: max, invalid: cfg.MaxIterations < 0}
+	return loopNode[T]{body: body, maxIterations: maxIterations}
 }
 
 type loopNode[T any] struct {
-	body    func(context.Context, int, T) (T, bool, error)
-	max     int
-	invalid bool
+	body          func(context.Context, int, T) (T, bool, error)
+	maxIterations int
 }
 
 func (l loopNode[T]) Run(ctx context.Context, in T) (T, error) {
@@ -46,10 +45,14 @@ func (l loopNode[T]) Run(ctx context.Context, in T) (T, error) {
 	if l.body == nil {
 		return cur, ErrNilFunc
 	}
-	if l.invalid {
-		return cur, fmt.Errorf("%w: negative max iterations", ErrInvalidConfig)
+	if l.maxIterations < 0 {
+		return cur, fmt.Errorf(
+			"%w: max iterations must be non-negative, got %d",
+			ErrInvalidConfig,
+			l.maxIterations,
+		)
 	}
-	for i := range l.max {
+	for i := range l.maxIterations {
 		if err := ctx.Err(); err != nil {
 			return cur, err
 		}
@@ -62,5 +65,5 @@ func (l loopNode[T]) Run(ctx context.Context, in T) (T, error) {
 			return cur, nil
 		}
 	}
-	return cur, fmt.Errorf("%w (%d)", ErrMaxIterations, l.max)
+	return cur, fmt.Errorf("%w: limit %d", ErrMaxIterations, l.maxIterations)
 }
