@@ -36,6 +36,7 @@ type branchStep struct {
 }
 
 func (b branchStep) Run(ctx context.Context, s Store) (Store, error) {
+	ctx = ensureRun(ctx)
 	if b.id == "" {
 		return s, &StepError{ID: b.id, Op: OpValidate, Err: ErrInvalidStepID}
 	}
@@ -51,8 +52,14 @@ func (b branchStep) Run(ctx context.Context, s Store) (Store, error) {
 			}
 		}
 	}
+	if err := runFrom(ctx).validateDefinition(b); err != nil {
+		return s, err
+	}
+	if err := runFrom(ctx).claim(scope(ctx), b.id); err != nil {
+		return s, &StepError{ID: b.id, Op: OpValidate, Err: err}
+	}
 
-	name, err := b.decide(ctx, s)
+	name, replayed, err := b.decide(ctx, s)
 	if err != nil {
 		return s, err
 	}
@@ -67,39 +74,40 @@ func (b branchStep) Run(ctx context.Context, s Store) (Store, error) {
 	// A decision is durable only after it names an actual case. Recording an
 	// unknown name would poison the Journal and make every later run fail before
 	// the resolver had a chance to recover.
-	runFrom(ctx).journal().record(scope(ctx), b.id, name)
+	if !replayed {
+		if err := runFrom(ctx).journal().record(scope(ctx), b.id, name); err != nil {
+			return s, &StepError{ID: b.id, Op: OpRun, Err: err}
+		}
+	}
 	return step.Run(ctx, s)
 }
 
 // decide returns the branch to take, reusing the recorded decision when the run
 // is resuming. Run records a fresh decision only after verifying the case.
-func (b branchStep) decide(ctx context.Context, s Store) (string, error) {
-	journal := runFrom(ctx).journal()
-	if journal != nil {
-		if recorded, ok := journal.lookup(scope(ctx), b.id); ok {
-			if name, ok := recorded.(string); ok {
-				return name, nil
-			}
-			return "", &StepError{
-				ID: b.id,
-				Op: OpRun,
-				Err: fmt.Errorf(
-					"%w: journaled branch decision has type %T; want string",
-					ErrTypeMismatch,
-					recorded,
-				),
-			}
+func (b branchStep) decide(ctx context.Context, s Store) (string, bool, error) {
+	if recorded, ok := runFrom(ctx).replay(scope(ctx), b.id); ok {
+		if name, ok := recorded.(string); ok {
+			return name, true, nil
+		}
+		return "", false, &StepError{
+			ID: b.id,
+			Op: OpRun,
+			Err: fmt.Errorf(
+				"%w: journaled branch decision has type %T; want string",
+				ErrTypeMismatch,
+				recorded,
+			),
 		}
 	}
 
 	name, err := b.resolve(ctx, s)
 	if err != nil {
 		if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
-			return "", suspensions.identify(b.id, scope(ctx)).err()
+			return "", false, suspensions.identify(b.id, scope(ctx)).err()
 		}
-		return "", &StepError{ID: b.id, Op: OpRun, Err: err}
+		return "", false, &StepError{ID: b.id, Op: OpRun, Err: err}
 	}
-	return name, nil
+	return name, false, nil
 }
 
 func (b branchStep) Describe() Description {
@@ -110,4 +118,12 @@ func (b branchStep) Describe() Description {
 		children = append(children, d)
 	}
 	return Description{ID: b.id, Kind: "branch", Children: children}
+}
+
+func (b branchStep) workflowDefinition() stepDefinition {
+	return stepDefinition{
+		kind:  definitionBranch,
+		id:    b.id,
+		cases: b.cases,
+	}
 }

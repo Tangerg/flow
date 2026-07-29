@@ -182,6 +182,39 @@ func TestValidateSpecJSONRejectsSchemaViolations(t *testing.T) {
 	}
 }
 
+func TestJSONBoundariesRejectExcessiveNesting(t *testing.T) {
+	deep := []byte(
+		strings.Repeat("[", workflow.MaxNestingDepth+1) +
+			"0" +
+			strings.Repeat("]", workflow.MaxNestingDepth+1),
+	)
+	levels := workflow.MaxNestingDepth/2 + 1
+	nestedSpec := []byte(
+		strings.Repeat(`{"kind":"sequence","steps":[`, levels) +
+			`{"kind":"sequence","steps":[]}` +
+			strings.Repeat(`]}`, levels),
+	)
+	if err := workflow.ValidateSpecJSON(nestedSpec); !errors.Is(err, workflow.ErrMaxDepth) {
+		t.Fatalf("ValidateSpecJSON error = %v; want ErrMaxDepth", err)
+	}
+	graphWithDeepConfig := append(
+		[]byte(`{"nodes":[{"id":"deep","type":"deep","config":`),
+		deep...,
+	)
+	graphWithDeepConfig = append(graphWithDeepConfig, []byte(`}]}`)...)
+	if err := workflow.ValidateGraphJSON(graphWithDeepConfig); !errors.Is(err, workflow.ErrMaxDepth) {
+		t.Fatalf("ValidateGraphJSON error = %v; want ErrMaxDepth", err)
+	}
+
+	_, err := workflow.InterruptFactory()(workflow.LeafSpec{
+		ID:     "deep",
+		Config: json.RawMessage(deep),
+	})
+	if !errors.Is(err, workflow.ErrMaxDepth) {
+		t.Fatalf("config error = %v; want ErrMaxDepth", err)
+	}
+}
+
 func TestValidateGraphJSONReportsDuplicateMemberPath(t *testing.T) {
 	err := workflow.ValidateGraphJSON([]byte(
 		`{"nodes":[{"id":"first","id":"second","type":"x"}]}`,

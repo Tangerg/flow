@@ -82,8 +82,15 @@ type iterationStep struct {
 }
 
 func (it iterationStep) Run(ctx context.Context, s Store) (Store, error) {
+	ctx = ensureRun(ctx)
 	if err := it.validate(); err != nil {
 		return s, err
+	}
+	if err := runFrom(ctx).validateDefinition(it); err != nil {
+		return s, err
+	}
+	if err := runFrom(ctx).claim(scope(ctx), it.id); err != nil {
+		return s, &StepError{ID: it.id, Op: OpValidate, Err: err}
 	}
 	items, err := Get[[]any](s, it.input)
 	if err != nil {
@@ -182,4 +189,8 @@ func (it iterationStep) collect(s Store, outcomes []elementOutcome) (Store, erro
 
 func (it iterationStep) Describe() Description {
 	return Description{ID: it.id, Kind: "iteration", Children: []Description{Describe(it.body)}}
+}
+
+func (it iterationStep) workflowDefinition() stepDefinition {
+	return stepDefinition{kind: definitionIteration, id: it.id, body: it.body}
 }

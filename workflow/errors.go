@@ -12,12 +12,13 @@ var ErrNilStep = errors.New("workflow: nil step")
 // ErrInvalidStepID is returned when a named workflow step has an empty ID.
 var ErrInvalidStepID = errors.New("workflow: empty step ID")
 
-// Stable sentinel errors returned by Store lookup, Journal mutation,
-// registration, and graph validation. Use [errors.Is] rather than matching
-// their text.
+// Stable sentinel errors returned by Store lookup, recursive input boundaries,
+// Journal mutation, registration, and graph validation. Use [errors.Is] rather
+// than matching their text.
 var (
 	ErrNotFound              = errors.New("workflow: value not found")
 	ErrTypeMismatch          = errors.New("workflow: value type mismatch")
+	ErrMaxDepth              = errors.New("workflow: maximum nesting depth exceeded")
 	ErrInvalidRegistration   = errors.New("workflow: invalid registration")
 	ErrDuplicateRegistration = errors.New("workflow: duplicate registration")
 	ErrInvalidGraph          = errors.New("workflow: invalid graph")
@@ -33,6 +34,12 @@ var (
 	ErrUnknownPort           = errors.New("workflow: unknown input port")
 	ErrDuplicatePort         = errors.New("workflow: duplicate input port")
 )
+
+// MaxNestingDepth is the maximum nesting accepted at recursive workflow
+// boundaries, including JSON values and Journal scope paths. Keeping one limit
+// prevents a document from passing one boundary only to exhaust the stack in
+// the next one.
+const MaxNestingDepth = 1024
 
 // StepOp identifies the phase of a workflow step that failed.
 type StepOp string

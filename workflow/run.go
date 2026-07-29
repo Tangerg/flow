@@ -2,7 +2,9 @@ package workflow
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"sync"
 	"sync/atomic"
 )
 
@@ -30,13 +32,20 @@ type runKey struct{}
 // the run's own bookkeeping. Keeping the counter here rather than in RunConfig
 // leaves the exported type plain data.
 type runState struct {
-	config RunConfig
-	seq    atomic.Uint64
+	config          RunConfig
+	journalRevision uint64
+	seq             atomic.Uint64
+	definitionOnce  sync.Once
+	definitionErr   error
+	claimsMu        sync.Mutex
+	claims          journalNode
 }
 
 // Run executes step once under cfg. Each call establishes a fresh run boundary:
 // event sequence numbers start at one, while cfg.Journal may deliberately carry
-// completed work across calls. A nil step returns [ErrNilStep].
+// completed work across calls. Journal replay observes a stable snapshot from
+// the start of the call; records added during the call belong to a later run. A
+// nil step returns [ErrNilStep].
 //
 //	journal := workflow.NewJournal()
 //	out, err := workflow.Run(ctx, pipeline, in, workflow.RunConfig{
@@ -55,7 +64,20 @@ func Run(ctx context.Context, step Step, in Store, cfg RunConfig) (Store, error)
 // withConfig installs a new run even for the zero configuration. Masking an
 // enclosing run is what makes a nested Run call an independent boundary.
 func withConfig(ctx context.Context, cfg RunConfig) context.Context {
-	return context.WithValue(ctx, runKey{}, &runState{config: cfg})
+	return context.WithValue(ctx, runKey{}, &runState{
+		config:          cfg,
+		journalRevision: cfg.Journal.snapshotRevision(),
+	})
+}
+
+// ensureRun gives direct composite.Run calls the same per-run identity
+// bookkeeping as the package-level Run function, without masking an existing
+// configured run.
+func ensureRun(ctx context.Context) context.Context {
+	if runFrom(ctx) != nil {
+		return ctx
+	}
+	return withConfig(ctx, RunConfig{})
 }
 
 func runFrom(ctx context.Context) *runState {
@@ -73,6 +95,52 @@ func (r *runState) journal() *Journal {
 		return nil
 	}
 	return r.config.Journal
+}
+
+// replay returns a record that existed when this run began. Records written by
+// the current run are deliberately excluded: seeing one again means two steps
+// claimed the same identity, not that the later step is being resumed.
+func (r *runState) replay(path []string, id string) (any, bool) {
+	if r == nil || r.config.Journal == nil {
+		return nil, false
+	}
+	return r.config.Journal.lookupAt(path, id, r.journalRevision)
+}
+
+// claim enforces the execution identity invariant independently of the
+// Journal. This catches duplicate IDs even when both invocations would replay
+// the same historical record, and it also covers opaque caller-defined wrappers
+// that static definition validation cannot see through.
+func (r *runState) claim(path []string, id string) error {
+	if r == nil {
+		return nil
+	}
+	key := JournalKey{ID: id, Path: path}
+	if err := key.validate(); err != nil {
+		return err
+	}
+
+	r.claimsMu.Lock()
+	defer r.claimsMu.Unlock()
+	if !r.claims.record(path, id, journalValue{}) {
+		return fmt.Errorf(
+			"%w: step %q at path %q was invoked more than once in one run",
+			ErrDuplicateStep,
+			id,
+			path,
+		)
+	}
+	return nil
+}
+
+func (r *runState) validateDefinition(step Step) error {
+	if r == nil {
+		return nil
+	}
+	r.definitionOnce.Do(func() {
+		r.definitionErr = (definitionValidator{}).validate(step)
+	})
+	return r.definitionErr
 }
 
 // emit completes event with the run's sequence number and scope, then delivers

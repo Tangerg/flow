@@ -33,6 +33,89 @@ func TestJournal_recordsOnlyCompletedSteps(t *testing.T) {
 	}
 }
 
+func TestSequence_rejectsDuplicateIDsBeforeRunning(t *testing.T) {
+	var runs int
+	step := func() workflow.Step {
+		return workflow.Leaf(
+			"same",
+			workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+			flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+				runs++
+				return value, nil
+			}),
+		)
+	}
+
+	_, err := workflow.Sequence(step(), step()).
+		Run(context.Background(), workflow.NewStore())
+	if !errors.Is(err, workflow.ErrDuplicateStep) {
+		t.Fatalf("err = %v; want ErrDuplicateStep", err)
+	}
+	if runs != 0 {
+		t.Fatalf("%d duplicate steps ran; want validation before side effects", runs)
+	}
+}
+
+func TestRun_rejectsDuplicateIDsHiddenByOpaqueStepsOnFreshAndReplay(t *testing.T) {
+	var firstRuns, secondRuns int
+	hidden := func(runs *int) workflow.Step {
+		leaf := workflow.Leaf(
+			"same",
+			workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+			flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+				(*runs)++
+				return value, nil
+			}),
+		)
+		return flow.NodeFunc[workflow.Store, workflow.Store](leaf.Run)
+	}
+	pipeline := workflow.Sequence(hidden(&firstRuns), hidden(&secondRuns))
+	journal := workflow.NewJournal()
+	cfg := workflow.RunConfig{Journal: journal}
+
+	for attempt := range 2 {
+		_, err := workflow.Run(
+			context.Background(),
+			pipeline,
+			workflow.NewStore(),
+			cfg,
+		)
+		if !errors.Is(err, workflow.ErrDuplicateStep) {
+			t.Fatalf("run %d err = %v; want ErrDuplicateStep", attempt+1, err)
+		}
+	}
+	if firstRuns != 1 || secondRuns != 0 {
+		t.Fatalf("runs = %d,%d; duplicate execution was not stopped", firstRuns, secondRuns)
+	}
+	if journal.Len() != 1 {
+		t.Fatalf("journal Len = %d; want the one unambiguous completion", journal.Len())
+	}
+}
+
+func TestJournal_internalConflictIsReturnedByRun(t *testing.T) {
+	journal := workflow.NewJournal()
+	step := workflow.Leaf(
+		"same",
+		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+		flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+			if err := journal.Record(workflow.JournalKey{ID: "same"}, "external"); err != nil {
+				return 0, err
+			}
+			return value, nil
+		}),
+	)
+
+	_, err := workflow.Run(
+		context.Background(),
+		step,
+		workflow.NewStore(),
+		workflow.RunConfig{Journal: journal},
+	)
+	if !errors.Is(err, workflow.ErrJournalConflict) {
+		t.Fatalf("err = %v; want ErrJournalConflict", err)
+	}
+}
+
 func TestNilJournalJSONMethods(t *testing.T) {
 	var journal *workflow.Journal
 	data, err := journal.MarshalJSON()
@@ -126,6 +209,54 @@ func TestJournal_recordExternalCompletion(t *testing.T) {
 	var nilJournal *workflow.Journal
 	if err := nilJournal.Record(workflow.JournalKey{ID: "approval"}, true); err == nil {
 		t.Fatal("nil Journal Record unexpectedly succeeded")
+	}
+}
+
+func TestJournal_enforcesOneSharedDepthLimit(t *testing.T) {
+	deepPath := make([]string, workflow.MaxNestingDepth)
+	for index := range deepPath {
+		deepPath[index] = strconv.Itoa(index)
+	}
+
+	journal := workflow.NewJournal()
+	if err := journal.Record(
+		workflow.JournalKey{ID: "deep", Path: deepPath},
+		true,
+	); err != nil {
+		t.Fatalf("Record at limit: %v", err)
+	}
+	keys := journal.Keys()
+	if len(keys) != 1 || !slices.Equal(keys[0].Path, deepPath) {
+		t.Fatalf("Keys = %v; want one key with path depth %d", keys, len(deepPath))
+	}
+	encoded, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatalf("Marshal deep Journal: %v", err)
+	}
+	var restored workflow.Journal
+	if err := json.Unmarshal(encoded, &restored); err != nil {
+		t.Fatalf("Unmarshal deep Journal: %v", err)
+	}
+
+	tooDeep := append(slices.Clone(deepPath), "too-deep")
+	if err := journal.Record(
+		workflow.JournalKey{ID: "rejected", Path: tooDeep},
+		true,
+	); !errors.Is(err, workflow.ErrMaxDepth) {
+		t.Fatalf("Record error = %v; want ErrMaxDepth", err)
+	}
+
+	document, err := json.Marshal(map[string]any{
+		"version": 1,
+		"records": []any{map[string]any{
+			"id": "rejected", "path": tooDeep, "value": true,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Marshal fixture: %v", err)
+	}
+	if err := json.Unmarshal(document, &restored); !errors.Is(err, workflow.ErrMaxDepth) {
+		t.Fatalf("Unmarshal error = %v; want ErrMaxDepth", err)
 	}
 }
 

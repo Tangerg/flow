@@ -244,6 +244,37 @@ func BenchmarkValidateGraphJSONScaling(b *testing.B) {
 	}
 }
 
+func BenchmarkJournalDeepTraversal(b *testing.B) {
+	for _, depth := range []int{16, 256, workflow.MaxNestingDepth} {
+		path := make([]string, depth)
+		for index := range path {
+			path[index] = strconv.Itoa(index)
+		}
+		journal := workflow.NewJournal()
+		if err := journal.Record(
+			workflow.JournalKey{ID: "leaf", Path: path},
+			true,
+		); err != nil {
+			b.Fatalf("Record setup: %v", err)
+		}
+
+		b.Run(strconv.Itoa(depth)+"/keys", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				_ = journal.Keys()
+			}
+		})
+		b.Run(strconv.Itoa(depth)+"/marshal", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, err := json.Marshal(journal); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func benchmarkIncrement(id, input string) workflow.Step {
 	return workflow.Leaf(
 		id,

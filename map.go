@@ -18,8 +18,11 @@ type MapConfig struct {
 // the outputs in input order. The first failure cancels the remaining calls and
 // is returned. A zero [MapConfig] runs every element concurrently; set
 // MapConfig.Concurrency to bound it. Cancellation is cooperative: calls already
-// running must honor their context; Map waits for them to return. A nil node is
-// rejected even when the input is empty.
+// running must honor their context; Map waits for them to return. If the parent
+// context is cancelled before Run returns, its cancellation error takes
+// precedence and Map discards the output slice, even when every started call
+// happened to return successfully. A nil node is rejected even when the input
+// is empty.
 //
 // Map is the concurrency primitive — fan-out, collecting a result per item, and
 // heterogeneous fan-in are derivable from it and live in higher-level packages

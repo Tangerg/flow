@@ -57,9 +57,9 @@ func GraphJSONSchema() json.RawMessage {
 }
 
 // ValidateSpecJSON checks that data is one complete JSON value conforming to
-// [SpecJSONSchema]. Duplicate object members are rejected. Registry-dependent
-// checks such as node types and config schemas are performed by
-// [Registry.ValidateSpec] and compilation.
+// [SpecJSONSchema]. Duplicate object members and values nested beyond
+// [MaxNestingDepth] are rejected. Registry-dependent checks such as node types
+// and config schemas are performed by [Registry.ValidateSpec] and compilation.
 func ValidateSpecJSON(data []byte) error {
 	if err := schemaLoader(loadSpecSchema).validate(jsonDocument(data)); err != nil {
 		return &SpecError{Field: "json", Err: fmt.Errorf("%w: %w", ErrInvalidSpec, err)}
@@ -68,9 +68,10 @@ func ValidateSpecJSON(data []byte) error {
 }
 
 // ValidateGraphJSON checks that data is one complete JSON value conforming to
-// [GraphJSONSchema]. Duplicate object members are rejected. Registry-dependent
-// checks such as node types, cycles, and config schemas are performed by
-// [Registry.ValidateGraph] and compilation.
+// [GraphJSONSchema]. Duplicate object members and values nested beyond
+// [MaxNestingDepth] are rejected. Registry-dependent checks such as node types,
+// cycles, and config schemas are performed by [Registry.ValidateGraph] and
+// compilation.
 func ValidateGraphJSON(data []byte) error {
 	if err := schemaLoader(loadGraphSchema).validate(jsonDocument(data)); err != nil {
 		return &GraphError{Field: "json", Err: fmt.Errorf("%w: %w", ErrInvalidGraph, err)}
@@ -176,17 +177,21 @@ func (e *jsonSchemaError) Error() string {
 func (e *jsonSchemaError) Unwrap() error { return e.err }
 
 func (e *jsonSchemaError) leaves() []*jschema.ValidationError {
-	var leaves []*jschema.ValidationError
-	var visit func(*jschema.ValidationError)
-	visit = func(err *jschema.ValidationError) {
+	leaves := make([]*jschema.ValidationError, 0)
+	pending := []*jschema.ValidationError{e.err}
+	for len(pending) > 0 {
+		last := len(pending) - 1
+		err := pending[last]
+		pending = pending[:last]
 		if len(err.Causes) == 0 {
 			leaves = append(leaves, err)
-			return
+			continue
 		}
-		for _, cause := range err.Causes {
-			visit(cause)
+		// Push in reverse so the iterative depth-first walk preserves the
+		// validator's diagnostic order.
+		for index := len(err.Causes) - 1; index >= 0; index-- {
+			pending = append(pending, err.Causes[index])
 		}
 	}
-	visit(e.err)
 	return leaves
 }

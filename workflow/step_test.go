@@ -122,6 +122,26 @@ func TestLeaf_rejectsEmptyIDAndNilBind(t *testing.T) {
 	}
 }
 
+func TestSequence_rejectsExcessiveDefinitionNesting(t *testing.T) {
+	var step workflow.Step = workflow.Leaf(
+		"leaf",
+		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+		flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+			return value, nil
+		}),
+	)
+	for range workflow.MaxNestingDepth {
+		step = workflow.Sequence(step)
+	}
+
+	if _, err := step.Run(
+		context.Background(),
+		workflow.NewStore(),
+	); !errors.Is(err, workflow.ErrMaxDepth) {
+		t.Fatalf("err = %v; want ErrMaxDepth", err)
+	}
+}
+
 func TestLeaf_validatesDefinitionBeforeJournalReplay(t *testing.T) {
 	journal := workflow.NewJournal()
 	if err := journal.Record(workflow.JournalKey{ID: "broken"}, 42); err != nil {

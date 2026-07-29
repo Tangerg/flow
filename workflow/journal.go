@@ -30,18 +30,22 @@ import (
 // A Journal is safe for concurrent use within one logical workflow execution;
 // concurrent branches record into the same one. Do not share one Journal between
 // unrelated executions, because records intentionally have no run ID. Records are
-// append-only until Forget or Reset: an internal duplicate completion keeps the
-// first value, while Record reports ErrJournalConflict. The zero Journal is empty
-// and ready to use. A Journal must not be copied after first use.
+// append-only until Forget or Reset: every duplicate completion reports
+// [ErrJournalConflict]. Each [Run] replays only records that existed when that
+// run began, so a duplicate identity created during a run cannot masquerade as
+// historical work. The zero Journal is empty and ready to use. A Journal must
+// not be copied after first use.
 type Journal struct {
-	mu    sync.RWMutex
-	root  journalNode
-	count int
+	mu       sync.RWMutex
+	root     journalNode
+	count    int
+	revision uint64
 }
 
 // JournalKey identifies one recorded execution of a step. ID is the step ID;
-// Path is the enclosing repeated scopes, outermost first. Construct JournalKey
-// values with keyed fields so the type can grow without breaking callers.
+// Path is the enclosing repeated scopes, outermost first, and may contain at
+// most [MaxNestingDepth] segments. Construct JournalKey values with keyed fields
+// so the type can grow without breaking callers.
 type JournalKey struct {
 	ID   string   `json:"id"`
 	Path []string `json:"path,omitempty"`
@@ -54,21 +58,17 @@ func (k JournalKey) compare(other JournalKey) int {
 	return cmp.Compare(k.ID, other.ID)
 }
 
-type journalPath []string
-
-func (p journalPath) child(segment string) journalPath {
-	next := make(journalPath, len(p)+1)
-	copy(next, p)
-	next[len(p)] = segment
-	return next
-}
-
 // journalNode is a trie over scope segments. Keeping the path structured avoids
 // delimiter escaping entirely: every possible segment and step ID has one
 // unambiguous place in the tree.
 type journalNode struct {
-	records  map[string]any
+	records  map[string]journalValue
 	children map[string]*journalNode
+}
+
+type journalValue struct {
+	value    any
+	revision uint64
 }
 
 // NewJournal returns an empty Journal.
@@ -79,42 +79,62 @@ func NewJournal() *Journal { return &Journal{} }
 // [Suspend] represents an externally supplied result: record the response under
 // the suspension's [Suspension.Key], then run the same workflow again.
 //
-// Record rejects an empty step ID and an identity already present in the
-// Journal. A recorded value is held as-is; mutable values must not be modified
-// afterward. The method is safe for concurrent use.
+// Record rejects an empty step ID, a path deeper than [MaxNestingDepth], and an
+// identity already present in the Journal. A recorded value is held as-is;
+// mutable values must not be modified afterward. The method is safe for
+// concurrent use.
 func (j *Journal) Record(key JournalKey, value any) error {
-	switch {
-	case j == nil:
+	if j == nil {
 		return errors.New("workflow: record journal: nil journal")
-	case key.ID == "":
-		return fmt.Errorf("workflow: record journal: %w", ErrInvalidStepID)
 	}
+	return j.insert(key, value)
+}
 
+// record stores a step's output. A nil Journal discards it, so callers need not
+// check whether resumption is enabled.
+func (j *Journal) record(path []string, id string, value any) error {
+	if j == nil {
+		return nil
+	}
+	return j.insert(JournalKey{ID: id, Path: path}, value)
+}
+
+func (j *Journal) insert(key JournalKey, value any) error {
+	if err := key.validate(); err != nil {
+		return fmt.Errorf("workflow: record journal: %w", err)
+	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if _, exists := j.root.lookup(key.Path, key.ID); exists {
 		return fmt.Errorf("workflow: record journal step %q at %q: %w",
 			key.ID, key.Path, ErrJournalConflict)
 	}
-	j.root.record(key.Path, key.ID, value)
+	j.revision++
+	j.root.record(key.Path, key.ID, journalValue{
+		value:    value,
+		revision: j.revision,
+	})
 	j.count++
 	return nil
 }
 
-// record stores a step's output. A nil Journal discards it, so callers need not
-// check whether resumption is enabled.
-func (j *Journal) record(path []string, id string, value any) {
-	if j == nil || id == "" {
-		return
-	}
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	if j.root.record(path, id, value) {
-		j.count++
+func (key JournalKey) validate() error {
+	switch {
+	case key.ID == "":
+		return ErrInvalidStepID
+	case len(key.Path) > MaxNestingDepth:
+		return fmt.Errorf(
+			"%w: scope path depth %d exceeds limit %d",
+			ErrMaxDepth,
+			len(key.Path),
+			MaxNestingDepth,
+		)
+	default:
+		return nil
 	}
 }
 
-func (n *journalNode) record(path []string, id string, value any) bool {
+func (n *journalNode) record(path []string, id string, value journalValue) bool {
 	for _, segment := range path {
 		if n.children == nil {
 			n.children = make(map[string]*journalNode)
@@ -127,7 +147,7 @@ func (n *journalNode) record(path []string, id string, value any) bool {
 		n = child
 	}
 	if n.records == nil {
-		n.records = make(map[string]any)
+		n.records = make(map[string]journalValue)
 	}
 	if _, exists := n.records[id]; exists {
 		return false
@@ -136,20 +156,33 @@ func (n *journalNode) record(path []string, id string, value any) bool {
 	return true
 }
 
-func (j *Journal) lookup(path []string, id string) (any, bool) {
+func (j *Journal) lookupAt(path []string, id string, revision uint64) (any, bool) {
 	if j == nil {
 		return nil, false
 	}
 	j.mu.RLock()
 	defer j.mu.RUnlock()
-	return j.root.lookup(path, id)
+	value, ok := j.root.lookup(path, id)
+	if !ok || value.revision > revision {
+		return nil, false
+	}
+	return value.value, true
 }
 
-func (n *journalNode) lookup(path []string, id string) (any, bool) {
+func (j *Journal) snapshotRevision() uint64 {
+	if j == nil {
+		return 0
+	}
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.revision
+}
+
+func (n *journalNode) lookup(path []string, id string) (journalValue, bool) {
 	for _, segment := range path {
 		n = n.children[segment]
 		if n == nil {
-			return nil, false
+			return journalValue{}, false
 		}
 	}
 	value, ok := n.records[id]
@@ -186,7 +219,9 @@ func (n *journalNode) appendKeys(path []string, keys *[]JournalKey) {
 		*keys = append(*keys, JournalKey{Path: slices.Clone(path), ID: id})
 	}
 	for segment, child := range n.children {
-		child.appendKeys(journalPath(path).child(segment), keys)
+		path = append(path, segment)
+		child.appendKeys(path, keys)
+		path = path[:len(path)-1]
 	}
 }
 
@@ -199,17 +234,19 @@ func (j *Journal) Reset() {
 	defer j.mu.Unlock()
 	j.root = journalNode{}
 	j.count = 0
+	j.revision++
 }
 
 // Forget removes one recorded step, so the next run repeats it.
 func (j *Journal) Forget(key JournalKey) {
-	if j == nil || key.ID == "" {
+	if j == nil || key.validate() != nil {
 		return
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.root.forget(key.Path, key.ID) {
 		j.count--
+		j.revision++
 	}
 }
 

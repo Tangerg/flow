@@ -36,12 +36,15 @@ func (interrupt interruptStep) Run(ctx context.Context, store Store) (Store, err
 		run.emit(ctx, Event{Kind: EventFailed, ID: interrupt.id, Err: err})
 		return store, err
 	}
-	if journal := run.journal(); journal != nil {
-		if response, ok := journal.lookup(scope(ctx), interrupt.id); ok {
-			next := store.WithOutput(interrupt.id, response)
-			run.emit(ctx, Event{Kind: EventSkipped, ID: interrupt.id, Store: next})
-			return next, nil
-		}
+	if err := run.claim(scope(ctx), interrupt.id); err != nil {
+		err := &StepError{ID: interrupt.id, Op: OpValidate, Err: err}
+		run.emit(ctx, Event{Kind: EventFailed, ID: interrupt.id, Err: err})
+		return store, err
+	}
+	if response, ok := run.replay(scope(ctx), interrupt.id); ok {
+		next := store.WithOutput(interrupt.id, response)
+		run.emit(ctx, Event{Kind: EventSkipped, ID: interrupt.id, Store: next})
+		return next, nil
 	}
 
 	suspension := &Suspension{
@@ -55,6 +58,10 @@ func (interrupt interruptStep) Run(ctx context.Context, store Store) (Store, err
 
 func (interrupt interruptStep) Describe() Description {
 	return Description{ID: interrupt.id, Kind: "interrupt"}
+}
+
+func (interrupt interruptStep) workflowDefinition() stepDefinition {
+	return stepDefinition{kind: definitionNamed, id: interrupt.id}
 }
 
 // InterruptFactory is the [LeafFactory] form of [Interrupt]. The leaf's JSON

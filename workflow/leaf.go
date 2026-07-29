@@ -23,7 +23,8 @@ func From[I any](ref Ref) BindFunc[I] {
 //
 // This is the prep/exec/post split: bind reads the pool, node computes, the Step
 // writes back — the node itself stays free of any Store knowledge and is unit
-// testable on its own.
+// testable on its own. id must be non-empty and unique among steps that can run
+// in the same execution scope.
 func Leaf[I, O any](id string, bind BindFunc[I], node flow.Node[I, O]) Step {
 	return leafStep[I, O]{id: id, bind: bind, node: node}
 }
@@ -48,6 +49,10 @@ func (leaf leafStep[I, O]) Describe() Description {
 	return Description{ID: leaf.id, Kind: "leaf"}
 }
 
+func (leaf leafStep[I, O]) workflowDefinition() stepDefinition {
+	return stepDefinition{kind: definitionNamed, id: leaf.id}
+}
+
 // leafExecution owns the mutable state of one leaf invocation. The leaf
 // definition remains immutable and safe for concurrent use.
 type leafExecution[I, O any] struct {
@@ -58,7 +63,7 @@ type leafExecution[I, O any] struct {
 }
 
 func (execution *leafExecution[I, O]) execute(ctx context.Context) (Store, error) {
-	if err := execution.validate(); err != nil {
+	if err := execution.validate(ctx); err != nil {
 		execution.run.emit(ctx, Event{
 			Kind: EventFailed,
 			ID:   execution.leaf.id,
@@ -79,12 +84,12 @@ func (execution *leafExecution[I, O]) execute(ctx context.Context) (Store, error
 	if err != nil {
 		return execution.fail(ctx, OpRun, err)
 	}
-	return execution.complete(ctx, output), nil
+	return execution.complete(ctx, output)
 }
 
 // validate runs before replay so stale Journal data cannot hide an invalid
 // workflow definition.
-func (execution *leafExecution[I, O]) validate() error {
+func (execution *leafExecution[I, O]) validate(ctx context.Context) error {
 	switch {
 	case execution.leaf.id == "":
 		return &StepError{ID: execution.leaf.id, Op: OpValidate, Err: ErrInvalidStepID}
@@ -93,16 +98,15 @@ func (execution *leafExecution[I, O]) validate() error {
 	case execution.leaf.node == nil:
 		return &StepError{ID: execution.leaf.id, Op: OpRun, Err: flow.ErrNilNode}
 	default:
+		if err := execution.run.claim(scope(ctx), execution.leaf.id); err != nil {
+			return &StepError{ID: execution.leaf.id, Op: OpValidate, Err: err}
+		}
 		return nil
 	}
 }
 
 func (execution *leafExecution[I, O]) replay(ctx context.Context) (Store, bool) {
-	journal := execution.run.journal()
-	if journal == nil {
-		return Store{}, false
-	}
-	value, ok := journal.lookup(scope(ctx), execution.leaf.id)
+	value, ok := execution.run.replay(scope(ctx), execution.leaf.id)
 	if !ok {
 		return Store{}, false
 	}
@@ -163,9 +167,11 @@ func (execution *leafExecution[I, O]) suspend(
 	return execution.store, err
 }
 
-func (execution *leafExecution[I, O]) complete(ctx context.Context, output O) Store {
+func (execution *leafExecution[I, O]) complete(ctx context.Context, output O) (Store, error) {
 	next := execution.store.WithOutput(execution.leaf.id, output)
-	execution.run.journal().record(scope(ctx), execution.leaf.id, output)
+	if err := execution.run.journal().record(scope(ctx), execution.leaf.id, output); err != nil {
+		return execution.fail(ctx, OpRun, err)
+	}
 	if execution.run.observing() {
 		execution.run.emit(ctx, Event{
 			Kind:    EventCompleted,
@@ -174,5 +180,5 @@ func (execution *leafExecution[I, O]) complete(ctx context.Context, output O) St
 			Store:   next,
 		})
 	}
-	return next
+	return next, nil
 }

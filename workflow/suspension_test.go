@@ -614,10 +614,10 @@ func TestSuspend_loopResumesAtTheWaitingIteration(t *testing.T) {
 	// Each completed iteration records both the body's output and the loop's own
 	// stop decision, so a resumed loop cannot stop somewhere else.
 	if keys := journal.Keys(); !equalJournalKeys(keys, []workflow.JournalKey{
-		{Path: []string{"[0]"}, ID: "loop"},
-		{Path: []string{"[0]"}, ID: "tick"},
-		{Path: []string{"[1]"}, ID: "loop"},
-		{Path: []string{"[1]"}, ID: "tick"},
+		{Path: []string{"loop[0]"}, ID: "loop"},
+		{Path: []string{"loop[0]"}, ID: "tick"},
+		{Path: []string{"loop[1]"}, ID: "loop"},
+		{Path: []string{"loop[1]"}, ID: "tick"},
 	}) {
 		t.Fatalf("journal keys = %v; want a body and a decision record per iteration", keys)
 	}
@@ -926,7 +926,7 @@ func TestSuspend_journaledDecisionOfTheWrongTypeIsReported(t *testing.T) {
 	// A loop records one decision per iteration, so its key carries the scope.
 	if err := json.Unmarshal([]byte(`{"version":1,"records":[
 		{"id":"route","value":"not-a-case"},
-		{"path":["[0]"],"id":"repeat","value":"not-a-bool"}
+		{"path":["repeat[0]"],"id":"repeat","value":"not-a-bool"}
 	]}`), journal); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}

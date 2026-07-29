@@ -44,6 +44,7 @@ type loopStep struct {
 }
 
 func (l loopStep) Run(ctx context.Context, s Store) (Store, error) {
+	ctx = ensureRun(ctx)
 	switch {
 	case l.id == "":
 		return s, &StepError{ID: l.id, Op: OpValidate, Err: ErrInvalidStepID}
@@ -62,9 +63,15 @@ func (l loopStep) Run(ctx context.Context, s Store) (Store, error) {
 			),
 		}
 	}
+	if err := runFrom(ctx).validateDefinition(l); err != nil {
+		return s, err
+	}
+	if err := runFrom(ctx).claim(scope(ctx), l.id); err != nil {
+		return s, &StepError{ID: l.id, Op: OpValidate, Err: err}
+	}
 
 	bodyNode := func(ctx context.Context, iter int, s Store) (Store, bool, error) {
-		body := (scopedStep{step: l.body}).indexed("", iter)
+		body := (scopedStep{step: l.body}).indexed(l.id, iter)
 		next, err := body.run(ctx, s)
 		if err != nil {
 			return s, false, err
@@ -80,21 +87,22 @@ func (l loopStep) Run(ctx context.Context, s Store) (Store, error) {
 // stop returns whether the loop ends after this iteration, reusing the recorded
 // decision when the run is resuming.
 func (l loopStep) stop(ctx context.Context, iter int, s Store) (bool, error) {
-	journal := runFrom(ctx).journal()
-	if journal != nil {
-		if recorded, ok := journal.lookup(scope(ctx), l.id); ok {
-			if stop, ok := recorded.(bool); ok {
-				return stop, nil
-			}
-			return false, &StepError{
-				ID: l.id,
-				Op: OpRun,
-				Err: fmt.Errorf(
-					"%w: journaled loop decision has type %T; want bool",
-					ErrTypeMismatch,
-					recorded,
-				),
-			}
+	run := runFrom(ctx)
+	if err := run.claim(scope(ctx), l.id); err != nil {
+		return false, &StepError{ID: l.id, Op: OpValidate, Err: err}
+	}
+	if recorded, ok := run.replay(scope(ctx), l.id); ok {
+		if stop, ok := recorded.(bool); ok {
+			return stop, nil
+		}
+		return false, &StepError{
+			ID: l.id,
+			Op: OpRun,
+			Err: fmt.Errorf(
+				"%w: journaled loop decision has type %T; want bool",
+				ErrTypeMismatch,
+				recorded,
+			),
 		}
 	}
 
@@ -105,10 +113,16 @@ func (l loopStep) stop(ctx context.Context, iter int, s Store) (bool, error) {
 		}
 		return false, &StepError{ID: l.id, Op: OpRun, Err: err}
 	}
-	journal.record(scope(ctx), l.id, stop)
+	if err := run.journal().record(scope(ctx), l.id, stop); err != nil {
+		return false, &StepError{ID: l.id, Op: OpRun, Err: err}
+	}
 	return stop, nil
 }
 
 func (l loopStep) Describe() Description {
 	return Description{ID: l.id, Kind: "loop", Children: []Description{Describe(l.body)}}
+}
+
+func (l loopStep) workflowDefinition() stepDefinition {
+	return stepDefinition{kind: definitionLoop, id: l.id, body: l.body}
 }

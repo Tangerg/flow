@@ -31,7 +31,9 @@ type ParallelConfig struct {
 // Parallel merges only cells actually written by each branch; cells merely
 // inherited from the input snapshot cannot overwrite another branch's work. On
 // a same-cell conflict a later branch's value wins. A zero [ParallelConfig] runs
-// every branch concurrently. It rejects a nil branch before running any branch.
+// every branch concurrently. Before running, it rejects nil branches and
+// duplicate IDs in steps built by this package. Runtime identity checks cover
+// IDs hidden inside caller-defined steps.
 func Parallel(branches []Step, cfg ParallelConfig) Step {
 	return parallelStep{branches: stepList(slices.Clone(branches)), limit: cfg.Concurrency}
 }
@@ -43,7 +45,11 @@ type parallelStep struct {
 }
 
 func (p parallelStep) Run(ctx context.Context, s Store) (Store, error) {
+	ctx = ensureRun(ctx)
 	if err := p.validate(); err != nil {
+		return s, err
+	}
+	if err := runFrom(ctx).validateDefinition(p); err != nil {
 		return s, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -140,4 +146,8 @@ func (r branchRunner) Run(ctx context.Context, branch Step) (branchOutcome, erro
 
 func (p parallelStep) Describe() Description {
 	return Description{Kind: "parallel", Children: p.branches.describe()}
+}
+
+func (p parallelStep) workflowDefinition() stepDefinition {
+	return stepDefinition{kind: definitionSteps, steps: p.branches}
 }

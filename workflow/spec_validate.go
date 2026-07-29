@@ -19,8 +19,9 @@ func (r *Registry) validateSpec(root Spec) error {
 }
 
 // specValidator owns the recursive state and invariants of nested Spec
-// validation. Step IDs remain path-local because mutually exclusive branch cases
-// may deliberately reuse an output ID.
+// validation. Step IDs remain path-local because mutually exclusive branch
+// cases and independently scoped repeated bodies may deliberately reuse an
+// output ID.
 type specValidator struct {
 	registry *Registry
 }
@@ -113,7 +114,11 @@ func (v specValidator) validateLoop(spec Spec, stepIDs map[string]struct{}) erro
 			fmt.Errorf("%w: unknown condition %q", ErrInvalidSpec, spec.Condition),
 		)
 	}
-	return v.validate(*spec.Body, stepIDs)
+	// The loop body runs under a scope derived from the loop ID and iteration
+	// index, so its IDs are local and may be reused outside this loop. Reserve
+	// the loop ID itself because each iteration records the stop decision under
+	// that ID in the same scope.
+	return v.validate(*spec.Body, map[string]struct{}{spec.ID: {}})
 }
 
 func (v specValidator) validateLeaf(spec Spec, stepIDs map[string]struct{}) error {

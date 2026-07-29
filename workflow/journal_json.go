@@ -74,11 +74,13 @@ func (n *journalNode) appendEntries(path []string, entries *[]journalEntry) {
 	for id, value := range n.records {
 		*entries = append(*entries, journalEntry{
 			key:   JournalKey{Path: slices.Clone(path), ID: id},
-			value: value,
+			value: value.value,
 		})
 	}
 	for segment, child := range n.children {
-		child.appendEntries(journalPath(path).child(segment), entries)
+		path = append(path, segment)
+		child.appendEntries(path, entries)
+		path = path[:len(path)-1]
 	}
 }
 
@@ -108,8 +110,9 @@ func (j *Journal) UnmarshalJSON(data []byte) error {
 	var root journalNode
 	count := 0
 	for index, record := range document.Records {
-		if record.ID == "" {
-			return fmt.Errorf("workflow: unmarshal journal record %d: step ID is empty", index)
+		key := JournalKey{ID: record.ID, Path: record.Path}
+		if err := key.validate(); err != nil {
+			return fmt.Errorf("workflow: unmarshal journal record %d: %w", index, err)
 		}
 		if len(record.Value) == 0 {
 			return fmt.Errorf("workflow: unmarshal journal record %d: value is missing", index)
@@ -124,7 +127,7 @@ func (j *Journal) UnmarshalJSON(data []byte) error {
 				err,
 			)
 		}
-		if inserted := root.record(record.Path, record.ID, value); !inserted {
+		if inserted := root.record(record.Path, record.ID, journalValue{value: value}); !inserted {
 			return fmt.Errorf(
 				"workflow: unmarshal journal record %d: duplicate step %q at path %q",
 				index,
@@ -137,7 +140,19 @@ func (j *Journal) UnmarshalJSON(data []byte) error {
 
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	j.revision++
+	root.setRevision(j.revision)
 	j.root = root
 	j.count = count
 	return nil
+}
+
+func (n *journalNode) setRevision(revision uint64) {
+	for id, value := range n.records {
+		value.revision = revision
+		n.records[id] = value
+	}
+	for _, child := range n.children {
+		child.setRevision(revision)
+	}
 }

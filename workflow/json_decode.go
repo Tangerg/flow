@@ -60,6 +60,7 @@ func (d jsonDocument) value() (any, error) {
 type jsonReader struct {
 	decoder *json.Decoder
 	path    []string
+	depth   int
 }
 
 func (r *jsonReader) read() (any, error) {
@@ -71,6 +72,10 @@ func (r *jsonReader) read() (any, error) {
 	if !ok {
 		return token, nil
 	}
+	if err := r.enter(); err != nil {
+		return nil, err
+	}
+	defer r.leave()
 
 	switch delim {
 	case '{':
@@ -80,6 +85,23 @@ func (r *jsonReader) read() (any, error) {
 	default:
 		return nil, fmt.Errorf("unexpected JSON delimiter %q", delim)
 	}
+}
+
+func (r *jsonReader) enter() error {
+	if r.depth >= MaxNestingDepth {
+		return fmt.Errorf(
+			"%w at %s: depth exceeds limit %d",
+			ErrMaxDepth,
+			pointerPath(r.path).encode(),
+			MaxNestingDepth,
+		)
+	}
+	r.depth++
+	return nil
+}
+
+func (r *jsonReader) leave() {
+	r.depth--
 }
 
 func (r *jsonReader) readObject() (map[string]any, error) {
@@ -98,11 +120,11 @@ func (r *jsonReader) readObject() (map[string]any, error) {
 			)
 		}
 		value, err := r.read()
+		r.path = r.path[:len(r.path)-1]
 		if err != nil {
 			return nil, err
 		}
 		object[name] = value
-		r.path = r.path[:len(r.path)-1]
 	}
 	if _, err := r.decoder.Token(); err != nil { // }
 		return nil, err
@@ -127,11 +149,11 @@ func (r *jsonReader) readArray() ([]any, error) {
 	for index := 0; r.decoder.More(); index++ {
 		r.path = append(r.path, strconv.Itoa(index))
 		value, err := r.read()
+		r.path = r.path[:len(r.path)-1]
 		if err != nil {
 			return nil, err
 		}
 		array = append(array, value)
-		r.path = r.path[:len(r.path)-1]
 	}
 	if _, err := r.decoder.Token(); err != nil { // ]
 		return nil, err

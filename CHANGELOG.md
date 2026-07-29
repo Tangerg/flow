@@ -78,6 +78,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Workflow execution now enforces one `(scope, step ID)` identity per run.
+  Built-in composites reject duplicate IDs before executing, opaque custom
+  wrappers are covered at runtime, Journal write conflicts are returned instead
+  of silently keeping stale data, and each run replays a stable Journal snapshot.
+  Loop body scopes now include the loop ID (`loop[0]`), so sibling loops may
+  safely reuse body IDs; persisted Journals using the old bare `[0]` Loop paths
+  must be discarded or migrated.
+- Strict JSON, node config, programmatic definition, and Journal path boundaries
+  share a maximum nesting depth and return `ErrMaxDepth` instead of allowing
+  recursive schema validation to exhaust the process stack. Journal key
+  traversal now uses linear live path storage rather than retaining a copied
+  path at every trie level.
+- `Map` now documents that parent cancellation takes precedence over a completed
+  output slice, and `Race` explicitly documents that it waits indefinitely for
+  a losing node that ignores cancellation.
 - Repository documentation is now organized by audience: the root README is a
   concise adoption guide, the English tutorial series owns progressive
   learning, executable examples remain the runnable source of truth, package

@@ -184,7 +184,7 @@ func TestEvents_scopePathDistinguishesLoopIterations(t *testing.T) {
 		workflow.NewStore(), cfg); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if want := []string{"[0]", "[1]", "[2]"}; !slices.Equal(paths, want) {
+	if want := []string{"loop[0]", "loop[1]", "loop[2]"}; !slices.Equal(paths, want) {
 		t.Fatalf("paths = %v; want %v", paths, want)
 	}
 }

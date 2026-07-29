@@ -11,7 +11,8 @@ import (
 // losing call to stop, so no goroutine retains the input after the operation
 // completes. If every node fails, it returns their joined errors in input order,
 // each wrapped in an [IndexError]. Cancellation is cooperative; losing nodes
-// must honor their context.
+// must honor their context. A losing node that ignores cancellation can
+// therefore prevent Race from returning indefinitely.
 //
 // Race is the disjunction concurrency primitive — the "first success wins" twin
 // of [Map]'s "wait for all". It cannot be expressed by a wait-for-all map, so it

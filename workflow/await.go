@@ -43,6 +43,11 @@ func (await awaitStep) Run(ctx context.Context, store Store) (Store, error) {
 		run.emit(ctx, Event{Kind: EventFailed, ID: await.id, Err: err})
 		return store, err
 	}
+	if err := run.claim(scope(ctx), await.id); err != nil {
+		err := &StepError{ID: await.id, Op: OpValidate, Err: err}
+		run.emit(ctx, Event{Kind: EventFailed, ID: await.id, Err: err})
+		return store, err
+	}
 	if _, ok := store.Lookup(await.ref); ok {
 		run.emit(ctx, Event{Kind: EventCompleted, ID: await.id, Store: store})
 		return store, nil
@@ -54,6 +59,10 @@ func (await awaitStep) Run(ctx context.Context, store Store) (Store, error) {
 
 func (await awaitStep) Describe() Description {
 	return Description{ID: await.id, Kind: "await", Label: await.ref.String()}
+}
+
+func (await awaitStep) workflowDefinition() stepDefinition {
+	return stepDefinition{kind: definitionNamed, id: await.id}
 }
 
 // AwaitFactory is the [LeafFactory] form of [Await]: a node type a serialized
