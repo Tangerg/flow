@@ -142,6 +142,125 @@ func TestIteration_validatesItsStructureBeforeReadingInput(t *testing.T) {
 	}
 }
 
+func TestIteration_rejectsInvalidStaticBodyDefinition(t *testing.T) {
+	body := workflow.Leaf(
+		"",
+		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+		flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+			return 1, nil
+		}),
+	)
+	step := workflow.Iteration(workflow.IterationConfig{
+		ID:         "items",
+		Input:      workflow.Output("start"),
+		Body:       body,
+		BodyOutput: workflow.Output("body"),
+	})
+	_, err := step.Run(
+		context.Background(),
+		workflow.NewStore().WithOutput("start", []any{}),
+	)
+	if !errors.Is(err, workflow.ErrInvalidStepID) {
+		t.Fatalf("error = %v; want ErrInvalidStepID", err)
+	}
+}
+
+func TestIteration_rejectsIDUsedBeforeIteration(t *testing.T) {
+	step := workflow.Sequence(
+		leafStep("items"),
+		workflow.Iteration(workflow.IterationConfig{
+			ID:         "items",
+			Input:      workflow.Output("start"),
+			Body:       leafStep("body"),
+			BodyOutput: workflow.Output("body"),
+		}),
+	)
+	_, err := step.Run(
+		context.Background(),
+		workflow.NewStore().WithOutput("start", []any{}),
+	)
+	if !errors.Is(err, workflow.ErrDuplicateStep) {
+		t.Fatalf("error = %v; want ErrDuplicateStep", err)
+	}
+}
+
+func TestIteration_rejectsDuplicateOpaqueInvocation(t *testing.T) {
+	body := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+			return store.WithOutput("value", 1), nil
+		},
+	)
+	iteration := workflow.Iteration(workflow.IterationConfig{
+		ID:         "items",
+		Input:      workflow.Output("start"),
+		Body:       body,
+		BodyOutput: workflow.Output("value"),
+	})
+	twice := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(ctx context.Context, store workflow.Store) (workflow.Store, error) {
+			next, err := iteration.Run(ctx, store)
+			if err != nil {
+				return next, err
+			}
+			return iteration.Run(ctx, next)
+		},
+	)
+	_, err := workflow.Run(
+		context.Background(),
+		twice,
+		workflow.NewStore().WithOutput("start", []any{}),
+		workflow.RunConfig{},
+	)
+	if !errors.Is(err, workflow.ErrDuplicateStep) {
+		t.Fatalf("error = %v; want ErrDuplicateStep", err)
+	}
+}
+
+func TestIteration_reportsBodyFailureAndMissingOutput(t *testing.T) {
+	boom := errors.New("boom")
+	tests := map[string]struct {
+		body       workflow.Step
+		bodyOutput workflow.Ref
+		want       error
+	}{
+		"body failure": {
+			body: flow.NodeFunc[workflow.Store, workflow.Store](
+				func(context.Context, workflow.Store) (workflow.Store, error) {
+					return workflow.Store{}, boom
+				},
+			),
+			bodyOutput: workflow.Output("value"),
+			want:       boom,
+		},
+		"missing body output": {
+			body: flow.NodeFunc[workflow.Store, workflow.Store](
+				func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+					return store, nil
+				},
+			),
+			bodyOutput: workflow.Output("missing"),
+			want:       workflow.ErrNotFound,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			step := workflow.Iteration(workflow.IterationConfig{
+				ID:         "items",
+				Input:      workflow.Output("start"),
+				Body:       test.body,
+				BodyOutput: test.bodyOutput,
+			})
+			_, err := step.Run(
+				context.Background(),
+				workflow.NewStore().WithOutput("start", []any{1}),
+			)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("error = %v; want %v", err, test.want)
+			}
+		})
+	}
+}
+
 func mustSlice(t *testing.T, s workflow.Store, nodeID string) []any {
 	t.Helper()
 	raw, ok := s.Lookup(workflow.Output(nodeID))

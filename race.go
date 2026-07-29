@@ -61,7 +61,7 @@ func (race raceNode[I, O]) startNodes(ctx context.Context, input I) <-chan raceR
 	results := make(chan raceResult[O], len(race.nodes))
 	for index, node := range race.nodes {
 		go func() {
-			value, err := run(ctx, node, input)
+			value, err := node.Run(ctx, input)
 			results <- raceResult[O]{index: index, value: value, err: err}
 		}()
 	}
@@ -94,9 +94,6 @@ func (run *raceRun[O]) waitForAll(parent context.Context) (O, error) {
 	var zero O
 	if err := parent.Err(); err != nil {
 		return zero, err
-	}
-	if run.parentErr != nil {
-		return zero, run.parentErr
 	}
 	if run.won {
 		return run.winner, nil

@@ -21,10 +21,10 @@ func (t thenNode[I, M, O]) Run(ctx context.Context, in I) (O, error) {
 		var zero O
 		return zero, ErrNilNode
 	}
-	mid, err := run(ctx, t.first, in)
+	mid, err := t.first.Run(ctx, in)
 	if err != nil {
 		var zero O
 		return zero, err
 	}
-	return run(ctx, t.second, mid)
+	return t.second.Run(ctx, mid)
 }

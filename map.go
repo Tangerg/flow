@@ -52,7 +52,7 @@ func (m mapNode[I, O]) Run(ctx context.Context, input []I) ([]O, error) {
 		count: len(input),
 		limit: m.limit,
 		call: func(ctx context.Context, index int) error {
-			value, err := run(ctx, m.node, input[index])
+			value, err := m.node.Run(ctx, input[index])
 			if err != nil {
 				return &IndexError{Index: index, Err: err}
 			}

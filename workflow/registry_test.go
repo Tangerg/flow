@@ -152,13 +152,74 @@ func TestRegistry_reportsInvalidAndDuplicateRegistrations(t *testing.T) {
 	}
 }
 
+func TestRegistry_reportsInvalidResolverAndConditionRegistrations(t *testing.T) {
+	resolver := workflow.Resolver(func(context.Context, workflow.Store) (string, error) {
+		return "", nil
+	})
+	condition := workflow.Condition(func(context.Context, int, workflow.Store) (bool, error) {
+		return false, nil
+	})
+
+	for name, register := range map[string]func(*workflow.Registry) error{
+		"resolver empty name": func(reg *workflow.Registry) error {
+			return reg.RegisterResolver("", resolver)
+		},
+		"resolver nil": func(reg *workflow.Registry) error {
+			return reg.RegisterResolver("resolver", nil)
+		},
+		"resolver duplicate": func(reg *workflow.Registry) error {
+			if err := reg.RegisterResolver("resolver", resolver); err != nil {
+				return err
+			}
+			return reg.RegisterResolver("resolver", resolver)
+		},
+		"condition empty name": func(reg *workflow.Registry) error {
+			return reg.RegisterCondition("", condition)
+		},
+		"condition nil": func(reg *workflow.Registry) error {
+			return reg.RegisterCondition("condition", nil)
+		},
+		"condition duplicate": func(reg *workflow.Registry) error {
+			if err := reg.RegisterCondition("condition", condition); err != nil {
+				return err
+			}
+			return reg.RegisterCondition("condition", condition)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := register(workflow.NewRegistry()); err == nil {
+				t.Fatal("registration unexpectedly succeeded")
+			}
+		})
+	}
+}
+
 func TestRegistry_mustRegisterPanics(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("MustRegisterLeaf did not panic")
-		}
-	}()
-	workflow.NewRegistry().MustRegisterLeaf("", addN())
+	tests := map[string]func(){
+		"leaf": func() {
+			workflow.NewRegistry().MustRegisterLeaf("", addN())
+		},
+		"resolver": func() {
+			workflow.NewRegistry().MustRegisterResolver("", func(context.Context, workflow.Store) (string, error) {
+				return "", nil
+			})
+		},
+		"condition": func() {
+			workflow.NewRegistry().MustRegisterCondition("", func(context.Context, int, workflow.Store) (bool, error) {
+				return false, nil
+			})
+		},
+	}
+	for name, run := range tests {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("MustRegister%s did not panic", name)
+				}
+			}()
+			run()
+		})
+	}
 }
 
 func TestRegistry_rejectsDuplicateIDsInNestedSpec(t *testing.T) {
@@ -220,6 +281,142 @@ func TestValidateSpec_rejectsMalformedConfigWithoutANodeSchema(t *testing.T) {
 	}
 	if err := reg.ValidateSpec(spec); !errors.Is(err, workflow.ErrInvalidSpec) {
 		t.Fatalf("err = %v; want ErrInvalidSpec", err)
+	}
+}
+
+func TestValidateSpec_rejectsEveryStructuralBoundary(t *testing.T) {
+	reg := workflow.NewRegistry().
+		MustRegisterLeaf("addN", addN()).
+		MustRegisterResolver("pick", func(context.Context, workflow.Store) (string, error) {
+			return "case", nil
+		}).
+		MustRegisterCondition("done", func(context.Context, int, workflow.Store) (bool, error) {
+			return true, nil
+		})
+	leaf := func(id string) workflow.Spec {
+		return workflow.Spec{Kind: workflow.KindLeaf, ID: id, Type: "addN"}
+	}
+	body := func() *workflow.Spec {
+		value := workflow.Spec{Kind: workflow.KindSequence}
+		return &value
+	}
+	input := func(ref workflow.Ref) *workflow.Ref { return &ref }
+
+	tests := map[string]workflow.Spec{
+		"negative max iterations": {
+			Kind: workflow.KindLoop, ID: "loop", Body: body(),
+			Condition: "done", MaxIterations: -1,
+		},
+		"duplicate loop ID": {
+			Kind: workflow.KindSequence,
+			Steps: []workflow.Spec{
+				leaf("same"),
+				{Kind: workflow.KindLoop, ID: "same", Body: body(), Condition: "done"},
+			},
+		},
+		"missing loop body": {
+			Kind: workflow.KindLoop, ID: "loop", Condition: "done",
+		},
+		"unknown loop condition": {
+			Kind: workflow.KindLoop, ID: "loop", Body: body(), Condition: "missing",
+		},
+		"empty leaf type": {
+			Kind: workflow.KindLeaf, ID: "leaf",
+		},
+		"unknown leaf type": {
+			Kind: workflow.KindLeaf, ID: "leaf", Type: "missing",
+		},
+		"duplicate default input": {
+			Kind: workflow.KindLeaf, ID: "leaf", Type: "addN",
+			Input: input(workflow.Output("a")),
+			Inputs: workflow.Inputs{
+				workflow.DefaultPort: workflow.Output("b"),
+			},
+		},
+		"invalid leaf input": {
+			Kind: workflow.KindLeaf, ID: "leaf", Type: "addN",
+			Input: input(workflow.Ref{NodeID: "source", Path: "/~2"}),
+		},
+		"duplicate branch ID": {
+			Kind: workflow.KindSequence,
+			Steps: []workflow.Spec{
+				leaf("same"),
+				{
+					Kind: workflow.KindBranch, ID: "same", Resolver: "pick",
+					Cases: map[string]workflow.Spec{"case": {Kind: workflow.KindSequence}},
+				},
+			},
+		},
+		"missing branch cases": {
+			Kind: workflow.KindBranch, ID: "branch", Resolver: "pick",
+		},
+		"unknown branch resolver": {
+			Kind: workflow.KindBranch, ID: "branch", Resolver: "missing",
+			Cases: map[string]workflow.Spec{"case": {Kind: workflow.KindSequence}},
+		},
+		"empty branch case name": {
+			Kind: workflow.KindBranch, ID: "branch", Resolver: "pick",
+			Cases: map[string]workflow.Spec{"": {Kind: workflow.KindSequence}},
+		},
+		"duplicate iteration ID": {
+			Kind: workflow.KindSequence,
+			Steps: []workflow.Spec{
+				leaf("same"),
+				{
+					Kind: workflow.KindIteration, ID: "same",
+					Input: input(workflow.Output("items")), Body: body(),
+					BodyOutput: input(workflow.Output("value")),
+				},
+			},
+		},
+		"missing iteration input": {
+			Kind: workflow.KindIteration, ID: "each", Body: body(),
+			BodyOutput: input(workflow.Output("value")),
+		},
+		"missing iteration body": {
+			Kind: workflow.KindIteration, ID: "each",
+			Input:      input(workflow.Output("items")),
+			BodyOutput: input(workflow.Output("value")),
+		},
+		"missing iteration body output": {
+			Kind: workflow.KindIteration, ID: "each",
+			Input: input(workflow.Output("items")), Body: body(),
+		},
+		"invalid iteration input": {
+			Kind: workflow.KindIteration, ID: "each",
+			Input: input(workflow.Ref{NodeID: "items", Path: "/~2"}), Body: body(),
+			BodyOutput: input(workflow.Output("value")),
+		},
+		"invalid iteration body output": {
+			Kind: workflow.KindIteration, ID: "each",
+			Input: input(workflow.Output("items")), Body: body(),
+			BodyOutput: input(workflow.Ref{NodeID: "value", Path: "/~2"}),
+		},
+	}
+
+	for name, spec := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := reg.ValidateSpec(spec); err == nil {
+				t.Fatal("ValidateSpec unexpectedly succeeded")
+			}
+		})
+	}
+}
+
+func TestValidateSpec_requiresDeclaredLeafPorts(t *testing.T) {
+	reg := workflow.NewRegistry().
+		MustRegisterLeaf("addN", addN()).
+		MustRegisterSchema("addN", workflow.NodeSchema{
+			Inputs: workflow.OnePort(workflow.TypeNumber),
+			Output: workflow.TypeNumber,
+		})
+	err := reg.ValidateSpec(workflow.Spec{
+		Kind: workflow.KindLeaf,
+		ID:   "leaf",
+		Type: "addN",
+	})
+	if !errors.Is(err, workflow.ErrMissingPort) {
+		t.Fatalf("error = %v; want ErrMissingPort", err)
 	}
 }
 

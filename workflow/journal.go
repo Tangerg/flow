@@ -157,9 +157,6 @@ func (n *journalNode) record(path []string, id string, value journalValue) bool 
 }
 
 func (j *Journal) lookupAt(path []string, id string, revision uint64) (any, bool) {
-	if j == nil {
-		return nil, false
-	}
 	j.mu.RLock()
 	defer j.mu.RUnlock()
 	value, ok := j.root.lookup(path, id)

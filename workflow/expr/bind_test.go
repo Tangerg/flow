@@ -133,6 +133,19 @@ func TestSwitch_withoutFallbackFailsOnNoMatch(t *testing.T) {
 	}
 }
 
+func TestSwitch_reportsCaseEvaluationError(t *testing.T) {
+	resolver, err := expr.Switch(expr.SwitchSpec{
+		Cases:    []expr.Case{{When: "missing.output > 0", Then: "matched"}},
+		Fallback: "fallback",
+	})
+	if err != nil {
+		t.Fatalf("Switch: %v", err)
+	}
+	if _, err := resolver(context.Background(), workflow.NewStore()); !errors.Is(err, expr.ErrUndefined) {
+		t.Fatalf("error = %v; want ErrUndefined", err)
+	}
+}
+
 func TestSwitch_rejectsInvalidSpecs(t *testing.T) {
 	specs := map[string]struct {
 		spec expr.SwitchSpec
@@ -242,6 +255,37 @@ func TestBindings_leavesRegistryUntouchedOnError(t *testing.T) {
 	}
 	if err := reg.ValidateSpec(spec); err == nil {
 		t.Fatal("a partially applied Bindings registered a condition")
+	}
+}
+
+func TestBindings_rejectsInvalidResolversAndSwitches(t *testing.T) {
+	tests := map[string]expr.Bindings{
+		"resolver": {
+			Resolvers: map[string]string{"bad": "counter"},
+		},
+		"switch": {
+			Switches: map[string]expr.SwitchSpec{"bad": {}},
+		},
+	}
+	for name, bindings := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := bindings.Register(workflow.NewRegistry()); err == nil {
+				t.Fatal("Register unexpectedly succeeded")
+			}
+		})
+	}
+}
+
+func TestBindings_reportsDuplicateResolverRegistration(t *testing.T) {
+	reg := workflow.NewRegistry().MustRegisterResolver(
+		"pick",
+		func(context.Context, workflow.Store) (string, error) {
+			return "", nil
+		},
+	)
+	bindings := expr.Bindings{Resolvers: map[string]string{"pick": `"case"`}}
+	if err := bindings.Register(reg); !errors.Is(err, workflow.ErrDuplicateRegistration) {
+		t.Fatalf("error = %v; want ErrDuplicateRegistration", err)
 	}
 }
 

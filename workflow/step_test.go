@@ -3,6 +3,7 @@ package workflow_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/Tangerg/flow"
@@ -182,6 +183,29 @@ func TestLeaf_acceptsCustomBindFunc(t *testing.T) {
 	got, err := workflow.Get[int](out, workflow.Output("double"))
 	if err != nil || got != 42 {
 		t.Fatalf("Get = %d, %v; want 42, nil", got, err)
+	}
+}
+
+func TestLeaf_rejectsExcessiveExecutionScopeDepth(t *testing.T) {
+	ctx := context.Background()
+	for index := range workflow.MaxNestingDepth + 1 {
+		ctx = workflow.WithScope(ctx, fmt.Sprintf("scope-%d", index))
+	}
+	step := workflow.Leaf(
+		"leaf",
+		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+		flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+			return 1, nil
+		}),
+	)
+	_, err := workflow.Run(
+		ctx,
+		step,
+		workflow.NewStore(),
+		workflow.RunConfig{},
+	)
+	if !errors.Is(err, workflow.ErrMaxDepth) {
+		t.Fatalf("error = %v; want ErrMaxDepth", err)
 	}
 }
 

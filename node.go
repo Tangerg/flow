@@ -36,13 +36,3 @@ func (f NodeFunc[I, O]) Run(ctx context.Context, in I) (O, error) {
 	}
 	return f(ctx, in)
 }
-
-// run invokes n, guarding against a nil Node so that composites fail with
-// [ErrNilNode] instead of panicking on a nil interface.
-func run[I, O any](ctx context.Context, n Node[I, O], in I) (O, error) {
-	if n == nil {
-		var zero O
-		return zero, ErrNilNode
-	}
-	return n.Run(ctx, in)
-}

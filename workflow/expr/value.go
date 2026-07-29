@@ -88,10 +88,8 @@ func (n floatNumber) normalized() any {
 	if math.IsNaN(value) || math.IsInf(value, 0) || value != math.Trunc(value) {
 		return float64(n)
 	}
-	encoded, err := json.Marshal(float64(n))
-	if err != nil {
-		return float64(n)
-	}
+	// Finite float64 values are always representable by encoding/json.
+	encoded, _ := json.Marshal(float64(n))
 	if integer, err := strconv.ParseInt(string(encoded), 10, 64); err == nil {
 		return integer
 	}
@@ -154,9 +152,7 @@ func (o operand) negate() (any, error) {
 		if n == uint64(math.MaxInt64)+1 {
 			return int64(math.MinInt64), nil
 		}
-		if n <= math.MaxInt64 {
-			return -int64(n), nil
-		}
+		// normalized converts smaller unsigned values to int64 before evaluation.
 		return nil, fmt.Errorf("%w: unary - overflows int64", ErrType)
 	case float64:
 		return -n, nil
@@ -273,10 +269,8 @@ func (op binaryOperator) applyOrder(order int, unordered bool) bool {
 		return order <= 0
 	case token.GTR:
 		return order > 0
-	case token.GEQ:
+	default: // token.GEQ; callers establish ordering before applying it.
 		return order >= 0
-	default:
-		panic("expr: applyOrder called with non-ordering operator")
 	}
 }
 
@@ -393,14 +387,12 @@ func (n unsignedNumber) compareFloat(other floatNumber) (order int, unordered bo
 	if order := cmp.Compare(uint64(n), truncated); order != 0 {
 		return order, false
 	}
-	switch converted := float64(truncated); {
-	case converted < floating:
+	// For a non-negative in-range float, truncation and conversion back to
+	// float64 can only preserve the value or move below it.
+	if float64(truncated) < floating {
 		return -1, false
-	case converted > floating:
-		return 1, false
-	default:
-		return 0, false
 	}
+	return 0, false
 }
 
 func (op binaryOperator) applyString(left, right string) (any, error) {
@@ -434,13 +426,11 @@ func (op binaryOperator) applyInt(left, right int64) (any, error) {
 			return nil, ErrDivideByZero
 		}
 		return left / right, nil
-	case token.REM:
+	default: // token.REM; compilation rejects every other operator.
 		if right == 0 {
 			return nil, ErrDivideByZero
 		}
 		return left % right, nil
-	default:
-		return nil, fmt.Errorf("%w: %s does not accept numbers", ErrType, op.String())
 	}
 }
 
@@ -451,9 +441,6 @@ func (op binaryOperator) applyUnsigned(left, right operand) (any, bool, error) {
 	leftInteger, leftOK := left.integer()
 	rightInteger, rightOK := right.integer()
 	if !leftOK || !rightOK {
-		return nil, false, nil
-	}
-	if !leftInteger.unsigned && !rightInteger.unsigned {
 		return nil, false, nil
 	}
 	if leftInteger.negative {
@@ -502,13 +489,11 @@ func (op binaryOperator) applyUint(left, right uint64) (any, error) {
 			return nil, ErrDivideByZero
 		}
 		return left / right, nil
-	case token.REM:
+	default: // token.REM; compilation rejects every other operator.
 		if right == 0 {
 			return nil, ErrDivideByZero
 		}
 		return left % right, nil
-	default:
-		return nil, fmt.Errorf("%w: %s does not accept numbers", ErrType, op)
 	}
 }
 
@@ -525,10 +510,8 @@ func (op binaryOperator) applyFloat(left, right float64) (any, error) {
 			return nil, ErrDivideByZero
 		}
 		return left / right, nil
-	case token.REM:
+	default: // token.REM; compilation rejects every other operator.
 		return nil, fmt.Errorf("%w: %% wants two integers", ErrType)
-	default:
-		return nil, fmt.Errorf("%w: %s does not accept numbers", ErrType, op.String())
 	}
 }
 

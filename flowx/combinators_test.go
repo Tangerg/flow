@@ -148,6 +148,25 @@ func TestCombine_validatesBothNodesBeforeRunning(t *testing.T) {
 	}
 }
 
+func TestCombine_propagatesNodeFailure(t *testing.T) {
+	boom := errors.New("boom")
+	failing := flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+		return 0, boom
+	})
+	ok := flow.NodeFunc[int, string](func(context.Context, int) (string, error) {
+		return "ok", nil
+	})
+
+	_, err := flowx.Combine(
+		failing,
+		ok,
+		func(context.Context, int, string) (string, error) { return "", nil },
+	).Run(context.Background(), 1)
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v; want node failure", err)
+	}
+}
+
 func TestChain(t *testing.T) {
 	inc := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil })
 	got, err := flowx.Chain(inc, inc, inc).Run(context.Background(), 0)

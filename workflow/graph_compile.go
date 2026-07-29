@@ -41,11 +41,8 @@ func (r *Registry) CompileGraph(graph Graph) (Step, error) {
 // CompileGraphJSON validates data against [GraphJSONSchema], strictly
 // unmarshals it into a Graph, and compiles it.
 func (r *Registry) CompileGraphJSON(data []byte) (Step, error) {
-	if err := ValidateGraphJSON(data); err != nil {
-		return nil, err
-	}
 	var graph Graph
-	if err := jsonDocument(data).decode(&graph); err != nil {
+	if err := schemaLoader(loadGraphSchema).decode(jsonDocument(data), &graph); err != nil {
 		return nil, &GraphError{
 			Field: "json",
 			Err:   fmt.Errorf("%w: %w", ErrInvalidGraph, err),

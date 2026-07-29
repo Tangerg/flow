@@ -75,6 +75,22 @@ func TestCompileGraph_portsInferDependencies(t *testing.T) {
 	}
 }
 
+func TestCompileGraph_deduplicatesExplicitAndInferredDependency(t *testing.T) {
+	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	graph := workflow.Graph{Nodes: []workflow.NodeSpec{
+		{ID: "a", Type: "addN", Input: refPtr(workflow.Output("start"))},
+		{
+			ID:        "b",
+			Type:      "addN",
+			Input:     refPtr(workflow.Output("a")),
+			DependsOn: []string{"a"},
+		},
+	}}
+	if _, err := reg.CompileGraph(graph); err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+}
+
 func TestCompileGraph_rejectsDuplicateDefaultPort(t *testing.T) {
 	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{{

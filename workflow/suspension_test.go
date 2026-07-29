@@ -29,6 +29,19 @@ func runJournal(step workflow.Step, in workflow.Store, journal *workflow.Journal
 	return workflow.Run(context.Background(), step, in, workflow.RunConfig{Journal: journal})
 }
 
+type suspendedByIdentity struct{}
+
+func (suspendedByIdentity) Error() string { return "custom suspension" }
+
+func (suspendedByIdentity) Is(target error) bool {
+	return target == workflow.ErrSuspended
+}
+
+type errorChildren []error
+
+func (children errorChildren) Error() string   { return "joined children" }
+func (children errorChildren) Unwrap() []error { return children }
+
 func TestSuspend_sequenceResumesWithoutRepeatingWork(t *testing.T) {
 	var aRuns, bRuns atomic.Int64
 	pipeline := workflow.Sequence(
@@ -103,6 +116,36 @@ func TestSuspend_structuredLeafValueCanBeResolved(t *testing.T) {
 	}
 	if approved, err := workflow.Get[bool](out, workflow.Output("approval")); err != nil || !approved {
 		t.Fatalf("approval = %v, %v; want true", approved, err)
+	}
+}
+
+func TestSuspend_leafObserverReceivesSuspension(t *testing.T) {
+	step := workflow.Leaf(
+		"wait",
+		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+		flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+			return 0, workflow.Suspend("not ready")
+		}),
+	)
+	var event workflow.Event
+	_, err := workflow.Run(
+		context.Background(),
+		step,
+		workflow.NewStore(),
+		workflow.RunConfig{Observer: workflow.ObserverFunc(
+			func(_ context.Context, candidate workflow.Event) {
+				if candidate.Kind == workflow.EventSuspended {
+					event = candidate
+				}
+			},
+		)},
+	)
+	if !errors.Is(err, workflow.ErrSuspended) {
+		t.Fatalf("Run error = %v; want ErrSuspended", err)
+	}
+	if event.Kind != workflow.EventSuspended || event.ID != "wait" ||
+		!errors.Is(event.Err, workflow.ErrSuspended) {
+		t.Fatalf("suspension event = %+v", event)
 	}
 }
 
@@ -221,6 +264,61 @@ func TestInterrupt_resolvesRepeatedScopesIndependently(t *testing.T) {
 	got, err := workflow.Get[[]bool](out, workflow.Output("items"))
 	if err != nil || !slices.Equal(got, []bool{true, false, true}) {
 		t.Fatalf("items = %v, %v; want [true false true]", got, err)
+	}
+}
+
+func TestAwaitAndInterrupt_rejectDuplicateOpaqueInvocation(t *testing.T) {
+	await := workflow.Await("gate", workflow.Output("ready"))
+	awaitTwice := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(ctx context.Context, store workflow.Store) (workflow.Store, error) {
+			next, err := await.Run(ctx, store)
+			if err != nil {
+				return next, err
+			}
+			return await.Run(ctx, next)
+		},
+	)
+	_, err := workflow.Run(
+		context.Background(),
+		awaitTwice,
+		workflow.NewStore().WithOutput("ready", true),
+		workflow.RunConfig{},
+	)
+	if !errors.Is(err, workflow.ErrDuplicateStep) {
+		t.Fatalf("duplicate Await error = %v; want ErrDuplicateStep", err)
+	}
+
+	journal := workflow.NewJournal()
+	if err := journal.Record(workflow.JournalKey{ID: "question"}, "answer"); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	interrupt := workflow.Interrupt("question", "continue?")
+	interruptTwice := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(ctx context.Context, store workflow.Store) (workflow.Store, error) {
+			next, err := interrupt.Run(ctx, store)
+			if err != nil {
+				return next, err
+			}
+			return interrupt.Run(ctx, next)
+		},
+	)
+	_, err = workflow.Run(
+		context.Background(),
+		interruptTwice,
+		workflow.NewStore(),
+		workflow.RunConfig{Journal: journal},
+	)
+	if !errors.Is(err, workflow.ErrDuplicateStep) {
+		t.Fatalf("duplicate Interrupt error = %v; want ErrDuplicateStep", err)
+	}
+}
+
+func TestInterrupt_rejectsEmptyID(t *testing.T) {
+	if _, err := workflow.Interrupt("", "continue?").Run(
+		context.Background(),
+		workflow.NewStore(),
+	); !errors.Is(err, workflow.ErrInvalidStepID) {
+		t.Fatalf("error = %v; want ErrInvalidStepID", err)
 	}
 }
 
@@ -767,6 +865,36 @@ func TestSuspensions_ofOtherErrors(t *testing.T) {
 	}
 }
 
+func TestSuspensions_supportsSentinelCustomIdentityAndNilChildren(t *testing.T) {
+	tests := []struct {
+		name  string
+		err   error
+		value any
+	}{
+		{name: "sentinel", err: workflow.ErrSuspended},
+		{name: "custom identity", err: suspendedByIdentity{}, value: "custom suspension"},
+		{
+			name: "nil joined child",
+			err: errorChildren{
+				nil,
+				&workflow.Suspension{ID: "wait", Value: "ready"},
+			},
+			value: "ready",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			waits := workflow.Suspensions(test.err)
+			if len(waits) != 1 || waits[0].Value != test.value {
+				t.Fatalf("Suspensions = %+v; want one with value %#v", waits, test.value)
+			}
+			if !workflow.SuspendedOnly(test.err) {
+				t.Fatalf("SuspendedOnly(%v) = false", test.err)
+			}
+		})
+	}
+}
+
 func TestSuspendedOnly_classifiesTheWholeErrorTree(t *testing.T) {
 	first := &workflow.Suspension{ID: "a", Value: "first"}
 	second := &workflow.Suspension{ID: "b", Value: "second"}
@@ -819,6 +947,26 @@ func TestJoinSuspensions_normalizesAndCopies(t *testing.T) {
 	}
 	if err := workflow.JoinSuspensions(nil, nil); err != nil {
 		t.Fatalf("JoinSuspensions(nil, nil) = %v; want nil", err)
+	}
+}
+
+func TestJoinSuspensions_ordersByAwaitAfterIdentity(t *testing.T) {
+	err := workflow.JoinSuspensions(
+		&workflow.Suspension{ID: "wait", Await: workflow.Output("z")},
+		&workflow.Suspension{ID: "wait", Await: workflow.Output("a")},
+	)
+	waits := workflow.Suspensions(err)
+	if len(waits) != 2 ||
+		waits[0].Await != workflow.Output("a") ||
+		waits[1].Await != workflow.Output("z") {
+		t.Fatalf("Suspensions = %+v; want await a before z", waits)
+	}
+}
+
+func TestSuspension_nilKey(t *testing.T) {
+	var suspension *workflow.Suspension
+	if key := suspension.Key(); key.ID != "" || key.Path != nil {
+		t.Fatalf("nil Suspension Key = %+v; want zero", key)
 	}
 }
 

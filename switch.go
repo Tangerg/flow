@@ -32,7 +32,7 @@ func (s switchNode[K, I, O]) Run(ctx context.Context, in I) (O, error) {
 			return zero, fmt.Errorf("case %v: %w", key, ErrNilNode)
 		}
 	}
-	key, err := run(ctx, s.resolve, in)
+	key, err := s.resolve.Run(ctx, in)
 	if err != nil {
 		return zero, err
 	}
@@ -40,5 +40,5 @@ func (s switchNode[K, I, O]) Run(ctx context.Context, in I) (O, error) {
 	if !ok {
 		return zero, fmt.Errorf("%w: key %v", ErrNoCase, key)
 	}
-	return run(ctx, node, in)
+	return node.Run(ctx, in)
 }

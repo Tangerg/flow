@@ -110,6 +110,28 @@ func TestRegisterSchema_rejectsInvalidPortsAndTypes(t *testing.T) {
 	}
 }
 
+func TestRegisterSchema_rejectsEmptyAndDuplicateNames(t *testing.T) {
+	reg := workflow.NewRegistry()
+	if err := reg.RegisterSchema("", workflow.NodeSchema{}); !errors.Is(err, workflow.ErrInvalidRegistration) {
+		t.Fatalf("empty name error = %v; want ErrInvalidRegistration", err)
+	}
+	if err := reg.RegisterSchema("node", workflow.NodeSchema{}); err != nil {
+		t.Fatalf("first registration: %v", err)
+	}
+	if err := reg.RegisterSchema("node", workflow.NodeSchema{}); !errors.Is(err, workflow.ErrDuplicateRegistration) {
+		t.Fatalf("duplicate error = %v; want ErrDuplicateRegistration", err)
+	}
+}
+
+func TestMustRegisterSchema_panics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("MustRegisterSchema did not panic")
+		}
+	}()
+	workflow.NewRegistry().MustRegisterSchema("", workflow.NodeSchema{})
+}
+
 func TestRegistry_introspection(t *testing.T) {
 	configSchema := json.RawMessage(`{"type":"object"}`)
 	reg := workflow.NewRegistry().

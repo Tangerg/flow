@@ -12,6 +12,22 @@ import (
 	"github.com/Tangerg/flow/workflow"
 )
 
+type failOnceJSON struct {
+	calls int
+}
+
+func (value *failOnceJSON) MarshalJSON() ([]byte, error) {
+	value.calls++
+	if value.calls == 1 {
+		return nil, errors.New("first marshal failed")
+	}
+	return []byte(`true`), nil
+}
+
+type nestedValue struct {
+	Next *nestedValue `json:"next,omitempty"`
+}
+
 func TestRef_helpers(t *testing.T) {
 	ref := workflow.Output("step").Child("items", "0")
 	if ref != workflow.At("step", "output", "items", "0") || ref.String() != "step#/output/items/0" {
@@ -280,6 +296,35 @@ func TestStore_missing(t *testing.T) {
 	}
 }
 
+func TestStore_rejectsInvalidPointerAndUnrepresentableNestedValues(t *testing.T) {
+	store := workflow.NewStore().
+		WithOutput("channel", make(chan int)).
+		WithOutput("plain", 1)
+
+	if _, ok := store.Lookup(workflow.Ref{NodeID: "plain", Path: "/~2"}); ok {
+		t.Fatal("invalid JSON Pointer unexpectedly resolved")
+	}
+	if _, ok := store.Lookup(workflow.Output("channel").Child("field")); ok {
+		t.Fatal("channel unexpectedly resolved through JSON")
+	}
+
+	var deep *nestedValue
+	for range workflow.MaxNestingDepth + 1 {
+		deep = &nestedValue{Next: deep}
+	}
+	store = store.WithOutput("deep", deep)
+	if _, ok := store.Lookup(workflow.Output("deep").Child("next")); ok {
+		t.Fatal("excessively nested value unexpectedly resolved")
+	}
+}
+
+func TestGet_reportsValuesThatCannotBeMarshaled(t *testing.T) {
+	store := workflow.NewStore().WithOutput("channel", make(chan int))
+	if _, err := workflow.Get[int](store, workflow.Output("channel")); !errors.Is(err, workflow.ErrTypeMismatch) {
+		t.Fatalf("error = %v; want ErrTypeMismatch", err)
+	}
+}
+
 func TestStore_JSONRoundTrip(t *testing.T) {
 	original := workflow.NewStore().
 		With("a", "output", map[string]any{"items": []any{"x", true}}).
@@ -415,6 +460,18 @@ func TestStore_UnmarshalIsAtomic(t *testing.T) {
 	}
 }
 
+func TestStore_UnmarshalReportsEveryJSONKind(t *testing.T) {
+	for _, data := range []string{"true", "1", `"text"`, "[]"} {
+		store := workflow.NewStore().WithOutput("old", 1)
+		if err := json.Unmarshal([]byte(data), &store); err == nil {
+			t.Fatalf("Unmarshal(%s) unexpectedly succeeded", data)
+		}
+		if got, ok := store.Lookup(workflow.Output("old")); !ok || got != 1 {
+			t.Fatalf("store changed after Unmarshal(%s)", data)
+		}
+	}
+}
+
 func TestStore_UnmarshalRejectsNilReceiver(t *testing.T) {
 	var store *workflow.Store
 	if err := store.UnmarshalJSON([]byte(`{}`)); err == nil ||
@@ -474,5 +531,16 @@ func TestStore_MarshalReportsTheFirstBadCellDeterministically(t *testing.T) {
 	_, err := json.Marshal(store)
 	if err == nil || !strings.Contains(err.Error(), `node "a" key "a"`) {
 		t.Fatalf("err = %v; want first bad cell a.a", err)
+	}
+}
+
+func TestStore_MarshalPreservesOriginalErrorWhenRetrySucceeds(t *testing.T) {
+	value := new(failOnceJSON)
+	_, err := json.Marshal(workflow.NewStore().WithOutput("flaky", value))
+	if err == nil || !strings.Contains(err.Error(), "marshal store") {
+		t.Fatalf("error = %v; want Store marshal error", err)
+	}
+	if value.calls != 2 {
+		t.Fatalf("MarshalJSON calls = %d; want 2", value.calls)
 	}
 }

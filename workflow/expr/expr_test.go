@@ -222,6 +222,27 @@ func TestParse_indexBounds(t *testing.T) {
 	}
 }
 
+func TestParse_reportsNestedCompilationErrors(t *testing.T) {
+	for _, src := range []string{
+		`(a + b)[0]`,
+		`a.output[1.5]`,
+		`-counter`,
+		`counter + 1`,
+		`1 + counter`,
+		`len(counter)`,
+	} {
+		if _, err := expr.Parse(src); err == nil {
+			t.Fatalf("Parse(%q) unexpectedly succeeded", src)
+		}
+	}
+}
+
+func TestEval_reportsRightOperandFailure(t *testing.T) {
+	if _, err := expr.MustParse(`1 + missing.output`).Eval(workflow.NewStore()); !errors.Is(err, expr.ErrUndefined) {
+		t.Fatalf("error = %v; want ErrUndefined", err)
+	}
+}
+
 func TestParse_integerIndexesUseTheStorePathRepresentation(t *testing.T) {
 	s := store("list.output", []any{"zero", "one", "two"})
 	for src, want := range map[string]string{
@@ -368,6 +389,7 @@ func TestEval_containerEqualityIsSymmetric(t *testing.T) {
 	)
 	for _, src := range []string{
 		"nil == list.output",
+		"nil != list.output",
 		"list.output == nil",
 		"list.output == list.output",
 		"nil == object.output",

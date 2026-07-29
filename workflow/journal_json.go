@@ -96,7 +96,8 @@ func (j *Journal) UnmarshalJSON(data []byte) error {
 	}
 
 	var document journalDocument
-	if err := jsonDocument(data).decode(&document); err != nil {
+	decoded, err := jsonDocument(data).decodeWithValue(&document)
+	if err != nil {
 		return fmt.Errorf("workflow: unmarshal journal: %w", err)
 	}
 	if document.Version != journalJSONVersion {
@@ -107,6 +108,13 @@ func (j *Journal) UnmarshalJSON(data []byte) error {
 		)
 	}
 
+	// Typed decoding above proves these shapes whenever there is a record. Keep
+	// the semantic tree only to distinguish an absent value from an explicit
+	// null without parsing each RawMessage again.
+	var decodedRecords []any
+	if len(document.Records) > 0 {
+		decodedRecords = decoded.(map[string]any)["records"].([]any)
+	}
 	var root journalNode
 	count := 0
 	for index, record := range document.Records {
@@ -114,18 +122,10 @@ func (j *Journal) UnmarshalJSON(data []byte) error {
 		if err := key.validate(); err != nil {
 			return fmt.Errorf("workflow: unmarshal journal record %d: %w", index, err)
 		}
-		if len(record.Value) == 0 {
+		object := decodedRecords[index].(map[string]any)
+		value, present := object["value"]
+		if !present {
 			return fmt.Errorf("workflow: unmarshal journal record %d: value is missing", index)
-		}
-		value, err := jsonDocument(record.Value).value()
-		if err != nil {
-			return fmt.Errorf(
-				"workflow: unmarshal journal record %d (%q at path %q): %w",
-				index,
-				record.ID,
-				record.Path,
-				err,
-			)
 		}
 		if inserted := root.record(record.Path, record.ID, journalValue{value: value}); !inserted {
 			return fmt.Errorf(

@@ -205,3 +205,116 @@ func TestBranch_nilResolver(t *testing.T) {
 		t.Fatalf("err = %v; want route validation StepError", err)
 	}
 }
+
+func TestBranch_rejectsInvalidStaticIdentities(t *testing.T) {
+	leaf := func(id string) workflow.Step {
+		return workflow.Leaf(
+			id,
+			workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+			flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+				return 1, nil
+			}),
+		)
+	}
+	resolve := func(context.Context, workflow.Store) (string, error) {
+		return "case", nil
+	}
+	tests := map[string]workflow.Step{
+		"branch ID collides before branch": workflow.Sequence(
+			leaf("route"),
+			workflow.Branch("route", resolve, map[string]workflow.Step{
+				"case": leaf("out"),
+			}),
+		),
+		"case collides with branch ID": workflow.Branch(
+			"route",
+			resolve,
+			map[string]workflow.Step{"case": leaf("route")},
+		),
+	}
+	for name, step := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := step.Run(
+				context.Background(),
+				workflow.NewStore(),
+			); !errors.Is(err, workflow.ErrDuplicateStep) {
+				t.Fatalf("error = %v; want ErrDuplicateStep", err)
+			}
+		})
+	}
+}
+
+func TestBranch_rejectsDuplicateOpaqueInvocation(t *testing.T) {
+	branch := workflow.Branch(
+		"route",
+		func(context.Context, workflow.Store) (string, error) { return "ok", nil },
+		map[string]workflow.Step{
+			"ok": flow.NodeFunc[workflow.Store, workflow.Store](
+				func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+					return store, nil
+				},
+			),
+		},
+	)
+	twice := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(ctx context.Context, store workflow.Store) (workflow.Store, error) {
+			next, err := branch.Run(ctx, store)
+			if err != nil {
+				return next, err
+			}
+			return branch.Run(ctx, next)
+		},
+	)
+	if _, err := workflow.Run(
+		context.Background(),
+		twice,
+		workflow.NewStore(),
+		workflow.RunConfig{},
+	); !errors.Is(err, workflow.ErrDuplicateStep) {
+		t.Fatalf("error = %v; want ErrDuplicateStep", err)
+	}
+}
+
+func TestBranch_reportsJournalDecisionConflict(t *testing.T) {
+	journal := workflow.NewJournal()
+	branch := workflow.Branch(
+		"route",
+		func(context.Context, workflow.Store) (string, error) {
+			if err := journal.Record(workflow.JournalKey{ID: "route"}, "ok"); err != nil {
+				return "", err
+			}
+			return "ok", nil
+		},
+		map[string]workflow.Step{"ok": leafStep("ok")},
+	)
+	_, err := workflow.Run(
+		context.Background(),
+		branch,
+		workflow.NewStore().WithOutput("start", 1),
+		workflow.RunConfig{Journal: journal},
+	)
+	if !errors.Is(err, workflow.ErrJournalConflict) {
+		t.Fatalf("error = %v; want ErrJournalConflict", err)
+	}
+}
+
+func TestBranch_rejectsJournaledDecisionOfWrongType(t *testing.T) {
+	journal := workflow.NewJournal()
+	if err := journal.Record(workflow.JournalKey{ID: "route"}, 1); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	branch := workflow.Branch(
+		"route",
+		func(context.Context, workflow.Store) (string, error) { return "ok", nil },
+		map[string]workflow.Step{"ok": leafStep("ok")},
+	)
+	_, err := workflow.Run(
+		context.Background(),
+		branch,
+		workflow.NewStore().WithOutput("start", 1),
+		workflow.RunConfig{Journal: journal},
+	)
+	if !errors.Is(err, workflow.ErrTypeMismatch) {
+		t.Fatalf("error = %v; want ErrTypeMismatch", err)
+	}
+}

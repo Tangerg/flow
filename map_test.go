@@ -153,6 +153,73 @@ func TestMap_singleItemReportsCancellationAfterRun(t *testing.T) {
 	}
 }
 
+func TestMap_singleItemHonorsCancellationBeforeRun(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ran := false
+	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
+		ran = true
+		return in, nil
+	})
+
+	_, err := flow.Map(node, flow.MapConfig{}).Run(ctx, []int{1})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v; want context.Canceled", err)
+	}
+	if ran {
+		t.Fatal("single item ran under an already cancelled context")
+	}
+}
+
+func TestMap_singleItemReturnsNodeError(t *testing.T) {
+	boom := errors.New("boom")
+	node := flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+		return 0, boom
+	})
+
+	_, err := flow.Map(node, flow.MapConfig{}).Run(context.Background(), []int{1})
+	var indexErr *flow.IndexError
+	if !errors.As(err, &indexErr) || indexErr.Index != 0 || !errors.Is(err, boom) {
+		t.Fatalf("err = %v; want IndexError(0, boom)", err)
+	}
+}
+
+func TestMap_sequentialSuccessAndCancellation(t *testing.T) {
+	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
+		return in + 1, nil
+	})
+	got, err := flow.Map(node, flow.MapConfig{Concurrency: 1}).Run(
+		context.Background(),
+		[]int{1, 2},
+	)
+	if err != nil || len(got) != 2 || got[0] != 2 || got[1] != 3 {
+		t.Fatalf("sequential Map = %v, %v; want [2 3], nil", got, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := flow.Map(node, flow.MapConfig{Concurrency: 1}).Run(
+		ctx,
+		[]int{1, 2},
+	); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled sequential Map error = %v; want context.Canceled", err)
+	}
+}
+
+func TestMap_sequentialCancellationTakesPrecedenceOverNodeError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	boom := errors.New("boom")
+	node := flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+		cancel()
+		return 0, boom
+	})
+
+	_, err := flow.Map(node, flow.MapConfig{Concurrency: 1}).Run(ctx, []int{1, 2})
+	if !errors.Is(err, context.Canceled) || errors.Is(err, boom) {
+		t.Fatalf("err = %v; want only parent cancellation", err)
+	}
+}
+
 func TestMap_errorIncludesIndex(t *testing.T) {
 	boom := errors.New("boom")
 	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
@@ -182,7 +249,7 @@ func TestMap_boundedFailureStopsScheduling(t *testing.T) {
 		case 1:
 			close(secondStarted)
 			<-ctx.Done()
-			return 0, ctx.Err()
+			return in, nil
 		default:
 			return in, nil
 		}

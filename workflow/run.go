@@ -167,9 +167,6 @@ func (r *runState) claim(path []string, id string) error {
 }
 
 func (r *runState) validateDefinition(step Step) error {
-	if r == nil {
-		return nil
-	}
 	r.definitionOnce.Do(func() {
 		r.definitionErr = (definitionValidator{}).validate(step)
 	})

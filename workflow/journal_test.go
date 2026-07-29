@@ -202,6 +202,10 @@ func TestJournal_recordExternalCompletion(t *testing.T) {
 	}, false); err != nil {
 		t.Fatalf("Record after Forget: %v", err)
 	}
+	journal.Forget(workflow.JournalKey{ID: "approval", Path: []string{"missing"}})
+	if journal.Len() != 1 {
+		t.Fatalf("Len after forgetting a missing scope = %d; want 1", journal.Len())
+	}
 	if err := journal.Record(workflow.JournalKey{}, true); !errors.Is(err, workflow.ErrInvalidStepID) {
 		t.Fatalf("empty key error = %v; want ErrInvalidStepID", err)
 	}

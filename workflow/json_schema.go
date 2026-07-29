@@ -120,6 +120,21 @@ func (load schemaLoader) validate(document jsonDocument) error {
 	return schema.validate(doc)
 }
 
+func (load schemaLoader) decode(document jsonDocument, dst any) error {
+	doc, err := document.value()
+	if err != nil {
+		return err
+	}
+	schema, err := load()
+	if err != nil {
+		return err
+	}
+	if err := schema.validate(doc); err != nil {
+		return err
+	}
+	return document.decodeParsed(dst)
+}
+
 func (s *compiledSchema) validateConfig(config json.RawMessage) error {
 	data := bytes.TrimSpace(config)
 	if len(data) == 0 {
@@ -167,9 +182,6 @@ func (e *jsonSchemaError) Error() string {
 		}
 		seen[message] = struct{}{}
 		messages = append(messages, message)
-	}
-	if len(messages) == 0 {
-		return e.err.Error()
 	}
 	return strings.Join(messages, "; ")
 }

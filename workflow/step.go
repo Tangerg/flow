@@ -22,9 +22,6 @@ type scopedStep struct {
 }
 
 func (scoped scopedStep) run(ctx context.Context, store Store) (Store, error) {
-	if scoped.step == nil {
-		return store, ErrNilStep
-	}
 	return scoped.step.Run(scoped.childContext(ctx), store)
 }
 

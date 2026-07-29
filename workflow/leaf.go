@@ -144,8 +144,6 @@ func (execution *leafExecution[I, O]) validate(ctx context.Context) error {
 		return &StepError{ID: execution.leaf.id, Op: OpValidate, Err: ErrInvalidStepID}
 	case execution.leaf.bind == nil:
 		return &StepError{ID: execution.leaf.id, Op: OpBind, Err: flow.ErrNilFunc}
-	case execution.leaf.runner == nil:
-		return &StepError{ID: execution.leaf.id, Op: OpRun, Err: flow.ErrNilNode}
 	default:
 		if err := execution.leaf.runner.validate(); err != nil {
 			return &StepError{ID: execution.leaf.id, Op: OpRun, Err: err}

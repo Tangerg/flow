@@ -95,9 +95,6 @@ func (s Store) withDelta(key storeKey, value cell) Store {
 }
 
 func (s Store) compact() Store {
-	if s.delta == nil {
-		return s
-	}
 	return Store{snapshot: &storeSnapshot{data: s.materialize()}}
 }
 
@@ -187,8 +184,8 @@ func (s Store) Changes(base Store) []Write {
 }
 
 // changedWrites returns the receiver's cells that do not share the
-// corresponding identity in base. Revisions preserve write order; the key is a
-// deterministic tie-breaker for data restored from an external snapshot.
+// corresponding identity in base. Globally unique revisions preserve write
+// order, including for data restored from an external snapshot.
 func (s Store) changedWrites(base map[storeKey]cell) []storeWrite {
 	candidate := s.materialize()
 	changed := make([]storeWrite, 0, len(candidate))
@@ -199,13 +196,7 @@ func (s Store) changedWrites(base map[storeKey]cell) []storeWrite {
 		changed = append(changed, storeWrite{key: identity, cell: next})
 	}
 	slices.SortFunc(changed, func(a, b storeWrite) int {
-		if order := cmp.Compare(a.cell.revision, b.cell.revision); order != 0 {
-			return order
-		}
-		if order := cmp.Compare(a.key.nodeID, b.key.nodeID); order != 0 {
-			return order
-		}
-		return cmp.Compare(a.key.key, b.key.key)
+		return cmp.Compare(a.cell.revision, b.cell.revision)
 	})
 	return changed
 }

@@ -19,19 +19,26 @@ func (d jsonDocument) decode(dst any) error {
 	if _, err := d.value(); err != nil {
 		return err
 	}
+	return d.decodeParsed(dst)
+}
+
+// decodeWithValue returns the ordinary JSON value and decodes the same document
+// into dst. Callers that need both representations can share the strict parse
+// instead of reparsing nested raw messages.
+func (d jsonDocument) decodeWithValue(dst any) (any, error) {
+	value, err := d.value()
+	if err != nil {
+		return nil, err
+	}
+	return value, d.decodeParsed(dst)
+}
+
+// decodeParsed maps a document already accepted by value into a Go type.
+func (d jsonDocument) decodeParsed(dst any) error {
 	decoder := json.NewDecoder(bytes.NewReader(d))
 	decoder.DisallowUnknownFields()
 	decoder.UseNumber()
-	if err := decoder.Decode(dst); err != nil {
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		if err == nil {
-			return errors.New("multiple JSON values")
-		}
-		return err
-	}
-	return nil
+	return decoder.Decode(dst)
 }
 
 // value decodes one JSON value into the ordinary JSON domain while
@@ -77,14 +84,10 @@ func (r *jsonReader) read() (any, error) {
 	}
 	defer r.leave()
 
-	switch delim {
-	case '{':
+	if delim == '{' {
 		return r.readObject()
-	case '[':
-		return r.readArray()
-	default:
-		return nil, fmt.Errorf("unexpected JSON delimiter %q", delim)
 	}
+	return r.readArray()
 }
 
 func (r *jsonReader) enter() error {
@@ -137,11 +140,9 @@ func (r *jsonReader) readMemberName() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	name, ok := token.(string)
-	if !ok {
-		return "", fmt.Errorf("JSON object member name has type %T; want string", token)
-	}
-	return name, nil
+	// More reports true inside an object only when the next token is a member
+	// name, so a successful Token call is necessarily a string.
+	return token.(string), nil
 }
 
 func (r *jsonReader) readArray() ([]any, error) {

@@ -49,6 +49,18 @@ func TestLoop_nilCondition(t *testing.T) {
 	}
 }
 
+func TestLoop_nilBody(t *testing.T) {
+	_, err := workflow.Loop(
+		"loop",
+		nil,
+		func(context.Context, int, workflow.Store) (bool, error) { return true, nil },
+		workflow.LoopConfig{},
+	).Run(context.Background(), workflow.NewStore())
+	if !errors.Is(err, workflow.ErrNilStep) {
+		t.Fatalf("error = %v; want ErrNilStep", err)
+	}
+}
+
 func TestLoop_maxIterations(t *testing.T) {
 	body := workflow.Leaf("x",
 		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
@@ -183,5 +195,128 @@ func TestValidateSpec_siblingLoopBodiesMayReuseAnID(t *testing.T) {
 	colliding.Body.ID = "same"
 	if err := registry.ValidateSpec(colliding); !errors.Is(err, workflow.ErrDuplicateStep) {
 		t.Fatalf("same body and loop ID error = %v; want ErrDuplicateStep", err)
+	}
+}
+
+func TestLoop_rejectsInvalidStaticIdentities(t *testing.T) {
+	leaf := func(id string) workflow.Step {
+		return workflow.Leaf(
+			id,
+			workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+			flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+				return 1, nil
+			}),
+		)
+	}
+	done := func(context.Context, int, workflow.Store) (bool, error) {
+		return true, nil
+	}
+	tests := map[string]workflow.Step{
+		"loop ID collides before loop": workflow.Sequence(
+			leaf("loop"),
+			workflow.Loop("loop", leaf("body"), done, workflow.LoopConfig{}),
+		),
+		"body collides with loop ID": workflow.Loop(
+			"loop",
+			leaf("loop"),
+			done,
+			workflow.LoopConfig{},
+		),
+	}
+	for name, step := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := step.Run(
+				context.Background(),
+				workflow.NewStore(),
+			); !errors.Is(err, workflow.ErrDuplicateStep) {
+				t.Fatalf("error = %v; want ErrDuplicateStep", err)
+			}
+		})
+	}
+}
+
+func TestLoop_rejectsDuplicateOpaqueInvocation(t *testing.T) {
+	body := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+			return store, nil
+		},
+	)
+	loop := workflow.Loop(
+		"loop",
+		body,
+		func(context.Context, int, workflow.Store) (bool, error) { return true, nil },
+		workflow.LoopConfig{},
+	)
+	twice := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(ctx context.Context, store workflow.Store) (workflow.Store, error) {
+			next, err := loop.Run(ctx, store)
+			if err != nil {
+				return next, err
+			}
+			return loop.Run(ctx, next)
+		},
+	)
+	if _, err := workflow.Run(
+		context.Background(),
+		twice,
+		workflow.NewStore(),
+		workflow.RunConfig{},
+	); !errors.Is(err, workflow.ErrDuplicateStep) {
+		t.Fatalf("error = %v; want ErrDuplicateStep", err)
+	}
+}
+
+func TestLoop_stopRejectsIdentityClaimedByOpaqueBody(t *testing.T) {
+	await := workflow.Await("loop", workflow.Output("ready"))
+	body := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(ctx context.Context, store workflow.Store) (workflow.Store, error) {
+			return await.Run(ctx, store)
+		},
+	)
+	loop := workflow.Loop(
+		"loop",
+		body,
+		func(context.Context, int, workflow.Store) (bool, error) { return true, nil },
+		workflow.LoopConfig{},
+	)
+	_, err := workflow.Run(
+		context.Background(),
+		loop,
+		workflow.NewStore().WithOutput("ready", true),
+		workflow.RunConfig{},
+	)
+	if !errors.Is(err, workflow.ErrDuplicateStep) {
+		t.Fatalf("error = %v; want ErrDuplicateStep", err)
+	}
+}
+
+func TestLoop_reportsJournalDecisionConflict(t *testing.T) {
+	journal := workflow.NewJournal()
+	loop := workflow.Loop(
+		"loop",
+		flow.NodeFunc[workflow.Store, workflow.Store](
+			func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+				return store, nil
+			},
+		),
+		func(ctx context.Context, _ int, _ workflow.Store) (bool, error) {
+			if err := journal.Record(
+				workflow.JournalKey{ID: "loop", Path: workflow.Scope(ctx)},
+				true,
+			); err != nil {
+				return false, err
+			}
+			return true, nil
+		},
+		workflow.LoopConfig{},
+	)
+	_, err := workflow.Run(
+		context.Background(),
+		loop,
+		workflow.NewStore(),
+		workflow.RunConfig{Journal: journal},
+	)
+	if !errors.Is(err, workflow.ErrJournalConflict) {
+		t.Fatalf("error = %v; want ErrJournalConflict", err)
 	}
 }

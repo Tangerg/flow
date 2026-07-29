@@ -234,9 +234,6 @@ func (suspension *Suspension) compare(other *Suspension) int {
 }
 
 func (suspension *Suspension) clone() *Suspension {
-	if suspension == nil {
-		return nil
-	}
 	clone := *suspension
 	clone.Path = slices.Clone(suspension.Path)
 	return &clone

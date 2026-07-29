@@ -68,6 +68,68 @@ func TestParallel_emptyAndSingleRespectCancellation(t *testing.T) {
 	}
 }
 
+func TestParallel_emptyPassesThrough(t *testing.T) {
+	input := workflow.NewStore().WithOutput("start", 1)
+	output, err := workflow.Parallel(nil, workflow.ParallelConfig{}).
+		Run(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, err := workflow.Get[int](output, workflow.Output("start")); err != nil || got != 1 {
+		t.Fatalf("start = %v, %v; want 1", got, err)
+	}
+}
+
+func TestParallel_rejectsDuplicateStaticIDs(t *testing.T) {
+	step := leafStep("same")
+	_, err := workflow.Parallel(
+		[]workflow.Step{step, step},
+		workflow.ParallelConfig{},
+	).Run(context.Background(), workflow.NewStore())
+	if !errors.Is(err, workflow.ErrDuplicateStep) {
+		t.Fatalf("error = %v; want ErrDuplicateStep", err)
+	}
+}
+
+func TestParallel_singleBranchCancellationTakesPrecedence(t *testing.T) {
+	boom := errors.New("boom")
+	tests := map[string]error{
+		"branch error":   boom,
+		"branch success": nil,
+	}
+	for name, branchErr := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			branch := flow.NodeFunc[workflow.Store, workflow.Store](
+				func(context.Context, workflow.Store) (workflow.Store, error) {
+					cancel()
+					return workflow.NewStore(), branchErr
+				},
+			)
+			_, err := workflow.Parallel(
+				[]workflow.Step{branch},
+				workflow.ParallelConfig{},
+			).Run(ctx, workflow.NewStore())
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("error = %v; want context.Canceled", err)
+			}
+		})
+	}
+}
+
+func TestParallel_singleSuspensionIsPreserved(t *testing.T) {
+	output, err := workflow.Parallel(
+		[]workflow.Step{workflow.Await("wait", workflow.Output("ready"))},
+		workflow.ParallelConfig{},
+	).Run(context.Background(), workflow.NewStore())
+	if !workflow.SuspendedOnly(err) {
+		t.Fatalf("error = %v; want pure suspension", err)
+	}
+	if _, ok := output.Lookup(workflow.Output("ready")); ok {
+		t.Fatal("suspended single branch created its awaited value")
+	}
+}
+
 func TestParallel_validatesEveryBranchBeforeRunning(t *testing.T) {
 	ran := false
 	first := flow.NodeFunc[workflow.Store, workflow.Store](func(_ context.Context, store workflow.Store) (workflow.Store, error) {
@@ -171,5 +233,56 @@ func TestParallel_mergesUnrelatedStore(t *testing.T) {
 	}
 	if got, _ := out.Lookup(workflow.Output("other")); got != 2 {
 		t.Fatalf("other = %v; want 2", got)
+	}
+}
+
+func TestParallel_compactsDeepBranchInput(t *testing.T) {
+	base := workflow.NewStore()
+	for index := range 64 {
+		base = base.WithOutput(fmt.Sprintf("base-%d", index), index)
+	}
+	write := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+			return store.WithOutput("written", true), nil
+		},
+	)
+	pass := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+			return store, nil
+		},
+	)
+	output, err := workflow.Parallel(
+		[]workflow.Step{write, pass},
+		workflow.ParallelConfig{},
+	).Run(context.Background(), base)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, err := workflow.Get[bool](output, workflow.Output("written")); err != nil || !got {
+		t.Fatalf("written = %v, %v; want true", got, err)
+	}
+	if got, err := workflow.Get[int](output, workflow.Output("base-0")); err != nil || got != 0 {
+		t.Fatalf("base-0 = %v, %v; want 0", got, err)
+	}
+}
+
+func TestParallel_compactsLargeMergedResult(t *testing.T) {
+	branches := make([]workflow.Step, 130)
+	for index := range branches {
+		branches[index] = flow.NodeFunc[workflow.Store, workflow.Store](
+			func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+				return store.WithOutput(fmt.Sprintf("branch-%d", index), index), nil
+			},
+		)
+	}
+	output, err := workflow.Parallel(branches, workflow.ParallelConfig{Concurrency: 4}).
+		Run(context.Background(), workflow.NewStore())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for index := range branches {
+		if got, ok := output.Lookup(workflow.Output(fmt.Sprintf("branch-%d", index))); !ok || got != index {
+			t.Fatalf("branch-%d = %v, %v; want %d", index, got, ok, index)
+		}
 	}
 }
