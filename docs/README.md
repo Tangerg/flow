@@ -22,6 +22,8 @@ Package comments and Go examples are the canonical API reference:
 - [`workflow`](../workflow/doc.go) — dynamic state, graphs, JSON, streaming,
   observation, and resumption.
 - [`workflow/expr`](../workflow/expr/doc.go) — optional data-driven rules.
+- [`workflow/diagram`](../workflow/diagram/doc.go) — deterministic ASCII and
+  Mermaid renderings of Graph definitions.
 
 Read them locally with:
 
@@ -29,6 +31,7 @@ Read them locally with:
 go doc github.com/Tangerg/flow
 go doc github.com/Tangerg/flow/workflow
 go doc github.com/Tangerg/flow/workflow/expr
+go doc github.com/Tangerg/flow/workflow/diagram
 ```
 
 ## Project

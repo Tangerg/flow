@@ -279,6 +279,11 @@ func TestValidateGraphJSONRejectsSchemaViolations(t *testing.T) {
 		"empty node id":        `{"nodes":[{"id":"","type":"x"}]}`,
 		"duplicate dependency": `{"nodes":[{"id":"x","type":"x","dependsOn":["a","a"]}]}`,
 		"negative concurrency": `{"nodes":[],"concurrency":-1}`,
+		"empty gates":          `{"nodes":[{"id":"x","type":"x","when":[]}]}`,
+		"incomplete gate":      `{"nodes":[{"id":"x","type":"x","when":[{"nodeID":"route"}]}]}`,
+		"duplicate gate":       `{"nodes":[{"id":"x","type":"x","when":[{"nodeID":"route","outlet":"yes"},{"nodeID":"route","outlet":"yes"}]}]}`,
+		"unknown trigger":      `{"nodes":[{"id":"x","type":"x","when":[{"nodeID":"route","outlet":"yes"}],"trigger":"sometimes"}]}`,
+		"trigger without gate": `{"nodes":[{"id":"x","type":"x","trigger":"any"}]}`,
 		"unknown field":        `{"nodes":[],"unknown":true}`,
 	}
 	for name, data := range tests {

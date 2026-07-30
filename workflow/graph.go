@@ -13,7 +13,8 @@ import (
 //
 // Input wires [DefaultPort] and is sugar for the common single-input node; its
 // zero value means absent. Inputs wires ports by name. Setting the default port
-// both ways is rejected as [ErrDuplicatePort].
+// both ways is rejected as [ErrDuplicatePort]. When gates execution on routing
+// outputs; its zero Trigger requires every gate, while [TriggerAny] requires one.
 type NodeSpec struct {
 	ID        string          `json:"id"`
 	Type      string          `json:"type"`
@@ -21,13 +22,21 @@ type NodeSpec struct {
 	Inputs    Inputs          `json:"inputs,omitempty"`
 	Config    json.RawMessage `json:"config,omitempty"`
 	DependsOn []string        `json:"dependsOn,omitempty"`
+	When      []Gate          `json:"when,omitempty"`
+	Trigger   Trigger         `json:"trigger,omitempty"`
 }
 
 // Graph is a flat, arbitrarily wired DAG of leaf nodes — the shape a visual
 // editor produces. Unlike a nested [Spec], any node may depend on any other as
 // long as the result is acyclic. [Registry.CompileGraph] topologically layers it
-// and runs independent nodes concurrently. Concurrency limits each layer; zero
-// means unbounded.
+// and runs independent nodes concurrently. Routing nodes select conditional
+// targets through [NodeSpec.When]. Concurrency limits each layer; zero means
+// unbounded.
+//
+// A compiled Graph owns Store cells named by its node IDs. Each invocation
+// clears those cells and reconstructs them from current execution or Journal
+// replay, so a Store returned by an earlier invocation is safe to reuse with new
+// external inputs.
 type Graph struct {
 	Nodes       []NodeSpec `json:"nodes"`
 	Concurrency int        `json:"concurrency,omitempty"`

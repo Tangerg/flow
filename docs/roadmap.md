@@ -1,410 +1,160 @@
 # Roadmap
 
-Planned work, in priority order, with the reasoning behind each item. This is a
-maintainer-facing document: it records what is missing, why it matters, and which
-decisions must be made before v1. Compatibility history stays in the
-[changelog](../CHANGELOG.md).
+This document records the remaining engine work and the boundaries that prevent
+the package from growing into an application platform. Compatibility history
+belongs in the [changelog](../CHANGELOG.md).
 
-Last reviewed: 2026-07-29.
+Last reviewed: 2026-07-30.
 
-## Where the library stands
+## Current ceiling
 
-The engine core is complete and verified. Cycles are rejected at build time by
-Kahn layering, the Store is persistent with a defined merge rule, resumption is
-keyed by a structured scope trie, suspension is a third outcome rather than a
-failure, streaming is a first-class leaf shape, and step identity is enforced
-both statically and at run time. All four packages hold full statement coverage
-and the JSON boundaries are fuzzed.
+The in-process runtime can now express:
 
-What remains falls into four groups: one missing concept that blocks a whole
-class of graphs, one missing capability in the dynamic layer, one open design
-decision, and a set of ergonomic gaps.
+- typed sequence, selection, repetition, mapping, races, and derived
+  compositions in `flow` and `flowx`;
+- persistent named state with typed reads and RFC 6901 references;
+- nested workflow control flow through `Spec`;
+- arbitrary flat DAGs through `Graph`, including named ports, bounded layer
+  concurrency, conditional outlets, explicit bypass, and cross-arm merge;
+- strict JSON decoding, self-contained Draft 2020-12 schemas, registry
+  validation, and configuration schemas;
+- suspension as a third outcome, structured waits, persisted Store and Journal
+  state, and checkpoint-and-restart replay;
+- synchronous streaming with backpressure and consumer failure propagation;
+- run-scoped lifecycle observation and Store deltas; and
+- deterministic ASCII and Mermaid renderings in `workflow/diagram`.
 
-## A constraint that shapes every item below
-
-The module currently targets Go 1.25. Generic methods are part of the draft
-[Go 1.27 release notes](https://go.dev/doc/go1.27), with that release expected
-in August 2026, but the roadmap must not depend on an unreleased toolchain.
-APIs that capture caller types therefore remain package-level generic functions.
-
-Go 1.27 should trigger an API review, not an automatic rewrite. A method such as
-`registry.RegisterNode("http", build)` may benefit because its type parameters
-can be inferred from `build`. `store.Get[T](ref)` gains only namespacing because
-`T` appears solely in the result and still has to be supplied explicitly. The
-existing function forms remain small, composable, and compatible.
-
-## Landed during this review
-
-The roadmap identified four contained improvements that did not require an open
-semantic decision:
-
-- `LeafFunc` and `StreamLeafFunc` lift ordinary typed functions with one
-  referenced input.
-- `FirstOf` reads the first available reference and stops on a real conversion
-  error.
-- `Graph.Concurrency` bounds each topological layer; zero remains unbounded.
-- `Spec.Input`, `Spec.BodyOutput`, and `NodeSpec.Input` are `Ref` values with
-  `omitzero`, so `Input: workflow.Output("source")` works inline without changing
-  the JSON wire format for omitted inputs.
-
-## P0 — Conditional edges and bypass semantics
-
-The flat `Graph` cannot express a mutually exclusive branch. Its node fields are
-`id`, `type`, `input`, `inputs`, `config`, and `dependsOn`; nothing carries a
-condition. Compilation produces `Sequence(Parallel(layer)...)`, so every node in
-a layer runs. A diamond whose two arms are meant to be exclusive executes both.
-There is also no skip state: a node whose upstream did not run fails its bind
-with `ErrNotFound` rather than being bypassed.
-
-`Branch` in the nested `Spec` covers conditional control flow, but only as a
-subtree. A graph produced by a visual editor routes on edges and re-converges
-across branches, which a subtree cannot represent without duplicating nodes.
-
-### The condition belongs to the source node, not the edge
-
-This is what keeps the design small. In editor-produced graphs the routing node
-evaluates its own condition and reports which outlet fired; the edge carries only
-a label that is compared against it. No expression is attached to an edge, and no
-new expression machinery is needed — `expr.Switch` already compiles ordered
-boolean cases into the name of the case that matched, which is exactly the shape
-a routing node's output needs.
-
-### The smallest coherent contract
-
-**Routing output.** In the first version, a routing node's ordinary `output` is
-the selected outlet name. `NodeSchema` gains `Outlets []string`, declared next
-to `Inputs` and `Output`, so editors can render branches and validation can
-reject unknown outlets. Outlet names must be non-empty and unique; an empty list
-means the node is not declared as a router.
-
-Do not add a separate `#/outlet` cell or `RouteFactory` yet. A leaf currently
-publishes and journals one final output. Writing a second conventional cell only
-on a fresh run would make a completed replay restore different state. If a real
-node later needs both a payload and an independently selected outlet, design a
-replay-aware multi-output publication contract first.
-
-An ordinary `Factory` returning `string` is sufficient for the initial routing
-node, and `expr.Switch` already produces that shape.
-
-**Gate.** A target node declares which routing output it accepts. Edges stay
-implicit through `inputs` and `dependsOn`; no explicit edge objects are
-introduced:
-
-```json
-{
-  "id": "merge", "type": "summarize",
-  "inputs": { "in": { "nodeID": "yes", "path": "/output" } },
-  "when": [
-    { "nodeID": "route", "outlet": "true" },
-    { "nodeID": "route", "outlet": "false" }
-  ],
-  "trigger": "any"
-}
-```
-
-**Trigger.** Two rules are enough for editor-produced graphs: branch targets use
-the default, and re-convergence points use `any`.
+Every definition still compiles to the same small protocol:
 
 ```go
-type Trigger string
-
-const (
-    TriggerAll Trigger = ""    // every gate must be satisfied (default)
-    TriggerAny Trigger = "any" // one satisfied gate is enough
-)
+Run(context.Context, input) (output, error)
 ```
 
-Other engines ship a dozen trigger rules. Adding more is only justified once a
-real graph needs one.
+There is no orchestrator object, hidden worker pool, or provider abstraction.
 
-**Bypassed.** A node whose gate is not satisfied does not run, publishes no
-output, and emits `EventBypassed`. It does not write a new reserved Store cell:
-the observer is the audit surface, and gates are recomputed from journaled
-routing outputs on resume.
+## Landed: conditional Graph execution
 
-Bypass is explicit rather than inferred from missing inputs. Every node in a
-conditional region must carry the route gate; an editor may generate the
-repeated declaration. An ungated node that reads a bypassed node's absent output
-still fails with `ErrNotFound`. This avoids treating a genuine missing input as
-control flow and avoids guessing whether a multi-input node is optional.
+The former largest Graph gap is complete.
 
-If a gate source has no output because it was itself bypassed, that gate is
-unsatisfied. Gate sources must name graph nodes, never external Store values.
+A routing node publishes its selected outlet as its ordinary string output and
+declares the complete set in `NodeSchema.Outlets`. A target uses `NodeSpec.When`;
+the zero `Trigger` requires every gate and `TriggerAny` requires one. Gate
+sources participate in topological ordering and cycle detection.
 
-A merge point reached through `any` may find one arm absent, so it needs a
-tolerant bind:
+An unsatisfied target emits `EventBypassed`, runs no user code, and writes no
+output. Bypass is explicit rather than inferred from missing data. A bypassed
+routing source makes downstream gates unsatisfied, so conditional regions
+propagate correctly.
 
-```go
-// FirstOf reads the first reference that resolves, so a merge point after
-// mutually exclusive branches can read whichever arm ran.
-func FirstOf[I any](refs ...Ref) BindFunc[I]
-```
+The runtime preserves these invariants:
 
-### The layered model is enough
+- gates are recomputed from replayed routing outputs rather than journaled as a
+  second identity;
+- every gate source has a registered schema and non-empty outlet declaration;
+- runtime output must be a declared outlet, even if a custom factory violates
+  its schema;
+- gate wrappers preserve static duplicate-ID and nesting-depth validation;
+- a compiled Graph owns its internal node cells and clears them at each
+  invocation, so reusing a previous Store cannot revive stale branch output;
+- suspension ends the current sequence layer before a later gate can run; and
+- `FirstOf` skips only absent values, never a real conversion error.
 
-A runtime edge interpreter is not required. Topological layering already
-guarantees that when layer N runs, every dependency's state is in the Store, so a
-gate is a Store read. Each compiled leaf is wrapped:
+`Route` adapts an existing Store-based `Resolver` into an ordinary replayable
+leaf. A typed node that returns a string remains the smallest routing primitive.
 
-```go
-leaf = gated(gateSpec{id: nodeID, when: node.When, trigger: node.Trigger, step: leaf})
-```
+## Settled engine boundaries
 
-No cross-goroutine bookkeeping, no inferred merge points, no manual counters.
+### Errors are terminal; domain outcomes are data
 
-### Invariants to preserve
+Generic failure routing is not an engine primitive.
 
-**Gates must not be journaled.** A gate reads only a routing leaf's ordinary
-output, which completed-leaf replay restores, so a resumed run recomputes the
-same decision. This differs from `Branch`, whose resolver may not be a pure
-function of the Store and therefore records its choice. It also avoids a
-conflict: a journaling gate would claim the same `(scope, id)` identity as the
-leaf it wraps. Lock this into a test.
+A Go `error` has no stable serialization or replay representation. Catching it
+at a graph edge would also need to distinguish node failures from context
+cancellation, definition errors, bind errors, Journal conflicts, emitter
+failure, and suspension. A generic classifier or codec interface would move
+application policy into the engine and still be unable to make arbitrary error
+values durable.
 
-**Gate sources must join the dependency graph.** `connectNodes` has to treat each
-`when[].nodeID` as a dependency, or a gate could be evaluated before its source
-runs and conditional edges would escape cycle detection.
+A recoverable domain outcome such as `declined`, `not_found`, or
+`needs_review` is ordinary typed output. A following routing node maps that data
+to a declared outlet. An actual error terminates execution and remains available
+through `errors.Is` and `errors.As`.
 
-**The gate wrapper must preserve static definition traversal.** `gated` must
-implement the package-private `definitionStep` contract. When the wrapped step
-implements `definitionStep`, `workflowDefinition` forwards its definition
-unchanged so duplicate IDs and nesting depth remain visible to
-`definitionValidator`. For an opaque step, the wrapper reports the graph node ID
-as `definitionNamed`; runtime `claim` remains the final defense for identities
-hidden inside caller-defined steps. A decorator must not move duplicate-ID
-detection from construction time to execution time.
+This rule keeps fresh execution and Journal replay equivalent.
 
-**Outlet validation is intentionally stricter than ordinary port
-validation.** Every `when[].nodeID` must name a graph node whose type has a
-registered `NodeSchema` with a non-empty `Outlets` declaration, and the requested
-outlet must be present in that declaration. An absent schema or empty `Outlets`
-is a compile-time `GraphError` on the target node's `when` field, not an
-unchecked dynamic comparison. The existing permissive behavior for undeclared
-input ports is useful for simple nodes; applying it to routing would let an
-arbitrary output value silently control execution.
+### Retry and timeout wrap typed work
 
-**Suspension wins before gate evaluation.** A suspended layer ends the enclosing
-sequence before any later layer runs. A target must therefore never interpret an
-unfinished source as a bypass.
+Retry, timeout, hedging, and circuit breaking are policies around the typed node
+inside a workflow leaf. They are not fields on `NodeSpec` or `Spec`.
 
-### Naming
+Applying them to a named `Step` would invoke the same execution identity more
+than once, conflict with Journal replay, and risk retrying suspension. A generic
+workflow decorator also cannot define which domain errors are retryable or how
+an emitter timeout interacts with backpressure. Applications or node libraries
+own those decisions before calling `Leaf`.
 
-`EventSkipped` already means "replayed from the Journal", which is a different
-fact from "not selected". A conditional bypass needs its own kind; `EventBypassed`
-keeps consumer switches unambiguous.
+`Graph.Concurrency`, `ParallelConfig.Concurrency`, and
+`IterationConfig.Concurrency` remain engine-level resource bounds because they
+describe composition itself.
 
-### Tests that must exist
+### Graph and Spec keep distinct roles
 
-Exclusive arms where only the selected one runs; explicit gates across a
-multi-node conditional region; re-convergence through `any` plus `FirstOf`; an
-ungated missing input remaining an error; gate sources ordered before targets;
-cycle detection covering conditional edges; resume recomputing gates
-identically; a suspended source not being mistaken for a bypass; and unknown,
-empty, duplicate, undeclared-schema, and non-routing-source outlets rejected at
-compile time. A duplicate ID hidden behind `gated` must still be rejected before
-execution, and the wrapper must not hide nesting-depth violations.
+`Graph` is the flat form produced by an editor: arbitrary data edges,
+conditional outlets, and cross-arm convergence.
 
-## P1 — The dynamic layer cannot declare policy
+`Spec` is the structured form: nested sequence, parallel, branch, loop, and
+iteration.
 
-`Graph.Concurrency` now covers the graph-level resource limit. `Retry` and
-`Timeout` still do not have a coherent dynamic-layer contract.
+Neither is a strict superset. Flattening `Spec` would lose repeated scoped
+execution; nesting every Graph branch would lose arbitrary convergence. Keep
+both and share internal execution concepts only where their semantics are
+actually identical.
 
-The project's position is that retry, timeout, and tracing are policies rather
-than control flow, implemented as decorators. That holds for a pipeline written
-in Go. It does not hold for the dynamic layer, whose entire purpose is a
-definition that arrives as JSON: there is no way to express "retry this call
-three times".
+### Persistence is a value boundary
 
-Leaving it to each node type reproduces the problem the package documentation
-already names for inputs — a node that reads references out of its own config is
-invisible to the layer above. A retry buried in one node type's config is
-invisible in the same way: an editor cannot render it, validation cannot check
-it, and every node author reimplements it differently.
+Store and Journal are serializable values. The engine does not define a
+`Storage`, `Queue`, `Scheduler`, `Clock`, or `Lease` interface.
 
-### Retry conflicts with step identity and factory abstraction
+An application chooses where to persist them, how to identify a run, when to
+wake it, and how to coordinate ownership. Those facilities consume the engine;
+the engine does not depend on hypothetical abstractions for them.
 
-Retry means running the same computation twice, and `claim` rejects a second
-invocation of one `(scope, id)` with `ErrDuplicateStep`. Because `LeafFactory`
-returns a `Step`, the engine cannot reach inside to wrap the typed node.
+## Before v1
 
-The earlier proposal to add policy to `LeafSpec` is not ready to implement:
+The remaining work is stabilization rather than another execution subsystem:
 
-- `Factory` and `BindFactory` can wrap their typed node, but an arbitrary
-  `LeafFactory` returns an opaque `Step` and can silently ignore the policy.
-- Workflow suspension must never be retried as a failure. A decorator in the
-  root `flow` package cannot import `workflow` to recognize `ErrSuspended`.
-- A timeout around a streaming node must define what happens while its emitter
-  is applying backpressure and how the cancellation cause is reported.
-- JSON still needs stable duration and backoff representations, validation
-  limits, and an explicit retryable-error classifier.
+1. Freeze the exported API after real downstream use of conditional Graphs.
+2. Run compatibility analysis on every exported change and document the final
+   pre-v1 migration.
+3. Keep statement coverage, race checks, vet, lint, fuzzing, and vulnerability
+   checks green.
+4. Add property or fuzz cases only where they strengthen a concrete invariant;
+   do not optimize or generalize without a measured problem.
+5. Review generic methods after Go 1.27 ships and the module adopts it. Preserve
+   package-level generic functions where a method is not clearly simpler.
 
-Do not relax `claim`; it prevents silent replay corruption. Before policy fields
-are exported, define one contract that every registered factory must either
-apply or explicitly reject. A capability-bearing registration value is a
-possible direction, but it should be justified independently rather than
-smuggled in as retry plumbing.
+Potential future concepts require evidence:
 
-### Minimum useful set
+- A replay-aware multi-output leaf contract, if real routers need both a
+  payload and an independent outlet.
+- Composite/subgraph nodes in Graph, if editors need reusable structured
+  regions rather than flat DAGs.
+- An opt-in schema inference helper for tooling, never automatic registration,
+  if repeated schemas prove to be a maintenance burden.
 
-Graph-level `concurrency` is complete. Node-level `retry` and `timeout` remain
-the minimum useful policy set once the contract above is closed. Circuit
-breaking and hedging stay with custom factories.
-
-## P2 — Failure routing
-
-Editor-produced graphs also route on failure, turning try/catch into an edge. The
-library terminates a branch on error instead.
-
-This needs its own design pass, because it collides with two established
-semantics: the first failure cancels siblings, and suspension is already a third
-outcome. Adding skip makes four states. A reserved outlet such as `error` is the
-obvious shape, but which failures are routable must be declared per node type in
-`NodeSchema` rather than defaulted globally — a global default would silently
-swallow real errors.
-
-Evaluate after P0 and P1 land.
-
-## P3 — Decide whether both DSLs survive v1
-
-`Graph` and `Spec` must stay semantically consistent with each other, with their
-JSON Schemas, and with the programmatic API. The paired `allowedFields` and
-`populatedFields` tables in `spec_validate.go` are the kind of duplication that
-drifts.
-
-The two forms are not currently supersets of each other. Conditional Graph edges
-would express cross-branch re-convergence that `Spec` cannot. Conversely, `Spec`
-has `Loop` and `Iteration`, which a flat Graph cannot represent as ordinary
-nodes. Making Graph the only serialized form would therefore remove real
-capability unless Graph first gains composite/subgraph nodes.
-
-The default direction is to keep both with distinct jobs: Graph for
-editor-produced flat DAGs, Spec for structured control flow. Reduce drift by
-sharing internal validation and compilation concepts, not by pretending the
-wire formats are equivalent. Reconsider consolidation only after a concrete
-composite-node model exists.
-
-## Ergonomics
-
-The useful low-magic improvements are now implemented. Two reflection-based
-ideas remain intentionally unapproved.
-
-### Concise function lifting (complete)
-
-From `example/workflow_test.go`:
-
-```go
-clean := workflow.Leaf(
-    "clean",
-    workflow.From[string](workflow.Output("input")),
-    flow.NodeFunc[string, string](func(_ context.Context, in string) (string, error) {
-        return strings.TrimSpace(in), nil
-    }),
-)
-```
-
-The caller writes the types three times. A package-level function infers both
-from the function literal:
-
-```go
-// LeafFunc lifts an ordinary function into a Step that binds its input from ref.
-func LeafFunc[I, O any](id string, ref Ref, fn func(context.Context, I) (O, error)) Step
-```
-
-```go
-clean := workflow.LeafFunc("clean", workflow.Output("input"),
-    func(_ context.Context, in string) (string, error) {
-        return strings.TrimSpace(in), nil
-    })
-```
-
-Inference works with no type arguments at the call site, and
-`StreamLeafFunc` provides the streaming counterpart. Both are now implemented.
-
-### A multi-port node costs twenty-two lines
-
-From `example/dag_test.go`, a node that adds two numbers spends most of its body
-restating port names: fetch each ref, check each `ok`, build the error, then read
-each value again inside the bind.
-
-Field names could carry the port names:
-
-```go
-// PortsFactory binds a node whose input struct fields name its input ports.
-func PortsFactory[C, I, O any](build func(C) (flow.Node[I, O], error)) LeafFactory
-```
-
-```go
-type pair struct {
-    Left  int `json:"left"`
-    Right int `json:"right"`
-}
-
-sum := workflow.PortsFactory(func(_ struct{}) (flow.Node[pair, int], error) { ... })
-```
-
-Do not implement this shape yet. It introduces a second reflection contract:
-embedded fields, `json` tags, ignored and unexported fields, duplicate promoted
-names, optional ports, and custom unmarshalling all need exact rules. Reusing
-`Get` for conversion does not answer how ports are discovered or which are
-required. `BindFactory` is explicit and remains the source of truth until a
-smaller contract is demonstrated by several real nodes.
-
-### Derive the node schema from the same types
-
-The same example spends twelve lines registering schemas that restate what the Go
-types already say: `OnePort(TypeNumber)` and `Output: TypeNumber` for a
-`Node[int, int]`. A `ValueType` sometimes follows from a Go type, but not
-reliably enough to make an inferred schema authoritative. `json.Marshaler`
-implementations, aliases, pointers, and domain constraints can all serialize
-differently from their underlying Go kind.
-
-With the current Go version, `LeafFactory` erases `I` and `O`, so any opt-in
-derivation would have to happen while the generic types are still visible:
-
-```go
-// InferSchema may assist tooling, but does not register anything.
-func InferSchema[I, O any]() NodeSchema
-```
-
-Keep `NodeSchema` explicit. An opt-in helper may later serve tooling, but it must
-never silently register or override a schema. A caller-supplied `ConfigSchema`
-and domain constraints remain authoritative.
-
-### Inline references (complete)
-
-`NodeSpec.Input`, `Spec.Input`, and `Spec.BodyOutput` are now plain `Ref` values
-with `json:",omitzero"`. A zero `Ref` is already invalid and means “unset”; valid
-references can be written inline. This pre-v1 breaking change is complete.
-
-### Sugar for P0
-
-Conditional edges should land with only the sugar that removes accidental
-verbosity: `When(nodeID, outlet)` constructs a `Gate`, and `FirstOf` handles
-merge inputs. `FirstOf` is complete. Do not add `Route(id, spec)` until repeated
-real call sites reveal what it would hide; an ordinary string-output node is
-already the honest routing primitive.
+None is an approved v1 requirement.
 
 ## Out of scope
 
-These remain excluded by design, and the reasoning is already recorded in the
-package documentation:
+- Distributed scheduling, durable timers, queues, workers, leases, and leader
+  election.
+- Exactly-once external effects, distributed transactions, and saga
+  coordination.
+- Deterministic instruction-level replay.
+- Workflow-definition migration and deployment policy.
+- A catalog of HTTP, model, retrieval, or code-execution nodes.
+- Engine-level stream middleware.
+- Reflection-driven port binding or authoritative schema inference.
 
-- Distributed scheduling, durable timers, leases, and exactly-once effects.
-- Deterministic instruction-level replay and workflow-definition migration.
-- A node library. Model calls, HTTP, code execution, and retrieval are product
-  assets; the library stays an engine plus a registry.
-- Engine-level stream middleware. Wrapping `yield` in a `StreamNode` composes
-  the same pipeline more explicitly.
-
-## Sequencing
-
-| Order | Item | Notes |
-|---|---|---|
-| 1 | P0 conditional edges and bypass | Implement the output-based gate contract above; do not add a second publication channel |
-| 2 | P1 node policy design | Specify factory participation, suspension, streaming timeout, and JSON representation before code |
-| 3 | P3 DSL roles | Document distinct Graph and Spec roles; share internals where it removes drift |
-| 4 | P2 failure routing | Reassess after bypass and policy outcomes are stable |
-
-The contained ergonomics work and graph concurrency slice are complete.
-`PortsFactory`, automatic schema derivation, and a separate outlet cell are not
-approved implementation items.
+These are product, platform, or integration responsibilities. Keeping them out
+is what lets the runtime remain small, embeddable, and composable.

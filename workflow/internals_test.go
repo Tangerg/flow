@@ -18,6 +18,12 @@ func (validate schemaValidatorFunc) Validate(value any) error {
 	return validate(value)
 }
 
+type opaqueTestStep struct{}
+
+func (opaqueTestStep) Run(_ context.Context, store Store) (Store, error) {
+	return store, nil
+}
+
 func TestJSONDocument_reportsMalformedStructure(t *testing.T) {
 	var target any
 	if _, err := jsonDocument(`{`).decodeWithValue(&target); err == nil {
@@ -190,4 +196,85 @@ func TestStoreInternals_reportStableFallbacks(t *testing.T) {
 			t.Fatal("kind returned an empty description")
 		}
 	}
+}
+
+func TestGraphDecorators_preserveDefinitionAndStoreBoundaries(t *testing.T) {
+	t.Run("opaque definition", func(t *testing.T) {
+		step := decoratedStep{
+			id:   "opaque",
+			step: opaqueTestStep{},
+		}
+		definition := step.workflowDefinition()
+		if definition.kind != definitionNamed || definition.id != "opaque" {
+			t.Fatalf("definition = %+v; want named opaque", definition)
+		}
+		if description := step.Describe(); description.ID != "opaque" ||
+			description.Kind != "opaque" {
+			t.Fatalf("description = %+v; want named opaque", description)
+		}
+	})
+
+	t.Run("empty graph namespace", func(t *testing.T) {
+		store := NewStore().WithOutput("external", 1)
+		if got := store.withoutNodes(nil); got != store {
+			t.Fatal("empty node set changed the Store")
+		}
+		nodes := map[string]struct{}{"node": {}}
+		if got := (Store{}).withoutNodes(nodes); got != (Store{}) {
+			t.Fatalf("empty Store changed to %+v", got)
+		}
+		if got := store.withoutNodes(nodes); got != store {
+			t.Fatal("unrelated node set changed the Store")
+		}
+		externalSnapshot := store.compact()
+		if got := externalSnapshot.withoutNodes(nodes); got != externalSnapshot {
+			t.Fatal("unrelated node set changed a snapshotted Store")
+		}
+		if got := NewStore().WithOutput("node", 1).withoutNodes(nodes); got != (Store{}) {
+			t.Fatalf("removing the only internal node returned %+v", got)
+		}
+		snapshot := NewStore().WithOutput("node", 1).compact()
+		if got := snapshot.withoutNodes(nodes); got != (Store{}) {
+			t.Fatalf("removing a snapshotted internal node returned %+v", got)
+		}
+	})
+
+	t.Run("gated definition depth", func(t *testing.T) {
+		var step Step = opaqueTestStep{}
+		for range MaxNestingDepth {
+			step = Sequence(step)
+		}
+		step = gated(
+			"target",
+			[]compiledGate{{
+				Gate:    When("route", "yes"),
+				outlets: []string{"yes"},
+			}},
+			TriggerAll,
+			step,
+		)
+		if err := (definitionValidator{}).validate(step); !errors.Is(err, ErrMaxDepth) {
+			t.Fatalf("error = %v; want ErrMaxDepth", err)
+		}
+	})
+
+	t.Run("bypass reserves execution identity", func(t *testing.T) {
+		step := gated(
+			"target",
+			[]compiledGate{{
+				Gate:    When("route", "yes"),
+				outlets: []string{"yes", "no"},
+			}},
+			TriggerAll,
+			opaqueTestStep{},
+		)
+		ctx := withConfig(t.Context(), RunConfig{})
+		store := NewStore().WithOutput("route", "no")
+		if _, err := step.Run(ctx, store); err != nil {
+			t.Fatalf("first bypass: %v", err)
+		}
+		if _, err := step.Run(ctx, store); !errors.Is(err, ErrDuplicateStep) {
+			t.Fatalf("second bypass error = %v; want ErrDuplicateStep", err)
+		}
+	})
 }

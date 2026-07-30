@@ -14,6 +14,7 @@ order; each uses only public APIs and has asserted output.
 | 6 | [`rules_test.go`](./rules_test.go) | [Data-driven rules](../docs/tutorials/06-data-driven-rules.md) | Expression-based routing |
 | 7 | [`resume_test.go`](./resume_test.go) | [Suspension and resumption](../docs/tutorials/07-suspension-and-resumption.md) | Interrupts, persistence, and Journal replay |
 | 8 | [`stream_test.go`](./stream_test.go) | [Streaming output](../docs/tutorials/08-streaming-output.md) | Backpressure, chunk identity, and final results |
+| 9 | [`routing_test.go`](./routing_test.go) | [Conditional graphs and diagrams](../docs/tutorials/09-conditional-graphs-and-diagrams.md) | Routing outlets, bypass, merge gates, and visualization |
 
 Run the complete path:
 

@@ -10,13 +10,15 @@ type EventKind string
 
 // Step lifecycle event kinds. A step that ran reports exactly one of
 // [EventCompleted], [EventFailed], or [EventSuspended]; a step skipped because a
-// [Journal] already holds its result reports [EventSkipped] instead of starting.
+// [Journal] already holds its result reports [EventSkipped] instead of starting,
+// while a Graph node whose gate is not satisfied reports [EventBypassed].
 const (
 	EventStarted   EventKind = "started"
 	EventCompleted EventKind = "completed"
 	EventFailed    EventKind = "failed"
 	EventSuspended EventKind = "suspended"
 	EventSkipped   EventKind = "skipped"
+	EventBypassed  EventKind = "bypassed"
 )
 
 // Event describes one step lifecycle transition.
@@ -49,8 +51,8 @@ type Event struct {
 	Elapsed time.Duration
 
 	// Store is the Store the step produced. It is set on [EventCompleted] and
-	// [EventSkipped]; a failed or suspended step has no output. Pair it with
-	// [Store.Changes] to record just the step's writes.
+	// [EventSkipped]; a failed, suspended, or bypassed step has no output. Pair
+	// it with [Store.Changes] to record just the step's writes.
 	Store Store
 
 	// Err is the failure on [EventFailed], or an error matching [ErrSuspended] on

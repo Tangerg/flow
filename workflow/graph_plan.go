@@ -89,9 +89,90 @@ func (planner *graphPlanner) indexNodes() error {
 				Err:    fmt.Errorf("%w: %w", ErrInvalidGraph, err),
 			}
 		}
+		if err := planner.validateGates(node); err != nil {
+			return err
+		}
 		planner.plan.inputsByNode[node.ID] = inputs
 		planner.plan.nodesByID[node.ID] = node
 		planner.indexByID[node.ID] = index
+	}
+	return nil
+}
+
+func (*graphPlanner) validateGates(node NodeSpec) error {
+	if !node.Trigger.valid() {
+		return &GraphError{
+			NodeID: node.ID,
+			Field:  "trigger",
+			Err: fmt.Errorf(
+				"%w: unknown trigger %q",
+				ErrInvalidGraph,
+				node.Trigger,
+			),
+		}
+	}
+	if len(node.When) == 0 {
+		if node.Trigger == TriggerAny {
+			return &GraphError{
+				NodeID: node.ID,
+				Field:  "trigger",
+				Err: fmt.Errorf(
+					"%w: trigger %q requires at least one gate",
+					ErrInvalidGraph,
+					node.Trigger,
+				),
+			}
+		}
+		return nil
+	}
+
+	seen := make(map[Gate]struct{}, len(node.When))
+	sources := make(map[string]string, len(node.When))
+	for _, gate := range node.When {
+		switch {
+		case gate.NodeID == "":
+			return &GraphError{
+				NodeID: node.ID,
+				Field:  "when",
+				Err:    fmt.Errorf("%w: gate source node ID is empty", ErrInvalidGraph),
+			}
+		case gate.Outlet == "":
+			return &GraphError{
+				NodeID: node.ID,
+				Field:  "when",
+				Err:    fmt.Errorf("%w: gate outlet is empty", ErrInvalidGraph),
+			}
+		}
+		if _, duplicate := seen[gate]; duplicate {
+			return &GraphError{
+				NodeID: node.ID,
+				Field:  "when",
+				Err: fmt.Errorf(
+					"%w: gate %q/%q is declared more than once",
+					ErrInvalidGraph,
+					gate.NodeID,
+					gate.Outlet,
+				),
+			}
+		}
+		seen[gate] = struct{}{}
+
+		if previous, duplicateSource := sources[gate.NodeID]; duplicateSource &&
+			node.Trigger == TriggerAll {
+			return &GraphError{
+				NodeID: node.ID,
+				Field:  "when",
+				Err: fmt.Errorf(
+					"%w: trigger %q requires routing node %q to select both %q and %q",
+					ErrInvalidGraph,
+					TriggerAll,
+					gate.NodeID,
+					previous,
+					gate.Outlet,
+				),
+			}
+		}
+		sources[gate.NodeID] = gate.Outlet
 	}
 	return nil
 }
@@ -101,6 +182,16 @@ func (planner *graphPlanner) connectNodes() error {
 		connected := make(map[string]struct{})
 		for _, ref := range planner.plan.inputsByNode[node.ID].Refs() {
 			if err := planner.connectInput(nodeIndex, node.ID, ref.NodeID, connected); err != nil {
+				return err
+			}
+		}
+		for _, gate := range node.When {
+			if err := planner.connectGate(
+				nodeIndex,
+				node.ID,
+				gate.NodeID,
+				connected,
+			); err != nil {
 				return err
 			}
 		}
@@ -120,6 +211,29 @@ func (planner *graphPlanner) connectNodes() error {
 		}
 	}
 	return nil
+}
+
+func (planner *graphPlanner) connectGate(
+	nodeIndex int,
+	nodeID, dependency string,
+	connected map[string]struct{},
+) error {
+	dependencyIndex, exists := planner.indexByID[dependency]
+	if !exists {
+		return &GraphError{
+			NodeID: nodeID,
+			Field:  "when",
+			Err:    fmt.Errorf("%w %q", ErrUnknownNode, dependency),
+		}
+	}
+	return planner.connectDependency(
+		nodeIndex,
+		nodeID,
+		dependency,
+		dependencyIndex,
+		"when",
+		connected,
+	)
 }
 
 func (*graphPlanner) validateExplicit(

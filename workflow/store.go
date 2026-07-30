@@ -102,6 +102,43 @@ func (s Store) compact() Store {
 	return Store{snapshot: &storeSnapshot{data: s.materialize()}}
 }
 
+// withoutNodes returns a snapshot without cells owned by nodeIDs. A compiled
+// Graph uses it at its execution boundary so stale outputs from an earlier run
+// cannot satisfy current dependencies or conditional merges. The Journal then
+// restores exactly the internal values that belong to the current definition.
+func (s Store) withoutNodes(nodeIDs map[string]struct{}) Store {
+	if len(nodeIDs) == 0 || !s.hasNode(nodeIDs) {
+		return s
+	}
+	data := s.materialize()
+	for key := range data {
+		if _, owned := nodeIDs[key.nodeID]; owned {
+			delete(data, key)
+		}
+	}
+	if len(data) == 0 {
+		return Store{}
+	}
+	return Store{snapshot: &storeSnapshot{data: data}}
+}
+
+func (s Store) hasNode(nodeIDs map[string]struct{}) bool {
+	for delta := s.delta; delta != nil; delta = delta.parent {
+		if _, found := nodeIDs[delta.key.nodeID]; found {
+			return true
+		}
+	}
+	if s.snapshot == nil {
+		return false
+	}
+	for key := range s.snapshot.data {
+		if _, found := nodeIDs[key.nodeID]; found {
+			return true
+		}
+	}
+	return false
+}
+
 // WithOutput returns a copy of the Store with value written to the conventional
 // output key for nodeID.
 func (s Store) WithOutput(nodeID string, value any) Store {

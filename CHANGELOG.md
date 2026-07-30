@@ -8,6 +8,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Conditional execution for flat `workflow.Graph` definitions.
+  `NodeSchema.Outlets` declares a routing node's possible string outputs;
+  `NodeSpec.When`, `Gate`, `When`, and `TriggerAny` gate targets and
+  re-convergence points; and `EventBypassed` distinguishes an unselected node
+  from Journal replay. Gate sources participate in dependency ordering and
+  cycle detection, and both schema validation and execution reject undeclared
+  outlets through `ErrUnknownOutlet`.
+- `workflow.Route`, which adapts an existing Store-based `Resolver` into an
+  ordinary leaf whose outlet decision is observed, journaled, and replayed.
+- Optional `workflow/diagram` package with deterministic ASCII and Mermaid
+  renderings of flat Graph definitions. Rendering escapes Mermaid labels and
+  remains separate from Graph validation and execution.
 - `workflow.LeafFunc` and `workflow.StreamLeafFunc`, concise adapters for the
   common case of lifting an ordinary typed function with one referenced input.
 - `workflow.FirstOf`, a tolerant binder that reads the first available
@@ -95,6 +107,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `NodeSpec` and `NodeSchema` gained routing fields. Unkeyed composite literals
+  for either type must be converted to keyed fields; keyed literals require no
+  migration.
+- A compiled `workflow.Graph` now owns every Store cell whose node ID belongs to
+  that Graph. Each invocation removes those internal cells before execution and
+  rebuilds them from current work or Journal replay, preventing a reused prior
+  Store from leaking output from a now-bypassed branch. Callers that seeded
+  values under an internal node ID must move them to an external input ID and
+  wire that reference through a port.
 - `Spec.Input`, `Spec.BodyOutput`, and `NodeSpec.Input` are now `Ref` values
   rather than pointers. Callers can write `Input: workflow.Output("source")`
   directly; a zero `Ref` remains omitted from JSON and means the field is unset.

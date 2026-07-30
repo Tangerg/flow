@@ -34,15 +34,18 @@ func OnePort(t ValueType) Ports { return Ports{DefaultPort: t} }
 
 // NodeSchema describes a registered node type for validation and tooling.
 // Inputs and Output let editors check connections and report incomplete wiring.
-// ConfigSchema, when present, is a self-contained Draft 2020-12 JSON Schema for
-// the node's config; an omitted config is validated as an empty object. External
-// references are rejected.
+// Outlets declares every string that a routing node may produce as its ordinary
+// output. A non-empty Outlets requires Output to be [TypeString]; an empty slice
+// means the node is not declared as a router. ConfigSchema, when present, is a
+// self-contained Draft 2020-12 JSON Schema for the node's config; an omitted
+// config is validated as an empty object. External references are rejected.
 //
 // An empty Inputs declares nothing, so a node's wiring is left unchecked. Use
 // [OnePort] for the common single-input node.
 type NodeSchema struct {
 	Inputs       Ports           `json:"inputs,omitempty"`
 	Output       ValueType       `json:"output"`
+	Outlets      []string        `json:"outlets,omitempty"`
 	ConfigSchema json.RawMessage `json:"configSchema,omitempty"`
 }
 
@@ -101,6 +104,23 @@ func (schema NodeSchema) validate() error {
 	if !schema.Output.valid() {
 		return fmt.Errorf("output type %q is invalid", schema.Output)
 	}
+	if len(schema.Outlets) > 0 && schema.Output != TypeString {
+		return fmt.Errorf(
+			"routing output type is %q; want %q",
+			schema.Output,
+			TypeString,
+		)
+	}
+	outlets := make(map[string]struct{}, len(schema.Outlets))
+	for _, outlet := range schema.Outlets {
+		if outlet == "" {
+			return errors.New("outlet name is empty")
+		}
+		if _, duplicate := outlets[outlet]; duplicate {
+			return fmt.Errorf("outlet %q is declared more than once", outlet)
+		}
+		outlets[outlet] = struct{}{}
+	}
 	for _, port := range slices.Sorted(maps.Keys(schema.Inputs)) {
 		switch valueType := schema.Inputs[port]; {
 		case port == "":
@@ -114,6 +134,7 @@ func (schema NodeSchema) validate() error {
 
 func (schema NodeSchema) clone() NodeSchema {
 	schema.Inputs = maps.Clone(schema.Inputs)
+	schema.Outlets = slices.Clone(schema.Outlets)
 	schema.ConfigSchema = bytes.Clone(schema.ConfigSchema)
 	return schema
 }
@@ -132,7 +153,7 @@ func (r *Registry) MustRegisterSchema(nodeType string, schema NodeSchema) *Regis
 
 // NodeSchema returns the schema registered for nodeType. The bool reports
 // whether one was registered; an unregistered node type accepts any wiring and
-// config. The returned Inputs and ConfigSchema are copies.
+// config. The returned Inputs, Outlets, and ConfigSchema are copies.
 //
 // Together with [Registry.NodeTypes] this is what an editor reads to render a
 // node palette and to know which ports a node exposes.

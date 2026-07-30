@@ -13,6 +13,29 @@ import (
 // [Describer].
 type Step = flow.Node[Store, Store]
 
+// decoratedStep is the transparent execution metadata shared by internal
+// wrappers. It preserves static validation and public descriptions instead of
+// turning a built-in step opaque.
+type decoratedStep struct {
+	id   string
+	step Step
+}
+
+func (step decoratedStep) Describe() Description {
+	description := Describe(step.step)
+	if description.ID == "" {
+		description.ID = step.id
+	}
+	return description
+}
+
+func (step decoratedStep) workflowDefinition() stepDefinition {
+	if defined, ok := step.step.(definitionStep); ok {
+		return defined.workflowDefinition()
+	}
+	return stepDefinition{kind: definitionNamed, id: step.id}
+}
+
 // scopedStep owns one child-step invocation in a repeated execution scope.
 // Context remains an explicit method argument, following the standard context
 // contract instead of being retained in a struct.

@@ -40,6 +40,16 @@
       "propertyNames": { "minLength": 1 },
       "additionalProperties": { "$ref": "#/$defs/ref" }
     },
+    "gate": {
+      "type": "object",
+      "description": "A routing output that must select this node.",
+      "properties": {
+        "nodeID": { "type": "string", "minLength": 1 },
+        "outlet": { "type": "string", "minLength": 1 }
+      },
+      "required": ["nodeID", "outlet"],
+      "additionalProperties": false
+    },
     "node": {
       "type": "object",
       "properties": {
@@ -52,9 +62,22 @@
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "uniqueItems": true
+        },
+        "when": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/gate" },
+          "uniqueItems": true
+        },
+        "trigger": {
+          "const": "any",
+          "description": "Run when any gate matches; omission requires every gate."
         }
       },
       "required": ["id", "type"],
+      "dependentRequired": {
+        "trigger": ["when"]
+      },
       "additionalProperties": false
     }
   }

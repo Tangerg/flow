@@ -209,4 +209,4 @@ should report two suspensions. Record only one response and confirm the other
 wait remains. Record both and verify that the publishing step runs once.
 
 [Previous: Data-driven rules](./06-data-driven-rules.md) ·
-[Tutorial index](./README.md)
+[Next: Streaming output](./08-streaming-output.md)

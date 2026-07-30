@@ -12,7 +12,8 @@ import (
 // when a node reads several ports.
 type LeafFactory func(LeafSpec) (Step, error)
 
-// Resolver picks a branch name from the Store (see [Branch]).
+// Resolver picks a branch or outlet name from the Store (see [Branch] and
+// [Route]).
 type Resolver func(ctx context.Context, s Store) (string, error)
 
 // Condition decides whether a [Loop] should stop after an iteration. It may
@@ -181,8 +182,9 @@ func (r *Registry) lookupCondition(name string) (Condition, bool) {
 	return condition, ok
 }
 
-func (r *Registry) lookupNodeSchema(nodeType string) registeredNodeSchema {
+func (r *Registry) lookupNodeSchema(nodeType string) (registeredNodeSchema, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.schemas[nodeType]
+	schema, ok := r.schemas[nodeType]
+	return schema, ok
 }

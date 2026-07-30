@@ -33,6 +33,7 @@ var (
 	ErrMissingPort           = errors.New("workflow: unwired input port")
 	ErrUnknownPort           = errors.New("workflow: unknown input port")
 	ErrDuplicatePort         = errors.New("workflow: duplicate input port")
+	ErrUnknownOutlet         = errors.New("workflow: unknown outlet")
 )
 
 // MaxNestingDepth is the maximum nesting accepted at recursive workflow

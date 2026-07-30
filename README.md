@@ -29,6 +29,7 @@ go get github.com/Tangerg/flow
 | [`flowx`](./flowx) | Derived convenience shapes such as fan-out and fallback | `Node[I, O]` |
 | [`workflow`](./workflow) | Named state, streaming output, JSON DSLs, and resumption | `Step`, `Store` |
 | [`workflow/expr`](./workflow/expr) | Optional data-driven branch and loop rules | `Condition`, `Resolver` |
+| [`workflow/diagram`](./workflow/diagram) | Deterministic Graph diagnostics and documentation | `ASCII`, `Mermaid` |
 
 Start with `flow`. A pipeline defined in Go rarely needs the dynamic layer.
 
@@ -218,7 +219,7 @@ The dynamic layer has two definition forms:
 
 | Form | Best for |
 | --- | --- |
-| `Graph` | A flat DAG with arbitrary named-port edges |
+| `Graph` | A flat DAG with named-port edges and conditional routes |
 | `Spec` | Nested sequence, parallel, branch, loop, and iteration |
 
 Both compile to an ordinary `Step`:
@@ -229,8 +230,8 @@ JSON -> strict decode -> JSON Schema -> Registry validation -> Step
 
 For a Graph, input ports imply dependencies. Compilation checks registrations,
 configuration schemas, missing or unknown ports, edge types, duplicate IDs,
-and cycles before any node runs. Independent nodes execute in topological
-layers.
+cycles, and routing outlets before any node runs. Independent nodes execute in
+topological layers.
 
 ```go
 if err := workflow.ValidateGraphJSON(data); err != nil {
@@ -246,6 +247,42 @@ if err != nil {
 `GraphJSONSchema` and `SpecJSONSchema` expose self-contained Draft 2020-12
 schemas for editors and API endpoints. Duplicate JSON members are rejected, and
 external schema references are disabled.
+
+A routing node publishes its selected outlet as an ordinary string output and
+declares every possible value in `NodeSchema.Outlets`. Targets opt into that
+control flow with `When`; the zero trigger requires every gate, while
+`TriggerAny` supports a merge reached through either arm:
+
+```go
+approve := workflow.NodeSpec{
+	ID: "approve", Type: "send",
+	When: []workflow.Gate{
+		workflow.When("route", "approve"),
+	},
+}
+result := workflow.NodeSpec{
+	ID: "result", Type: "merge",
+	When: []workflow.Gate{
+		workflow.When("route", "approve"),
+		workflow.When("route", "review"),
+	},
+	Trigger: workflow.TriggerAny,
+}
+```
+
+An unselected node emits `EventBypassed` and publishes no output. Bypass is
+explicit; an ungated missing input remains an error. `FirstOf` is the usual
+binder for a merge with mutually exclusive inputs. `Route` adapts an existing
+Store-based `Resolver` into a journaled routing leaf.
+
+Render a definition without coupling diagnostics to execution:
+
+```go
+fmt.Print(diagram.ASCII(graph))
+fmt.Print(diagram.Mermaid(graph))
+```
+
+Rendering is deterministic but does not validate the Graph.
 
 The optional `workflow/expr` package keeps simple branch and loop rules in data:
 
@@ -336,9 +373,9 @@ Use `errors.Is` and `errors.As`; do not branch on error text.
 Package dependencies point toward the typed core:
 
 ```text
-workflow/expr ---> workflow ---\
-                                +---> flow
-flowx -------------------------/
+workflow/diagram ---> workflow ---> flow
+workflow/expr ------> workflow
+flowx ---------------------------> flow
 ```
 
 There is no central scheduler. Dynamic definitions are validated and compiled
@@ -359,7 +396,7 @@ timers are requirements.
 
 ## Documentation
 
-- [Tutorials](./docs/tutorials/README.md) — Level 0 through Level 8, aligned
+- [Tutorials](./docs/tutorials/README.md) — Level 0 through Level 9, aligned
   with executable examples.
 - [Executable examples](./example/README.md) — public-API examples with asserted
   output.
@@ -374,6 +411,7 @@ pkg.go.dev:
 ```sh
 go doc github.com/Tangerg/flow
 go doc github.com/Tangerg/flow/workflow
+go doc github.com/Tangerg/flow/workflow/diagram
 ```
 
 ## Stability

@@ -46,6 +46,8 @@ type runState struct {
 	definitionErr   error
 	claimsMu        sync.Mutex
 	claims          journalNode
+	bypassedMu      sync.RWMutex
+	bypassed        journalNode
 }
 
 // Run executes step once under cfg. Each call establishes a fresh run boundary:
@@ -164,6 +166,19 @@ func (r *runState) claim(path []string, id string) error {
 		)
 	}
 	return nil
+}
+
+func (r *runState) markBypassed(path []string, id string) {
+	r.bypassedMu.Lock()
+	defer r.bypassedMu.Unlock()
+	r.bypassed.record(path, id, journalValue{})
+}
+
+func (r *runState) wasBypassed(path []string, id string) bool {
+	r.bypassedMu.RLock()
+	defer r.bypassedMu.RUnlock()
+	_, ok := r.bypassed.lookup(path, id)
+	return ok
 }
 
 // validateDefinition checks the static workflow shape once per run and caches

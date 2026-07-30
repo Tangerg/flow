@@ -29,6 +29,26 @@
 // config is invisible to both. [Registry.NodeTypes] and [Registry.NodeSchema]
 // expose the registered vocabulary for an editor to render.
 //
+// # Conditional graphs
+//
+// A flat Graph routes through ordinary node output. A routing node declares its
+// possible string [NodeSchema.Outlets], and a target's [NodeSpec.When] gates it
+// on one or more selected outlets. The zero [Trigger] requires every gate;
+// [TriggerAny] runs a merge reached through any one arm. An unsatisfied target
+// does not run, writes no output, and emits [EventBypassed]. Bypass is explicit:
+// a missing value on an ungated node remains an error.
+//
+// [Route] turns a Store-based [Resolver] into a journaled routing leaf; a typed
+// leaf that already returns a string needs no adapter. [FirstOf] binds the first
+// available input at a mutually exclusive merge. Route decisions use the
+// routing leaf's ordinary output, so Journal replay restores them without a
+// second hidden state channel.
+//
+// A compiled Graph owns cells whose node IDs belong to that Graph. Each
+// invocation removes those internal cells from its input Store, then rebuilds
+// them from the current execution or Journal replay. Reusing a prior result with
+// new external inputs therefore cannot revive an output from a now-bypassed arm.
+//
 // [SpecJSONSchema] and [GraphJSONSchema] expose the Draft 2020-12 schemas for
 // the two JSON DSL shapes. [ValidateSpecJSON] and [ValidateGraphJSON] perform
 // portable structural checks; a Registry adds node, config, type, and graph
@@ -95,11 +115,11 @@
 // Invoking one named Step more than once in the same scope is
 // [ErrDuplicateStep].
 //
-// What this is not is a durable workflow engine. There is no scheduler, no timer,
-// and no exactly-once guarantee: a step that suspends after a side effect and
-// before recording its result will repeat that effect. Resumption is
-// checkpoint-and-restart at step granularity, which fits an approval, a callback,
-// or a retry window — not a distributed saga.
+// This runtime does not own durable process orchestration. There is no
+// scheduler, timer, lease, or exactly-once guarantee: a step that suspends after
+// a side effect and before recording its result will repeat that effect.
+// Resumption is checkpoint-and-restart at step granularity, which fits an
+// approval, a callback, or a retry window — not a distributed saga.
 //
 // # Streaming output
 //
@@ -138,6 +158,11 @@
 // side-effect-free expression over a Store into ordinary [Condition] and
 // [Resolver] values, so a branch rule or a loop's stop test can live in config
 // rather than in Go. It is opt-in and this package does not import it.
+//
+// Recoverable domain outcomes are ordinary output data and may feed a routing
+// node. Go errors remain terminal. Treating arbitrary errors as routable values
+// would require a stable serialization and replay contract and could
+// accidentally swallow cancellation, invalid definitions, or suspension.
 //
 // Errors preserve their causes for errors.Is and errors.As. [RefError],
 // [RegistrationError], [GraphError], [SpecError], and [StepError] identify the

@@ -134,7 +134,8 @@ func (v specValidator) validateLeaf(spec Spec, stepIDs map[string]struct{}) erro
 	if _, ok := v.registry.lookupLeaf(spec.Type); !ok {
 		return spec.fieldError("type", fmt.Errorf("%w %q", ErrUnknownNodeType, spec.Type))
 	}
-	if err := v.registry.lookupNodeSchema(spec.Type).validateConfig(spec.Config); err != nil {
+	registered, _ := v.registry.lookupNodeSchema(spec.Type)
+	if err := registered.validateConfig(spec.Config); err != nil {
 		return spec.fieldError("config", fmt.Errorf("%w: %w", ErrInvalidSpec, err))
 	}
 	inputs, err := spec.Inputs.withDefault(spec.Input)
@@ -147,7 +148,7 @@ func (v specValidator) validateLeaf(spec Spec, stepIDs map[string]struct{}) erro
 	// A nested Spec has no cross-node index, so ports are checked for
 	// completeness only; edge types are checked when a flat Graph names both
 	// ends.
-	schema := v.registry.lookupNodeSchema(spec.Type).schema
+	schema := registered.schema
 	if err := schema.validateInputs(inputs, func(Ref) (ValueType, bool) {
 		return "", false
 	}); err != nil {

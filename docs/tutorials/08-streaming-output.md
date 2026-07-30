@@ -166,4 +166,4 @@ Verify all three properties:
    `context.Cause(ctx)`.
 
 [Previous: Suspension and resumption](./07-suspension-and-resumption.md) ·
-[Tutorial index](./README.md)
+[Next: Conditional graphs and diagrams](./09-conditional-graphs-and-diagrams.md)
