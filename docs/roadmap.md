@@ -14,8 +14,11 @@ The in-process runtime can now express:
   compositions in `flow` and `flowx`;
 - persistent named state with typed reads and RFC 6901 references;
 - nested workflow control flow through `Spec`;
-- arbitrary flat DAGs through `Graph`, including named ports, bounded layer
-  concurrency, conditional outlets, explicit bypass, and cross-arm merge;
+- arbitrary flat DAGs through `Graph`, including named ports,
+  dependency-triggered bounded concurrency, conditional outlets, explicit
+  bypass, and cross-arm merge;
+- sealed, reusable execution regions through `Subgraph`, including declarative
+  inputs, isolated state and identity, and one projected result;
 - strict JSON decoding, self-contained Draft 2020-12 schemas, registry
   validation, and configuration schemas;
 - suspension as a third outcome, structured waits, persisted Store and Journal
@@ -56,11 +59,43 @@ The runtime preserves these invariants:
 - gate wrappers preserve static duplicate-ID and nesting-depth validation;
 - a compiled Graph owns its internal node cells and clears them at each
   invocation, so reusing a previous Store cannot revive stale branch output;
-- suspension ends the current sequence layer before a later gate can run; and
+- suspension never satisfies a dependency, so a gated target cannot run while
+  its routing source is waiting; and
 - `FirstOf` skips only absent values, never a real conversion error.
 
 `Route` adapts an existing Store-based `Resolver` into an ordinary replayable
 leaf. A typed node that returns a string remains the smallest routing primitive.
+
+## Landed: dependency-triggered Graph execution
+
+A compiled Graph retains its dependency counts and reverse edges. Each run owns
+an independent ready set and starts a node as soon as its dependencies complete,
+subject to one graph-wide concurrency bound. There are no synthetic
+`Sequence(Parallel(layer), ...)` barriers.
+
+The execution contract is deterministic despite concurrent completion:
+
+- a node sees the input Store plus only its declared dependencies;
+- dependency and final Stores merge in graph declaration order;
+- success and bypass satisfy dependencies, while suspension does not;
+- unrelated ready work and writes returned by a waiting composite are preserved
+  when another branch suspends;
+- failure stops dispatch, cancels running siblings, and returns already
+  completed node writes with the error; and
+- the compiled Step is immutable and safe for concurrent reuse.
+
+## Landed: sealed subgraphs
+
+`Subgraph` gives a reusable Step an explicit engine boundary without changing
+`Ref` or adding Store namespaces. It copies declared outer references to named
+outputs in a fresh inner Store, runs the body under a scope derived from the
+subgraph ID, and projects one declared body output back to the outer Store.
+
+The boundary is visible but its implementation is not. `SubgraphFactory` uses a
+Graph node's ordinary input ports, so outer cycles, external inputs, and port
+types remain statically checkable. The inner Graph or Spec validates itself.
+Inner cells and IDs cannot leak into or collide with the outer definition.
+`Spec` and its JSON Schema include the same structured `subgraph` shape.
 
 ## Settled engine boundaries
 
@@ -102,8 +137,8 @@ describe composition itself.
 `Graph` is the flat form produced by an editor: arbitrary data edges,
 conditional outlets, and cross-arm convergence.
 
-`Spec` is the structured form: nested sequence, parallel, branch, loop, and
-iteration.
+`Spec` is the structured form: nested sequence, parallel, branch, loop,
+iteration, and sealed subgraph.
 
 Neither is a strict superset. Flattening `Spec` would lose repeated scoped
 execution; nesting every Graph branch would lose arbitrary convergence. Keep
@@ -119,11 +154,18 @@ An application chooses where to persist them, how to identify a run, when to
 wake it, and how to coordinate ownership. Those facilities consume the engine;
 the engine does not depend on hypothetical abstractions for them.
 
+Journal size grows with recorded execution boundaries: a loop of `n`
+iterations whose body completes `m` journaled boundaries records `O(n*m)`
+entries. The engine deliberately does not compact that history, because full
+records keep resume equivalent to replay. Applications should bound repetition
+and retain or discard a Journal with the workflow run whose history it owns.
+
 ## Before v1
 
 The remaining work is stabilization rather than another execution subsystem:
 
-1. Freeze the exported API after real downstream use of conditional Graphs.
+1. Freeze the exported API after real downstream use of conditional,
+   dependency-driven Graphs and sealed Subgraphs.
 2. Run compatibility analysis on every exported change and document the final
    pre-v1 migration.
 3. Keep statement coverage, race checks, vet, lint, fuzzing, and vulnerability
@@ -137,8 +179,6 @@ Potential future concepts require evidence:
 
 - A replay-aware multi-output leaf contract, if real routers need both a
   payload and an independent outlet.
-- Composite/subgraph nodes in Graph, if editors need reusable structured
-  regions rather than flat DAGs.
 - An opt-in schema inference helper for tooling, never automatic registration,
   if repeated schemas prove to be a maintenance burden.
 

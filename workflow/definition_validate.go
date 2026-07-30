@@ -14,6 +14,7 @@ const (
 	definitionBranch
 	definitionLoop
 	definitionIteration
+	definitionSubgraph
 )
 
 // stepDefinition is the package-private execution shape of a built-in Step.
@@ -83,6 +84,17 @@ func (d definitionValidator) validateStep(
 			return err
 		}
 		// An iteration body has its own Store and Journal scope.
+		return d.validateStep(
+			definition.body,
+			make(map[string]struct{}),
+			depth+1,
+		)
+	case definitionSubgraph:
+		if err := d.claim(definition.id, ids); err != nil {
+			return err
+		}
+		// A subgraph body has an isolated Store and a scope derived from the
+		// subgraph ID, so its execution identities are local to that instance.
 		return d.validateStep(
 			definition.body,
 			make(map[string]struct{}),

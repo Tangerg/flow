@@ -15,6 +15,7 @@ order; each uses only public APIs and has asserted output.
 | 7 | [`resume_test.go`](./resume_test.go) | [Suspension and resumption](../docs/tutorials/07-suspension-and-resumption.md) | Interrupts, persistence, and Journal replay |
 | 8 | [`stream_test.go`](./stream_test.go) | [Streaming output](../docs/tutorials/08-streaming-output.md) | Backpressure, chunk identity, and final results |
 | 9 | [`routing_test.go`](./routing_test.go) | [Conditional graphs and diagrams](../docs/tutorials/09-conditional-graphs-and-diagrams.md) | Routing outlets, bypass, merge gates, and visualization |
+| 10 | [`subgraph_test.go`](./subgraph_test.go) | [Dependency-driven graphs and sealed subgraphs](../docs/tutorials/10-dependency-graphs-and-subgraphs.md) | Ready-node scheduling, isolated state, scoped reuse, and projected output |
 
 Run the complete path:
 

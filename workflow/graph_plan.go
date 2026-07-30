@@ -1,6 +1,9 @@
 package workflow
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // plan validates the graph structurally. Registry-level semantic checks build
 // on the resulting plan.
@@ -8,12 +11,13 @@ func (g Graph) plan() (graphPlan, error) {
 	planner := graphPlanner{
 		graph: g,
 		plan: graphPlan{
-			nodesByID:    make(map[string]NodeSpec, len(g.Nodes)),
-			inputsByNode: make(map[string]Inputs, len(g.Nodes)),
+			nodesByID:             make(map[string]NodeSpec, len(g.Nodes)),
+			inputsByNode:          make(map[string]Inputs, len(g.Nodes)),
+			dependencyCounts:      make([]int, len(g.Nodes)),
+			dependencyNodeIndexes: make([][]int, len(g.Nodes)),
+			dependentNodeIndexes:  make([][]int, len(g.Nodes)),
 		},
-		indexByID:            make(map[string]int, len(g.Nodes)),
-		dependencyCounts:     make([]int, len(g.Nodes)),
-		dependentNodeIndexes: make([][]int, len(g.Nodes)),
+		indexByID: make(map[string]int, len(g.Nodes)),
 	}
 	return planner.build()
 }
@@ -21,18 +25,18 @@ func (g Graph) plan() (graphPlan, error) {
 // graphPlan is the stable output of graph planning. Mutable traversal state
 // remains on graphPlanner and cannot leak into validation or compilation.
 type graphPlan struct {
-	nodesByID    map[string]NodeSpec
-	inputsByNode map[string]Inputs
-	layers       [][]string
+	nodesByID             map[string]NodeSpec
+	inputsByNode          map[string]Inputs
+	dependencyCounts      []int
+	dependencyNodeIndexes [][]int
+	dependentNodeIndexes  [][]int
 }
 
 // graphPlanner owns the indexes and counters mutated during one planning pass.
 type graphPlanner struct {
-	graph                Graph
-	plan                 graphPlan
-	indexByID            map[string]int
-	dependencyCounts     []int
-	dependentNodeIndexes [][]int
+	graph     Graph
+	plan      graphPlan
+	indexByID map[string]int
 }
 
 func (g *graphPlanner) build() (graphPlan, error) {
@@ -52,11 +56,12 @@ func (g *graphPlanner) build() (graphPlan, error) {
 	if err := g.connectNodes(); err != nil {
 		return graphPlan{}, err
 	}
-	layers, err := g.topologicalLayers()
-	if err != nil {
+	for index := range g.plan.dependencyNodeIndexes {
+		slices.Sort(g.plan.dependencyNodeIndexes[index])
+	}
+	if err := g.validateAcyclic(); err != nil {
 		return graphPlan{}, err
 	}
-	g.plan.layers = layers
 	return g.plan, nil
 }
 
@@ -322,53 +327,42 @@ func (g *graphPlanner) connectDependency(
 		return nil
 	}
 	connected[dependency] = struct{}{}
-	g.dependencyCounts[nodeIndex]++
-	g.dependentNodeIndexes[dependencyIndex] = append(
-		g.dependentNodeIndexes[dependencyIndex],
+	g.plan.dependencyCounts[nodeIndex]++
+	g.plan.dependencyNodeIndexes[nodeIndex] = append(
+		g.plan.dependencyNodeIndexes[nodeIndex],
+		dependencyIndex,
+	)
+	g.plan.dependentNodeIndexes[dependencyIndex] = append(
+		g.plan.dependentNodeIndexes[dependencyIndex],
 		nodeIndex,
 	)
 	return nil
 }
 
-func (g *graphPlanner) topologicalLayers() ([][]string, error) {
-	// Kahn's algorithm computes each node's barrier level in O(V+E). Levels are
-	// materialized in a final spec-order pass so independent nodes retain the
-	// deterministic order in which the caller declared them.
+func (g *graphPlanner) validateAcyclic() error {
+	// Kahn's algorithm validates the graph in O(V+E). It works on a copy because
+	// the original counts are the immutable execution plan reused by every run.
+	dependencyCounts := slices.Clone(g.plan.dependencyCounts)
 	ready := make([]int, 0, len(g.graph.Nodes))
-	for nodeIndex, count := range g.dependencyCounts {
+	for nodeIndex, count := range dependencyCounts {
 		if count == 0 {
 			ready = append(ready, nodeIndex)
 		}
 	}
 
-	levels := make([]int, len(g.graph.Nodes))
 	processed := 0
-	maxLevel := 0
 	for head := 0; head < len(ready); head++ {
 		node := ready[head]
 		processed++
-		for _, dependent := range g.dependentNodeIndexes[node] {
-			nextLevel := levels[node] + 1
-			if levels[dependent] < nextLevel {
-				levels[dependent] = nextLevel
-				maxLevel = max(maxLevel, nextLevel)
-			}
-			g.dependencyCounts[dependent]--
-			if g.dependencyCounts[dependent] == 0 {
+		for _, dependent := range g.plan.dependentNodeIndexes[node] {
+			dependencyCounts[dependent]--
+			if dependencyCounts[dependent] == 0 {
 				ready = append(ready, dependent)
 			}
 		}
 	}
 	if processed != len(g.graph.Nodes) {
-		return nil, &GraphError{Err: ErrCycle}
+		return &GraphError{Err: ErrCycle}
 	}
-	if len(g.graph.Nodes) == 0 {
-		return nil, nil
-	}
-
-	layers := make([][]string, maxLevel+1)
-	for nodeIndex, node := range g.graph.Nodes {
-		layers[levels[nodeIndex]] = append(layers[levels[nodeIndex]], node.ID)
-	}
-	return layers, nil
+	return nil
 }

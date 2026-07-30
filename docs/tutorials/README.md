@@ -26,6 +26,7 @@ go test ./example -run Example -v
 | 7 | [Suspension and resumption](./07-suspension-and-resumption.md) | [`resume_test.go`](../../example/resume_test.go) | Resume a workflow across process boundaries |
 | 8 | [Streaming output](./08-streaming-output.md) | [`stream_test.go`](../../example/stream_test.go) | Deliver incremental output with backpressure |
 | 9 | [Conditional graphs and diagrams](./09-conditional-graphs-and-diagrams.md) | [`routing_test.go`](../../example/routing_test.go) | Route a flat DAG, merge exclusive arms, and render it |
+| 10 | [Dependency-driven graphs and sealed subgraphs](./10-dependency-graphs-and-subgraphs.md) | [`subgraph_test.go`](../../example/subgraph_test.go) | Run ready nodes promptly and reuse sealed workflow regions |
 
 Read the series in order on your first pass. If your workflow is defined in Go,
 Levels 1 and 2 may be all you need. Continue into `workflow` only when the

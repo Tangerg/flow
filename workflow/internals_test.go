@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -173,6 +174,17 @@ func TestSpecCompiler_defendsItsValidatedInputContract(t *testing.T) {
 			Kind: KindIteration, ID: "each", Input: Output("items"),
 			Body: &broken, BodyOutput: Output("value"),
 		},
+		"missing subgraph body": {
+			Kind: KindSubgraph, ID: "sub", BodyOutput: Output("value"),
+		},
+		"missing subgraph output": {
+			Kind: KindSubgraph, ID: "sub",
+			Body: &Spec{Kind: KindSequence},
+		},
+		"subgraph body": {
+			Kind: KindSubgraph, ID: "sub",
+			Body: &broken, BodyOutput: Output("value"),
+		},
 	}
 
 	for name, spec := range tests {
@@ -195,6 +207,17 @@ func TestStoreInternals_reportStableFallbacks(t *testing.T) {
 		if value.kind() == "" {
 			t.Fatal("kind returned an empty description")
 		}
+	}
+
+	var writes []storeWrite
+	base := NewStore()
+	for index := range storeOverlayLimit*2 + 1 {
+		next := base.WithOutput(fmt.Sprintf("node-%d", index), index)
+		writes = append(writes, next.writesSince(base)...)
+	}
+	merged := base.withWrites(writes)
+	if merged.depth != 0 {
+		t.Fatalf("withWrites depth = %d; want compacted snapshot", merged.depth)
 	}
 }
 

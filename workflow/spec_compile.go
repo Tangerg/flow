@@ -45,6 +45,8 @@ func (s specCompiler) compile(spec Spec) (Step, error) {
 		return s.compileLoop(spec)
 	case KindIteration:
 		return s.compileIteration(spec)
+	case KindSubgraph:
+		return s.compileSubgraph(spec)
 	default:
 		return nil, spec.fieldError(
 			"kind",
@@ -192,5 +194,30 @@ func (s specCompiler) compileIteration(spec Spec) (Step, error) {
 		Body:        body,
 		BodyOutput:  spec.BodyOutput,
 		Concurrency: spec.Concurrency,
+	}), nil
+}
+
+func (s specCompiler) compileSubgraph(spec Spec) (Step, error) {
+	if spec.Body == nil {
+		return nil, spec.fieldError(
+			"body",
+			fmt.Errorf("%w: subgraph body is required", ErrInvalidSpec),
+		)
+	}
+	if spec.BodyOutput == (Ref{}) {
+		return nil, spec.fieldError(
+			"bodyOutput",
+			fmt.Errorf("%w: subgraph body output is required", ErrInvalidSpec),
+		)
+	}
+	body, err := s.compile(*spec.Body)
+	if err != nil {
+		return nil, err
+	}
+	return Subgraph(SubgraphConfig{
+		ID:         spec.ID,
+		Inputs:     spec.Inputs,
+		Body:       body,
+		BodyOutput: spec.BodyOutput,
 	}), nil
 }

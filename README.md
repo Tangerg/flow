@@ -220,7 +220,7 @@ The dynamic layer has two definition forms:
 | Form | Best for |
 | --- | --- |
 | `Graph` | A flat DAG with named-port edges and conditional routes |
-| `Spec` | Nested sequence, parallel, branch, loop, and iteration |
+| `Spec` | Nested sequence, parallel, branch, loop, iteration, and sealed subgraphs |
 
 Both compile to an ordinary `Step`:
 
@@ -231,7 +231,9 @@ JSON -> strict decode -> JSON Schema -> Registry validation -> Step
 For a Graph, input ports imply dependencies. Compilation checks registrations,
 configuration schemas, missing or unknown ports, edge types, duplicate IDs,
 cycles, and routing outlets before any node runs. Independent nodes execute in
-topological layers.
+dependency order: a node starts as soon as all of its dependencies complete,
+without waiting for unrelated branches. `Graph.Concurrency` bounds the whole
+graph; zero means unbounded.
 
 ```go
 if err := workflow.ValidateGraphJSON(data); err != nil {
@@ -247,6 +249,23 @@ if err != nil {
 `GraphJSONSchema` and `SpecJSONSchema` expose self-contained Draft 2020-12
 schemas for editors and API endpoints. Duplicate JSON members are rejected, and
 external schema references are disabled.
+
+`Subgraph` seals a reusable Step behind an explicit boundary. It copies declared
+inputs into a fresh Store, scopes the body under the subgraph ID, and projects
+one declared result back out:
+
+```go
+region := workflow.Subgraph(workflow.SubgraphConfig{
+	ID:         "price",
+	Inputs:     workflow.Inputs{"request": workflow.Output("order")},
+	Body:       body,
+	BodyOutput: workflow.Output("total"),
+})
+```
+
+Inner cells never leak into the outer Store. `SubgraphFactory` exposes the same
+boundary as a registered Graph node, so ordinary Graph inputs still power cycle
+detection, external-input discovery, and port type checking.
 
 A routing node publishes its selected outlet as an ordinary string output and
 declares every possible value in `NodeSchema.Outlets`. Targets opt into that
@@ -396,7 +415,7 @@ timers are requirements.
 
 ## Documentation
 
-- [Tutorials](./docs/tutorials/README.md) — Level 0 through Level 9, aligned
+- [Tutorials](./docs/tutorials/README.md) — Level 0 through Level 10, aligned
   with executable examples.
 - [Executable examples](./example/README.md) — public-API examples with asserted
   output.

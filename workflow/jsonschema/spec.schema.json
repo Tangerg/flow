@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Tangerg/flow/schema/workflow-spec.json",
   "title": "Flow workflow specification",
-  "description": "A nested workflow made from leaf, sequence, parallel, branch, loop, and iteration steps.",
+  "description": "A nested workflow made from leaf, sequence, parallel, branch, loop, iteration, and subgraph steps.",
   "$ref": "#/$defs/spec",
   "$defs": {
     "ref": {
@@ -26,7 +26,7 @@
     },
     "inputs": {
       "type": "object",
-      "description": "Input references wired by port name.",
+      "description": "Input references wired by port name, or inner seed IDs for a subgraph.",
       "propertyNames": { "minLength": 1 },
       "additionalProperties": { "$ref": "#/$defs/ref" }
     },
@@ -125,11 +125,27 @@
       "required": ["id", "input", "body", "bodyOutput"],
       "additionalProperties": false
     },
+    "subgraph": {
+      "type": "object",
+      "description": "Runs a nested body in an isolated Store and projects one result.",
+      "properties": {
+        "kind": { "const": "subgraph" },
+        "id": { "type": "string", "minLength": 1 },
+        "inputs": {
+          "$ref": "#/$defs/inputs",
+          "description": "Maps inner seed IDs to references in the outer Store."
+        },
+        "body": { "$ref": "#/$defs/spec" },
+        "bodyOutput": { "$ref": "#/$defs/ref" }
+      },
+      "required": ["id", "body", "bodyOutput"],
+      "additionalProperties": false
+    },
     "spec": {
       "type": "object",
       "properties": {
         "kind": {
-          "enum": ["leaf", "sequence", "parallel", "branch", "loop", "iteration"]
+          "enum": ["leaf", "sequence", "parallel", "branch", "loop", "iteration", "subgraph"]
         }
       },
       "required": ["kind"],
@@ -157,6 +173,10 @@
         {
           "if": { "properties": { "kind": { "const": "iteration" } }, "required": ["kind"] },
           "then": { "$ref": "#/$defs/iteration" }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "subgraph" } }, "required": ["kind"] },
+          "then": { "$ref": "#/$defs/subgraph" }
         }
       ]
     }

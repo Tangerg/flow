@@ -120,7 +120,7 @@ their meaning.
 | Form | Best for | Dependency shape |
 | --- | --- | --- |
 | `Graph` | Data-processing DAGs and visual canvases | Flat nodes and port edges |
-| `Spec` | Sequence, parallel, branch, loop, and iteration | Nested control flow and named behavior |
+| `Spec` | Sequence, parallel, branch, loop, iteration, and subgraph | Nested control flow and sealed regions |
 
 Do not force every definition into one DSL. `Graph` makes arbitrary data edges
 clear; `Spec` makes structured control flow clear. Both compile to `Step`.

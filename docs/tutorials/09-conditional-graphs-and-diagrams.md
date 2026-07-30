@@ -170,4 +170,4 @@ names.
 - Routing infrastructure errors instead of returning them.
 
 [Previous: Streaming output](./08-streaming-output.md) ·
-[Tutorial index](./README.md)
+[Next: Dependency-driven graphs and sealed subgraphs](./10-dependency-graphs-and-subgraphs.md)

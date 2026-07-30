@@ -45,6 +45,8 @@ func (s specValidator) validate(spec Spec, stepIDs map[string]struct{}) error {
 		return s.validateLoop(spec, stepIDs)
 	case KindIteration:
 		return s.validateIteration(spec, stepIDs)
+	case KindSubgraph:
+		return s.validateSubgraph(spec, stepIDs)
 	default:
 		return spec.fieldError(
 			"kind",
@@ -231,6 +233,31 @@ func (s specValidator) validateIteration(spec Spec, stepIDs map[string]struct{})
 	return s.validate(*spec.Body, make(map[string]struct{}))
 }
 
+func (s specValidator) validateSubgraph(spec Spec, stepIDs map[string]struct{}) error {
+	if err := spec.claimID(stepIDs); err != nil {
+		return err
+	}
+	if spec.Body == nil {
+		return spec.fieldError(
+			"body",
+			fmt.Errorf("%w: subgraph body is required", ErrInvalidSpec),
+		)
+	}
+	if spec.BodyOutput == (Ref{}) {
+		return spec.fieldError(
+			"bodyOutput",
+			fmt.Errorf("%w: subgraph body output is required", ErrInvalidSpec),
+		)
+	}
+	if err := spec.Inputs.validate(); err != nil {
+		return spec.fieldError("inputs", fmt.Errorf("%w: %w", ErrInvalidSpec, err))
+	}
+	if err := spec.BodyOutput.validate(); err != nil {
+		return spec.fieldError("bodyOutput", fmt.Errorf("%w: %w", ErrInvalidSpec, err))
+	}
+	return s.validate(*spec.Body, make(map[string]struct{}))
+}
+
 func (s Spec) claimID(stepIDs map[string]struct{}) error {
 	if s.ID == "" {
 		return s.fieldError("id", ErrInvalidStepID)
@@ -272,6 +299,8 @@ func (s Spec) allowedFields() []string {
 		return []string{"id", "body", "condition", "maxIterations"}
 	case KindIteration:
 		return []string{"id", "input", "body", "bodyOutput", "concurrency"}
+	case KindSubgraph:
+		return []string{"id", "inputs", "body", "bodyOutput"}
 	default:
 		return nil
 	}

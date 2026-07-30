@@ -15,8 +15,8 @@
 // logic is bridged in with [Leaf], and streaming logic with [StreamLeaf];
 // [Factory] adapts the common case of a typed node constructor with JSON config,
 // and [BindFactory] the case of a node reading several inputs. Composites
-// ([Sequence], [Branch], [Loop], [Parallel], [Iteration]) are built from flow's
-// primitives.
+// ([Sequence], [Branch], [Loop], [Parallel], [Iteration], [Subgraph]) remain
+// ordinary Steps.
 //
 // # Named input ports
 //
@@ -44,10 +44,34 @@
 // routing leaf's ordinary output, so Journal replay restores them without a
 // second hidden state channel.
 //
+// Graph execution is dependency-driven rather than divided into topological
+// barriers. A node starts as soon as every declared dependency completes,
+// subject to the graph-wide concurrency bound. It receives only the initial
+// Store and those dependencies' results, merged in declaration order.
+// Suspension blocks descendants but preserves the waiting node's returned
+// writes and does not stop unrelated ready work; failure cancels running
+// siblings and preserves nodes that had already completed.
+//
 // A compiled Graph owns cells whose node IDs belong to that Graph. Each
 // invocation removes those internal cells from its input Store, then rebuilds
 // them from the current execution or Journal replay. Reusing a prior result with
 // new external inputs therefore cannot revive an output from a now-bypassed arm.
+//
+// # Sealed subgraphs
+//
+// [Subgraph] turns any Step into an isolated composite. Declared inputs are
+// copied from the outer Store into a fresh inner Store, the body runs under a
+// scope derived from the subgraph ID, and one [SubgraphConfig.BodyOutput] is
+// projected back to [Output] of that ID. Inner cells never leak out. The body
+// remains responsible for its own static validation and Journal boundaries;
+// replay derives the projected output again rather than recording a second
+// hidden checkpoint.
+//
+// [SubgraphFactory] installs the same boundary as a registered Graph node.
+// Because its inputs still come from [LeafSpec.Inputs], the enclosing Graph can
+// detect cycles, report external inputs, and check registered port types without
+// inspecting or exposing the subgraph body. [Spec] and its JSON Schema also
+// provide the "subgraph" kind for structured definitions.
 //
 // [SpecJSONSchema] and [GraphJSONSchema] expose the Draft 2020-12 schemas for
 // the two JSON DSL shapes. [ValidateSpecJSON] and [ValidateGraphJSON] perform
@@ -81,8 +105,8 @@
 // job has to finish — and the run ends with an error matching [ErrSuspended].
 // [Suspensions] returns every wait, including its structured application value
 // and its scope-aware [Suspension.Key]. Suspension is a third outcome, not a kind
-// of failure, so [Parallel] and [Iteration] let their remaining work finish
-// rather than cancelling it.
+// of failure, so [Parallel], [Iteration], and [Graph] let work that is not
+// downstream of the wait finish rather than cancelling it.
 //
 // Await is a Store gate: it passes through once its Ref exists. Interrupt is a
 // request/response Step: it exposes a value, then produces the response under
@@ -106,7 +130,8 @@
 // Suspension awareness lives in this package's composites. The generic
 // combinators in flow and flowx know nothing about a Store, so they treat a
 // suspension as any other error and fail fast; compose Steps with [Sequence],
-// [Parallel], [Branch], [Loop], and [Iteration] when a workflow can suspend.
+// [Parallel], [Branch], [Loop], [Iteration], [Subgraph], and compiled [Graph]
+// when a workflow can suspend.
 // A caller-defined composite can make the same distinction with
 // [SuspendedOnly], collect waits with [Suspensions], and return them together
 // with [JoinSuspensions].
@@ -143,10 +168,11 @@
 // Distribution and deterministic replay stay out of scope, but the package
 // carries enough on each [Event] to build tracing and durability outside it:
 // [Event.Seq] orders a run, [Event.Path] distinguishes repeated executions of one
-// leaf or wait boundary under [Loop] and [Iteration], and [Event.Store] is the
-// serializable snapshot that boundary produced. [Store.Changes] narrows that
-// snapshot to just its writes, the delta an audit log or external persister
-// records. Attach an Observer through [RunConfig] when calling [Run]. Use an
+// leaf or wait boundary under [Loop], [Iteration], and [Subgraph], and
+// [Event.Store] is the serializable snapshot that boundary produced.
+// [Store.Changes] narrows that snapshot to just its writes, the delta an audit
+// log or external persister records. Attach an Observer through [RunConfig] when
+// calling [Run]. Use an
 // Emitter for high-volume intermediate values; lifecycle events deliberately
 // remain a separate, low-volume channel.
 //

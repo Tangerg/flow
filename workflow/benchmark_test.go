@@ -264,6 +264,44 @@ func BenchmarkCompileGraphScaling(b *testing.B) {
 	}
 }
 
+func BenchmarkGraphRunScaling(b *testing.B) {
+	registry := workflow.NewRegistry().MustRegisterLeaf(
+		"noop",
+		func(spec workflow.LeafSpec) (workflow.Step, error) {
+			return workflow.Leaf(
+				spec.ID,
+				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+					return struct{}{}, nil
+				}),
+				flow.NodeFunc[struct{}, struct{}](
+					func(context.Context, struct{}) (struct{}, error) {
+						return struct{}{}, nil
+					},
+				),
+			), nil
+		},
+	)
+
+	for _, shape := range []string{"chain", "wide"} {
+		for _, size := range []int{16, 128} {
+			b.Run(shape+"/"+strconv.Itoa(size), func(b *testing.B) {
+				step, err := registry.CompileGraph(benchmarkGraph(shape, size))
+				if err != nil {
+					b.Fatalf("CompileGraph: %v", err)
+				}
+
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					if _, err := step.Run(b.Context(), workflow.NewStore()); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
+
 func BenchmarkValidateGraphJSONScaling(b *testing.B) {
 	for _, size := range []int{16, 128, 1024} {
 		data, err := json.Marshal(benchmarkGraph("chain", size))

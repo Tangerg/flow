@@ -28,10 +28,21 @@ type NodeSpec struct {
 
 // Graph is a flat, arbitrarily wired DAG of leaf nodes — the shape a visual
 // editor produces. Unlike a nested [Spec], any node may depend on any other as
-// long as the result is acyclic. [Registry.CompileGraph] topologically layers it
-// and runs independent nodes concurrently. Routing nodes select conditional
-// targets through [NodeSpec.When]. Concurrency limits each layer; zero means
+// long as the result is acyclic. [Registry.CompileGraph] starts each node as
+// soon as its dependencies complete. Routing nodes select conditional targets
+// through [NodeSpec.When]. Concurrency limits the whole graph; zero means
 // unbounded.
+//
+// Each node sees the invocation's input Store plus the completed Stores of its
+// declared dependencies, merged in graph declaration order. It cannot observe
+// an unrelated node merely because that node happened to finish first. Final
+// results use the same order, so same-cell conflicts never depend on goroutine
+// scheduling.
+//
+// A suspension blocks only its descendants; other ready work and writes
+// returned with the suspension are retained for Journal-backed resumption. A
+// failure cancels running siblings, prevents new nodes from starting, and
+// returns the writes of nodes that had already completed along with the error.
 //
 // A compiled Graph owns Store cells named by its node IDs. Each invocation
 // clears those cells and reconstructs them from current execution or Journal

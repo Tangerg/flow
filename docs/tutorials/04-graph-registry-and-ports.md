@@ -158,10 +158,15 @@ start --> twice -----\
     `--> plusTen -----+--> total
 ```
 
-`twice` and `plusTen` share a layer and may run concurrently; `total` waits for
-both. Compilation turns the DAG into topological layers equivalent to
-`Sequence(Parallel(layer), ...)`. `Graph.Concurrency` bounds each layer; zero
-leaves it unbounded.
+`twice` and `plusTen` may run concurrently; `total` starts as soon as both
+complete. Compilation retains the dependency edges rather than inserting
+topological barriers, so a fast dependency chain never waits for an unrelated
+slow branch. `Graph.Concurrency` bounds the whole graph; zero leaves it
+unbounded.
+
+Each node receives the initial Store plus only its declared dependencies,
+merged in graph declaration order. Completion timing therefore cannot expose an
+undeclared value or change the winner of a same-cell conflict.
 
 Use `DependsOn` for a pure control dependency. Ordinary data dependencies
 belong in ports. If a factory hides Store references inside its config, graph
@@ -200,8 +205,8 @@ reusable `workflow.Step`.
 - Reading undeclared Store references from factory configuration.
 - Registering node instances instead of constructors for node types.
 - Repeating a data dependency in `DependsOn`.
-- Treating a DAG as a node-at-a-time scheduler. Execution uses topological
-  layers with a barrier between them.
+- Assuming declaration order creates a dependency or that unrelated branches
+  form a barrier.
 - Rebuilding the Registry in every request. Assemble it at application startup.
 
 ## Exercise

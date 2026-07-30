@@ -152,6 +152,8 @@ than silently overwriting the first result.
 | `Parallel` | Lets siblings finish, merges writes, and reports every wait |
 | `Iteration` | Lets other elements finish but does not write an incomplete collected output |
 | `Loop` | Stops; the Journal replays completed iterations |
+| `Graph` | Blocks descendants of a waiting node but lets unrelated ready work finish |
+| `Subgraph` | Publishes no outer output; its completed inner boundaries remain in the Journal |
 
 A waiting branch must not cancel its siblings as if it had failed. Doing so
 would discard their completed work and repeat their side effects after resume.

@@ -175,6 +175,12 @@ func TestCompileSpecJSONAcceptsEveryKind(t *testing.T) {
 			"body":{"kind":"leaf","id":"item","type":"addN","input":{"nodeID":"each","path":"/item"}},
 			"bodyOutput":{"nodeID":"item","path":"/output"}, "concurrency":2
 		}`,
+		"subgraph": `{
+			"kind":"subgraph", "id":"sub",
+			"inputs":{"value":{"nodeID":"seed","path":"/output"}},
+			"body":{"kind":"leaf","id":"inner","type":"addN","input":{"nodeID":"value","path":"/output"}},
+			"bodyOutput":{"nodeID":"inner","path":"/output"}
+		}`,
 	}
 	for name, data := range tests {
 		t.Run(name, func(t *testing.T) {

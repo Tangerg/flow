@@ -13,6 +13,7 @@ const (
 	KindBranch    SpecKind = "branch"
 	KindLoop      SpecKind = "loop"
 	KindIteration SpecKind = "iteration"
+	KindSubgraph  SpecKind = "subgraph"
 )
 
 // Spec is a serializable description of a workflow graph. Its Kind selects
@@ -22,8 +23,8 @@ type Spec struct {
 	Kind SpecKind `json:"kind"`
 
 	// Node ID, required by every kind that records something under its own name:
-	// leaf, branch, loop, and iteration. Sequence and parallel are purely
-	// structural and take none.
+	// leaf, branch, loop, iteration, and subgraph. Sequence and parallel are
+	// purely structural and take none.
 	ID string `json:"id,omitempty"`
 
 	// Leaf: registered type and its raw config.
@@ -34,8 +35,10 @@ type Spec struct {
 	// field is absent.
 	Input Ref `json:"input,omitzero"`
 
-	// Leaf inputs wired by port name. For the default port this is equivalent to
-	// Input; setting it both ways is rejected as [ErrDuplicatePort].
+	// Leaf inputs wired by port name. For a subgraph, keys name inner seed IDs
+	// and values reference the outer Store. For a leaf's default port this is
+	// equivalent to Input; setting it both ways is rejected as
+	// [ErrDuplicatePort].
 	Inputs Inputs `json:"inputs,omitempty"`
 
 	// Sequence and parallel children.
@@ -45,15 +48,15 @@ type Spec struct {
 	Resolver string          `json:"resolver,omitempty"`
 	Cases    map[string]Spec `json:"cases,omitempty"`
 
-	// Loop and iteration body.
+	// Loop, iteration, and subgraph body.
 	Body *Spec `json:"body,omitempty"`
 
 	// Loop: registered condition name and iteration cap.
 	Condition     string `json:"condition,omitempty"`
 	MaxIterations int    `json:"maxIterations,omitempty"`
 
-	// Iteration: where to read each element's result in the post-run Store.
-	// A zero Ref means the field is absent.
+	// Iteration and subgraph: where to read the body's result in its post-run
+	// Store. A zero Ref means the field is absent.
 	BodyOutput Ref `json:"bodyOutput,omitzero"`
 
 	// Parallel and iteration concurrency limit (0 = unbounded).

@@ -9,64 +9,84 @@ import (
 // CompileGraph validates a flat Graph, builds its leaves, and returns a Step.
 // It rejects duplicate IDs, missing dependencies, cycles, unknown node types,
 // invalid node configs, nil factory results, incompatible registered schemas,
-// and invalid routing gates, then runs each topological layer's nodes
-// concurrently. Build errors are reported as GraphError values at the graph
-// node and field that caused them.
+// and invalid routing gates. A compiled graph starts a node as soon as all of
+// its dependencies complete, subject to the graph-wide concurrency limit.
+// Build errors are reported as GraphError values at the graph node and field
+// that caused them.
 func (r *Registry) CompileGraph(graph Graph) (Step, error) {
 	plan, err := r.validateGraph(graph)
 	if err != nil {
 		return nil, err
 	}
 
-	var layerSteps []Step
-	for _, layer := range plan.layers {
-		steps := make([]Step, 0, len(layer))
-		for _, nodeID := range layer {
-			leaf, field, err := (leafCompiler{registry: r}).compile(
-				plan.nodesByID[nodeID].leafSpec(),
-			)
-			if err != nil {
-				return nil, &GraphError{
-					NodeID: nodeID,
-					Field:  field,
-					Err:    fmt.Errorf("%w: %w", ErrInvalidGraph, err),
-				}
+	steps := make(stepList, len(graph.Nodes))
+	for index, node := range graph.Nodes {
+		step, field, err := (leafCompiler{registry: r}).compile(node.leafSpec())
+		if err != nil {
+			return nil, &GraphError{
+				NodeID: node.ID,
+				Field:  field,
+				Err:    fmt.Errorf("%w: %w", ErrInvalidGraph, err),
 			}
-			if len(plan.nodesByID[nodeID].When) > 0 {
-				leaf = r.gate(plan.nodesByID[nodeID], plan, leaf)
-			}
-			steps = append(steps, leaf)
 		}
-		if len(steps) == 1 {
-			layerSteps = append(layerSteps, steps[0])
-		} else {
-			layerSteps = append(layerSteps, Parallel(
-				steps,
-				ParallelConfig{Concurrency: graph.Concurrency},
-			))
+		if len(node.When) > 0 {
+			step = r.gate(node, plan, step)
 		}
+		steps[index] = step
 	}
-	return compiledGraph(plan, Sequence(layerSteps...)), nil
+	return compiledGraph(plan, steps, graph.Concurrency), nil
 }
 
 type graphStep struct {
-	decoratedStep
-	nodeIDs map[string]struct{}
+	steps                 stepList
+	dependencyCounts      []int
+	dependencyNodeIndexes [][]int
+	dependentNodeIndexes  [][]int
+	nodeIDs               map[string]struct{}
+	limit                 int
 }
 
-func compiledGraph(plan graphPlan, step Step) Step {
+func compiledGraph(plan graphPlan, steps stepList, limit int) Step {
 	nodeIDs := make(map[string]struct{}, len(plan.nodesByID))
 	for nodeID := range plan.nodesByID {
 		nodeIDs[nodeID] = struct{}{}
 	}
 	return graphStep{
-		decoratedStep: decoratedStep{step: step},
-		nodeIDs:       nodeIDs,
+		steps:                 steps,
+		dependencyCounts:      slices.Clone(plan.dependencyCounts),
+		dependencyNodeIndexes: cloneIndexes(plan.dependencyNodeIndexes),
+		dependentNodeIndexes:  cloneIndexes(plan.dependentNodeIndexes),
+		nodeIDs:               nodeIDs,
+		limit:                 limit,
 	}
 }
 
+func cloneIndexes(indexes [][]int) [][]int {
+	cloned := make([][]int, len(indexes))
+	for index, values := range indexes {
+		cloned[index] = slices.Clone(values)
+	}
+	return cloned
+}
+
 func (g graphStep) Run(ctx context.Context, store Store) (Store, error) {
-	return g.step.Run(ctx, store.withoutNodes(g.nodeIDs))
+	ctx = ensureRun(ctx)
+	input := store.withoutNodes(g.nodeIDs)
+	if err := runFrom(ctx).validateDefinition(g); err != nil {
+		return input, err
+	}
+	if err := ctx.Err(); err != nil {
+		return input, err
+	}
+	return (graphExecution{graph: g, input: input}).run(ctx)
+}
+
+func (g graphStep) Describe() Description {
+	return Description{Kind: "graph", Children: g.steps.describe()}
+}
+
+func (g graphStep) workflowDefinition() stepDefinition {
+	return stepDefinition{kind: definitionSteps, steps: g.steps}
 }
 
 func (r *Registry) gate(node NodeSpec, plan graphPlan, step Step) Step {

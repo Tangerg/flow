@@ -388,6 +388,32 @@ func TestValidateSpec_rejectsEveryStructuralBoundary(t *testing.T) {
 			Input: workflow.Output("items"), Body: body(),
 			BodyOutput: workflow.Ref{NodeID: "value", Path: "/~2"},
 		},
+		"duplicate subgraph ID": {
+			Kind: workflow.KindSequence,
+			Steps: []workflow.Spec{
+				leaf("same"),
+				{
+					Kind: workflow.KindSubgraph, ID: "same",
+					Body: body(), BodyOutput: workflow.Output("value"),
+				},
+			},
+		},
+		"missing subgraph body": {
+			Kind: workflow.KindSubgraph, ID: "sub",
+			BodyOutput: workflow.Output("value"),
+		},
+		"missing subgraph body output": {
+			Kind: workflow.KindSubgraph, ID: "sub", Body: body(),
+		},
+		"invalid subgraph input": {
+			Kind: workflow.KindSubgraph, ID: "sub",
+			Inputs: workflow.Inputs{"value": {NodeID: "seed", Path: "/~2"}},
+			Body:   body(), BodyOutput: workflow.Output("value"),
+		},
+		"invalid subgraph body output": {
+			Kind: workflow.KindSubgraph, ID: "sub",
+			Body: body(), BodyOutput: workflow.Ref{NodeID: "value", Path: "/~2"},
+		},
 	}
 
 	for name, spec := range tests {

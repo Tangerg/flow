@@ -202,17 +202,7 @@ func (w Write) Ref() Ref { return At(w.NodeID, w.Key) }
 // Cells that base holds and s does not are not reported: a Store has no delete.
 // Values are borrowed views and must not be mutated.
 func (s Store) Changes(base Store) []Write {
-	if writes, ok := s.deltaSince(base); ok {
-		changes := make([]Write, 0, len(writes))
-		for _, write := range writes {
-			changes = append(changes, Write{NodeID: write.key.nodeID, Key: write.key.key, Value: write.cell.value})
-		}
-		return changes
-	}
-
-	// s may be unrelated to base or may have compacted a long overlay. Compare
-	// write identities, then restore write order from the revision counter.
-	changed := s.changedWrites(base.materialize())
+	changed := s.writesSince(base)
 	changes := make([]Write, 0, len(changed))
 	for _, write := range changed {
 		changes = append(changes, Write{
@@ -222,6 +212,20 @@ func (s Store) Changes(base Store) []Write {
 		})
 	}
 	return changes
+}
+
+// writesSince is the identity-preserving form of Changes used by Store
+// composition. It takes the overlay fast path when possible and falls back to
+// revision comparison for an unrelated or compacted Store.
+func (s Store) writesSince(base Store) []storeWrite {
+	if deltas, ok := s.deltaSince(base); ok {
+		writes := make([]storeWrite, 0, len(deltas))
+		for _, delta := range deltas {
+			writes = append(writes, storeWrite{key: delta.key, cell: delta.cell})
+		}
+		return writes
+	}
+	return s.changedWrites(base.materialize())
 }
 
 // changedWrites returns the receiver's cells that do not share the
@@ -284,6 +288,18 @@ func (s Store) merge(others ...Store) Store {
 		return merger.result.compact()
 	}
 	return merger.result
+}
+
+// withWrites applies identity-preserving writes in order. It is the low-level
+// counterpart of merge for a caller that already isolated each branch's delta.
+func (s Store) withWrites(writes []storeWrite) Store {
+	for _, write := range writes {
+		s = s.withDelta(write.key, write.cell)
+	}
+	if s.depth > storeOverlayLimit*2 {
+		return s.compact()
+	}
+	return s
 }
 
 // storeMerger owns the lazy fallback state needed while combining branches.

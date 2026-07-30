@@ -8,6 +8,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `workflow.Subgraph` and `SubgraphConfig`, a sealed composite that copies
+  declared outer inputs into a fresh Store, scopes a reusable body under the
+  subgraph ID, and projects one declared result back out without leaking inner
+  cells. `SubgraphFactory` exposes the same boundary as a registered Graph node,
+  and the `Spec` JSON DSL now includes a `subgraph` kind.
 - Conditional execution for flat `workflow.Graph` definitions.
   `NodeSchema.Outlets` declares a routing node's possible string outputs;
   `NodeSpec.When`, `Gate`, `When`, and `TriggerAny` gate targets and
@@ -24,8 +29,8 @@ All notable changes to this project are documented here. The format follows
   common case of lifting an ordinary typed function with one referenced input.
 - `workflow.FirstOf`, a tolerant binder that reads the first available
   reference in declaration order, for mutually exclusive merge paths.
-- `Graph.Concurrency`, which bounds the number of nodes running concurrently in
-  each topological layer; zero retains unbounded execution.
+- `Graph.Concurrency`, which bounds the number of nodes running concurrently
+  across a dependency-driven graph; zero retains unbounded execution.
 - First-class streaming output for Go-defined workflow leaves.
   `StreamNode[I, O, C]` and `StreamNodeFunc` model a typed producer with a
   synchronous, stoppable yield callback; `StreamLeaf` gives it the same binding,
@@ -37,7 +42,7 @@ All notable changes to this project are documented here. The format follows
 - `SuspendedOnly` and variadic `JoinSuspensions`, allowing caller-defined
   composites to preserve the package's suspension-as-a-third-outcome semantics
   without depending on internal error types.
-- An executable `example` package with an eight-stage learning path from one
+- An executable `example` package with a ten-stage learning path from one
   typed node through composition, dynamic DAGs, the JSON DSL, expression-based
   routing, persisted suspension/resumption, and streaming output. The examples
   use only public APIs and run as output-checked Go examples.
@@ -107,6 +112,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Compiled Graphs now schedule from dependency readiness instead of inserting
+  topological `Sequence(Parallel(...))` barriers. `Graph.Concurrency` is a
+  graph-wide limit. Nodes receive only the input Store and their declared
+  dependencies, and completed Stores merge in declaration order. Suspension
+  blocks descendants while unrelated work finishes; a real failure returns
+  already completed writes together with the error.
 - `NodeSpec` and `NodeSchema` gained routing fields. Unkeyed composite literals
   for either type must be converted to keyed fields; keyed literals require no
   migration.
@@ -293,6 +304,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Breaking
 
+- Graph nodes can no longer observe an unrelated node merely because a former
+  layer barrier happened to run it earlier; wire every Store read through
+  `NodeSpec.Input` or `NodeSpec.Inputs`, or declare a pure control edge with
+  `DependsOn`. Failure may now return writes from nodes that completed before
+  the error instead of discarding the whole in-flight layer.
 - Invalid `expr.SwitchSpec` values and conflicting `expr.Bindings` names now
   match `workflow.ErrInvalidSpec`; registering bindings into a nil Registry
   matches `workflow.ErrInvalidRegistration`. `expr.ErrUnsupported` is reserved

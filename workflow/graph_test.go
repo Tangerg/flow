@@ -43,11 +43,14 @@ func TestCompileGraph_diamond(t *testing.T) {
 		t.Fatalf("d = %v, %v; want 112", v, ok)
 	}
 
-	// The fan-in node must be layered after both producers.
+	// Introspection preserves the user's graph rather than exposing an internal
+	// scheduling transform.
 	description := workflow.Describe(step)
-	last := description.Children[len(description.Children)-1]
-	if last.ID != "d" {
-		t.Fatalf("last layer = %+v; want the fan-in node d", last)
+	if description.Kind != "graph" || len(description.Children) != 4 {
+		t.Fatalf("description = %+v; want graph with four nodes", description)
+	}
+	if last := description.Children[len(description.Children)-1]; last.ID != "d" {
+		t.Fatalf("last node = %+v; want d", last)
 	}
 }
 
@@ -142,6 +145,256 @@ func TestCompileGraph_rejectsNegativeConcurrency(t *testing.T) {
 		!errors.As(err, &graphErr) ||
 		graphErr.Field != "concurrency" {
 		t.Fatalf("error = %v; want concurrency GraphError", err)
+	}
+}
+
+func TestCompileGraph_emptyGraphIsAnIdentity(t *testing.T) {
+	step, err := workflow.NewRegistry().CompileGraph(workflow.Graph{})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+	input := workflow.NewStore().WithOutput("seed", 1)
+	output, err := step.Run(t.Context(), input)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if value, getErr := workflow.Get[int](output, workflow.Output("seed")); getErr != nil || value != 1 {
+		t.Fatalf("seed = %v, %v; want 1", value, getErr)
+	}
+	if description := workflow.Describe(step); description.Kind != "graph" || len(description.Children) != 0 {
+		t.Fatalf("Describe = %+v; want empty graph", description)
+	}
+}
+
+func TestCompileGraph_checksContextBeforeStartingNodes(t *testing.T) {
+	calls := 0
+	registry := workflow.NewRegistry().MustRegisterLeaf("node", func(spec workflow.LeafSpec) (workflow.Step, error) {
+		return workflow.Leaf(
+			spec.ID,
+			workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+				calls++
+				return struct{}{}, nil
+			}),
+			flow.NodeFunc[struct{}, struct{}](func(context.Context, struct{}) (struct{}, error) {
+				return struct{}{}, nil
+			}),
+		), nil
+	})
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.NodeSpec{{
+		ID: "node", Type: "node",
+	}}})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := step.Run(ctx, workflow.NewStore()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v; want context cancellation", err)
+	}
+	if calls != 0 {
+		t.Fatalf("bind calls = %d; want 0", calls)
+	}
+}
+
+func TestCompileGraph_parentCancellationStopsRunningNodes(t *testing.T) {
+	started := make(chan struct{})
+	registry := workflow.NewRegistry().MustRegisterLeaf("blocking", func(spec workflow.LeafSpec) (workflow.Step, error) {
+		return workflow.Leaf(
+			spec.ID,
+			workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+				return struct{}{}, nil
+			}),
+			flow.NodeFunc[struct{}, struct{}](func(ctx context.Context, _ struct{}) (struct{}, error) {
+				close(started)
+				<-ctx.Done()
+				return struct{}{}, ctx.Err()
+			}),
+		), nil
+	})
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.NodeSpec{{
+		ID: "blocking", Type: "blocking",
+	}}})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, err := step.Run(ctx, workflow.NewStore())
+		done <- err
+	}()
+	<-started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v; want context cancellation", err)
+	}
+}
+
+func TestCompileGraph_failureKeepsCompletedNodesAndCancelsSiblings(t *testing.T) {
+	boom := errors.New("boom")
+	blockedStarted := make(chan struct{})
+	descendantCalls := 0
+	registry := workflow.NewRegistry().
+		MustRegisterLeaf("complete", func(spec workflow.LeafSpec) (workflow.Step, error) {
+			return workflow.Leaf(
+				spec.ID,
+				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+					return struct{}{}, nil
+				}),
+				flow.NodeFunc[struct{}, string](func(context.Context, struct{}) (string, error) {
+					return "committed", nil
+				}),
+			), nil
+		}).
+		MustRegisterLeaf("fail", func(spec workflow.LeafSpec) (workflow.Step, error) {
+			return workflow.Leaf(
+				spec.ID,
+				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+					return struct{}{}, nil
+				}),
+				flow.NodeFunc[struct{}, struct{}](func(context.Context, struct{}) (struct{}, error) {
+					return struct{}{}, boom
+				}),
+			), nil
+		}).
+		MustRegisterLeaf("blocking", func(spec workflow.LeafSpec) (workflow.Step, error) {
+			return workflow.Leaf(
+				spec.ID,
+				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+					return struct{}{}, nil
+				}),
+				flow.NodeFunc[struct{}, struct{}](func(ctx context.Context, _ struct{}) (struct{}, error) {
+					close(blockedStarted)
+					<-ctx.Done()
+					return struct{}{}, ctx.Err()
+				}),
+			), nil
+		}).
+		MustRegisterLeaf("descendant", func(spec workflow.LeafSpec) (workflow.Step, error) {
+			return workflow.Leaf(
+				spec.ID,
+				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+					descendantCalls++
+					return struct{}{}, nil
+				}),
+				flow.NodeFunc[struct{}, struct{}](func(context.Context, struct{}) (struct{}, error) {
+					return struct{}{}, nil
+				}),
+			), nil
+		})
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.NodeSpec{
+		{ID: "complete", Type: "complete"},
+		{ID: "blocking", Type: "blocking"},
+		{ID: "fail", Type: "fail", DependsOn: []string{"complete"}},
+		{ID: "descendant", Type: "descendant", DependsOn: []string{"fail"}},
+	}})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+
+	output, err := step.Run(t.Context(), workflow.NewStore())
+	if !errors.Is(err, boom) {
+		t.Fatalf("Run error = %v; want boom", err)
+	}
+	<-blockedStarted
+	if value, getErr := workflow.Get[string](output, workflow.Output("complete")); getErr != nil || value != "committed" {
+		t.Fatalf("completed output = %v, %v; want committed", value, getErr)
+	}
+	if descendantCalls != 0 {
+		t.Fatalf("descendant calls = %d; want 0", descendantCalls)
+	}
+}
+
+func TestCompileGraph_mergesCompletedStoresInDeclarationOrder(t *testing.T) {
+	secondCompleted := make(chan struct{})
+	registry := workflow.NewRegistry().
+		MustRegisterLeaf("first", func(workflow.LeafSpec) (workflow.Step, error) {
+			return flow.NodeFunc[workflow.Store, workflow.Store](
+				func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+					<-secondCompleted
+					return store.WithOutput("shared", "first"), nil
+				},
+			), nil
+		}).
+		MustRegisterLeaf("second", func(workflow.LeafSpec) (workflow.Step, error) {
+			return flow.NodeFunc[workflow.Store, workflow.Store](
+				func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+					close(secondCompleted)
+					return store.WithOutput("shared", "second"), nil
+				},
+			), nil
+		}).
+		MustRegisterLeaf("reader", func(spec workflow.LeafSpec) (workflow.Step, error) {
+			return workflow.Leaf(
+				spec.ID,
+				workflow.From[string](workflow.Output("shared")),
+				flow.NodeFunc[string, string](func(_ context.Context, value string) (string, error) {
+					return value, nil
+				}),
+			), nil
+		})
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.NodeSpec{
+		{ID: "first", Type: "first"},
+		{ID: "second", Type: "second"},
+		{ID: "reader", Type: "reader", DependsOn: []string{"second", "first"}},
+	}})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+	output, err := step.Run(t.Context(), workflow.NewStore())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if value, getErr := workflow.Get[string](output, workflow.Output("shared")); getErr != nil || value != "second" {
+		t.Fatalf("shared = %v, %v; want declaration-order winner second", value, getErr)
+	}
+	if value, getErr := workflow.Get[string](output, workflow.Output("reader")); getErr != nil || value != "second" {
+		t.Fatalf("reader = %v, %v; want dependency-order winner second", value, getErr)
+	}
+}
+
+func TestCompileGraph_nodesSeeOnlyDeclaredDependencies(t *testing.T) {
+	registry := workflow.NewRegistry().
+		MustRegisterLeaf("constant", func(spec workflow.LeafSpec) (workflow.Step, error) {
+			return workflow.Leaf(
+				spec.ID,
+				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+					return struct{}{}, nil
+				}),
+				flow.NodeFunc[struct{}, int](func(context.Context, struct{}) (int, error) {
+					return 1, nil
+				}),
+			), nil
+		}).
+		MustRegisterLeaf("hidden-read", func(spec workflow.LeafSpec) (workflow.Step, error) {
+			// This deliberately violates the factory contract by hiding a Store
+			// reference instead of declaring it in spec.Inputs.
+			return workflow.Leaf(
+				spec.ID,
+				workflow.From[int](workflow.Output("unrelated")),
+				flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+					return value, nil
+				}),
+			), nil
+		})
+	step, err := registry.CompileGraph(workflow.Graph{
+		Concurrency: 1,
+		Nodes: []workflow.NodeSpec{
+			{ID: "unrelated", Type: "constant"},
+			{ID: "reader", Type: "hidden-read"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+
+	output, err := step.Run(t.Context(), workflow.NewStore())
+	if !errors.Is(err, workflow.ErrNotFound) {
+		t.Fatalf("Run error = %v; want hidden read to remain unavailable", err)
+	}
+	if value, getErr := workflow.Get[int](output, workflow.Output("unrelated")); getErr != nil || value != 1 {
+		t.Fatalf("unrelated output = %v, %v; want retained value 1", value, getErr)
 	}
 }
 
@@ -453,7 +706,7 @@ func TestGraph_inputs(t *testing.T) {
 	}
 }
 
-func TestCompileGraph_preservesSpecOrderWithinLayer(t *testing.T) {
+func TestCompileGraph_descriptionPreservesDeclarationOrder(t *testing.T) {
 	constant := func(spec workflow.LeafSpec) (workflow.Step, error) {
 		return workflow.Leaf(
 			spec.ID,
@@ -474,11 +727,196 @@ func TestCompileGraph_preservesSpecOrderWithinLayer(t *testing.T) {
 		t.Fatalf("CompileGraph: %v", err)
 	}
 	description := workflow.Describe(step)
-	if len(description.Children) != 2 {
-		t.Fatalf("description = %+v; want two layers", description)
+	if description.Kind != "graph" || len(description.Children) != 4 {
+		t.Fatalf("description = %+v; want graph with four nodes", description)
 	}
-	second := description.Children[1]
-	if len(second.Children) != 2 || second.Children[0].ID != "child-b" || second.Children[1].ID != "child-a" {
-		t.Fatalf("second layer = %+v; want child-b then child-a", second)
+	var ids []string
+	for _, child := range description.Children {
+		ids = append(ids, child.ID)
+	}
+	want := []string{"parent-a", "parent-b", "child-b", "child-a"}
+	if !slices.Equal(ids, want) {
+		t.Fatalf("description IDs = %v; want %v", ids, want)
+	}
+}
+
+func TestCompileGraph_startsReadyDescendantWithoutWaitingForUnrelatedRoot(t *testing.T) {
+	slowStarted := make(chan struct{})
+	releaseSlow := make(chan struct{})
+	afterCompleted := make(chan struct{})
+
+	registry := workflow.NewRegistry().
+		MustRegisterLeaf("slow", func(spec workflow.LeafSpec) (workflow.Step, error) {
+			return workflow.Leaf(
+				spec.ID,
+				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+					return struct{}{}, nil
+				}),
+				flow.NodeFunc[struct{}, struct{}](func(ctx context.Context, _ struct{}) (struct{}, error) {
+					close(slowStarted)
+					select {
+					case <-releaseSlow:
+						return struct{}{}, nil
+					case <-ctx.Done():
+						return struct{}{}, ctx.Err()
+					}
+				}),
+			), nil
+		}).
+		MustRegisterLeaf("constant", func(spec workflow.LeafSpec) (workflow.Step, error) {
+			return workflow.Leaf(
+				spec.ID,
+				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+					return struct{}{}, nil
+				}),
+				flow.NodeFunc[struct{}, int](func(context.Context, struct{}) (int, error) {
+					return 1, nil
+				}),
+			), nil
+		}).
+		MustRegisterLeaf("after", workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
+			return flow.NodeFunc[int, int](func(_ context.Context, input int) (int, error) {
+				close(afterCompleted)
+				return input + 1, nil
+			}), nil
+		}))
+
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.NodeSpec{
+		{ID: "slow", Type: "slow"},
+		{ID: "fetch", Type: "constant"},
+		{ID: "after-fetch", Type: "after", Input: workflow.Output("fetch")},
+	}})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := step.Run(t.Context(), workflow.NewStore())
+		done <- err
+	}()
+	<-slowStarted
+	select {
+	case <-afterCompleted:
+		// The dependency chain completed while the unrelated root remained
+		// blocked. A layer barrier would deadlock here until releaseSlow.
+	case <-time.After(time.Second):
+		t.Fatal("after-fetch waited for the unrelated slow root")
+	}
+	close(releaseSlow)
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
+func TestCompileGraph_suspensionBlocksDependentsButNotUnrelatedWork(t *testing.T) {
+	journal := workflow.NewJournal()
+	unrelatedCalls := 0
+	targetCalls := 0
+	registry := workflow.NewRegistry().
+		MustRegisterLeaf("route", workflow.InterruptFactory()).
+		MustRegisterSchema("route", workflow.NodeSchema{
+			Output:  workflow.TypeString,
+			Outlets: []string{"yes", "no"},
+		}).
+		MustRegisterLeaf("unrelated", func(spec workflow.LeafSpec) (workflow.Step, error) {
+			return workflow.Leaf(
+				spec.ID,
+				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+					return struct{}{}, nil
+				}),
+				flow.NodeFunc[struct{}, int](func(context.Context, struct{}) (int, error) {
+					unrelatedCalls++
+					return unrelatedCalls, nil
+				}),
+			), nil
+		}).
+		MustRegisterLeaf("target", func(spec workflow.LeafSpec) (workflow.Step, error) {
+			return workflow.Leaf(
+				spec.ID,
+				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+					return struct{}{}, nil
+				}),
+				flow.NodeFunc[struct{}, string](func(context.Context, struct{}) (string, error) {
+					targetCalls++
+					return "ran", nil
+				}),
+			), nil
+		})
+
+	step, err := registry.CompileGraph(workflow.Graph{
+		Concurrency: 1,
+		Nodes: []workflow.NodeSpec{
+			{ID: "route", Type: "route"},
+			{ID: "unrelated", Type: "unrelated"},
+			{ID: "target", Type: "target", When: []workflow.Gate{workflow.When("route", "yes")}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+
+	first, err := workflow.Run(t.Context(), step, workflow.NewStore(), workflow.RunConfig{Journal: journal})
+	suspensions := workflow.Suspensions(err)
+	if len(suspensions) != 1 || suspensions[0].ID != "route" {
+		t.Fatalf("first Run error = %v; want route suspension", err)
+	}
+	if targetCalls != 0 {
+		t.Fatalf("target calls = %d; want 0 while route is suspended", targetCalls)
+	}
+	if value, getErr := workflow.Get[int](first, workflow.Output("unrelated")); getErr != nil || value != 1 {
+		t.Fatalf("unrelated output = %v, %v; want 1", value, getErr)
+	}
+
+	if err := journal.Record(suspensions[0].Key(), "yes"); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	second, err := workflow.Run(t.Context(), step, first, workflow.RunConfig{Journal: journal})
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if unrelatedCalls != 1 {
+		t.Fatalf("unrelated calls = %d; want replay without another call", unrelatedCalls)
+	}
+	if targetCalls != 1 {
+		t.Fatalf("target calls = %d; want 1", targetCalls)
+	}
+	if value, getErr := workflow.Get[string](second, workflow.Output("target")); getErr != nil || value != "ran" {
+		t.Fatalf("target output = %v, %v; want ran", value, getErr)
+	}
+}
+
+func TestCompileGraph_preservesWritesReturnedWithSuspension(t *testing.T) {
+	registry := workflow.NewRegistry().MustRegisterLeaf(
+		"composite",
+		func(workflow.LeafSpec) (workflow.Step, error) {
+			completed := workflow.Leaf(
+				"completed",
+				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+					return struct{}{}, nil
+				}),
+				flow.NodeFunc[struct{}, string](func(context.Context, struct{}) (string, error) {
+					return "kept", nil
+				}),
+			)
+			return workflow.Parallel(
+				[]workflow.Step{completed, workflow.Interrupt("wait", "continue?")},
+				workflow.ParallelConfig{},
+			), nil
+		},
+	)
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.NodeSpec{{
+		ID: "composite", Type: "composite",
+	}}})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+
+	output, err := step.Run(t.Context(), workflow.NewStore())
+	if !errors.Is(err, workflow.ErrSuspended) {
+		t.Fatalf("Run error = %v; want suspension", err)
+	}
+	if value, getErr := workflow.Get[string](output, workflow.Output("completed")); getErr != nil || value != "kept" {
+		t.Fatalf("completed output = %v, %v; want kept", value, getErr)
 	}
 }

@@ -15,8 +15,8 @@ const DefaultPort = "in"
 // Inputs maps a node's input port names to the [Ref] each port reads. A node
 // declares its ports through a [NodeSchema]; a graph wires them with Inputs.
 //
-// Naming every input is what lets the layer above see the whole data flow: the
-// flat [Graph] infers dependencies from every wired port, and
+// Naming every input is what lets the enclosing definition see the whole data
+// flow: the flat [Graph] infers dependencies from every wired port, and
 // [Registry.ValidateGraph] type-checks each one. A node that smuggles extra
 // references through its config is invisible to both.
 type Inputs map[string]Ref
