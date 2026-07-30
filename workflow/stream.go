@@ -28,16 +28,16 @@ type StreamNodeFunc[I, O, C any] func(context.Context, I, func(C) bool) (O, erro
 var _ StreamNode[any, any, any] = StreamNodeFunc[any, any, any](nil)
 
 // RunStream calls f. A nil StreamNodeFunc returns [flow.ErrNilNode].
-func (f StreamNodeFunc[I, O, C]) RunStream(
+func (s StreamNodeFunc[I, O, C]) RunStream(
 	ctx context.Context,
 	input I,
 	yield func(C) bool,
 ) (O, error) {
-	if f == nil {
+	if s == nil {
 		var zero O
 		return zero, flow.ErrNilNode
 	}
-	return f(ctx, input, yield)
+	return s(ctx, input, yield)
 }
 
 // Chunk is one intermediate value from a [StreamLeaf].
@@ -70,11 +70,11 @@ type EmitterFunc func(context.Context, Chunk) error
 var _ Emitter = EmitterFunc(nil)
 
 // Emit calls f. A nil EmitterFunc discards the chunk.
-func (f EmitterFunc) Emit(ctx context.Context, chunk Chunk) error {
-	if f == nil {
+func (e EmitterFunc) Emit(ctx context.Context, chunk Chunk) error {
+	if e == nil {
 		return nil
 	}
-	return f(ctx, chunk)
+	return e(ctx, chunk)
 }
 
 // StreamLeaf turns a [StreamNode] into a [Step]. It has the same binding,
@@ -112,17 +112,17 @@ type streamRunner[I, O, C any] struct {
 	node StreamNode[I, O, C]
 }
 
-func (runner streamRunner[I, O, C]) validate() error {
-	if runner.node == nil {
+func (s streamRunner[I, O, C]) validate() error {
+	if s.node == nil {
 		return flow.ErrNilNode
 	}
-	if function, ok := runner.node.(StreamNodeFunc[I, O, C]); ok && function == nil {
+	if function, ok := s.node.(StreamNodeFunc[I, O, C]); ok && function == nil {
 		return flow.ErrNilNode
 	}
 	return nil
 }
 
-func (runner streamRunner[I, O, C]) run(
+func (s streamRunner[I, O, C]) run(
 	ctx context.Context,
 	input I,
 	invocation leafInvocation,
@@ -130,7 +130,7 @@ func (runner streamRunner[I, O, C]) run(
 	emitter := invocation.run.emitter()
 	if emitter == nil {
 		stopped := false
-		output, err := runner.node.RunStream(ctx, input, func(C) bool {
+		output, err := s.node.RunStream(ctx, input, func(C) bool {
 			if ctx.Err() == nil {
 				return true
 			}
@@ -154,7 +154,7 @@ func (runner streamRunner[I, O, C]) run(
 		id:      invocation.id,
 		path:    invocation.path,
 	}
-	output, err := runner.node.RunStream(streamCtx, input, stream.yield)
+	output, err := s.node.RunStream(streamCtx, input, stream.yield)
 	if stream.err != nil {
 		var zero O
 		return zero, stream.err
@@ -179,29 +179,29 @@ type chunkStream[C any] struct {
 	err     error
 }
 
-func (stream *chunkStream[C]) yield(value C) bool {
-	if stream.stopped || stream.ctx.Err() != nil {
-		stream.stopped = true
+func (c *chunkStream[C]) yield(value C) bool {
+	if c.stopped || c.ctx.Err() != nil {
+		c.stopped = true
 		return false
 	}
 
-	index := stream.index
+	index := c.index
 	chunk := Chunk{
-		ID:    stream.id,
-		Path:  slices.Clone(stream.path),
-		Seq:   stream.run.nextSeq(),
+		ID:    c.id,
+		Path:  slices.Clone(c.path),
+		Seq:   c.run.nextSeq(),
 		Index: index,
 		Value: value,
 	}
-	if err := stream.emitter.Emit(stream.ctx, chunk); err != nil {
-		stream.err = fmt.Errorf("emit chunk %d: %w", index, err)
-		stream.stopped = true
-		stream.cancel(stream.err)
+	if err := c.emitter.Emit(c.ctx, chunk); err != nil {
+		c.err = fmt.Errorf("emit chunk %d: %w", index, err)
+		c.stopped = true
+		c.cancel(c.err)
 		return false
 	}
-	stream.index++
-	if stream.ctx.Err() != nil {
-		stream.stopped = true
+	c.index++
+	if c.ctx.Err() != nil {
+		c.stopped = true
 		return false
 	}
 	return true

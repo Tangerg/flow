@@ -27,42 +27,42 @@ type awaitStep struct {
 	ref Ref
 }
 
-func (await awaitStep) Run(ctx context.Context, store Store) (Store, error) {
+func (a awaitStep) Run(ctx context.Context, store Store) (Store, error) {
 	run := runFrom(ctx)
-	if await.id == "" {
-		err := &StepError{ID: await.id, Op: OpValidate, Err: ErrInvalidStepID}
-		run.emit(ctx, Event{Kind: EventFailed, ID: await.id, Err: err})
+	if a.id == "" {
+		err := &StepError{ID: a.id, Op: OpValidate, Err: ErrInvalidStepID}
+		run.emit(ctx, Event{Kind: EventFailed, ID: a.id, Err: err})
 		return store, err
 	}
-	if err := await.ref.validate(); err != nil {
+	if err := a.ref.validate(); err != nil {
 		err := &StepError{
-			ID:  await.id,
+			ID:  a.id,
 			Op:  OpValidate,
 			Err: fmt.Errorf("%w: await reference: %w", ErrInvalidSpec, err),
 		}
-		run.emit(ctx, Event{Kind: EventFailed, ID: await.id, Err: err})
+		run.emit(ctx, Event{Kind: EventFailed, ID: a.id, Err: err})
 		return store, err
 	}
-	if err := run.claim(scope(ctx), await.id); err != nil {
-		err := &StepError{ID: await.id, Op: OpValidate, Err: err}
-		run.emit(ctx, Event{Kind: EventFailed, ID: await.id, Err: err})
+	if err := run.claim(scope(ctx), a.id); err != nil {
+		err := &StepError{ID: a.id, Op: OpValidate, Err: err}
+		run.emit(ctx, Event{Kind: EventFailed, ID: a.id, Err: err})
 		return store, err
 	}
-	if _, ok := store.Lookup(await.ref); ok {
-		run.emit(ctx, Event{Kind: EventCompleted, ID: await.id, Store: store})
+	if _, ok := store.Lookup(a.ref); ok {
+		run.emit(ctx, Event{Kind: EventCompleted, ID: a.id, Store: store})
 		return store, nil
 	}
-	suspension := &Suspension{ID: await.id, Path: Scope(ctx), Await: await.ref}
-	run.emit(ctx, Event{Kind: EventSuspended, ID: await.id, Err: suspension})
+	suspension := &Suspension{ID: a.id, Path: Scope(ctx), Await: a.ref}
+	run.emit(ctx, Event{Kind: EventSuspended, ID: a.id, Err: suspension})
 	return store, suspension
 }
 
-func (await awaitStep) Describe() Description {
-	return Description{ID: await.id, Kind: "await", Label: await.ref.String()}
+func (a awaitStep) Describe() Description {
+	return Description{ID: a.id, Kind: "await", Label: a.ref.String()}
 }
 
-func (await awaitStep) workflowDefinition() stepDefinition {
-	return stepDefinition{kind: definitionNamed, id: await.id}
+func (a awaitStep) workflowDefinition() stepDefinition {
+	return stepDefinition{kind: definitionNamed, id: a.id}
 }
 
 // AwaitFactory is the [LeafFactory] form of [Await]: a node type a serialized

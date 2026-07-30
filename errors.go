@@ -32,9 +32,9 @@ type IndexError struct {
 	Err   error
 }
 
-func (e *IndexError) Error() string {
-	return fmt.Sprintf("flow: index %d: %v", e.Index, e.Err)
+func (i *IndexError) Error() string {
+	return fmt.Sprintf("flow: index %d: %v", i.Index, i.Err)
 }
 
 // Unwrap returns the underlying element error.
-func (e *IndexError) Unwrap() error { return e.Err }
+func (i *IndexError) Unwrap() error { return i.Err }

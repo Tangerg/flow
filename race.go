@@ -25,9 +25,9 @@ type raceNode[I, O any] struct {
 	nodes []Node[I, O]
 }
 
-func (race raceNode[I, O]) Run(ctx context.Context, input I) (O, error) {
+func (r raceNode[I, O]) Run(ctx context.Context, input I) (O, error) {
 	var zero O
-	if err := race.validate(); err != nil {
+	if err := r.validate(); err != nil {
 		return zero, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -39,17 +39,17 @@ func (race raceNode[I, O]) Run(ctx context.Context, input I) (O, error) {
 
 	run := raceRun[O]{
 		cancel:  cancel,
-		results: race.startNodes(raceCtx, input),
-		errs:    make([]error, len(race.nodes)),
+		results: r.startNodes(raceCtx, input),
+		errs:    make([]error, len(r.nodes)),
 	}
 	return run.waitForAll(ctx)
 }
 
-func (race raceNode[I, O]) validate() error {
-	if len(race.nodes) == 0 {
+func (r raceNode[I, O]) validate() error {
+	if len(r.nodes) == 0 {
 		return ErrNoNodes
 	}
-	for index, node := range race.nodes {
+	for index, node := range r.nodes {
 		if node == nil {
 			return &IndexError{Index: index, Err: ErrNilNode}
 		}
@@ -57,9 +57,9 @@ func (race raceNode[I, O]) validate() error {
 	return nil
 }
 
-func (race raceNode[I, O]) startNodes(ctx context.Context, input I) <-chan raceResult[O] {
-	results := make(chan raceResult[O], len(race.nodes))
-	for index, node := range race.nodes {
+func (r raceNode[I, O]) startNodes(ctx context.Context, input I) <-chan raceResult[O] {
+	results := make(chan raceResult[O], len(r.nodes))
+	for index, node := range r.nodes {
 		go func() {
 			value, err := node.Run(ctx, input)
 			results <- raceResult[O]{index: index, value: value, err: err}
@@ -86,43 +86,43 @@ type raceRun[O any] struct {
 	parentErr error
 }
 
-func (run *raceRun[O]) waitForAll(parent context.Context) (O, error) {
-	for range len(run.errs) {
-		run.record(run.nextResult(parent))
+func (r *raceRun[O]) waitForAll(parent context.Context) (O, error) {
+	for range len(r.errs) {
+		r.record(r.nextResult(parent))
 	}
 
 	var zero O
 	if err := parent.Err(); err != nil {
 		return zero, err
 	}
-	if run.won {
-		return run.winner, nil
+	if r.won {
+		return r.winner, nil
 	}
-	return zero, errors.Join(run.errs...)
+	return zero, errors.Join(r.errs...)
 }
 
-func (run *raceRun[O]) nextResult(parent context.Context) raceResult[O] {
-	if run.won || run.parentErr != nil {
-		return <-run.results
+func (r *raceRun[O]) nextResult(parent context.Context) raceResult[O] {
+	if r.won || r.parentErr != nil {
+		return <-r.results
 	}
 	select {
-	case result := <-run.results:
+	case result := <-r.results:
 		return result
 	case <-parent.Done():
-		run.parentErr = parent.Err()
-		run.cancel()
-		return <-run.results
+		r.parentErr = parent.Err()
+		r.cancel()
+		return <-r.results
 	}
 }
 
-func (run *raceRun[O]) record(result raceResult[O]) {
-	if result.err == nil && !run.won && run.parentErr == nil {
-		run.winner = result.value
-		run.won = true
-		run.cancel()
+func (r *raceRun[O]) record(result raceResult[O]) {
+	if result.err == nil && !r.won && r.parentErr == nil {
+		r.winner = result.value
+		r.won = true
+		r.cancel()
 		return
 	}
-	if !run.won && run.parentErr == nil {
-		run.errs[result.index] = &IndexError{Index: result.index, Err: result.err}
+	if !r.won && r.parentErr == nil {
+		r.errs[result.index] = &IndexError{Index: result.index, Err: result.err}
 	}
 }

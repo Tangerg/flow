@@ -64,8 +64,10 @@ func TestStreamLeaf_emitsChunksAndPublishesFinalOutput(t *testing.T) {
 	if len(signals) != 5 {
 		t.Fatalf("signals = %#v; want start, three chunks, complete", signals)
 	}
+	var want uint64
 	for index, signal := range signals {
-		if want := uint64(index + 1); signal.seq != want {
+		want++
+		if signal.seq != want {
 			t.Fatalf("signal %d Seq = %d; want %d", index, signal.seq, want)
 		}
 	}
@@ -73,6 +75,7 @@ func TestStreamLeaf_emitsChunksAndPublishesFinalOutput(t *testing.T) {
 		signals[4].kind != workflow.EventCompleted {
 		t.Fatalf("boundary events = %q, %q; want started, completed", signals[0].kind, signals[4].kind)
 	}
+	var wantIndex uint64
 	for index, signal := range signals[1:4] {
 		chunk := signal.chunk
 		if chunk == nil {
@@ -80,10 +83,11 @@ func TestStreamLeaf_emitsChunksAndPublishesFinalOutput(t *testing.T) {
 		}
 		if chunk.ID != "stream" ||
 			!slices.Equal(chunk.Path, []string{"outer"}) ||
-			chunk.Index != uint64(index) ||
+			chunk.Index != wantIndex ||
 			chunk.Value != fmt.Sprintf("chunk-%d", index) {
 			t.Fatalf("chunk %d = %+v; want identified, scoped chunk", index, chunk)
 		}
+		wantIndex++
 	}
 
 	// Each Chunk owns its Path.

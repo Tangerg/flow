@@ -85,34 +85,34 @@ func (r *Registry) RegisterSchema(nodeType string, schema NodeSchema) error {
 	return nil
 }
 
-func (schema NodeSchema) compile() (registeredNodeSchema, error) {
-	if err := schema.validate(); err != nil {
+func (n NodeSchema) compile() (registeredNodeSchema, error) {
+	if err := n.validate(); err != nil {
 		return registeredNodeSchema{}, err
 	}
-	schema = schema.clone()
+	n = n.clone()
 	validator, err := (schemaSource{
 		url:      configSchemaURL,
-		document: jsonDocument(schema.ConfigSchema),
+		document: jsonDocument(n.ConfigSchema),
 	}).compileOptional()
 	if err != nil {
 		return registeredNodeSchema{}, fmt.Errorf("config JSON Schema: %w", err)
 	}
-	return registeredNodeSchema{schema: schema, configValidator: validator}, nil
+	return registeredNodeSchema{schema: n, configValidator: validator}, nil
 }
 
-func (schema NodeSchema) validate() error {
-	if !schema.Output.valid() {
-		return fmt.Errorf("output type %q is invalid", schema.Output)
+func (n NodeSchema) validate() error {
+	if !n.Output.valid() {
+		return fmt.Errorf("output type %q is invalid", n.Output)
 	}
-	if len(schema.Outlets) > 0 && schema.Output != TypeString {
+	if len(n.Outlets) > 0 && n.Output != TypeString {
 		return fmt.Errorf(
 			"routing output type is %q; want %q",
-			schema.Output,
+			n.Output,
 			TypeString,
 		)
 	}
-	outlets := make(map[string]struct{}, len(schema.Outlets))
-	for _, outlet := range schema.Outlets {
+	outlets := make(map[string]struct{}, len(n.Outlets))
+	for _, outlet := range n.Outlets {
 		if outlet == "" {
 			return errors.New("outlet name is empty")
 		}
@@ -121,8 +121,8 @@ func (schema NodeSchema) validate() error {
 		}
 		outlets[outlet] = struct{}{}
 	}
-	for _, port := range slices.Sorted(maps.Keys(schema.Inputs)) {
-		switch valueType := schema.Inputs[port]; {
+	for _, port := range slices.Sorted(maps.Keys(n.Inputs)) {
+		switch valueType := n.Inputs[port]; {
 		case port == "":
 			return errors.New("input port name is empty")
 		case !valueType.valid():
@@ -132,15 +132,15 @@ func (schema NodeSchema) validate() error {
 	return nil
 }
 
-func (schema NodeSchema) clone() NodeSchema {
-	schema.Inputs = maps.Clone(schema.Inputs)
-	schema.Outlets = slices.Clone(schema.Outlets)
-	schema.ConfigSchema = bytes.Clone(schema.ConfigSchema)
-	return schema
+func (n NodeSchema) clone() NodeSchema {
+	n.Inputs = maps.Clone(n.Inputs)
+	n.Outlets = slices.Clone(n.Outlets)
+	n.ConfigSchema = bytes.Clone(n.ConfigSchema)
+	return n
 }
 
-func (registered registeredNodeSchema) validateConfig(config json.RawMessage) error {
-	return registered.configValidator.validateConfig(config)
+func (r registeredNodeSchema) validateConfig(config json.RawMessage) error {
+	return r.configValidator.validateConfig(config)
 }
 
 // MustRegisterSchema is like [Registry.RegisterSchema] but panics on error.
@@ -174,8 +174,8 @@ func (r *Registry) NodeTypes() []string {
 	return slices.Sorted(maps.Keys(r.leaves))
 }
 
-func (t ValueType) valid() bool {
-	switch t {
+func (v ValueType) valid() bool {
+	switch v {
 	case "", TypeAny, TypeString, TypeNumber, TypeBool, TypeArray, TypeObject:
 		return true
 	default:
@@ -185,8 +185,8 @@ func (t ValueType) valid() bool {
 
 // accepts reports whether a value of type out can feed a port of type t. An
 // empty or TypeAny type on either side is compatible with anything.
-func (t ValueType) accepts(out ValueType) bool {
-	return out == t || out == "" || t == "" || out == TypeAny || t == TypeAny
+func (v ValueType) accepts(out ValueType) bool {
+	return out == v || out == "" || v == "" || out == TypeAny || v == TypeAny
 }
 
 // validateInputs checks wiring against the schema: every
@@ -196,11 +196,11 @@ func (t ValueType) accepts(out ValueType) bool {
 //
 // A node type with no declared ports is left unchecked, so nodes may be
 // registered without a schema.
-func (schema NodeSchema) validateInputs(
+func (n NodeSchema) validateInputs(
 	inputs Inputs,
 	producerOutput func(Ref) (ValueType, bool),
 ) error {
-	declared := schema.Inputs
+	declared := n.Inputs
 	if len(declared) == 0 {
 		return nil
 	}

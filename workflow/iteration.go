@@ -81,55 +81,55 @@ type iterationStep struct {
 	limit      int
 }
 
-func (it iterationStep) Run(ctx context.Context, s Store) (Store, error) {
+func (i iterationStep) Run(ctx context.Context, s Store) (Store, error) {
 	ctx = ensureRun(ctx)
-	if err := it.validate(); err != nil {
+	if err := i.validate(); err != nil {
 		return s, err
 	}
-	if err := runFrom(ctx).validateDefinition(it); err != nil {
+	if err := runFrom(ctx).validateDefinition(i); err != nil {
 		return s, err
 	}
-	if err := runFrom(ctx).claim(scope(ctx), it.id); err != nil {
-		return s, &StepError{ID: it.id, Op: OpValidate, Err: err}
+	if err := runFrom(ctx).claim(scope(ctx), i.id); err != nil {
+		return s, &StepError{ID: i.id, Op: OpValidate, Err: err}
 	}
-	items, err := Get[[]any](s, it.input)
+	items, err := Get[[]any](s, i.input)
 	if err != nil {
-		return s, fmt.Errorf("workflow: iteration %q input: %w", it.id, err)
+		return s, fmt.Errorf("workflow: iteration %q input: %w", i.id, err)
 	}
-	outcomes, err := it.runElements(ctx, s, items)
+	outcomes, err := i.runElements(ctx, s, items)
 	if err != nil {
-		return s, fmt.Errorf("workflow: iteration %q: %w", it.id, err)
+		return s, fmt.Errorf("workflow: iteration %q: %w", i.id, err)
 	}
-	return it.collect(s, outcomes)
+	return i.collect(s, outcomes)
 }
 
-func (it iterationStep) validate() error {
+func (i iterationStep) validate() error {
 	switch {
-	case it.id == "":
-		return &StepError{ID: it.id, Op: OpValidate, Err: ErrInvalidStepID}
-	case it.body == nil:
-		return &StepError{ID: it.id, Op: OpValidate, Err: ErrNilStep}
-	case it.limit < 0:
+	case i.id == "":
+		return &StepError{ID: i.id, Op: OpValidate, Err: ErrInvalidStepID}
+	case i.body == nil:
+		return &StepError{ID: i.id, Op: OpValidate, Err: ErrNilStep}
+	case i.limit < 0:
 		return &StepError{
-			ID: it.id,
+			ID: i.id,
 			Op: OpValidate,
 			Err: fmt.Errorf(
 				"%w: concurrency must be non-negative, got %d",
 				flow.ErrInvalidConfig,
-				it.limit,
+				i.limit,
 			),
 		}
 	}
-	if err := it.input.validate(); err != nil {
+	if err := i.input.validate(); err != nil {
 		return &StepError{
-			ID:  it.id,
+			ID:  i.id,
 			Op:  OpValidate,
 			Err: fmt.Errorf("%w: iteration input: %w", ErrInvalidSpec, err),
 		}
 	}
-	if err := it.bodyOutput.validate(); err != nil {
+	if err := i.bodyOutput.validate(); err != nil {
 		return &StepError{
-			ID:  it.id,
+			ID:  i.id,
 			Op:  OpValidate,
 			Err: fmt.Errorf("%w: iteration body output: %w", ErrInvalidSpec, err),
 		}
@@ -137,7 +137,7 @@ func (it iterationStep) validate() error {
 	return nil
 }
 
-func (it iterationStep) runElements(
+func (i iterationStep) runElements(
 	ctx context.Context,
 	s Store,
 	items []any,
@@ -148,8 +148,8 @@ func (it iterationStep) runElements(
 	}
 
 	apply := flow.NodeFunc[int, elementOutcome](func(ctx context.Context, index int) (elementOutcome, error) {
-		scoped := s.With(it.id, itemKey, items[index]).With(it.id, indexKey, index)
-		body := (scopedStep{step: it.body}).indexed(it.id, index)
+		scoped := s.With(i.id, itemKey, items[index]).With(i.id, indexKey, index)
+		body := (scopedStep{step: i.body}).indexed(i.id, index)
 		result, err := body.run(ctx, scoped)
 		if err != nil {
 			// As in Parallel, a suspension travels as a value so the other
@@ -159,16 +159,16 @@ func (it iterationStep) runElements(
 			}
 			return elementOutcome{}, err
 		}
-		value, err := Get[any](result, it.bodyOutput)
+		value, err := Get[any](result, i.bodyOutput)
 		if err != nil {
-			return elementOutcome{}, fmt.Errorf("read body output %s: %w", it.bodyOutput, err)
+			return elementOutcome{}, fmt.Errorf("read body output %s: %w", i.bodyOutput, err)
 		}
 		return elementOutcome{value: value}, nil
 	})
-	return flow.Map(apply, flow.MapConfig{Concurrency: it.limit}).Run(ctx, elementIndexes)
+	return flow.Map(apply, flow.MapConfig{Concurrency: i.limit}).Run(ctx, elementIndexes)
 }
 
-func (it iterationStep) collect(s Store, outcomes []elementOutcome) (Store, error) {
+func (i iterationStep) collect(s Store, outcomes []elementOutcome) (Store, error) {
 	outputs := make([]any, len(outcomes))
 	var suspensions suspensionList
 	for index, outcome := range outcomes {
@@ -184,13 +184,13 @@ func (it iterationStep) collect(s Store, outcomes []elementOutcome) (Store, erro
 		// each element did finish, so resuming repeats only the waiting ones.
 		return s, suspensions.err()
 	}
-	return s.WithOutput(it.id, outputs), nil
+	return s.WithOutput(i.id, outputs), nil
 }
 
-func (it iterationStep) Describe() Description {
-	return Description{ID: it.id, Kind: "iteration", Children: []Description{Describe(it.body)}}
+func (i iterationStep) Describe() Description {
+	return Description{ID: i.id, Kind: "iteration", Children: []Description{Describe(i.body)}}
 }
 
-func (it iterationStep) workflowDefinition() stepDefinition {
-	return stepDefinition{kind: definitionIteration, id: it.id, body: it.body}
+func (i iterationStep) workflowDefinition() stepDefinition {
+	return stepDefinition{kind: definitionIteration, id: i.id, body: i.body}
 }

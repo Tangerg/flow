@@ -275,26 +275,26 @@ func ExampleAwait() {
 
 	// First run: the draft is written, then the workflow waits.
 	journal := workflow.NewJournal()
-	paused, err := workflow.Run(context.Background(), pipeline,
+	paused, runErr := workflow.Run(context.Background(), pipeline,
 		workflow.NewStore().WithOutput("topic", "ports"),
 		workflow.RunConfig{Journal: journal})
-	if !errors.Is(err, workflow.ErrSuspended) {
-		fmt.Println("unexpected:", err)
+	if !errors.Is(runErr, workflow.ErrSuspended) {
+		fmt.Println("unexpected:", runErr)
 		return
 	}
-	for _, s := range workflow.Suspensions(err) {
+	for _, s := range workflow.Suspensions(runErr) {
 		fmt.Printf("waiting: %s needs %s\n", s.ID, s.Await)
 	}
 
 	// Persist both halves of the run, as a durable resume would.
-	storeJSON, err := json.Marshal(paused)
-	if err != nil {
-		fmt.Println(err)
+	storeJSON, runErr := json.Marshal(paused)
+	if runErr != nil {
+		fmt.Println(runErr)
 		return
 	}
-	journalJSON, err := json.Marshal(journal)
-	if err != nil {
-		fmt.Println(err)
+	journalJSON, runErr := json.Marshal(journal)
+	if runErr != nil {
+		fmt.Println(runErr)
 		return
 	}
 
@@ -311,11 +311,11 @@ func ExampleAwait() {
 		return
 	}
 
-	out, err := workflow.Run(context.Background(), pipeline,
+	out, runErr := workflow.Run(context.Background(), pipeline,
 		store.With("editor", "verdict", "approved"),
 		workflow.RunConfig{Journal: resumed})
-	if err != nil {
-		fmt.Println(err)
+	if runErr != nil {
+		fmt.Println(runErr)
 		return
 	}
 	fmt.Println(workflow.Get[string](out, workflow.Output("publish")))
@@ -344,15 +344,15 @@ func ExampleInterrupt() {
 	journal := workflow.NewJournal()
 	cfg := workflow.RunConfig{Journal: journal}
 
-	paused, err := workflow.Run(context.Background(), step, workflow.NewStore(), cfg)
-	if !errors.Is(err, workflow.ErrSuspended) {
-		fmt.Println("unexpected:", err)
+	paused, runErr := workflow.Run(context.Background(), step, workflow.NewStore(), cfg)
+	if !errors.Is(runErr, workflow.ErrSuspended) {
+		fmt.Println("unexpected:", runErr)
 		return
 	}
-	wait := workflow.Suspensions(err)[0]
-	requestJSON, err := json.Marshal(wait.Value)
-	if err != nil {
-		fmt.Println(err)
+	wait := workflow.Suspensions(runErr)[0]
+	requestJSON, runErr := json.Marshal(wait.Value)
+	if runErr != nil {
+		fmt.Println(runErr)
 		return
 	}
 	fmt.Println(string(requestJSON))
@@ -361,9 +361,9 @@ func ExampleInterrupt() {
 		fmt.Println(err)
 		return
 	}
-	out, err := workflow.Run(context.Background(), step, paused, cfg)
-	if err != nil {
-		fmt.Println(err)
+	out, runErr := workflow.Run(context.Background(), step, paused, cfg)
+	if runErr != nil {
+		fmt.Println(runErr)
 		return
 	}
 	fmt.Println(workflow.Get[response](out, workflow.Output("approval")))

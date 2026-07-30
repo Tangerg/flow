@@ -60,12 +60,12 @@ type StepError struct {
 	Err error
 }
 
-func (e *StepError) Error() string {
-	return fmt.Sprintf("workflow: step %q %s: %v", e.ID, e.Op, e.Err)
+func (s *StepError) Error() string {
+	return fmt.Sprintf("workflow: step %q %s: %v", s.ID, s.Op, s.Err)
 }
 
 // Unwrap returns the underlying validation, bind, or run error.
-func (e *StepError) Unwrap() error { return e.Err }
+func (s *StepError) Unwrap() error { return s.Err }
 
 // RefError reports a failed typed lookup in a [Store]. Want is the requested
 // type; Got is empty when the reference is missing or contains an untyped nil.
@@ -76,19 +76,19 @@ type RefError struct {
 	Err  error
 }
 
-func (e *RefError) Error() string {
+func (r *RefError) Error() string {
 	switch {
-	case errors.Is(e.Err, ErrNotFound):
-		return fmt.Sprintf("workflow: ref %s: %v", e.Ref, e.Err)
-	case e.Got == "":
-		return fmt.Sprintf("workflow: ref %s: %v: got <nil>, want %s", e.Ref, e.Err, e.Want)
+	case errors.Is(r.Err, ErrNotFound):
+		return fmt.Sprintf("workflow: ref %s: %v", r.Ref, r.Err)
+	case r.Got == "":
+		return fmt.Sprintf("workflow: ref %s: %v: got <nil>, want %s", r.Ref, r.Err, r.Want)
 	default:
-		return fmt.Sprintf("workflow: ref %s: %v: got %s, want %s", e.Ref, e.Err, e.Got, e.Want)
+		return fmt.Sprintf("workflow: ref %s: %v: got %s, want %s", r.Ref, r.Err, r.Got, r.Want)
 	}
 }
 
 // Unwrap returns [ErrNotFound] or [ErrTypeMismatch].
-func (e *RefError) Unwrap() error { return e.Err }
+func (r *RefError) Unwrap() error { return r.Err }
 
 // RegistrationError reports an invalid or duplicate [Registry] entry.
 type RegistrationError struct {
@@ -97,15 +97,15 @@ type RegistrationError struct {
 	Err  error
 }
 
-func (e *RegistrationError) Error() string {
-	if e.Name == "" {
-		return fmt.Sprintf("workflow: register %s: %v", e.Kind, e.Err)
+func (r *RegistrationError) Error() string {
+	if r.Name == "" {
+		return fmt.Sprintf("workflow: register %s: %v", r.Kind, r.Err)
 	}
-	return fmt.Sprintf("workflow: register %s %q: %v", e.Kind, e.Name, e.Err)
+	return fmt.Sprintf("workflow: register %s %q: %v", r.Kind, r.Name, r.Err)
 }
 
 // Unwrap returns [ErrInvalidRegistration] or [ErrDuplicateRegistration].
-func (e *RegistrationError) Unwrap() error { return e.Err }
+func (r *RegistrationError) Unwrap() error { return r.Err }
 
 // GraphError identifies the graph node and field associated with a validation
 // or compilation error. NodeID and Field may be empty for whole-graph errors.
@@ -115,21 +115,21 @@ type GraphError struct {
 	Err    error
 }
 
-func (e *GraphError) Error() string {
+func (g *GraphError) Error() string {
 	switch {
-	case e.NodeID != "" && e.Field != "":
-		return fmt.Sprintf("workflow: graph node %q field %s: %v", e.NodeID, e.Field, e.Err)
-	case e.NodeID != "":
-		return fmt.Sprintf("workflow: graph node %q: %v", e.NodeID, e.Err)
-	case e.Field != "":
-		return fmt.Sprintf("workflow: graph field %s: %v", e.Field, e.Err)
+	case g.NodeID != "" && g.Field != "":
+		return fmt.Sprintf("workflow: graph node %q field %s: %v", g.NodeID, g.Field, g.Err)
+	case g.NodeID != "":
+		return fmt.Sprintf("workflow: graph node %q: %v", g.NodeID, g.Err)
+	case g.Field != "":
+		return fmt.Sprintf("workflow: graph field %s: %v", g.Field, g.Err)
 	default:
-		return fmt.Sprintf("workflow: graph: %v", e.Err)
+		return fmt.Sprintf("workflow: graph: %v", g.Err)
 	}
 }
 
 // Unwrap returns the underlying graph error.
-func (e *GraphError) Unwrap() error { return e.Err }
+func (g *GraphError) Unwrap() error { return g.Err }
 
 // SpecError identifies the nested specification and field associated with a
 // validation or compilation error.
@@ -140,19 +140,19 @@ type SpecError struct {
 	Err   error
 }
 
-func (e *SpecError) Error() string {
+func (s *SpecError) Error() string {
 	prefix := "workflow: spec"
-	if e.Kind != "" {
-		prefix += " " + string(e.Kind)
+	if s.Kind != "" {
+		prefix += " " + string(s.Kind)
 	}
-	if e.ID != "" {
-		prefix += fmt.Sprintf(" %q", e.ID)
+	if s.ID != "" {
+		prefix += fmt.Sprintf(" %q", s.ID)
 	}
-	if e.Field != "" {
-		prefix += " field " + e.Field
+	if s.Field != "" {
+		prefix += " field " + s.Field
 	}
-	return prefix + ": " + e.Err.Error()
+	return prefix + ": " + s.Err.Error()
 }
 
 // Unwrap returns the underlying specification error.
-func (e *SpecError) Unwrap() error { return e.Err }
+func (s *SpecError) Unwrap() error { return s.Err }

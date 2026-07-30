@@ -50,18 +50,18 @@ func (s Store) jsonDocument() storeJSONDocument {
 	return document
 }
 
-func (document storeJSONDocument) put(identity storeKey, cell cell) {
-	values := document[identity.nodeID]
+func (s storeJSONDocument) put(identity storeKey, cell cell) {
+	values := s[identity.nodeID]
 	if values == nil {
 		values = make(map[string]any)
-		document[identity.nodeID] = values
+		s[identity.nodeID] = values
 	}
 	values[identity.key] = cell.value
 }
 
-func (document storeJSONDocument) firstInvalidValue() (string, string, error) {
-	for _, nodeID := range slices.Sorted(maps.Keys(document)) {
-		values := document[nodeID]
+func (s storeJSONDocument) firstInvalidValue() (string, string, error) {
+	for _, nodeID := range slices.Sorted(maps.Keys(s)) {
+		values := s[nodeID]
 		for _, key := range slices.Sorted(maps.Keys(values)) {
 			if _, err := json.Marshal(values[key]); err != nil {
 				return nodeID, key, err
@@ -138,8 +138,8 @@ type jsonValue struct {
 	raw any
 }
 
-func (value jsonValue) kind() string {
-	switch value.raw.(type) {
+func (j jsonValue) kind() string {
+	switch j.raw.(type) {
 	case nil:
 		return "null"
 	case bool:
@@ -153,6 +153,6 @@ func (value jsonValue) kind() string {
 	case map[string]any:
 		return "object"
 	default:
-		return fmt.Sprintf("%T", value.raw)
+		return fmt.Sprintf("%T", j.raw)
 	}
 }

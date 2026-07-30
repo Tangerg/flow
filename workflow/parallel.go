@@ -136,8 +136,8 @@ type branchRunner struct {
 	input Store
 }
 
-func (r branchRunner) Run(ctx context.Context, branch Step) (branchOutcome, error) {
-	result, err := branch.Run(ctx, r.input)
+func (b branchRunner) Run(ctx context.Context, branch Step) (branchOutcome, error) {
+	result, err := branch.Run(ctx, b.input)
 	if err == nil {
 		return branchOutcome{store: result}, nil
 	}

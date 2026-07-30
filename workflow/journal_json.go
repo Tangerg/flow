@@ -70,14 +70,14 @@ func (j *Journal) MarshalJSON() ([]byte, error) {
 	return json.Marshal(journalDocument{Version: journalJSONVersion, Records: records})
 }
 
-func (n *journalNode) appendEntries(path []string, entries *[]journalEntry) {
-	for id, value := range n.records {
+func (j *journalNode) appendEntries(path []string, entries *[]journalEntry) {
+	for id, value := range j.records {
 		*entries = append(*entries, journalEntry{
 			key:   JournalKey{Path: slices.Clone(path), ID: id},
 			value: value.value,
 		})
 	}
-	for segment, child := range n.children {
+	for segment, child := range j.children {
 		path = append(path, segment)
 		child.appendEntries(path, entries)
 		path = path[:len(path)-1]
@@ -155,12 +155,12 @@ func (j *Journal) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (n *journalNode) setRevision(revision uint64) {
-	for id, value := range n.records {
+func (j *journalNode) setRevision(revision uint64) {
+	for id, value := range j.records {
 		value.revision = revision
-		n.records[id] = value
+		j.records[id] = value
 	}
-	for _, child := range n.children {
+	for _, child := range j.children {
 		child.setRevision(revision)
 	}
 }

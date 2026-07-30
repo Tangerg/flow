@@ -89,7 +89,7 @@ func (s schemaSource) compile() (*compiledSchema, error) {
 	// Schemas must be self-contained. In particular, registering a node must
 	// never perform network or filesystem I/O because of an external $ref.
 	compiler.UseLoader(jschema.SchemeURLLoader{})
-	if err := compiler.AddResource(s.url, doc); err != nil {
+	if err = compiler.AddResource(s.url, doc); err != nil {
 		return nil, fmt.Errorf("add JSON Schema resource: %w", err)
 	}
 	schema, err := compiler.Compile(s.url)
@@ -108,24 +108,24 @@ func (s schemaSource) compileOptional() (*compiledSchema, error) {
 
 type schemaLoader func() (*compiledSchema, error)
 
-func (load schemaLoader) validate(document jsonDocument) error {
+func (s schemaLoader) validate(document jsonDocument) error {
 	doc, err := document.value()
 	if err != nil {
 		return err
 	}
-	schema, err := load()
+	schema, err := s()
 	if err != nil {
 		return err
 	}
 	return schema.validate(doc)
 }
 
-func (load schemaLoader) decode(document jsonDocument, dst any) error {
+func (s schemaLoader) decode(document jsonDocument, dst any) error {
 	doc, err := document.value()
 	if err != nil {
 		return err
 	}
-	schema, err := load()
+	schema, err := s()
 	if err != nil {
 		return err
 	}
@@ -135,10 +135,10 @@ func (load schemaLoader) decode(document jsonDocument, dst any) error {
 	return document.decodeParsed(dst)
 }
 
-func (s *compiledSchema) validateConfig(config json.RawMessage) error {
+func (c *compiledSchema) validateConfig(config json.RawMessage) error {
 	data := bytes.TrimSpace(config)
 	if len(data) == 0 {
-		if s == nil {
+		if c == nil {
 			return nil
 		}
 		data = json.RawMessage(`{}`)
@@ -147,14 +147,14 @@ func (s *compiledSchema) validateConfig(config json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	if s == nil {
+	if c == nil {
 		return nil
 	}
-	return s.validate(doc)
+	return c.validate(doc)
 }
 
-func (s *compiledSchema) validate(doc any) error {
-	err := s.validator.Validate(doc)
+func (c *compiledSchema) validate(doc any) error {
+	err := c.validator.Validate(doc)
 	if err == nil {
 		return nil
 	}
@@ -173,8 +173,8 @@ type jsonSchemaError struct {
 
 // Error reports the deduplicated leaf diagnostics. leaves always yields at least
 // the root error, so the joined message is never empty.
-func (e *jsonSchemaError) Error() string {
-	leaves := e.leaves()
+func (j *jsonSchemaError) Error() string {
+	leaves := j.leaves()
 	messages := make([]string, 0, len(leaves))
 	seen := make(map[string]struct{}, len(leaves))
 	for _, leaf := range leaves {
@@ -188,11 +188,11 @@ func (e *jsonSchemaError) Error() string {
 	return strings.Join(messages, "; ")
 }
 
-func (e *jsonSchemaError) Unwrap() error { return e.err }
+func (j *jsonSchemaError) Unwrap() error { return j.err }
 
-func (e *jsonSchemaError) leaves() []*jschema.ValidationError {
+func (j *jsonSchemaError) leaves() []*jschema.ValidationError {
 	leaves := make([]*jschema.ValidationError, 0)
-	pending := []*jschema.ValidationError{e.err}
+	pending := []*jschema.ValidationError{j.err}
 	for len(pending) > 0 {
 		last := len(pending) - 1
 		err := pending[last]

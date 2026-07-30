@@ -35,15 +35,15 @@ type definitionStep interface {
 
 type definitionValidator struct{}
 
-func (validator definitionValidator) validate(step Step) error {
-	return validator.validateStep(
+func (d definitionValidator) validate(step Step) error {
+	return d.validateStep(
 		step,
 		make(map[string]struct{}),
 		0,
 	)
 }
 
-func (validator definitionValidator) validateStep(
+func (d definitionValidator) validateStep(
 	step Step,
 	ids map[string]struct{},
 	depth int,
@@ -63,50 +63,50 @@ func (validator definitionValidator) validateStep(
 
 	switch definition.kind {
 	case definitionSteps:
-		return validator.validateSteps(definition.steps, ids, depth+1)
+		return d.validateSteps(definition.steps, ids, depth+1)
 	case definitionBranch:
-		if err := validator.claim(definition.id, ids); err != nil {
+		if err := d.claim(definition.id, ids); err != nil {
 			return err
 		}
-		return validator.validateCases(definition.cases, ids, depth+1)
+		return d.validateCases(definition.cases, ids, depth+1)
 	case definitionLoop:
-		if err := validator.claim(definition.id, ids); err != nil {
+		if err := d.claim(definition.id, ids); err != nil {
 			return err
 		}
 		// A loop body is scoped by loop ID and iteration index. Its IDs do not
 		// collide with the surrounding workflow or another loop body. The loop
 		// ID remains reserved because its stop decision uses the same scope.
 		bodyIDs := map[string]struct{}{definition.id: {}}
-		return validator.validateStep(definition.body, bodyIDs, depth+1)
+		return d.validateStep(definition.body, bodyIDs, depth+1)
 	case definitionIteration:
-		if err := validator.claim(definition.id, ids); err != nil {
+		if err := d.claim(definition.id, ids); err != nil {
 			return err
 		}
 		// An iteration body has its own Store and Journal scope.
-		return validator.validateStep(
+		return d.validateStep(
 			definition.body,
 			make(map[string]struct{}),
 			depth+1,
 		)
 	default:
-		return validator.claim(definition.id, ids)
+		return d.claim(definition.id, ids)
 	}
 }
 
-func (validator definitionValidator) validateSteps(
+func (d definitionValidator) validateSteps(
 	steps stepList,
 	ids map[string]struct{},
 	depth int,
 ) error {
 	for _, step := range steps {
-		if err := validator.validateStep(step, ids, depth); err != nil {
+		if err := d.validateStep(step, ids, depth); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (validator definitionValidator) validateCases(
+func (d definitionValidator) validateCases(
 	cases map[string]Step,
 	ids map[string]struct{},
 	depth int,
@@ -117,7 +117,7 @@ func (validator definitionValidator) validateCases(
 	introduced := make(map[string]struct{})
 	for _, name := range slices.Sorted(maps.Keys(cases)) {
 		caseIDs := maps.Clone(ids)
-		if err := validator.validateStep(cases[name], caseIDs, depth); err != nil {
+		if err := d.validateStep(cases[name], caseIDs, depth); err != nil {
 			return err
 		}
 		for id := range caseIDs {

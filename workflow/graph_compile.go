@@ -65,8 +65,8 @@ func compiledGraph(plan graphPlan, step Step) Step {
 	}
 }
 
-func (graph graphStep) Run(ctx context.Context, store Store) (Store, error) {
-	return graph.step.Run(ctx, store.withoutNodes(graph.nodeIDs))
+func (g graphStep) Run(ctx context.Context, store Store) (Store, error) {
+	return g.step.Run(ctx, store.withoutNodes(g.nodeIDs))
 }
 
 func (r *Registry) gate(node NodeSpec, plan graphPlan, step Step) Step {

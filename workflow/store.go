@@ -294,44 +294,44 @@ type storeMerger struct {
 	baseData map[storeKey]cell
 }
 
-func (merger *storeMerger) add(other Store) {
-	if merger.addDirectChild(other) {
+func (s *storeMerger) add(other Store) {
+	if s.addDirectChild(other) {
 		return
 	}
-	if writes, ok := other.deltaSince(merger.base); ok {
-		merger.addWrites(writes)
+	if writes, ok := other.deltaSince(s.base); ok {
+		s.addWrites(writes)
 		return
 	}
 
 	// A branch may return a Store unrelated to its input or compact a long
 	// overlay. Fall back to revision comparison in that uncommon case.
-	if merger.baseData == nil {
-		merger.baseData = merger.base.materialize()
+	if s.baseData == nil {
+		s.baseData = s.base.materialize()
 	}
-	for _, write := range other.changedWrites(merger.baseData) {
-		merger.result = merger.result.withDelta(write.key, write.cell)
+	for _, write := range other.changedWrites(s.baseData) {
+		s.result = s.result.withDelta(write.key, write.cell)
 	}
 }
 
-func (merger *storeMerger) addDirectChild(other Store) bool {
+func (s *storeMerger) addDirectChild(other Store) bool {
 	delta := other.delta
-	if other.snapshot != merger.base.snapshot ||
+	if other.snapshot != s.base.snapshot ||
 		delta == nil ||
-		delta.parent != merger.base.delta {
+		delta.parent != s.base.delta {
 		return false
 	}
-	if merger.result.snapshot == merger.base.snapshot &&
-		merger.result.delta == merger.base.delta {
-		merger.result = other
+	if s.result.snapshot == s.base.snapshot &&
+		s.result.delta == s.base.delta {
+		s.result = other
 	} else {
-		merger.result = merger.result.withDelta(delta.key, delta.cell)
+		s.result = s.result.withDelta(delta.key, delta.cell)
 	}
 	return true
 }
 
-func (merger *storeMerger) addWrites(writes []*storeDelta) {
+func (s *storeMerger) addWrites(writes []*storeDelta) {
 	for _, write := range writes {
-		merger.result = merger.result.withDelta(write.key, write.cell)
+		s.result = s.result.withDelta(write.key, write.cell)
 	}
 }
 

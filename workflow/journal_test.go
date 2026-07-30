@@ -233,9 +233,9 @@ func TestJournal_enforcesOneSharedDepthLimit(t *testing.T) {
 	if len(keys) != 1 || !slices.Equal(keys[0].Path, deepPath) {
 		t.Fatalf("Keys = %v; want one key with path depth %d", keys, len(deepPath))
 	}
-	encoded, err := json.Marshal(journal)
-	if err != nil {
-		t.Fatalf("Marshal deep Journal: %v", err)
+	encoded, marshalErr := json.Marshal(journal)
+	if marshalErr != nil {
+		t.Fatalf("Marshal deep Journal: %v", marshalErr)
 	}
 	var restored workflow.Journal
 	if err := json.Unmarshal(encoded, &restored); err != nil {
@@ -250,14 +250,14 @@ func TestJournal_enforcesOneSharedDepthLimit(t *testing.T) {
 		t.Fatalf("Record error = %v; want ErrMaxDepth", err)
 	}
 
-	document, err := json.Marshal(map[string]any{
+	document, marshalErr := json.Marshal(map[string]any{
 		"version": 1,
 		"records": []any{map[string]any{
 			"id": "rejected", "path": tooDeep, "value": true,
 		}},
 	})
-	if err != nil {
-		t.Fatalf("Marshal fixture: %v", err)
+	if marshalErr != nil {
+		t.Fatalf("Marshal fixture: %v", marshalErr)
 	}
 	if err := json.Unmarshal(document, &restored); !errors.Is(err, workflow.ErrMaxDepth) {
 		t.Fatalf("Unmarshal error = %v; want ErrMaxDepth", err)
@@ -284,9 +284,9 @@ func TestJournal_jsonRoundTrip(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	data, err := json.Marshal(journal)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
+	data, marshalErr := json.Marshal(journal)
+	if marshalErr != nil {
+		t.Fatalf("Marshal: %v", marshalErr)
 	}
 	restored := workflow.NewJournal()
 	if err := json.Unmarshal(data, restored); err != nil {
@@ -297,10 +297,10 @@ func TestJournal_jsonRoundTrip(t *testing.T) {
 	}
 
 	// A restored record has to read back as the type the reading step asks for.
-	out, err := workflow.Run(context.Background(), pipeline, workflow.NewStore(),
+	out, marshalErr := workflow.Run(context.Background(), pipeline, workflow.NewStore(),
 		workflow.RunConfig{Journal: restored})
-	if err != nil {
-		t.Fatalf("resumed run: %v", err)
+	if marshalErr != nil {
+		t.Fatalf("resumed run: %v", marshalErr)
 	}
 	if got, err := workflow.Get[int](out, workflow.Output("i")); err != nil || got != 42 {
 		t.Fatalf("int = %v, %v", got, err)
@@ -484,18 +484,18 @@ func TestAwaitFactory(t *testing.T) {
 	  {"id":"approval","type":"await","kind":"leaf","input":{"nodeID":"inbox","path":"/decision"}},
 	  {"id":"act","type":"addN","kind":"leaf","input":{"nodeID":"start","path":"/output"},"config":{"n":1}}
 	]}`)
-	step, err := reg.CompileSpecJSON(spec)
-	if err != nil {
-		t.Fatalf("CompileSpecJSON: %v", err)
+	step, compileErr := reg.CompileSpecJSON(spec)
+	if compileErr != nil {
+		t.Fatalf("CompileSpecJSON: %v", compileErr)
 	}
 
 	in := workflow.NewStore().WithOutput("start", 1)
 	if _, err := step.Run(context.Background(), in); !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("err = %v; want ErrSuspended", err)
 	}
-	out, err := step.Run(context.Background(), in.With("inbox", "decision", "yes"))
-	if err != nil {
-		t.Fatalf("run: %v", err)
+	out, compileErr := step.Run(context.Background(), in.With("inbox", "decision", "yes"))
+	if compileErr != nil {
+		t.Fatalf("run: %v", compileErr)
 	}
 	if got, err := workflow.Get[int](out, workflow.Output("act")); err != nil || got != 2 {
 		t.Fatalf("act = %v, %v; want 2", got, err)
@@ -526,20 +526,20 @@ func TestAwaitFactory_requiresAWiredPort(t *testing.T) {
 
 func TestInterruptFactory_roundTripsStructuredRequestAndResponse(t *testing.T) {
 	reg := workflow.NewRegistry().MustRegisterLeaf("interrupt", workflow.InterruptFactory())
-	step, err := reg.CompileSpecJSON([]byte(`{
+	step, compileErr := reg.CompileSpecJSON([]byte(`{
 		"kind":"leaf",
 		"id":"approval",
 		"type":"interrupt",
 		"config":{"question":"publish?","actions":["approve","reject"]}
 	}`))
-	if err != nil {
-		t.Fatalf("CompileSpecJSON: %v", err)
+	if compileErr != nil {
+		t.Fatalf("CompileSpecJSON: %v", compileErr)
 	}
 
 	journal := workflow.NewJournal()
 	cfg := workflow.RunConfig{Journal: journal}
-	_, err = workflow.Run(context.Background(), step, workflow.NewStore(), cfg)
-	waits := workflow.Suspensions(err)
+	_, compileErr = workflow.Run(context.Background(), step, workflow.NewStore(), cfg)
+	waits := workflow.Suspensions(compileErr)
 	if len(waits) != 1 {
 		t.Fatalf("Suspensions = %+v; want one", waits)
 	}
@@ -551,15 +551,15 @@ func TestInterruptFactory_roundTripsStructuredRequestAndResponse(t *testing.T) {
 	if err := journal.Record(waits[0].Key(), map[string]any{"approved": true}); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
-	out, err := workflow.Run(context.Background(), step, workflow.NewStore(), cfg)
-	if err != nil {
-		t.Fatalf("resume: %v", err)
+	out, compileErr := workflow.Run(context.Background(), step, workflow.NewStore(), cfg)
+	if compileErr != nil {
+		t.Fatalf("resume: %v", compileErr)
 	}
-	response, err := workflow.Get[struct {
+	response, compileErr := workflow.Get[struct {
 		Approved bool `json:"approved"`
 	}](out, workflow.Output("approval"))
-	if err != nil || !response.Approved {
-		t.Fatalf("response = %+v, %v; want approved", response, err)
+	if compileErr != nil || !response.Approved {
+		t.Fatalf("response = %+v, %v; want approved", response, compileErr)
 	}
 }
 

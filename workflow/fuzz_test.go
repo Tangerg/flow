@@ -61,17 +61,17 @@ func FuzzStoreJSON(f *testing.F) {
 			return
 		}
 
-		again, err := json.Marshal(store)
-		if err != nil {
-			t.Fatalf("a decoded Store failed to marshal: %v", err)
+		again, marshalErr := json.Marshal(store)
+		if marshalErr != nil {
+			t.Fatalf("a decoded Store failed to marshal: %v", marshalErr)
 		}
 		var second workflow.Store
 		if err := json.Unmarshal(again, &second); err != nil {
 			t.Fatalf("re-decoding a marshalled Store failed: %v", err)
 		}
-		third, err := json.Marshal(second)
-		if err != nil {
-			t.Fatalf("marshal is not stable: %v", err)
+		third, marshalErr := json.Marshal(second)
+		if marshalErr != nil {
+			t.Fatalf("marshal is not stable: %v", marshalErr)
 		}
 		if string(again) != string(third) {
 			t.Fatalf("round trip is not idempotent:\n%s\n%s", again, third)

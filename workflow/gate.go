@@ -29,8 +29,8 @@ const (
 	TriggerAny Trigger = "any"
 )
 
-func (trigger Trigger) valid() bool {
-	return trigger == TriggerAll || trigger == TriggerAny
+func (t Trigger) valid() bool {
+	return t == TriggerAll || t == TriggerAny
 }
 
 // compiledGate carries the source's complete outlet declaration so execution
@@ -54,47 +54,47 @@ func gated(id string, gates []compiledGate, trigger Trigger, step Step) Step {
 	}
 }
 
-func (step gatedStep) Run(ctx context.Context, store Store) (Store, error) {
+func (g gatedStep) Run(ctx context.Context, store Store) (Store, error) {
 	ctx = ensureRun(ctx)
-	satisfied, err := step.satisfied(ctx, store)
+	satisfied, err := g.satisfied(ctx, store)
 	if err != nil {
-		return step.fail(ctx, store, OpRun, err)
+		return g.fail(ctx, store, OpRun, err)
 	}
 	if satisfied {
-		return step.step.Run(ctx, store)
+		return g.step.Run(ctx, store)
 	}
 	run := runFrom(ctx)
-	if err := run.claim(scope(ctx), step.id); err != nil {
-		return step.fail(ctx, store, OpValidate, err)
+	if err := run.claim(scope(ctx), g.id); err != nil {
+		return g.fail(ctx, store, OpValidate, err)
 	}
-	run.markBypassed(scope(ctx), step.id)
-	run.emit(ctx, Event{Kind: EventBypassed, ID: step.id})
+	run.markBypassed(scope(ctx), g.id)
+	run.emit(ctx, Event{Kind: EventBypassed, ID: g.id})
 	return store, nil
 }
 
-func (step gatedStep) fail(
+func (g gatedStep) fail(
 	ctx context.Context,
 	store Store,
 	op StepOp,
 	err error,
 ) (Store, error) {
-	stepErr := &StepError{ID: step.id, Op: op, Err: err}
+	stepErr := &StepError{ID: g.id, Op: op, Err: err}
 	runFrom(ctx).emit(ctx, Event{
 		Kind: EventFailed,
-		ID:   step.id,
+		ID:   g.id,
 		Err:  stepErr,
 	})
 	return store, stepErr
 }
 
-func (step gatedStep) satisfied(ctx context.Context, store Store) (bool, error) {
-	satisfied := step.trigger == TriggerAll
-	for _, gate := range step.gates {
+func (g gatedStep) satisfied(ctx context.Context, store Store) (bool, error) {
+	satisfied := g.trigger == TriggerAll
+	for _, gate := range g.gates {
 		match, err := gate.satisfied(ctx, store)
 		if err != nil {
 			return false, err
 		}
-		if step.trigger == TriggerAny {
+		if g.trigger == TriggerAny {
 			satisfied = satisfied || match
 		} else {
 			satisfied = satisfied && match
@@ -103,28 +103,28 @@ func (step gatedStep) satisfied(ctx context.Context, store Store) (bool, error) 
 	return satisfied, nil
 }
 
-func (gate compiledGate) satisfied(ctx context.Context, store Store) (bool, error) {
-	if runFrom(ctx).wasBypassed(scope(ctx), gate.NodeID) {
+func (c compiledGate) satisfied(ctx context.Context, store Store) (bool, error) {
+	if runFrom(ctx).wasBypassed(scope(ctx), c.NodeID) {
 		return false, nil
 	}
-	selected, err := Get[string](store, Output(gate.NodeID))
+	selected, err := Get[string](store, Output(c.NodeID))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return false, fmt.Errorf(
 				"routing node %q completed without an output: %w",
-				gate.NodeID,
+				c.NodeID,
 				err,
 			)
 		}
-		return false, fmt.Errorf("read routing node %q: %w", gate.NodeID, err)
+		return false, fmt.Errorf("read routing node %q: %w", c.NodeID, err)
 	}
-	if !slices.Contains(gate.outlets, selected) {
+	if !slices.Contains(c.outlets, selected) {
 		return false, fmt.Errorf(
 			"%w %q from routing node %q",
 			ErrUnknownOutlet,
 			selected,
-			gate.NodeID,
+			c.NodeID,
 		)
 	}
-	return selected == gate.Outlet, nil
+	return selected == c.Outlet, nil
 }

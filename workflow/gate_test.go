@@ -64,13 +64,13 @@ func TestCompileGraph_routesAndRemovesStaleBranchOutputs(t *testing.T) {
 			When: []workflow.Gate{workflow.When("route", "no")},
 		},
 	}}
-	step, err := registry.CompileGraph(graph)
-	if err != nil {
-		t.Fatalf("CompileGraph: %v", err)
+	step, compileErr := registry.CompileGraph(graph)
+	if compileErr != nil {
+		t.Fatalf("CompileGraph: %v", compileErr)
 	}
 
 	events := make(chan workflow.Event, 8)
-	first, err := workflow.Run(
+	first, compileErr := workflow.Run(
 		t.Context(),
 		step,
 		workflow.NewStore().WithOutput("start", 1),
@@ -80,8 +80,8 @@ func TestCompileGraph_routesAndRemovesStaleBranchOutputs(t *testing.T) {
 			},
 		)},
 	)
-	if err != nil {
-		t.Fatalf("first run: %v", err)
+	if compileErr != nil {
+		t.Fatalf("first run: %v", compileErr)
 	}
 	if got, err := workflow.Get[int](first, workflow.Output("yes")); err != nil || got != 11 {
 		t.Fatalf("yes output = %d, %v; want 11, nil", got, err)
@@ -99,9 +99,9 @@ func TestCompileGraph_routesAndRemovesStaleBranchOutputs(t *testing.T) {
 
 	// Reusing a previous result must not leak the old selected arm into a new
 	// run. The compiled Graph owns and rebuilds every internal node cell.
-	second, err := step.Run(t.Context(), first.WithOutput("start", -1))
-	if err != nil {
-		t.Fatalf("second run: %v", err)
+	second, compileErr := step.Run(t.Context(), first.WithOutput("start", -1))
+	if compileErr != nil {
+		t.Fatalf("second run: %v", compileErr)
 	}
 	if _, ok := second.Lookup(workflow.Output("yes")); ok {
 		t.Fatal("stale yes output survived the next graph run")
@@ -192,33 +192,33 @@ func TestCompileGraph_recomputesGatesAfterJournalReplay(t *testing.T) {
 			When: []workflow.Gate{workflow.When("route", "reject")},
 		},
 	}}
-	step, err := registry.CompileGraph(graph)
-	if err != nil {
-		t.Fatalf("CompileGraph: %v", err)
+	step, compileErr := registry.CompileGraph(graph)
+	if compileErr != nil {
+		t.Fatalf("CompileGraph: %v", compileErr)
 	}
 	journal := workflow.NewJournal()
 	input := workflow.NewStore().WithOutput("start", 7)
-	paused, err := workflow.Run(
+	paused, compileErr := workflow.Run(
 		t.Context(),
 		step,
 		input,
 		workflow.RunConfig{Journal: journal},
 	)
-	if !errors.Is(err, workflow.ErrSuspended) {
-		t.Fatalf("first run error = %v; want ErrSuspended", err)
+	if !errors.Is(compileErr, workflow.ErrSuspended) {
+		t.Fatalf("first run error = %v; want ErrSuspended", compileErr)
 	}
-	wait := workflow.Suspensions(err)[0]
+	wait := workflow.Suspensions(compileErr)[0]
 	if err := journal.Record(wait.Key(), 99); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
-	out, err := workflow.Run(
+	out, compileErr := workflow.Run(
 		t.Context(),
 		step,
 		paused,
 		workflow.RunConfig{Journal: journal},
 	)
-	if err != nil {
-		t.Fatalf("resume: %v", err)
+	if compileErr != nil {
+		t.Fatalf("resume: %v", compileErr)
 	}
 	if routeCalls.Load() != 1 {
 		t.Fatalf("route calls = %d; want replay without a second call", routeCalls.Load())

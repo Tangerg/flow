@@ -439,23 +439,23 @@ func TestValidateSpec_iterationBodyIDsAreLocalToEachElement(t *testing.T) {
 		},
 	}
 
-	step, err := reg.CompileSpec(spec)
-	if err != nil {
-		t.Fatalf("CompileSpec: %v", err)
+	step, compileErr := reg.CompileSpec(spec)
+	if compileErr != nil {
+		t.Fatalf("CompileSpec: %v", compileErr)
 	}
 	in := workflow.NewStore().
 		WithOutput("seed", 10).
 		WithOutput("items", []any{1, 2})
-	out, err := step.Run(context.Background(), in)
-	if err != nil {
-		t.Fatalf("Run: %v", err)
+	out, compileErr := step.Run(context.Background(), in)
+	if compileErr != nil {
+		t.Fatalf("Run: %v", compileErr)
 	}
 	if got, err := workflow.Get[int](out, workflow.Output("value")); err != nil || got != 10 {
 		t.Fatalf("outer value = %v, %v; want 10", got, err)
 	}
-	items, err := workflow.Get[[]int](out, workflow.Output("each"))
-	if err != nil || len(items) != 2 || items[0] != 2 || items[1] != 3 {
-		t.Fatalf("iteration output = %v, %v; want [2 3]", items, err)
+	items, compileErr := workflow.Get[[]int](out, workflow.Output("each"))
+	if compileErr != nil || len(items) != 2 || items[0] != 2 || items[1] != 3 {
+		t.Fatalf("iteration output = %v, %v; want [2 3]", items, compileErr)
 	}
 }
 

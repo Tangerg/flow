@@ -45,30 +45,30 @@ type renderer struct {
 }
 
 func newRenderer(graph workflow.Graph) renderer {
-	renderer := renderer{
+	r := renderer{
 		graph:       graph,
 		nodeIndexes: make(map[string]int, len(graph.Nodes)),
 	}
 	for index, node := range graph.Nodes {
-		if _, exists := renderer.nodeIndexes[node.ID]; !exists {
-			renderer.nodeIndexes[node.ID] = index
+		if _, exists := r.nodeIndexes[node.ID]; !exists {
+			r.nodeIndexes[node.ID] = index
 		}
 	}
-	renderer.collectEdges()
-	renderer.collectExternals()
-	return renderer
+	r.collectEdges()
+	r.collectExternals()
+	return r
 }
 
-func (renderer *renderer) collectEdges() {
-	for _, node := range renderer.graph.Nodes {
+func (r *renderer) collectEdges() {
+	for _, node := range r.graph.Nodes {
 		if node.Input != (workflow.Ref{}) {
-			renderer.addDataEdge(node.ID, workflow.DefaultPort, node.Input)
+			r.addDataEdge(node.ID, workflow.DefaultPort, node.Input)
 		}
 		for _, port := range node.Inputs.PortNames() {
-			renderer.addDataEdge(node.ID, port, node.Inputs[port])
+			r.addDataEdge(node.ID, port, node.Inputs[port])
 		}
 		for _, dependency := range node.DependsOn {
-			renderer.edges = append(renderer.edges, edge{
+			r.edges = append(r.edges, edge{
 				source: dependency,
 				target: node.ID,
 				label:  "depends",
@@ -80,7 +80,7 @@ func (renderer *renderer) collectEdges() {
 			if node.Trigger == workflow.TriggerAny {
 				label = "when:any=" + gate.Outlet
 			}
-			renderer.edges = append(renderer.edges, edge{
+			r.edges = append(r.edges, edge{
 				source: gate.NodeID,
 				target: node.ID,
 				label:  label,
@@ -90,12 +90,12 @@ func (renderer *renderer) collectEdges() {
 	}
 }
 
-func (renderer *renderer) addDataEdge(target, port string, ref workflow.Ref) {
+func (r *renderer) addDataEdge(target, port string, ref workflow.Ref) {
 	label := port
 	if ref != workflow.Output(ref.NodeID) {
 		label += ": " + ref.Path
 	}
-	renderer.edges = append(renderer.edges, edge{
+	r.edges = append(r.edges, edge{
 		source: ref.NodeID,
 		ref:    ref,
 		target: target,
@@ -104,10 +104,10 @@ func (renderer *renderer) addDataEdge(target, port string, ref workflow.Ref) {
 	})
 }
 
-func (renderer *renderer) collectExternals() {
+func (r *renderer) collectExternals() {
 	external := make(map[string]struct{})
-	for _, edge := range renderer.edges {
-		if _, internal := renderer.nodeIndexes[edge.source]; internal {
+	for _, edge := range r.edges {
+		if _, internal := r.nodeIndexes[edge.source]; internal {
 			continue
 		}
 		label := edge.source
@@ -116,16 +116,16 @@ func (renderer *renderer) collectExternals() {
 		}
 		external[label] = struct{}{}
 	}
-	renderer.externals = slices.Sorted(maps.Keys(external))
+	r.externals = slices.Sorted(maps.Keys(external))
 }
 
-func (renderer renderer) ascii() string {
+func (r renderer) ascii() string {
 	var output strings.Builder
 	output.WriteString("nodes:\n")
-	if len(renderer.graph.Nodes) == 0 {
+	if len(r.graph.Nodes) == 0 {
 		output.WriteString("  (none)\n")
 	} else {
-		for _, node := range renderer.graph.Nodes {
+		for _, node := range r.graph.Nodes {
 			fmt.Fprintf(
 				&output,
 				"  %s [%s]\n",
@@ -136,11 +136,11 @@ func (renderer renderer) ascii() string {
 	}
 
 	output.WriteString("edges:\n")
-	if len(renderer.edges) == 0 {
+	if len(r.edges) == 0 {
 		output.WriteString("  (none)\n")
 		return output.String()
 	}
-	for _, edge := range renderer.edges {
+	for _, edge := range r.edges {
 		source := edge.source
 		if edge.kind == dataEdge {
 			source = edge.ref.String()
@@ -156,10 +156,10 @@ func (renderer renderer) ascii() string {
 	return output.String()
 }
 
-func (renderer renderer) mermaid() string {
+func (r renderer) mermaid() string {
 	var output strings.Builder
 	output.WriteString("flowchart LR\n")
-	for index, node := range renderer.graph.Nodes {
+	for index, node := range r.graph.Nodes {
 		fmt.Fprintf(
 			&output,
 			"  n%d[\"%s<br/>%s\"]\n",
@@ -169,8 +169,8 @@ func (renderer renderer) mermaid() string {
 		)
 	}
 
-	externalIndexes := make(map[string]int, len(renderer.externals))
-	for index, label := range renderer.externals {
+	externalIndexes := make(map[string]int, len(r.externals))
+	for index, label := range r.externals {
 		externalIndexes[label] = index
 		fmt.Fprintf(
 			&output,
@@ -180,9 +180,9 @@ func (renderer renderer) mermaid() string {
 		)
 	}
 
-	for _, edge := range renderer.edges {
-		source := renderer.mermaidSource(edge, externalIndexes)
-		target := fmt.Sprintf("n%d", renderer.nodeIndexes[edge.target])
+	for _, edge := range r.edges {
+		source := r.mermaidSource(edge, externalIndexes)
+		target := fmt.Sprintf("n%d", r.nodeIndexes[edge.target])
 		arrow := "-->"
 		if edge.kind != dataEdge {
 			arrow = "-.->"
@@ -199,11 +199,11 @@ func (renderer renderer) mermaid() string {
 	return output.String()
 }
 
-func (renderer renderer) mermaidSource(
+func (r renderer) mermaidSource(
 	edge edge,
 	externalIndexes map[string]int,
 ) string {
-	if index, internal := renderer.nodeIndexes[edge.source]; internal {
+	if index, internal := r.nodeIndexes[edge.source]; internal {
 		return fmt.Sprintf("n%d", index)
 	}
 	label := edge.source

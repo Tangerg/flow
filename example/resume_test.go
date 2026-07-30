@@ -38,28 +38,28 @@ func Example_resume() {
 	pipeline := workflow.Sequence(prepare, approval, publish)
 
 	journal := workflow.NewJournal()
-	paused, err := workflow.Run(
+	paused, runErr := workflow.Run(
 		context.Background(),
 		pipeline,
 		workflow.NewStore().WithOutput("topic", "guide"),
 		workflow.RunConfig{Journal: journal},
 	)
-	if !errors.Is(err, workflow.ErrSuspended) {
-		fmt.Println("error:", err)
+	if !errors.Is(runErr, workflow.ErrSuspended) {
+		fmt.Println("error:", runErr)
 		return
 	}
-	wait := workflow.Suspensions(err)[0]
+	wait := workflow.Suspensions(runErr)[0]
 	request := wait.Value.(approvalRequest)
 	fmt.Println("waiting:", request.Question)
 
-	storeJSON, err := json.Marshal(paused)
-	if err != nil {
-		fmt.Println("error:", err)
+	storeJSON, runErr := json.Marshal(paused)
+	if runErr != nil {
+		fmt.Println("error:", runErr)
 		return
 	}
-	journalJSON, err := json.Marshal(journal)
-	if err != nil {
-		fmt.Println("error:", err)
+	journalJSON, runErr := json.Marshal(journal)
+	if runErr != nil {
+		fmt.Println("error:", runErr)
 		return
 	}
 
@@ -78,19 +78,19 @@ func Example_resume() {
 		return
 	}
 
-	finished, err := workflow.Run(
+	finished, runErr := workflow.Run(
 		context.Background(),
 		pipeline,
 		restoredStore,
 		workflow.RunConfig{Journal: &restoredJournal},
 	)
-	if err != nil {
-		fmt.Println("error:", err)
+	if runErr != nil {
+		fmt.Println("error:", runErr)
 		return
 	}
-	result, err := workflow.Get[string](finished, workflow.Output("publish"))
-	if err != nil {
-		fmt.Println("error:", err)
+	result, runErr := workflow.Get[string](finished, workflow.Output("publish"))
+	if runErr != nil {
+		fmt.Println("error:", runErr)
 		return
 	}
 	fmt.Println(result)

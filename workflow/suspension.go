@@ -38,35 +38,35 @@ type Suspension struct {
 	Value any `json:"value,omitempty"`
 }
 
-func (suspension *Suspension) Error() string {
-	if suspension == nil {
+func (s *Suspension) Error() string {
+	if s == nil {
 		return ErrSuspended.Error()
 	}
 	var message strings.Builder
 	message.WriteString("workflow:")
-	if suspension.ID != "" {
+	if s.ID != "" {
 		message.WriteString(" step ")
-		message.WriteString(strconv.Quote(suspension.ID))
+		message.WriteString(strconv.Quote(s.ID))
 	}
-	if len(suspension.Path) > 0 {
+	if len(s.Path) > 0 {
 		message.WriteString(" in ")
-		message.WriteString(strings.Join(suspension.Path, "/"))
+		message.WriteString(strings.Join(s.Path, "/"))
 	}
 	message.WriteString(" suspended")
-	reason, _ := suspension.Value.(string)
+	reason, _ := s.Value.(string)
 	switch {
 	case reason != "":
 		message.WriteString(": ")
 		message.WriteString(reason)
-	case suspension.Await != (Ref{}):
+	case s.Await != (Ref{}):
 		message.WriteString(": awaiting ")
-		message.WriteString(suspension.Await.String())
+		message.WriteString(s.Await.String())
 	}
 	return message.String()
 }
 
 // Unwrap returns [ErrSuspended].
-func (suspension *Suspension) Unwrap() error { return ErrSuspended }
+func (s *Suspension) Unwrap() error { return ErrSuspended }
 
 // Suspend returns an error that stops the run at the calling step. Use it inside
 // a node when the work cannot proceed yet; the caller resumes by supplying what
@@ -85,11 +85,11 @@ func Suspend(value any) error {
 // Key returns the structured identity of the suspended step. The returned Path
 // is a copy. It is the key to pass to [Journal.Record] when supplying the result
 // of an [Interrupt] or another journaled boundary that called [Suspend].
-func (suspension *Suspension) Key() JournalKey {
-	if suspension == nil {
+func (s *Suspension) Key() JournalKey {
+	if s == nil {
 		return JournalKey{}
 	}
-	return JournalKey{ID: suspension.ID, Path: slices.Clone(suspension.Path)}
+	return JournalKey{ID: s.ID, Path: slices.Clone(s.Path)}
 }
 
 // suspensionTree owns classification of the standard Go error tree.
@@ -100,8 +100,8 @@ type suspensionTree struct {
 // suspensions reports the suspension leaves and whether every error leaf is a
 // suspension. Composites use the second result to keep a joined failure from
 // being mistaken for "not yet".
-func (tree suspensionTree) suspensions() (suspensionList, bool) {
-	suspensions, only := tree.collect()
+func (s suspensionTree) suspensions() (suspensionList, bool) {
+	suspensions, only := s.collect()
 	if len(suspensions) == 0 {
 		return nil, false
 	}
@@ -111,8 +111,8 @@ func (tree suspensionTree) suspensions() (suspensionList, bool) {
 // collect walks both forms supported by the standard error tree:
 // Unwrap() error and Unwrap() []error. It returns copies so identifying a wait
 // at a workflow boundary never mutates an error owned by its caller.
-func (tree suspensionTree) collect() (suspensionList, bool) {
-	err := tree.err
+func (s suspensionTree) collect() (suspensionList, bool) {
+	err := s.err
 	if err == nil {
 		return nil, false
 	}
@@ -134,10 +134,10 @@ func (tree suspensionTree) collect() (suspensionList, bool) {
 	}
 
 	if many, ok := err.(interface{ Unwrap() []error }); ok {
-		return tree.collectMany(many.Unwrap())
+		return s.collectMany(many.Unwrap())
 	}
 	if one, ok := err.(interface{ Unwrap() error }); ok {
-		return tree.collectOne(one.Unwrap())
+		return s.collectOne(one.Unwrap())
 	}
 
 	// A custom error may participate in errors.Is without exposing an unwrap.
@@ -147,7 +147,7 @@ func (tree suspensionTree) collect() (suspensionList, bool) {
 	return nil, false
 }
 
-func (tree suspensionTree) collectMany(children []error) (suspensionList, bool) {
+func (s suspensionTree) collectMany(children []error) (suspensionList, bool) {
 	var suspensions suspensionList
 	onlySuspensions := true
 	childCount := 0
@@ -163,11 +163,11 @@ func (tree suspensionTree) collectMany(children []error) (suspensionList, bool) 
 	return suspensions, childCount > 0 && onlySuspensions
 }
 
-func (tree suspensionTree) collectOne(child error) (suspensionList, bool) {
+func (s suspensionTree) collectOne(child error) (suspensionList, bool) {
 	// Exact identity distinguishes a wrapper directly around ErrSuspended from
 	// a wrapper whose deeper tree merely contains one.
 	if child == ErrSuspended {
-		return suspensionList{{Value: tree.err.Error()}}, true
+		return suspensionList{{Value: s.err.Error()}}, true
 	}
 	return (suspensionTree{err: child}).collect()
 }
@@ -176,8 +176,8 @@ type suspensionList []*Suspension
 
 // identify fills in the workflow boundary that owns an otherwise anonymous
 // suspension. Already-identified nested waits keep their identity.
-func (list suspensionList) identify(id string, path []string) suspensionList {
-	for _, suspension := range list {
+func (s suspensionList) identify(id string, path []string) suspensionList {
+	for _, suspension := range s {
 		if suspension.ID == "" {
 			suspension.ID = id
 		}
@@ -185,37 +185,37 @@ func (list suspensionList) identify(id string, path []string) suspensionList {
 			suspension.Path = slices.Clone(path)
 		}
 	}
-	return list
+	return s
 }
 
 // err reports the suspensions of a fan-out as one error. Several branches may
 // be waiting at once, and a caller needs every reason to know what to supply
 // before resuming.
-func (list suspensionList) err() error {
-	list = list.normalized()
-	switch len(list) {
+func (s suspensionList) err() error {
+	s = s.normalized()
+	switch len(s) {
 	case 0:
 		return nil
 	case 1:
-		return list[0]
+		return s[0]
 	}
-	reasons := make([]string, 0, len(list))
-	for _, suspension := range list {
+	reasons := make([]string, 0, len(s))
+	for _, suspension := range s {
 		reasons = append(reasons, suspension.Error())
 	}
 	return &multiSuspension{
-		suspensions: list,
+		suspensions: s,
 		message: fmt.Sprintf(
 			"workflow: %d steps suspended: %s",
-			len(list),
+			len(s),
 			strings.Join(reasons, "; "),
 		),
 	}
 }
 
-func (list suspensionList) normalized() suspensionList {
-	normalized := make(suspensionList, 0, len(list))
-	for _, suspension := range list {
+func (s suspensionList) normalized() suspensionList {
+	normalized := make(suspensionList, 0, len(s))
+	for _, suspension := range s {
 		if suspension != nil {
 			normalized = append(normalized, suspension.clone())
 		}
@@ -226,22 +226,22 @@ func (list suspensionList) normalized() suspensionList {
 	return normalized
 }
 
-func (suspension *Suspension) compare(other *Suspension) int {
-	if order := strings.Compare(suspension.ID, other.ID); order != 0 {
+func (s *Suspension) compare(other *Suspension) int {
+	if order := strings.Compare(s.ID, other.ID); order != 0 {
 		return order
 	}
-	if order := slices.Compare(suspension.Path, other.Path); order != 0 {
+	if order := slices.Compare(s.Path, other.Path); order != 0 {
 		return order
 	}
-	return suspension.Await.compare(other.Await)
+	return s.Await.compare(other.Await)
 }
 
 // clone copies a suspension and its path so identifying a wait at a workflow
 // boundary never mutates an error owned by a caller. Callers filter nil entries
 // first, so the receiver is never nil.
-func (suspension *Suspension) clone() *Suspension {
-	clone := *suspension
-	clone.Path = slices.Clone(suspension.Path)
+func (s *Suspension) clone() *Suspension {
+	clone := *s
+	clone.Path = slices.Clone(s.Path)
 	return &clone
 }
 
@@ -251,13 +251,13 @@ type multiSuspension struct {
 	message     string
 }
 
-func (multi *multiSuspension) Error() string { return multi.message }
+func (m *multiSuspension) Error() string { return m.message }
 
 // Unwrap returns each suspension so errors.As finds the first and errors.Is
 // matches [ErrSuspended].
-func (multi *multiSuspension) Unwrap() []error {
-	errs := make([]error, len(multi.suspensions))
-	for index, suspension := range multi.suspensions {
+func (m *multiSuspension) Unwrap() []error {
+	errs := make([]error, len(m.suspensions))
+	for index, suspension := range m.suspensions {
 		errs[index] = suspension
 	}
 	return errs

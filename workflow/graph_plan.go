@@ -35,33 +35,33 @@ type graphPlanner struct {
 	dependentNodeIndexes [][]int
 }
 
-func (planner *graphPlanner) build() (graphPlan, error) {
-	if planner.graph.Concurrency < 0 {
+func (g *graphPlanner) build() (graphPlan, error) {
+	if g.graph.Concurrency < 0 {
 		return graphPlan{}, &GraphError{
 			Field: "concurrency",
 			Err: fmt.Errorf(
 				"%w: concurrency must be non-negative, got %d",
 				ErrInvalidGraph,
-				planner.graph.Concurrency,
+				g.graph.Concurrency,
 			),
 		}
 	}
-	if err := planner.indexNodes(); err != nil {
+	if err := g.indexNodes(); err != nil {
 		return graphPlan{}, err
 	}
-	if err := planner.connectNodes(); err != nil {
+	if err := g.connectNodes(); err != nil {
 		return graphPlan{}, err
 	}
-	layers, err := planner.topologicalLayers()
+	layers, err := g.topologicalLayers()
 	if err != nil {
 		return graphPlan{}, err
 	}
-	planner.plan.layers = layers
-	return planner.plan, nil
+	g.plan.layers = layers
+	return g.plan, nil
 }
 
-func (planner *graphPlanner) indexNodes() error {
-	for index, node := range planner.graph.Nodes {
+func (g *graphPlanner) indexNodes() error {
+	for index, node := range g.graph.Nodes {
 		switch {
 		case node.ID == "":
 			return &GraphError{
@@ -75,7 +75,7 @@ func (planner *graphPlanner) indexNodes() error {
 				Err:    fmt.Errorf("%w: node type is empty", ErrInvalidGraph),
 			}
 		}
-		if _, duplicate := planner.plan.nodesByID[node.ID]; duplicate {
+		if _, duplicate := g.plan.nodesByID[node.ID]; duplicate {
 			return &GraphError{NodeID: node.ID, Field: "id", Err: ErrDuplicateNode}
 		}
 		inputs, err := node.Inputs.withDefault(node.Input)
@@ -89,12 +89,12 @@ func (planner *graphPlanner) indexNodes() error {
 				Err:    fmt.Errorf("%w: %w", ErrInvalidGraph, err),
 			}
 		}
-		if err := planner.validateGates(node); err != nil {
+		if err := g.validateGates(node); err != nil {
 			return err
 		}
-		planner.plan.inputsByNode[node.ID] = inputs
-		planner.plan.nodesByID[node.ID] = node
-		planner.indexByID[node.ID] = index
+		g.plan.inputsByNode[node.ID] = inputs
+		g.plan.nodesByID[node.ID] = node
+		g.indexByID[node.ID] = index
 	}
 	return nil
 }
@@ -177,16 +177,16 @@ func (*graphPlanner) validateGates(node NodeSpec) error {
 	return nil
 }
 
-func (planner *graphPlanner) connectNodes() error {
-	for nodeIndex, node := range planner.graph.Nodes {
+func (g *graphPlanner) connectNodes() error {
+	for nodeIndex, node := range g.graph.Nodes {
 		connected := make(map[string]struct{})
-		for _, ref := range planner.plan.inputsByNode[node.ID].Refs() {
-			if err := planner.connectInput(nodeIndex, node.ID, ref.NodeID, connected); err != nil {
+		for _, ref := range g.plan.inputsByNode[node.ID].Refs() {
+			if err := g.connectInput(nodeIndex, node.ID, ref.NodeID, connected); err != nil {
 				return err
 			}
 		}
 		for _, gate := range node.When {
-			if err := planner.connectGate(
+			if err := g.connectGate(
 				nodeIndex,
 				node.ID,
 				gate.NodeID,
@@ -197,10 +197,10 @@ func (planner *graphPlanner) connectNodes() error {
 		}
 		explicit := make(map[string]struct{}, len(node.DependsOn))
 		for _, dependency := range node.DependsOn {
-			if err := planner.validateExplicit(node.ID, dependency, explicit); err != nil {
+			if err := g.validateExplicit(node.ID, dependency, explicit); err != nil {
 				return err
 			}
-			if err := planner.connectExplicit(
+			if err := g.connectExplicit(
 				nodeIndex,
 				node.ID,
 				dependency,
@@ -213,12 +213,12 @@ func (planner *graphPlanner) connectNodes() error {
 	return nil
 }
 
-func (planner *graphPlanner) connectGate(
+func (g *graphPlanner) connectGate(
 	nodeIndex int,
 	nodeID, dependency string,
 	connected map[string]struct{},
 ) error {
-	dependencyIndex, exists := planner.indexByID[dependency]
+	dependencyIndex, exists := g.indexByID[dependency]
 	if !exists {
 		return &GraphError{
 			NodeID: nodeID,
@@ -226,7 +226,7 @@ func (planner *graphPlanner) connectGate(
 			Err:    fmt.Errorf("%w %q", ErrUnknownNode, dependency),
 		}
 	}
-	return planner.connectDependency(
+	return g.connectDependency(
 		nodeIndex,
 		nodeID,
 		dependency,
@@ -262,16 +262,16 @@ func (*graphPlanner) validateExplicit(
 	return nil
 }
 
-func (planner *graphPlanner) connectInput(
+func (g *graphPlanner) connectInput(
 	nodeIndex int,
 	nodeID, dependency string,
 	connected map[string]struct{},
 ) error {
-	dependencyIndex, internal := planner.indexByID[dependency]
+	dependencyIndex, internal := g.indexByID[dependency]
 	if !internal {
 		return nil
 	}
-	return planner.connectDependency(
+	return g.connectDependency(
 		nodeIndex,
 		nodeID,
 		dependency,
@@ -281,12 +281,12 @@ func (planner *graphPlanner) connectInput(
 	)
 }
 
-func (planner *graphPlanner) connectExplicit(
+func (g *graphPlanner) connectExplicit(
 	nodeIndex int,
 	nodeID, dependency string,
 	connected map[string]struct{},
 ) error {
-	dependencyIndex, exists := planner.indexByID[dependency]
+	dependencyIndex, exists := g.indexByID[dependency]
 	if !exists {
 		return &GraphError{
 			NodeID: nodeID,
@@ -294,7 +294,7 @@ func (planner *graphPlanner) connectExplicit(
 			Err:    fmt.Errorf("%w %q", ErrUnknownNode, dependency),
 		}
 	}
-	return planner.connectDependency(
+	return g.connectDependency(
 		nodeIndex,
 		nodeID,
 		dependency,
@@ -304,7 +304,7 @@ func (planner *graphPlanner) connectExplicit(
 	)
 }
 
-func (planner *graphPlanner) connectDependency(
+func (g *graphPlanner) connectDependency(
 	nodeIndex int,
 	nodeID, dependency string,
 	dependencyIndex int,
@@ -322,52 +322,52 @@ func (planner *graphPlanner) connectDependency(
 		return nil
 	}
 	connected[dependency] = struct{}{}
-	planner.dependencyCounts[nodeIndex]++
-	planner.dependentNodeIndexes[dependencyIndex] = append(
-		planner.dependentNodeIndexes[dependencyIndex],
+	g.dependencyCounts[nodeIndex]++
+	g.dependentNodeIndexes[dependencyIndex] = append(
+		g.dependentNodeIndexes[dependencyIndex],
 		nodeIndex,
 	)
 	return nil
 }
 
-func (planner *graphPlanner) topologicalLayers() ([][]string, error) {
+func (g *graphPlanner) topologicalLayers() ([][]string, error) {
 	// Kahn's algorithm computes each node's barrier level in O(V+E). Levels are
 	// materialized in a final spec-order pass so independent nodes retain the
 	// deterministic order in which the caller declared them.
-	ready := make([]int, 0, len(planner.graph.Nodes))
-	for nodeIndex, count := range planner.dependencyCounts {
+	ready := make([]int, 0, len(g.graph.Nodes))
+	for nodeIndex, count := range g.dependencyCounts {
 		if count == 0 {
 			ready = append(ready, nodeIndex)
 		}
 	}
 
-	levels := make([]int, len(planner.graph.Nodes))
+	levels := make([]int, len(g.graph.Nodes))
 	processed := 0
 	maxLevel := 0
 	for head := 0; head < len(ready); head++ {
 		node := ready[head]
 		processed++
-		for _, dependent := range planner.dependentNodeIndexes[node] {
+		for _, dependent := range g.dependentNodeIndexes[node] {
 			nextLevel := levels[node] + 1
 			if levels[dependent] < nextLevel {
 				levels[dependent] = nextLevel
 				maxLevel = max(maxLevel, nextLevel)
 			}
-			planner.dependencyCounts[dependent]--
-			if planner.dependencyCounts[dependent] == 0 {
+			g.dependencyCounts[dependent]--
+			if g.dependencyCounts[dependent] == 0 {
 				ready = append(ready, dependent)
 			}
 		}
 	}
-	if processed != len(planner.graph.Nodes) {
+	if processed != len(g.graph.Nodes) {
 		return nil, &GraphError{Err: ErrCycle}
 	}
-	if len(planner.graph.Nodes) == 0 {
+	if len(g.graph.Nodes) == 0 {
 		return nil, nil
 	}
 
 	layers := make([][]string, maxLevel+1)
-	for nodeIndex, node := range planner.graph.Nodes {
+	for nodeIndex, node := range g.graph.Nodes {
 		layers[levels[nodeIndex]] = append(layers[levels[nodeIndex]], node.ID)
 	}
 	return layers, nil

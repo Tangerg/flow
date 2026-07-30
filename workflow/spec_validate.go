@@ -26,7 +26,7 @@ type specValidator struct {
 	registry *Registry
 }
 
-func (v specValidator) validate(spec Spec, stepIDs map[string]struct{}) error {
+func (s specValidator) validate(spec Spec, stepIDs map[string]struct{}) error {
 	if err := spec.validateFields(); err != nil {
 		return err
 	}
@@ -36,15 +36,15 @@ func (v specValidator) validate(spec Spec, stepIDs map[string]struct{}) error {
 
 	switch spec.Kind {
 	case KindLeaf:
-		return v.validateLeaf(spec, stepIDs)
+		return s.validateLeaf(spec, stepIDs)
 	case KindSequence, KindParallel:
-		return v.validateSteps(spec.Steps, stepIDs)
+		return s.validateSteps(spec.Steps, stepIDs)
 	case KindBranch:
-		return v.validateBranch(spec, stepIDs)
+		return s.validateBranch(spec, stepIDs)
 	case KindLoop:
-		return v.validateLoop(spec, stepIDs)
+		return s.validateLoop(spec, stepIDs)
 	case KindIteration:
-		return v.validateIteration(spec, stepIDs)
+		return s.validateIteration(spec, stepIDs)
 	default:
 		return spec.fieldError(
 			"kind",
@@ -53,52 +53,52 @@ func (v specValidator) validate(spec Spec, stepIDs map[string]struct{}) error {
 	}
 }
 
-func (spec Spec) validateFields() error {
-	if field := spec.unexpectedField(); field != "" {
-		return spec.fieldError(field, fmt.Errorf(
+func (s Spec) validateFields() error {
+	if field := s.unexpectedField(); field != "" {
+		return s.fieldError(field, fmt.Errorf(
 			"%w: field %q is not valid for a %q spec",
 			ErrInvalidSpec,
 			field,
-			spec.Kind,
+			s.Kind,
 		))
 	}
 	return nil
 }
 
-func (spec Spec) validateConstraints() error {
-	if spec.Concurrency < 0 {
-		return spec.fieldError(
+func (s Spec) validateConstraints() error {
+	if s.Concurrency < 0 {
+		return s.fieldError(
 			"concurrency",
 			fmt.Errorf(
 				"%w: concurrency must be non-negative, got %d",
 				ErrInvalidSpec,
-				spec.Concurrency,
+				s.Concurrency,
 			),
 		)
 	}
-	if spec.MaxIterations < 0 {
-		return spec.fieldError(
+	if s.MaxIterations < 0 {
+		return s.fieldError(
 			"maxIterations",
 			fmt.Errorf(
 				"%w: max iterations must be non-negative, got %d",
 				ErrInvalidSpec,
-				spec.MaxIterations,
+				s.MaxIterations,
 			),
 		)
 	}
 	return nil
 }
 
-func (v specValidator) validateSteps(specs []Spec, stepIDs map[string]struct{}) error {
+func (s specValidator) validateSteps(specs []Spec, stepIDs map[string]struct{}) error {
 	for _, spec := range specs {
-		if err := v.validate(spec, stepIDs); err != nil {
+		if err := s.validate(spec, stepIDs); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (v specValidator) validateLoop(spec Spec, stepIDs map[string]struct{}) error {
+func (s specValidator) validateLoop(spec Spec, stepIDs map[string]struct{}) error {
 	if err := spec.claimID(stepIDs); err != nil {
 		return err
 	}
@@ -108,7 +108,7 @@ func (v specValidator) validateLoop(spec Spec, stepIDs map[string]struct{}) erro
 			fmt.Errorf("%w: loop body is required", ErrInvalidSpec),
 		)
 	}
-	if _, ok := v.registry.lookupCondition(spec.Condition); !ok {
+	if _, ok := s.registry.lookupCondition(spec.Condition); !ok {
 		return spec.fieldError(
 			"condition",
 			fmt.Errorf("%w: unknown condition %q", ErrInvalidSpec, spec.Condition),
@@ -118,10 +118,10 @@ func (v specValidator) validateLoop(spec Spec, stepIDs map[string]struct{}) erro
 	// index, so its IDs are local and may be reused outside this loop. Reserve
 	// the loop ID itself because each iteration records the stop decision under
 	// that ID in the same scope.
-	return v.validate(*spec.Body, map[string]struct{}{spec.ID: {}})
+	return s.validate(*spec.Body, map[string]struct{}{spec.ID: {}})
 }
 
-func (v specValidator) validateLeaf(spec Spec, stepIDs map[string]struct{}) error {
+func (s specValidator) validateLeaf(spec Spec, stepIDs map[string]struct{}) error {
 	if err := spec.claimID(stepIDs); err != nil {
 		return err
 	}
@@ -131,10 +131,10 @@ func (v specValidator) validateLeaf(spec Spec, stepIDs map[string]struct{}) erro
 			fmt.Errorf("%w: node type is empty", ErrInvalidSpec),
 		)
 	}
-	if _, ok := v.registry.lookupLeaf(spec.Type); !ok {
+	if _, ok := s.registry.lookupLeaf(spec.Type); !ok {
 		return spec.fieldError("type", fmt.Errorf("%w %q", ErrUnknownNodeType, spec.Type))
 	}
-	registered, _ := v.registry.lookupNodeSchema(spec.Type)
+	registered, _ := s.registry.lookupNodeSchema(spec.Type)
 	if err := registered.validateConfig(spec.Config); err != nil {
 		return spec.fieldError("config", fmt.Errorf("%w: %w", ErrInvalidSpec, err))
 	}
@@ -157,7 +157,7 @@ func (v specValidator) validateLeaf(spec Spec, stepIDs map[string]struct{}) erro
 	return nil
 }
 
-func (v specValidator) validateBranch(spec Spec, stepIDs map[string]struct{}) error {
+func (s specValidator) validateBranch(spec Spec, stepIDs map[string]struct{}) error {
 	if err := spec.claimID(stepIDs); err != nil {
 		return err
 	}
@@ -167,7 +167,7 @@ func (v specValidator) validateBranch(spec Spec, stepIDs map[string]struct{}) er
 			fmt.Errorf("%w: at least one branch case is required", ErrInvalidSpec),
 		)
 	}
-	if _, ok := v.registry.lookupResolver(spec.Resolver); !ok {
+	if _, ok := s.registry.lookupResolver(spec.Resolver); !ok {
 		return spec.fieldError(
 			"resolver",
 			fmt.Errorf("%w: unknown resolver %q", ErrInvalidSpec, spec.Resolver),
@@ -186,7 +186,7 @@ func (v specValidator) validateBranch(spec Spec, stepIDs map[string]struct{}) er
 			)
 		}
 		caseIDs := maps.Clone(stepIDs)
-		if err := v.validate(spec.Cases[name], caseIDs); err != nil {
+		if err := s.validate(spec.Cases[name], caseIDs); err != nil {
 			return err
 		}
 		for id := range caseIDs {
@@ -199,7 +199,7 @@ func (v specValidator) validateBranch(spec Spec, stepIDs map[string]struct{}) er
 	return nil
 }
 
-func (v specValidator) validateIteration(spec Spec, stepIDs map[string]struct{}) error {
+func (s specValidator) validateIteration(spec Spec, stepIDs map[string]struct{}) error {
 	if err := spec.claimID(stepIDs); err != nil {
 		return err
 	}
@@ -228,29 +228,29 @@ func (v specValidator) validateIteration(spec Spec, stepIDs map[string]struct{})
 		return spec.fieldError("bodyOutput", fmt.Errorf("%w: %w", ErrInvalidSpec, err))
 	}
 	// An iteration body's Store and Journal scope are local to one element.
-	return v.validate(*spec.Body, make(map[string]struct{}))
+	return s.validate(*spec.Body, make(map[string]struct{}))
 }
 
-func (spec Spec) claimID(stepIDs map[string]struct{}) error {
-	if spec.ID == "" {
-		return spec.fieldError("id", ErrInvalidStepID)
+func (s Spec) claimID(stepIDs map[string]struct{}) error {
+	if s.ID == "" {
+		return s.fieldError("id", ErrInvalidStepID)
 	}
-	if _, exists := stepIDs[spec.ID]; exists {
-		return spec.fieldError("id", ErrDuplicateStep)
+	if _, exists := stepIDs[s.ID]; exists {
+		return s.fieldError("id", ErrDuplicateStep)
 	}
-	stepIDs[spec.ID] = struct{}{}
+	stepIDs[s.ID] = struct{}{}
 	return nil
 }
 
 // unexpectedField keeps the programmatic Spec API as strict as the JSON
 // schema. A populated field that a kind ignores is almost always a typo, and
 // silently accepting it makes code-built and JSON-built workflows disagree.
-func (spec Spec) unexpectedField() string {
-	allowed := spec.allowedFields()
+func (s Spec) unexpectedField() string {
+	allowed := s.allowedFields()
 	if allowed == nil {
 		return ""
 	}
-	for _, field := range spec.populatedFields() {
+	for _, field := range s.populatedFields() {
 		if !slices.Contains(allowed, field) {
 			return field
 		}
@@ -258,8 +258,8 @@ func (spec Spec) unexpectedField() string {
 	return ""
 }
 
-func (spec Spec) allowedFields() []string {
-	switch spec.Kind {
+func (s Spec) allowedFields() []string {
+	switch s.Kind {
 	case KindLeaf:
 		return []string{"id", "type", "config", "input", "inputs"}
 	case KindSequence:
@@ -277,25 +277,25 @@ func (spec Spec) allowedFields() []string {
 	}
 }
 
-func (spec Spec) populatedFields() []string {
+func (s Spec) populatedFields() []string {
 	fields := make([]string, 0, 13)
 	for _, field := range []struct {
 		name      string
 		populated bool
 	}{
-		{name: "id", populated: spec.ID != ""},
-		{name: "type", populated: spec.Type != ""},
-		{name: "config", populated: len(spec.Config) > 0},
-		{name: "input", populated: spec.Input != (Ref{})},
-		{name: "inputs", populated: len(spec.Inputs) > 0},
-		{name: "steps", populated: len(spec.Steps) > 0},
-		{name: "resolver", populated: spec.Resolver != ""},
-		{name: "cases", populated: len(spec.Cases) > 0},
-		{name: "body", populated: spec.Body != nil},
-		{name: "condition", populated: spec.Condition != ""},
-		{name: "maxIterations", populated: spec.MaxIterations != 0},
-		{name: "bodyOutput", populated: spec.BodyOutput != (Ref{})},
-		{name: "concurrency", populated: spec.Concurrency != 0},
+		{name: "id", populated: s.ID != ""},
+		{name: "type", populated: s.Type != ""},
+		{name: "config", populated: len(s.Config) > 0},
+		{name: "input", populated: s.Input != (Ref{})},
+		{name: "inputs", populated: len(s.Inputs) > 0},
+		{name: "steps", populated: len(s.Steps) > 0},
+		{name: "resolver", populated: s.Resolver != ""},
+		{name: "cases", populated: len(s.Cases) > 0},
+		{name: "body", populated: s.Body != nil},
+		{name: "condition", populated: s.Condition != ""},
+		{name: "maxIterations", populated: s.MaxIterations != 0},
+		{name: "bodyOutput", populated: s.BodyOutput != (Ref{})},
+		{name: "concurrency", populated: s.Concurrency != 0},
 	} {
 		if field.populated {
 			fields = append(fields, field.name)
@@ -304,6 +304,6 @@ func (spec Spec) populatedFields() []string {
 	return fields
 }
 
-func (spec Spec) fieldError(field string, err error) error {
-	return &SpecError{Kind: spec.Kind, ID: spec.ID, Field: field, Err: err}
+func (s Spec) fieldError(field string, err error) error {
+	return &SpecError{Kind: s.Kind, ID: s.ID, Field: field, Err: err}
 }

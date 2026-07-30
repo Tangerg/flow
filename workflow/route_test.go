@@ -29,27 +29,27 @@ func TestRoute_publishesAndReplaysResolverDecision(t *testing.T) {
 	journal := workflow.NewJournal()
 	input := workflow.NewStore().WithOutput("input", 1)
 
-	first, err := workflow.Run(
+	first, runErr := workflow.Run(
 		t.Context(),
 		route,
 		input,
 		workflow.RunConfig{Journal: journal},
 	)
-	if err != nil {
-		t.Fatalf("first run: %v", err)
+	if runErr != nil {
+		t.Fatalf("first run: %v", runErr)
 	}
 	if got, err := workflow.Get[string](first, workflow.Output("route")); err != nil || got != "yes" {
 		t.Fatalf("route output = %q, %v; want yes, nil", got, err)
 	}
 
-	replayed, err := workflow.Run(
+	replayed, runErr := workflow.Run(
 		t.Context(),
 		route,
 		input.WithOutput("input", -1),
 		workflow.RunConfig{Journal: journal},
 	)
-	if err != nil {
-		t.Fatalf("replay: %v", err)
+	if runErr != nil {
+		t.Fatalf("replay: %v", runErr)
 	}
 	if got, err := workflow.Get[string](replayed, workflow.Output("route")); err != nil || got != "yes" {
 		t.Fatalf("replayed output = %q, %v; want yes, nil", got, err)

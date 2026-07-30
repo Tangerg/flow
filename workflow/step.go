@@ -21,19 +21,19 @@ type decoratedStep struct {
 	step Step
 }
 
-func (step decoratedStep) Describe() Description {
-	description := Describe(step.step)
+func (d decoratedStep) Describe() Description {
+	description := Describe(d.step)
 	if description.ID == "" {
-		description.ID = step.id
+		description.ID = d.id
 	}
 	return description
 }
 
-func (step decoratedStep) workflowDefinition() stepDefinition {
-	if defined, ok := step.step.(definitionStep); ok {
+func (d decoratedStep) workflowDefinition() stepDefinition {
+	if defined, ok := d.step.(definitionStep); ok {
 		return defined.workflowDefinition()
 	}
-	return stepDefinition{kind: definitionNamed, id: step.id}
+	return stepDefinition{kind: definitionNamed, id: d.id}
 }
 
 // scopedStep owns one child-step invocation in a repeated execution scope.
@@ -46,23 +46,23 @@ type scopedStep struct {
 
 // run invokes the child under its scope. Composites validate their body before
 // constructing a scopedStep, so step is never nil here.
-func (scoped scopedStep) run(ctx context.Context, store Store) (Store, error) {
-	return scoped.step.Run(scoped.childContext(ctx), store)
+func (s scopedStep) run(ctx context.Context, store Store) (Store, error) {
+	return s.step.Run(s.childContext(ctx), store)
 }
 
-func (scoped scopedStep) indexed(id string, index int) scopedStep {
-	scoped.segment = id + "[" + strconv.Itoa(index) + "]"
-	return scoped
+func (s scopedStep) indexed(id string, index int) scopedStep {
+	s.segment = id + "[" + strconv.Itoa(index) + "]"
+	return s
 }
 
-func (scoped scopedStep) childContext(parent context.Context) context.Context {
-	return WithScope(parent, scoped.segment)
+func (s scopedStep) childContext(parent context.Context) context.Context {
+	return WithScope(parent, s.segment)
 }
 
 type stepList []Step
 
-func (steps stepList) validate() error {
-	for index, step := range steps {
+func (s stepList) validate() error {
+	for index, step := range s {
 		if step == nil {
 			return &flow.IndexError{Index: index, Err: ErrNilStep}
 		}
@@ -70,9 +70,9 @@ func (steps stepList) validate() error {
 	return nil
 }
 
-func (steps stepList) run(ctx context.Context, store Store) (Store, error) {
+func (s stepList) run(ctx context.Context, store Store) (Store, error) {
 	current := store
-	for _, step := range steps {
+	for _, step := range s {
 		var err error
 		current, err = step.Run(ctx, current)
 		if err != nil {
@@ -82,9 +82,9 @@ func (steps stepList) run(ctx context.Context, store Store) (Store, error) {
 	return current, nil
 }
 
-func (steps stepList) describe() []Description {
-	descriptions := make([]Description, len(steps))
-	for index, step := range steps {
+func (s stepList) describe() []Description {
+	descriptions := make([]Description, len(s))
+	for index, step := range s {
 		descriptions[index] = Describe(step)
 	}
 	return descriptions

@@ -73,37 +73,37 @@ type indexGroup struct {
 	call  func(context.Context, int) error
 }
 
-func (group indexGroup) run(parent context.Context) error {
-	if group.count <= 0 {
+func (i indexGroup) run(parent context.Context) error {
+	if i.count <= 0 {
 		return parent.Err()
 	}
 	switch {
-	case group.count == 1:
-		return group.runOne(parent)
-	case group.limit == 1:
-		return group.runSequential(parent)
+	case i.count == 1:
+		return i.runOne(parent)
+	case i.limit == 1:
+		return i.runSequential(parent)
 	default:
-		return group.runConcurrent(parent)
+		return i.runConcurrent(parent)
 	}
 }
 
-func (group indexGroup) runOne(parent context.Context) error {
+func (i indexGroup) runOne(parent context.Context) error {
 	if err := parent.Err(); err != nil {
 		return err
 	}
-	err := group.call(parent, 0)
+	err := i.call(parent, 0)
 	if parentErr := parent.Err(); parentErr != nil {
 		return parentErr
 	}
 	return err
 }
 
-func (group indexGroup) runSequential(parent context.Context) error {
-	for index := range group.count {
+func (i indexGroup) runSequential(parent context.Context) error {
+	for index := range i.count {
 		if err := parent.Err(); err != nil {
 			return err
 		}
-		if err := group.call(parent, index); err != nil {
+		if err := i.call(parent, index); err != nil {
 			if parentErr := parent.Err(); parentErr != nil {
 				return parentErr
 			}
@@ -113,16 +113,16 @@ func (group indexGroup) runSequential(parent context.Context) error {
 	return parent.Err()
 }
 
-func (group indexGroup) runConcurrent(parent context.Context) error {
+func (i indexGroup) runConcurrent(parent context.Context) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
 	failure := firstFailure{cancel: cancel}
 	var workers sync.WaitGroup
-	if group.bounded() {
-		group.startWorkers(ctx, &workers, &failure)
+	if i.bounded() {
+		i.startWorkers(ctx, &workers, &failure)
 	} else {
-		group.startCalls(ctx, &workers, &failure)
+		i.startCalls(ctx, &workers, &failure)
 	}
 	workers.Wait()
 
@@ -135,18 +135,18 @@ func (group indexGroup) runConcurrent(parent context.Context) error {
 	return ctx.Err()
 }
 
-func (group indexGroup) bounded() bool {
-	return group.limit > 1 && group.limit < group.count
+func (i indexGroup) bounded() bool {
+	return i.limit > 1 && i.limit < i.count
 }
 
-func (group indexGroup) startWorkers(
+func (i indexGroup) startWorkers(
 	ctx context.Context,
 	workers *sync.WaitGroup,
 	failure *firstFailure,
 ) {
 	var next atomic.Int64
-	count, call := group.count, group.call
-	for range group.limit {
+	count, call := i.count, i.call
+	for range i.limit {
 		workers.Go(func() {
 			for {
 				if ctx.Err() != nil {
@@ -165,13 +165,13 @@ func (group indexGroup) startWorkers(
 	}
 }
 
-func (group indexGroup) startCalls(
+func (i indexGroup) startCalls(
 	ctx context.Context,
 	workers *sync.WaitGroup,
 	failure *firstFailure,
 ) {
-	call := group.call
-	for index := range group.count {
+	call := i.call
+	for index := range i.count {
 		if ctx.Err() != nil {
 			return
 		}
@@ -194,9 +194,9 @@ type firstFailure struct {
 	cancel context.CancelFunc
 }
 
-func (failure *firstFailure) record(err error) {
-	failure.once.Do(func() {
-		failure.err = err
-		failure.cancel()
+func (f *firstFailure) record(err error) {
+	f.once.Do(func() {
+		f.err = err
+		f.cancel()
 	})
 }

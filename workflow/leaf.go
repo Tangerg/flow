@@ -92,22 +92,22 @@ type nodeRunner[I, O any] struct {
 	node flow.Node[I, O]
 }
 
-func (runner nodeRunner[I, O]) validate() error {
-	if runner.node == nil {
+func (n nodeRunner[I, O]) validate() error {
+	if n.node == nil {
 		return flow.ErrNilNode
 	}
-	if function, ok := runner.node.(flow.NodeFunc[I, O]); ok && function == nil {
+	if function, ok := n.node.(flow.NodeFunc[I, O]); ok && function == nil {
 		return flow.ErrNilNode
 	}
 	return nil
 }
 
-func (runner nodeRunner[I, O]) run(
+func (n nodeRunner[I, O]) run(
 	ctx context.Context,
 	input I,
 	_ leafInvocation,
 ) (O, error) {
-	return runner.node.Run(ctx, input)
+	return n.node.Run(ctx, input)
 }
 
 // leafInvocation identifies one execution of a leaf. Runners receive only the
@@ -119,21 +119,21 @@ type leafInvocation struct {
 	run  *runState
 }
 
-func (leaf leafStep[I, O]) Run(ctx context.Context, store Store) (Store, error) {
+func (l leafStep[I, O]) Run(ctx context.Context, store Store) (Store, error) {
 	execution := leafExecution[I, O]{
-		leaf:  leaf,
+		leaf:  l,
 		store: store,
 		run:   runFrom(ctx),
 	}
 	return execution.execute(ctx)
 }
 
-func (leaf leafStep[I, O]) Describe() Description {
-	return Description{ID: leaf.id, Kind: "leaf"}
+func (l leafStep[I, O]) Describe() Description {
+	return Description{ID: l.id, Kind: "leaf"}
 }
 
-func (leaf leafStep[I, O]) workflowDefinition() stepDefinition {
-	return stepDefinition{kind: definitionNamed, id: leaf.id}
+func (l leafStep[I, O]) workflowDefinition() stepDefinition {
+	return stepDefinition{kind: definitionNamed, id: l.id}
 }
 
 // leafExecution owns the mutable state of one leaf invocation. The leaf
@@ -145,127 +145,127 @@ type leafExecution[I, O any] struct {
 	started time.Time
 }
 
-func (execution *leafExecution[I, O]) execute(ctx context.Context) (Store, error) {
-	if err := execution.validate(ctx); err != nil {
-		execution.run.emit(ctx, Event{
+func (l *leafExecution[I, O]) execute(ctx context.Context) (Store, error) {
+	if err := l.validate(ctx); err != nil {
+		l.run.emit(ctx, Event{
 			Kind: EventFailed,
-			ID:   execution.leaf.id,
+			ID:   l.leaf.id,
 			Err:  err,
 		})
-		return execution.store, err
+		return l.store, err
 	}
-	if replayed, ok := execution.replay(ctx); ok {
+	if replayed, ok := l.replay(ctx); ok {
 		return replayed, nil
 	}
 
-	execution.start(ctx)
-	input, err := execution.leaf.bind(execution.store)
+	l.start(ctx)
+	input, err := l.leaf.bind(l.store)
 	if err != nil {
-		return execution.fail(ctx, OpBind, err)
+		return l.fail(ctx, OpBind, err)
 	}
-	output, err := execution.leaf.runner.run(ctx, input, leafInvocation{
-		id:   execution.leaf.id,
+	output, err := l.leaf.runner.run(ctx, input, leafInvocation{
+		id:   l.leaf.id,
 		path: scope(ctx),
-		run:  execution.run,
+		run:  l.run,
 	})
 	if err != nil {
-		return execution.fail(ctx, OpRun, err)
+		return l.fail(ctx, OpRun, err)
 	}
-	return execution.complete(ctx, output)
+	return l.complete(ctx, output)
 }
 
 // validate runs before replay so stale Journal data cannot hide an invalid
 // workflow definition. [Leaf] and [StreamLeaf] always install a runner, so only
 // the computation it holds can be nil, which runner.validate reports.
-func (execution *leafExecution[I, O]) validate(ctx context.Context) error {
+func (l *leafExecution[I, O]) validate(ctx context.Context) error {
 	switch {
-	case execution.leaf.id == "":
-		return &StepError{ID: execution.leaf.id, Op: OpValidate, Err: ErrInvalidStepID}
-	case execution.leaf.bind == nil:
-		return &StepError{ID: execution.leaf.id, Op: OpBind, Err: flow.ErrNilFunc}
+	case l.leaf.id == "":
+		return &StepError{ID: l.leaf.id, Op: OpValidate, Err: ErrInvalidStepID}
+	case l.leaf.bind == nil:
+		return &StepError{ID: l.leaf.id, Op: OpBind, Err: flow.ErrNilFunc}
 	default:
-		if err := execution.leaf.runner.validate(); err != nil {
-			return &StepError{ID: execution.leaf.id, Op: OpRun, Err: err}
+		if err := l.leaf.runner.validate(); err != nil {
+			return &StepError{ID: l.leaf.id, Op: OpRun, Err: err}
 		}
-		if err := execution.run.claim(scope(ctx), execution.leaf.id); err != nil {
-			return &StepError{ID: execution.leaf.id, Op: OpValidate, Err: err}
+		if err := l.run.claim(scope(ctx), l.leaf.id); err != nil {
+			return &StepError{ID: l.leaf.id, Op: OpValidate, Err: err}
 		}
 		return nil
 	}
 }
 
-func (execution *leafExecution[I, O]) replay(ctx context.Context) (Store, bool) {
-	value, ok := execution.run.replay(scope(ctx), execution.leaf.id)
+func (l *leafExecution[I, O]) replay(ctx context.Context) (Store, bool) {
+	value, ok := l.run.replay(scope(ctx), l.leaf.id)
 	if !ok {
 		return Store{}, false
 	}
-	next := execution.store.WithOutput(execution.leaf.id, value)
-	execution.run.emit(ctx, Event{
+	next := l.store.WithOutput(l.leaf.id, value)
+	l.run.emit(ctx, Event{
 		Kind:  EventSkipped,
-		ID:    execution.leaf.id,
+		ID:    l.leaf.id,
 		Store: next,
 	})
 	return next, true
 }
 
-func (execution *leafExecution[I, O]) start(ctx context.Context) {
-	if !execution.run.observing() {
+func (l *leafExecution[I, O]) start(ctx context.Context) {
+	if !l.run.observing() {
 		return
 	}
-	execution.started = time.Now()
-	execution.run.emit(ctx, Event{
+	l.started = time.Now()
+	l.run.emit(ctx, Event{
 		Kind: EventStarted,
-		ID:   execution.leaf.id,
+		ID:   l.leaf.id,
 	})
 }
 
-func (execution *leafExecution[I, O]) fail(
+func (l *leafExecution[I, O]) fail(
 	ctx context.Context,
 	op StepOp,
 	err error,
 ) (Store, error) {
 	if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
-		return execution.suspend(ctx, suspensions)
+		return l.suspend(ctx, suspensions)
 	}
 
-	stepErr := &StepError{ID: execution.leaf.id, Op: op, Err: err}
-	if execution.run.observing() {
-		execution.run.emit(ctx, Event{
+	stepErr := &StepError{ID: l.leaf.id, Op: op, Err: err}
+	if l.run.observing() {
+		l.run.emit(ctx, Event{
 			Kind:    EventFailed,
-			ID:      execution.leaf.id,
-			Elapsed: time.Since(execution.started),
+			ID:      l.leaf.id,
+			Elapsed: time.Since(l.started),
 			Err:     stepErr,
 		})
 	}
-	return execution.store, stepErr
+	return l.store, stepErr
 }
 
-func (execution *leafExecution[I, O]) suspend(
+func (l *leafExecution[I, O]) suspend(
 	ctx context.Context,
 	suspensions suspensionList,
 ) (Store, error) {
-	err := suspensions.identify(execution.leaf.id, scope(ctx)).err()
-	if execution.run.observing() {
-		execution.run.emit(ctx, Event{
+	err := suspensions.identify(l.leaf.id, scope(ctx)).err()
+	if l.run.observing() {
+		l.run.emit(ctx, Event{
 			Kind:    EventSuspended,
-			ID:      execution.leaf.id,
-			Elapsed: time.Since(execution.started),
+			ID:      l.leaf.id,
+			Elapsed: time.Since(l.started),
 			Err:     err,
 		})
 	}
-	return execution.store, err
+	return l.store, err
 }
 
-func (execution *leafExecution[I, O]) complete(ctx context.Context, output O) (Store, error) {
-	next := execution.store.WithOutput(execution.leaf.id, output)
-	if err := execution.run.journal().record(scope(ctx), execution.leaf.id, output); err != nil {
-		return execution.fail(ctx, OpRun, err)
+func (l *leafExecution[I, O]) complete(ctx context.Context, output O) (Store, error) {
+	next := l.store.WithOutput(l.leaf.id, output)
+	if err := l.run.journal().record(scope(ctx), l.leaf.id, output); err != nil {
+		return l.fail(ctx, OpRun, err)
 	}
-	if execution.run.observing() {
-		execution.run.emit(ctx, Event{
+	if l.run.observing() {
+		l.run.emit(ctx, Event{
 			Kind:    EventCompleted,
-			ID:      execution.leaf.id,
-			Elapsed: time.Since(execution.started),
+			ID:      l.leaf.id,
+			Elapsed: time.Since(l.started),
 			Store:   next,
 		})
 	}

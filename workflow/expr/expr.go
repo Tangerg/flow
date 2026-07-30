@@ -45,15 +45,15 @@ func Parse(src string) (*Expr, error) {
 
 type refList []workflow.Ref
 
-func (refs refList) sortedUnique() []workflow.Ref {
-	refs = slices.Clone(refs)
-	slices.SortFunc(refs, func(left, right workflow.Ref) int {
+func (r refList) sortedUnique() []workflow.Ref {
+	r = slices.Clone(r)
+	slices.SortFunc(r, func(left, right workflow.Ref) int {
 		if order := strings.Compare(left.NodeID, right.NodeID); order != 0 {
 			return order
 		}
 		return strings.Compare(left.Path, right.Path)
 	})
-	return slices.Compact(refs)
+	return slices.Compact(r)
 }
 
 // MustParse is like [Parse] but panics on error. Use it for expressions fixed at
@@ -186,21 +186,24 @@ func (c *compiler) compileLiteral(lit *ast.BasicLit) (evalFunc, error) {
 	}
 }
 
-// compileIdent accepts only the three predeclared constants. Every other bare
+// predeclaredIdents are the only bare identifiers an expression may use, and the
+// value each one evaluates to. Keeping the set in one place means a new
+// predeclared name cannot be accepted by one walk and rejected by the other.
+var predeclaredIdents = map[string]any{
+	"true":  true,
+	"false": false,
+	"nil":   nil,
+}
+
+// compileIdent accepts only the predeclared constants. Every other bare
 // identifier is a reference missing its path, which is worth saying plainly.
 func (c *compiler) compileIdent(id *ast.Ident) (evalFunc, error) {
-	switch id.Name {
-	case "true":
-		return c.constant(true), nil
-	case "false":
-		return c.constant(false), nil
-	case "nil":
-		return c.constant(nil), nil
-	default:
-		return nil, c.errorAt(id, fmt.Errorf(
-			"%w: %q is not a reference; a reference needs a node ID and a path, as in %s.output",
-			ErrUnsupported, id.Name, id.Name))
+	if value, predeclared := predeclaredIdents[id.Name]; predeclared {
+		return c.constant(value), nil
 	}
+	return nil, c.errorAt(id, fmt.Errorf(
+		"%w: %q is not a reference; a reference needs a node ID and a path, as in %s.output",
+		ErrUnsupported, id.Name, id.Name))
 }
 
 func (c *compiler) compileRef(node ast.Expr) (evalFunc, error) {
@@ -250,15 +253,13 @@ func (c *compiler) flatten(node ast.Expr) (string, []string, error) {
 }
 
 func (c *compiler) flattenIdent(node *ast.Ident) (string, []string, error) {
-	switch node.Name {
-	case "true", "false", "nil":
+	if _, predeclared := predeclaredIdents[node.Name]; predeclared {
 		return "", nil, c.errorAt(
 			node,
 			fmt.Errorf("%w: cannot select into %s", ErrUnsupported, node.Name),
 		)
-	default:
-		return node.Name, nil, nil
 	}
+	return node.Name, nil, nil
 }
 
 func (c *compiler) flattenSelector(node *ast.SelectorExpr) (string, []string, error) {
@@ -437,8 +438,8 @@ func (c *compiler) compileCall(n *ast.CallExpr) (evalFunc, error) {
 	}
 }
 
-func (eval evalFunc) bool(s workflow.Store, op token.Token) (bool, error) {
-	v, err := eval(s)
+func (e evalFunc) bool(s workflow.Store, op token.Token) (bool, error) {
+	v, err := e(s)
 	if err != nil {
 		return false, err
 	}

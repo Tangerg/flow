@@ -16,9 +16,9 @@ type failOnceJSON struct {
 	calls int
 }
 
-func (value *failOnceJSON) MarshalJSON() ([]byte, error) {
-	value.calls++
-	if value.calls == 1 {
+func (f *failOnceJSON) MarshalJSON() ([]byte, error) {
+	f.calls++
+	if f.calls == 1 {
 		return nil, errors.New("first marshal failed")
 	}
 	return []byte(`true`), nil
@@ -371,9 +371,9 @@ func TestStore_JSONRoundTripPreservesTypedReads(t *testing.T) {
 		WithOutput("struct", payload{N: 1, Items: []string{"a"}, Meta: map[string]string{"k": "v"}}).
 		WithOutput("nested", map[string]any{"deep": []any{map[string]any{"n": 9}}})
 
-	data, err := json.Marshal(original)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
+	data, marshalErr := json.Marshal(original)
+	if marshalErr != nil {
+		t.Fatalf("Marshal: %v", marshalErr)
 	}
 	var decoded workflow.Store
 	if err := json.Unmarshal(data, &decoded); err != nil {
@@ -401,9 +401,9 @@ func TestStore_JSONRoundTripPreservesTypedReads(t *testing.T) {
 	if got, err := workflow.Get[[]int](decoded, workflow.Output("slice")); err != nil || !slices.Equal(got, []int{1, 2, 3}) {
 		t.Fatalf("[]int = %v, %v", got, err)
 	}
-	got, err := workflow.Get[payload](decoded, workflow.Output("struct"))
-	if err != nil || got.N != 1 || !slices.Equal(got.Items, []string{"a"}) || got.Meta["k"] != "v" {
-		t.Fatalf("struct = %+v, %v", got, err)
+	got, marshalErr := workflow.Get[payload](decoded, workflow.Output("struct"))
+	if marshalErr != nil || got.N != 1 || !slices.Equal(got.Items, []string{"a"}) || got.Meta["k"] != "v" {
+		t.Fatalf("struct = %+v, %v", got, marshalErr)
 	}
 	// Conversion applies at any path depth, not just to whole cells.
 	if n, err := workflow.Get[int](decoded, workflow.At("nested", "output", "deep", "0", "n")); err != nil || n != 9 {

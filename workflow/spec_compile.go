@@ -23,28 +23,28 @@ type specCompiler struct {
 	leafCompiler
 }
 
-func (compiler specCompiler) compile(spec Spec) (Step, error) {
+func (s specCompiler) compile(spec Spec) (Step, error) {
 	switch spec.Kind {
 	case KindLeaf:
-		return compiler.compileLeaf(spec)
+		return s.compileLeaf(spec)
 	case KindSequence:
-		steps, err := compiler.compileAll(spec.Steps)
+		steps, err := s.compileAll(spec.Steps)
 		if err != nil {
 			return nil, err
 		}
 		return Sequence(steps...), nil
 	case KindParallel:
-		steps, err := compiler.compileAll(spec.Steps)
+		steps, err := s.compileAll(spec.Steps)
 		if err != nil {
 			return nil, err
 		}
 		return Parallel(steps, ParallelConfig{Concurrency: spec.Concurrency}), nil
 	case KindBranch:
-		return compiler.compileBranch(spec)
+		return s.compileBranch(spec)
 	case KindLoop:
-		return compiler.compileLoop(spec)
+		return s.compileLoop(spec)
 	case KindIteration:
-		return compiler.compileIteration(spec)
+		return s.compileIteration(spec)
 	default:
 		return nil, spec.fieldError(
 			"kind",
@@ -63,10 +63,10 @@ func (r *Registry) CompileSpecJSON(data []byte) (Step, error) {
 	return r.CompileSpec(spec)
 }
 
-func (compiler specCompiler) compileAll(specs []Spec) ([]Step, error) {
+func (s specCompiler) compileAll(specs []Spec) ([]Step, error) {
 	steps := make([]Step, len(specs))
 	for index, spec := range specs {
-		step, err := compiler.compile(spec)
+		step, err := s.compile(spec)
 		if err != nil {
 			return nil, err
 		}
@@ -75,8 +75,8 @@ func (compiler specCompiler) compileAll(specs []Spec) ([]Step, error) {
 	return steps, nil
 }
 
-func (compiler specCompiler) compileLeaf(spec Spec) (Step, error) {
-	step, field, err := compiler.leafCompiler.compile(spec)
+func (s specCompiler) compileLeaf(spec Spec) (Step, error) {
+	step, field, err := s.leafCompiler.compile(spec)
 	if err != nil {
 		return nil, spec.fieldError(field, err)
 	}
@@ -90,8 +90,8 @@ type leafCompiler struct {
 	registry *Registry
 }
 
-func (compiler leafCompiler) compile(spec Spec) (Step, string, error) {
-	factory, ok := compiler.registry.lookupLeaf(spec.Type)
+func (l leafCompiler) compile(spec Spec) (Step, string, error) {
+	factory, ok := l.registry.lookupLeaf(spec.Type)
 	if !ok {
 		return nil, "type", fmt.Errorf("%w %q", ErrUnknownNodeType, spec.Type)
 	}
@@ -119,8 +119,8 @@ func (compiler leafCompiler) compile(spec Spec) (Step, string, error) {
 	return step, "", nil
 }
 
-func (compiler specCompiler) compileBranch(spec Spec) (Step, error) {
-	resolver, ok := compiler.registry.lookupResolver(spec.Resolver)
+func (s specCompiler) compileBranch(spec Spec) (Step, error) {
+	resolver, ok := s.registry.lookupResolver(spec.Resolver)
 	if !ok {
 		return nil, spec.fieldError(
 			"resolver",
@@ -129,7 +129,7 @@ func (compiler specCompiler) compileBranch(spec Spec) (Step, error) {
 	}
 	cases := make(map[string]Step, len(spec.Cases))
 	for _, name := range slices.Sorted(maps.Keys(spec.Cases)) {
-		step, err := compiler.compile(spec.Cases[name])
+		step, err := s.compile(spec.Cases[name])
 		if err != nil {
 			return nil, err
 		}
@@ -138,21 +138,21 @@ func (compiler specCompiler) compileBranch(spec Spec) (Step, error) {
 	return Branch(spec.ID, resolver, cases), nil
 }
 
-func (compiler specCompiler) compileLoop(spec Spec) (Step, error) {
+func (s specCompiler) compileLoop(spec Spec) (Step, error) {
 	if spec.Body == nil {
 		return nil, spec.fieldError(
 			"body",
 			fmt.Errorf("%w: loop body is required", ErrInvalidSpec),
 		)
 	}
-	condition, ok := compiler.registry.lookupCondition(spec.Condition)
+	condition, ok := s.registry.lookupCondition(spec.Condition)
 	if !ok {
 		return nil, spec.fieldError(
 			"condition",
 			fmt.Errorf("%w: unknown condition %q", ErrInvalidSpec, spec.Condition),
 		)
 	}
-	body, err := compiler.compile(*spec.Body)
+	body, err := s.compile(*spec.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +164,7 @@ func (compiler specCompiler) compileLoop(spec Spec) (Step, error) {
 	), nil
 }
 
-func (compiler specCompiler) compileIteration(spec Spec) (Step, error) {
+func (s specCompiler) compileIteration(spec Spec) (Step, error) {
 	switch {
 	case spec.Input == (Ref{}):
 		return nil, spec.fieldError(
@@ -182,7 +182,7 @@ func (compiler specCompiler) compileIteration(spec Spec) (Step, error) {
 			fmt.Errorf("%w: iteration body output is required", ErrInvalidSpec),
 		)
 	}
-	body, err := compiler.compile(*spec.Body)
+	body, err := s.compile(*spec.Body)
 	if err != nil {
 		return nil, err
 	}

@@ -15,27 +15,27 @@ import (
 // boundary on the same parser.
 type jsonDocument []byte
 
-func (d jsonDocument) decode(dst any) error {
-	if _, err := d.value(); err != nil {
+func (j jsonDocument) decode(dst any) error {
+	if _, err := j.value(); err != nil {
 		return err
 	}
-	return d.decodeParsed(dst)
+	return j.decodeParsed(dst)
 }
 
 // decodeWithValue returns the ordinary JSON value and decodes the same document
 // into dst. Callers that need both representations can share the strict parse
 // instead of reparsing nested raw messages.
-func (d jsonDocument) decodeWithValue(dst any) (any, error) {
-	value, err := d.value()
+func (j jsonDocument) decodeWithValue(dst any) (any, error) {
+	value, err := j.value()
 	if err != nil {
 		return nil, err
 	}
-	return value, d.decodeParsed(dst)
+	return value, j.decodeParsed(dst)
 }
 
 // decodeParsed maps a document already accepted by value into a Go type.
-func (d jsonDocument) decodeParsed(dst any) error {
-	decoder := json.NewDecoder(bytes.NewReader(d))
+func (j jsonDocument) decodeParsed(dst any) error {
+	decoder := json.NewDecoder(bytes.NewReader(j))
 	decoder.DisallowUnknownFields()
 	decoder.UseNumber()
 	return decoder.Decode(dst)
@@ -45,8 +45,8 @@ func (d jsonDocument) decodeParsed(dst any) error {
 // rejecting duplicate object members. The standard decoder otherwise silently
 // keeps the last value, which would make schema validation observe a different
 // document than the caller supplied.
-func (d jsonDocument) value() (any, error) {
-	decoder := json.NewDecoder(bytes.NewReader(d))
+func (j jsonDocument) value() (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(j))
 	decoder.UseNumber()
 	reader := jsonReader{decoder: decoder}
 	value, err := reader.read()
@@ -70,8 +70,8 @@ type jsonReader struct {
 	depth   int
 }
 
-func (r *jsonReader) read() (any, error) {
-	token, err := r.decoder.Token()
+func (j *jsonReader) read() (any, error) {
+	token, err := j.decoder.Token()
 	if err != nil {
 		return nil, err
 	}
@@ -79,67 +79,67 @@ func (r *jsonReader) read() (any, error) {
 	if !ok {
 		return token, nil
 	}
-	if err := r.enter(); err != nil {
+	if err := j.enter(); err != nil {
 		return nil, err
 	}
-	defer r.leave()
+	defer j.leave()
 
 	// A closing delimiter cannot appear where a value is expected: the top level
 	// starts a document, an object member follows its name, and an array element
 	// is only read while More reports one. So the delimiter here is '{' or '['.
 	if delim == '{' {
-		return r.readObject()
+		return j.readObject()
 	}
-	return r.readArray()
+	return j.readArray()
 }
 
-func (r *jsonReader) enter() error {
-	if r.depth >= MaxNestingDepth {
+func (j *jsonReader) enter() error {
+	if j.depth >= MaxNestingDepth {
 		return fmt.Errorf(
 			"%w at %s: depth exceeds limit %d",
 			ErrMaxDepth,
-			pointerPath(r.path).encode(),
+			pointerPath(j.path).encode(),
 			MaxNestingDepth,
 		)
 	}
-	r.depth++
+	j.depth++
 	return nil
 }
 
-func (r *jsonReader) leave() {
-	r.depth--
+func (j *jsonReader) leave() {
+	j.depth--
 }
 
-func (r *jsonReader) readObject() (map[string]any, error) {
+func (j *jsonReader) readObject() (map[string]any, error) {
 	object := make(map[string]any)
-	for r.decoder.More() {
-		name, err := r.readMemberName()
+	for j.decoder.More() {
+		name, err := j.readMemberName()
 		if err != nil {
 			return nil, err
 		}
-		r.path = append(r.path, name)
+		j.path = append(j.path, name)
 		if _, duplicate := object[name]; duplicate {
 			return nil, fmt.Errorf(
 				"duplicate object member %q at %s",
 				name,
-				pointerPath(r.path).encode(),
+				pointerPath(j.path).encode(),
 			)
 		}
-		value, err := r.read()
-		r.path = r.path[:len(r.path)-1]
+		value, err := j.read()
+		j.path = j.path[:len(j.path)-1]
 		if err != nil {
 			return nil, err
 		}
 		object[name] = value
 	}
-	if _, err := r.decoder.Token(); err != nil { // }
+	if _, err := j.decoder.Token(); err != nil { // }
 		return nil, err
 	}
 	return object, nil
 }
 
-func (r *jsonReader) readMemberName() (string, error) {
-	token, err := r.decoder.Token()
+func (j *jsonReader) readMemberName() (string, error) {
+	token, err := j.decoder.Token()
 	if err != nil {
 		return "", err
 	}
@@ -148,18 +148,18 @@ func (r *jsonReader) readMemberName() (string, error) {
 	return token.(string), nil
 }
 
-func (r *jsonReader) readArray() ([]any, error) {
+func (j *jsonReader) readArray() ([]any, error) {
 	array := make([]any, 0)
-	for index := 0; r.decoder.More(); index++ {
-		r.path = append(r.path, strconv.Itoa(index))
-		value, err := r.read()
-		r.path = r.path[:len(r.path)-1]
+	for index := 0; j.decoder.More(); index++ {
+		j.path = append(j.path, strconv.Itoa(index))
+		value, err := j.read()
+		j.path = j.path[:len(j.path)-1]
 		if err != nil {
 			return nil, err
 		}
 		array = append(array, value)
 	}
-	if _, err := r.decoder.Token(); err != nil { // ]
+	if _, err := j.decoder.Token(); err != nil { // ]
 		return nil, err
 	}
 	return array, nil

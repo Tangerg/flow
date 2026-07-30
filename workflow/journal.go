@@ -51,11 +51,11 @@ type JournalKey struct {
 	Path []string `json:"path,omitempty"`
 }
 
-func (k JournalKey) compare(other JournalKey) int {
-	if order := slices.Compare(k.Path, other.Path); order != 0 {
+func (j JournalKey) compare(other JournalKey) int {
+	if order := slices.Compare(j.Path, other.Path); order != 0 {
 		return order
 	}
-	return cmp.Compare(k.ID, other.ID)
+	return cmp.Compare(j.ID, other.ID)
 }
 
 // journalNode is a trie over scope segments. Keeping the path structured avoids
@@ -118,15 +118,15 @@ func (j *Journal) insert(key JournalKey, value any) error {
 	return nil
 }
 
-func (key JournalKey) validate() error {
+func (j JournalKey) validate() error {
 	switch {
-	case key.ID == "":
+	case j.ID == "":
 		return ErrInvalidStepID
-	case len(key.Path) > MaxNestingDepth:
+	case len(j.Path) > MaxNestingDepth:
 		return fmt.Errorf(
 			"%w: scope path depth %d exceeds limit %d",
 			ErrMaxDepth,
-			len(key.Path),
+			len(j.Path),
 			MaxNestingDepth,
 		)
 	default:
@@ -134,25 +134,25 @@ func (key JournalKey) validate() error {
 	}
 }
 
-func (n *journalNode) record(path []string, id string, value journalValue) bool {
+func (j *journalNode) record(path []string, id string, value journalValue) bool {
 	for _, segment := range path {
-		if n.children == nil {
-			n.children = make(map[string]*journalNode)
+		if j.children == nil {
+			j.children = make(map[string]*journalNode)
 		}
-		child := n.children[segment]
+		child := j.children[segment]
 		if child == nil {
 			child = new(journalNode)
-			n.children[segment] = child
+			j.children[segment] = child
 		}
-		n = child
+		j = child
 	}
-	if n.records == nil {
-		n.records = make(map[string]journalValue)
+	if j.records == nil {
+		j.records = make(map[string]journalValue)
 	}
-	if _, exists := n.records[id]; exists {
+	if _, exists := j.records[id]; exists {
 		return false
 	}
-	n.records[id] = value
+	j.records[id] = value
 	return true
 }
 
@@ -178,14 +178,14 @@ func (j *Journal) snapshotRevision() uint64 {
 	return j.revision
 }
 
-func (n *journalNode) lookup(path []string, id string) (journalValue, bool) {
+func (j *journalNode) lookup(path []string, id string) (journalValue, bool) {
 	for _, segment := range path {
-		n = n.children[segment]
-		if n == nil {
+		j = j.children[segment]
+		if j == nil {
 			return journalValue{}, false
 		}
 	}
-	value, ok := n.records[id]
+	value, ok := j.records[id]
 	return value, ok
 }
 
@@ -214,11 +214,11 @@ func (j *Journal) Keys() []JournalKey {
 	return keys
 }
 
-func (n *journalNode) appendKeys(path []string, keys *[]JournalKey) {
-	for id := range n.records {
+func (j *journalNode) appendKeys(path []string, keys *[]JournalKey) {
+	for id := range j.records {
 		*keys = append(*keys, JournalKey{Path: slices.Clone(path), ID: id})
 	}
-	for segment, child := range n.children {
+	for segment, child := range j.children {
 		path = append(path, segment)
 		child.appendKeys(path, keys)
 		path = path[:len(path)-1]
@@ -252,31 +252,31 @@ func (j *Journal) Forget(key JournalKey) {
 
 // forget reports whether it removed a record and prunes empty scope nodes on
 // the way back up.
-func (n *journalNode) forget(path []string, id string) bool {
+func (j *journalNode) forget(path []string, id string) bool {
 	if len(path) == 0 {
-		if _, ok := n.records[id]; !ok {
+		if _, ok := j.records[id]; !ok {
 			return false
 		}
-		delete(n.records, id)
-		if len(n.records) == 0 {
-			n.records = nil
+		delete(j.records, id)
+		if len(j.records) == 0 {
+			j.records = nil
 		}
 		return true
 	}
 
-	child := n.children[path[0]]
+	child := j.children[path[0]]
 	if child == nil || !child.forget(path[1:], id) {
 		return false
 	}
 	if child.empty() {
-		delete(n.children, path[0])
-		if len(n.children) == 0 {
-			n.children = nil
+		delete(j.children, path[0])
+		if len(j.children) == 0 {
+			j.children = nil
 		}
 	}
 	return true
 }
 
-func (n *journalNode) empty() bool {
-	return len(n.records) == 0 && len(n.children) == 0
+func (j *journalNode) empty() bool {
+	return len(j.records) == 0 && len(j.children) == 0
 }

@@ -23,22 +23,22 @@ type Inputs map[string]Ref
 
 // Ref returns the reference wired to port. The bool reports whether the port is
 // wired.
-func (in Inputs) Ref(port string) (Ref, bool) {
-	ref, ok := in[port]
+func (i Inputs) Ref(port string) (Ref, bool) {
+	ref, ok := i[port]
 	return ref, ok
 }
 
 // Default returns the reference wired to [DefaultPort].
-func (in Inputs) Default() (Ref, bool) { return in.Ref(DefaultPort) }
+func (i Inputs) Default() (Ref, bool) { return i.Ref(DefaultPort) }
 
 // PortNames returns the wired port names in sorted order.
-func (in Inputs) PortNames() []string { return slices.Sorted(maps.Keys(in)) }
+func (i Inputs) PortNames() []string { return slices.Sorted(maps.Keys(i)) }
 
 // Refs returns the wired references ordered by port name.
-func (in Inputs) Refs() []Ref {
-	refs := make([]Ref, 0, len(in))
-	for _, port := range in.PortNames() {
-		refs = append(refs, in[port])
+func (i Inputs) Refs() []Ref {
+	refs := make([]Ref, 0, len(i))
+	for _, port := range i.PortNames() {
+		refs = append(refs, i[port])
 	}
 	return refs
 }
@@ -55,26 +55,26 @@ type LeafSpec struct {
 // withDefault merges the single-input "input" sugar into the receiver. It
 // reports an error when both spell out the default port, since the intent is
 // then ambiguous. The receiver is never mutated.
-func (in Inputs) withDefault(input Ref) (Inputs, error) {
+func (i Inputs) withDefault(input Ref) (Inputs, error) {
 	if input == (Ref{}) {
-		return maps.Clone(in), nil
+		return maps.Clone(i), nil
 	}
-	if _, duplicate := in[DefaultPort]; duplicate {
+	if _, duplicate := i[DefaultPort]; duplicate {
 		return nil, fmt.Errorf("%w: %q is set by both input and inputs", ErrDuplicatePort, DefaultPort)
 	}
-	resolved := make(Inputs, len(in)+1)
-	maps.Copy(resolved, in)
+	resolved := make(Inputs, len(i)+1)
+	maps.Copy(resolved, i)
 	resolved[DefaultPort] = input
 	return resolved, nil
 }
 
 // validate checks that every port name and wired reference is well formed.
-func (in Inputs) validate() error {
-	for _, port := range in.PortNames() {
+func (i Inputs) validate() error {
+	for _, port := range i.PortNames() {
 		if port == "" {
 			return errors.New("input port name is empty")
 		}
-		if err := in[port].validate(); err != nil {
+		if err := i[port].validate(); err != nil {
 			return fmt.Errorf("input port %q: %w", port, err)
 		}
 	}

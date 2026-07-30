@@ -9,9 +9,9 @@ import (
 // pointerPath is an unescaped sequence of RFC 6901 path segments.
 type pointerPath []string
 
-func (path pointerPath) encode() string {
+func (p pointerPath) encode() string {
 	var encoder pointerEncoder
-	for _, segment := range path {
+	for _, segment := range p {
 		encoder.write(segment)
 	}
 	return encoder.String()
@@ -21,27 +21,27 @@ type pointerEncoder struct {
 	strings.Builder
 }
 
-func (encoder *pointerEncoder) write(segment string) {
-	encoder.WriteByte('/')
+func (p *pointerEncoder) write(segment string) {
+	p.WriteByte('/')
 	for _, character := range segment {
 		switch character {
 		case '~':
-			encoder.WriteString("~0")
+			p.WriteString("~0")
 		case '/':
-			encoder.WriteString("~1")
+			p.WriteString("~1")
 		default:
-			encoder.WriteRune(character)
+			p.WriteRune(character)
 		}
 	}
 }
 
 type encodedPointer string
 
-func (pointer encodedPointer) scan() (pointerScanner, bool) {
-	if pointer == "" || pointer[0] != '/' {
+func (e encodedPointer) scan() (pointerScanner, bool) {
+	if e == "" || e[0] != '/' {
 		return pointerScanner{}, false
 	}
-	return pointerScanner{rest: string(pointer[1:]), more: true}, true
+	return pointerScanner{rest: string(e[1:]), more: true}, true
 }
 
 type pointerScanner struct {
@@ -52,15 +52,15 @@ type pointerScanner struct {
 // next returns one decoded pointer segment, whether one was present, and
 // whether its escaping was valid. Segments without "~" borrow the original
 // pointer string and allocate nothing.
-func (scanner *pointerScanner) next() (segment string, present, valid bool) {
-	if !scanner.more {
+func (p *pointerScanner) next() (segment string, present, valid bool) {
+	if !p.more {
 		return "", false, true
 	}
-	encoded := scanner.rest
+	encoded := p.rest
 	if slash := strings.IndexByte(encoded, '/'); slash >= 0 {
-		encoded, scanner.rest = encoded[:slash], encoded[slash+1:]
+		encoded, p.rest = encoded[:slash], encoded[slash+1:]
 	} else {
-		scanner.rest, scanner.more = "", false
+		p.rest, p.more = "", false
 	}
 	if !strings.Contains(encoded, "~") {
 		return encoded, true, true
@@ -93,10 +93,10 @@ func (scanner *pointerScanner) next() (segment string, present, valid bool) {
 // segments. JSON-domain maps and arrays remain allocation-free. A typed Go
 // value is converted through JSON at most once, after which the rest of the
 // walk stays in the JSON domain.
-func (scanner *pointerScanner) lookup(value any) (any, bool) {
+func (p *pointerScanner) lookup(value any) (any, bool) {
 	cursor := jsonCursor{value: value}
 	for {
-		segment, present, valid := scanner.next()
+		segment, present, valid := p.next()
 		if !valid {
 			return nil, false
 		}
@@ -117,41 +117,41 @@ type jsonCursor struct {
 	converted bool
 }
 
-func (cursor *jsonCursor) descend(segment string) bool {
-	switch current := cursor.value.(type) {
+func (j *jsonCursor) descend(segment string) bool {
+	switch current := j.value.(type) {
 	case map[string]any:
 		next, ok := current[segment]
 		if ok {
-			cursor.value = next
+			j.value = next
 		}
 		return ok
 	case []any:
 		index, ok := pointerToken(segment).index(len(current))
 		if ok {
-			cursor.value = current[index]
+			j.value = current[index]
 		}
 		return ok
 	default:
-		if !cursor.convert() {
+		if !j.convert() {
 			return false
 		}
-		return cursor.descend(segment)
+		return j.descend(segment)
 	}
 }
 
-func (cursor *jsonCursor) convert() bool {
-	if cursor.converted {
+func (j *jsonCursor) convert() bool {
+	if j.converted {
 		return false
 	}
-	encoded, err := json.Marshal(cursor.value)
+	encoded, err := json.Marshal(j.value)
 	if err != nil {
 		return false
 	}
-	cursor.value, err = jsonDocument(encoded).value()
+	j.value, err = jsonDocument(encoded).value()
 	if err != nil {
 		return false
 	}
-	cursor.converted = true
+	j.converted = true
 	return true
 }
 
@@ -160,15 +160,15 @@ type pointerToken string
 // index implements RFC 6901's array-index grammar. strconv.Atoi alone would
 // incorrectly accept tokens such as "+1" and "01", which are object keys but
 // not canonical array indexes.
-func (token pointerToken) index(length int) (int, bool) {
-	if token == "" || (len(token) > 1 && token[0] == '0') {
+func (p pointerToken) index(length int) (int, bool) {
+	if p == "" || (len(p) > 1 && p[0] == '0') {
 		return 0, false
 	}
-	for index := range len(token) {
-		if token[index] < '0' || token[index] > '9' {
+	for index := range len(p) {
+		if p[index] < '0' || p[index] > '9' {
 			return 0, false
 		}
 	}
-	index, err := strconv.Atoi(string(token))
+	index, err := strconv.Atoi(string(p))
 	return index, err == nil && index < length
 }

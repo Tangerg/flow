@@ -17,21 +17,21 @@ type sequenceStep struct {
 	steps stepList
 }
 
-func (sequence sequenceStep) Run(ctx context.Context, store Store) (Store, error) {
+func (s sequenceStep) Run(ctx context.Context, store Store) (Store, error) {
 	ctx = ensureRun(ctx)
-	if err := sequence.steps.validate(); err != nil {
+	if err := s.steps.validate(); err != nil {
 		return store, err
 	}
-	if err := runFrom(ctx).validateDefinition(sequence); err != nil {
+	if err := runFrom(ctx).validateDefinition(s); err != nil {
 		return store, err
 	}
-	return sequence.steps.run(ctx, store)
+	return s.steps.run(ctx, store)
 }
 
-func (sequence sequenceStep) Describe() Description {
-	return Description{Kind: "sequence", Children: sequence.steps.describe()}
+func (s sequenceStep) Describe() Description {
+	return Description{Kind: "sequence", Children: s.steps.describe()}
 }
 
-func (sequence sequenceStep) workflowDefinition() stepDefinition {
-	return stepDefinition{kind: definitionSteps, steps: sequence.steps}
+func (s sequenceStep) workflowDefinition() stepDefinition {
+	return stepDefinition{kind: definitionSteps, steps: s.steps}
 }

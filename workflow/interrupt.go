@@ -29,39 +29,39 @@ type interruptStep struct {
 	value any
 }
 
-func (interrupt interruptStep) Run(ctx context.Context, store Store) (Store, error) {
+func (i interruptStep) Run(ctx context.Context, store Store) (Store, error) {
 	run := runFrom(ctx)
-	if interrupt.id == "" {
-		err := &StepError{ID: interrupt.id, Op: OpValidate, Err: ErrInvalidStepID}
-		run.emit(ctx, Event{Kind: EventFailed, ID: interrupt.id, Err: err})
+	if i.id == "" {
+		err := &StepError{ID: i.id, Op: OpValidate, Err: ErrInvalidStepID}
+		run.emit(ctx, Event{Kind: EventFailed, ID: i.id, Err: err})
 		return store, err
 	}
-	if err := run.claim(scope(ctx), interrupt.id); err != nil {
-		err := &StepError{ID: interrupt.id, Op: OpValidate, Err: err}
-		run.emit(ctx, Event{Kind: EventFailed, ID: interrupt.id, Err: err})
+	if err := run.claim(scope(ctx), i.id); err != nil {
+		err := &StepError{ID: i.id, Op: OpValidate, Err: err}
+		run.emit(ctx, Event{Kind: EventFailed, ID: i.id, Err: err})
 		return store, err
 	}
-	if response, ok := run.replay(scope(ctx), interrupt.id); ok {
-		next := store.WithOutput(interrupt.id, response)
-		run.emit(ctx, Event{Kind: EventSkipped, ID: interrupt.id, Store: next})
+	if response, ok := run.replay(scope(ctx), i.id); ok {
+		next := store.WithOutput(i.id, response)
+		run.emit(ctx, Event{Kind: EventSkipped, ID: i.id, Store: next})
 		return next, nil
 	}
 
 	suspension := &Suspension{
-		ID:    interrupt.id,
+		ID:    i.id,
 		Path:  Scope(ctx),
-		Value: interrupt.value,
+		Value: i.value,
 	}
-	run.emit(ctx, Event{Kind: EventSuspended, ID: interrupt.id, Err: suspension})
+	run.emit(ctx, Event{Kind: EventSuspended, ID: i.id, Err: suspension})
 	return store, suspension
 }
 
-func (interrupt interruptStep) Describe() Description {
-	return Description{ID: interrupt.id, Kind: "interrupt"}
+func (i interruptStep) Describe() Description {
+	return Description{ID: i.id, Kind: "interrupt"}
 }
 
-func (interrupt interruptStep) workflowDefinition() stepDefinition {
-	return stepDefinition{kind: definitionNamed, id: interrupt.id}
+func (i interruptStep) workflowDefinition() stepDefinition {
+	return stepDefinition{kind: definitionNamed, id: i.id}
 }
 
 // InterruptFactory is the [LeafFactory] form of [Interrupt]. The leaf's JSON

@@ -166,7 +166,7 @@ func TestLeaf_rejectsEmptyIDAndNilBind(t *testing.T) {
 		Run(context.Background(), workflow.NewStore()); !errors.Is(err, workflow.ErrInvalidStepID) {
 		t.Fatalf("empty ID err = %v", err)
 	}
-	if _, err := workflow.Leaf[int, int]("x", nil, node).
+	if _, err := workflow.Leaf("x", nil, node).
 		Run(context.Background(), workflow.NewStore()); !errors.Is(err, flow.ErrNilFunc) {
 		t.Fatalf("nil binder err = %v", err)
 	}

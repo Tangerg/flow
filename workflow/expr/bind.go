@@ -120,9 +120,9 @@ func Switch(spec SwitchSpec) (workflow.Resolver, error) {
 
 // Refs returns every reference a SwitchSpec's cases read, deduplicated and
 // sorted. It reports a parse error in any case.
-func (spec SwitchSpec) Refs() ([]workflow.Ref, error) {
+func (s SwitchSpec) Refs() ([]workflow.Ref, error) {
 	var refs []workflow.Ref
-	for _, c := range spec.Cases {
+	for _, c := range s.Cases {
 		e, err := Parse(c.When)
 		if err != nil {
 			return nil, err
@@ -177,65 +177,65 @@ type bindingRegistrar struct {
 	resolvers  map[string]workflow.Resolver
 }
 
-func (registrar *bindingRegistrar) register() error {
-	if err := registrar.compileConditions(); err != nil {
+func (b *bindingRegistrar) register() error {
+	if err := b.compileConditions(); err != nil {
 		return err
 	}
-	if err := registrar.compileResolvers(); err != nil {
+	if err := b.compileResolvers(); err != nil {
 		return err
 	}
-	if err := registrar.compileSwitches(); err != nil {
+	if err := b.compileSwitches(); err != nil {
 		return err
 	}
-	for _, name := range slices.Sorted(maps.Keys(registrar.conditions)) {
-		if err := registrar.registry.RegisterCondition(name, registrar.conditions[name]); err != nil {
+	for _, name := range slices.Sorted(maps.Keys(b.conditions)) {
+		if err := b.registry.RegisterCondition(name, b.conditions[name]); err != nil {
 			return err
 		}
 	}
-	for _, name := range slices.Sorted(maps.Keys(registrar.resolvers)) {
-		if err := registrar.registry.RegisterResolver(name, registrar.resolvers[name]); err != nil {
+	for _, name := range slices.Sorted(maps.Keys(b.resolvers)) {
+		if err := b.registry.RegisterResolver(name, b.resolvers[name]); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (registrar *bindingRegistrar) compileConditions() error {
-	for _, name := range slices.Sorted(maps.Keys(registrar.bindings.Conditions)) {
-		condition, err := Condition(registrar.bindings.Conditions[name])
+func (b *bindingRegistrar) compileConditions() error {
+	for _, name := range slices.Sorted(maps.Keys(b.bindings.Conditions)) {
+		condition, err := Condition(b.bindings.Conditions[name])
 		if err != nil {
 			return fmt.Errorf("condition %q: %w", name, err)
 		}
-		registrar.conditions[name] = condition
+		b.conditions[name] = condition
 	}
 	return nil
 }
 
-func (registrar *bindingRegistrar) compileResolvers() error {
-	for _, name := range slices.Sorted(maps.Keys(registrar.bindings.Resolvers)) {
-		resolver, err := Resolver(registrar.bindings.Resolvers[name])
+func (b *bindingRegistrar) compileResolvers() error {
+	for _, name := range slices.Sorted(maps.Keys(b.bindings.Resolvers)) {
+		resolver, err := Resolver(b.bindings.Resolvers[name])
 		if err != nil {
 			return fmt.Errorf("resolver %q: %w", name, err)
 		}
-		registrar.resolvers[name] = resolver
+		b.resolvers[name] = resolver
 	}
 	return nil
 }
 
-func (registrar *bindingRegistrar) compileSwitches() error {
-	for _, name := range slices.Sorted(maps.Keys(registrar.bindings.Switches)) {
-		if _, duplicate := registrar.resolvers[name]; duplicate {
+func (b *bindingRegistrar) compileSwitches() error {
+	for _, name := range slices.Sorted(maps.Keys(b.bindings.Switches)) {
+		if _, duplicate := b.resolvers[name]; duplicate {
 			return fmt.Errorf(
 				"%w: name %q is used by both a resolver and a switch",
 				workflow.ErrInvalidSpec,
 				name,
 			)
 		}
-		resolver, err := Switch(registrar.bindings.Switches[name])
+		resolver, err := Switch(b.bindings.Switches[name])
 		if err != nil {
 			return fmt.Errorf("switch %q: %w", name, err)
 		}
-		registrar.resolvers[name] = resolver
+		b.resolvers[name] = resolver
 	}
 	return nil
 }

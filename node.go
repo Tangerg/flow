@@ -29,10 +29,10 @@ type NodeFunc[I, O any] func(ctx context.Context, in I) (O, error)
 var _ Node[any, any] = NodeFunc[any, any](nil)
 
 // Run calls f. A nil NodeFunc returns [ErrNilNode].
-func (f NodeFunc[I, O]) Run(ctx context.Context, in I) (O, error) {
-	if f == nil {
+func (n NodeFunc[I, O]) Run(ctx context.Context, in I) (O, error) {
+	if n == nil {
 		var zero O
 		return zero, ErrNilNode
 	}
-	return f(ctx, in)
+	return n(ctx, in)
 }

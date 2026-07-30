@@ -217,7 +217,7 @@ func TestBindFactory_rejectsNilFunctions(t *testing.T) {
 	bind := func(struct{}, workflow.Inputs) (workflow.BindFunc[int], error) { return nil, nil }
 
 	for name, factory := range map[string]workflow.LeafFactory{
-		"nil bind":   workflow.BindFactory[struct{}, int, int](nil, build),
+		"nil bind":   workflow.BindFactory(nil, build),
 		"nil build":  workflow.BindFactory[struct{}, int, int](bind, nil),
 		"nil binder": workflow.BindFactory(bind, build),
 	} {

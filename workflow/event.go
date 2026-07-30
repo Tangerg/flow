@@ -72,8 +72,8 @@ type Observer interface {
 type ObserverFunc func(context.Context, Event)
 
 // Observe calls f. A nil ObserverFunc discards the event.
-func (f ObserverFunc) Observe(ctx context.Context, event Event) {
-	if f != nil {
-		f(ctx, event)
+func (o ObserverFunc) Observe(ctx context.Context, event Event) {
+	if o != nil {
+		o(ctx, event)
 	}
 }

@@ -14,8 +14,8 @@ import (
 
 type schemaValidatorFunc func(any) error
 
-func (validate schemaValidatorFunc) Validate(value any) error {
-	return validate(value)
+func (s schemaValidatorFunc) Validate(value any) error {
+	return s(value)
 }
 
 type opaqueTestStep struct{}
