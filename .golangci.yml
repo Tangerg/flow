@@ -1,0 +1,147 @@
+# Lint configuration for the flow module.
+#
+# The enabled set is deliberately much broader than golangci-lint's default six
+# linters. This file exists so the standard is enforced on every push rather
+# than re-established by hand: a finding is either fixed, or suppressed at the
+# exact line with a comment saying why. No linter that found real code is
+# disabled wholesale.
+
+run:
+  # Tests are most of this module and carry its executable documentation, so
+  # they are held to the same standard as the library.
+  tests: true
+
+linters:
+  disable-all: true
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - canonicalheader
+    - containedctx
+    - copyloopvar
+    - decorder
+    - dogsled
+    - dupword
+    - durationcheck
+    - errcheck
+    - errchkjson
+    - errname
+    - errorlint
+    - exhaustive
+    - exptostd
+    - fatcontext
+    - forcetypeassert
+    - gocheckcompilerdirectives
+    - gochecksumtype
+    - goconst
+    - gocritic
+    - godot
+    - gofumpt
+    - goimports
+    - goprintffuncname
+    - gosec
+    - gosimple
+    - govet
+    - iface
+    - inamedparam
+    - ineffassign
+    - intrange
+    - makezero
+    - mirror
+    - misspell
+    - nakedret
+    - nilerr
+    - nilnesserr
+    - nilnil
+    - noctx
+    - nolintlint
+    - nosprintfhostport
+    - perfsprint
+    - predeclared
+    - reassign
+    - recvcheck
+    - revive
+    - staticcheck
+    - stylecheck
+    - tagalign
+    - testableexamples
+    - thelper
+    - tparallel
+    - unconvert
+    - unparam
+    - unused
+    - usestdlibvars
+    - usetesting
+    - wastedassign
+    - whitespace
+
+linters-settings:
+  govet:
+    # Includes shadow, so the zero-shadowing property is enforced rather than
+    # periodically restored.
+    enable-all: true
+    disable:
+      # Field order in this module is chosen to read as documentation — the
+      # identifying fields first, then configuration. Reordering for padding
+      # would trade that for a few bytes per value.
+      - fieldalignment
+
+  exhaustive:
+    # A default case handles the remaining values by construction here: the
+    # switches over reflect.Kind and go/token.Token exist precisely to accept a
+    # small supported subset and reject everything else in one place.
+    default-signifies-exhaustive: true
+
+  nolintlint:
+    # A suppression is a claim that the linter is wrong. It has to name the rule
+    # it disables and say why, or it is indistinguishable from silencing a real
+    # finding.
+    require-explanation: true
+    require-specific: true
+    allow-unused: false
+
+issues:
+  # golangci-lint ships default exclusion patterns that hide, among other
+  # things, unchecked errors on common calls. Nothing is hidden implicitly here.
+  exclude-use-default: false
+
+  # Truncating output turns "clean" into "clean as far as we looked".
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  exclude-rules:
+    # A failed assertion in a test is a test failure with a stack trace pointing
+    # at the assertion. The comma-ok form would add a branch that can only ever
+    # report the same thing less directly.
+    - path: _test\.go
+      linters:
+        - forcetypeassert
+
+    # Repeated literals in a table of cases read better inline than behind a
+    # name that has to be looked up to check a case.
+    - path: _test\.go
+      linters:
+        - goconst
+
+    # Test doubles model states, not APIs: one legitimately returns no value and
+    # no error, another swallows an error to simulate a stalled step, and their
+    # local error types are named for the scenario they describe.
+    - path: _test\.go
+      linters:
+        - nilnil
+        - nilerr
+        - errname
+
+    # Internals tests assert exact error identity, which is the property under
+    # test rather than an accidental non-use of errors.Is.
+    - path: internals_test\.go
+      linters:
+        - errorlint
+
+    # One test builds MaxNestingDepth+1 nested scopes to prove the depth limit
+    # rejects them, so the nested context is the subject of the test.
+    - path: workflow/step_test\.go
+      linters:
+        - fatcontext

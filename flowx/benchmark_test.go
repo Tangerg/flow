@@ -10,7 +10,7 @@ import (
 )
 
 func BenchmarkFallback(b *testing.B) {
-	ctx := context.Background()
+	ctx := b.Context()
 	boom := errors.New("boom")
 	primary := flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom })
 	alt := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in + 1, nil })

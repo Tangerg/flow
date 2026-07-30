@@ -23,7 +23,7 @@ func TestSwitch_routes(t *testing.T) {
 	node := flow.Switch(resolve, cases)
 
 	for in, want := range map[int]string{2: "even", 3: "odd"} {
-		got, err := node.Run(context.Background(), in)
+		got, err := node.Run(t.Context(), in)
 		if err != nil {
 			t.Fatalf("Run(%d) error: %v", in, err)
 		}
@@ -39,7 +39,7 @@ func TestSwitch_noCase(t *testing.T) {
 	}
 	resolve := flow.NodeFunc[int, string](func(_ context.Context, _ int) (string, error) { return "missing", nil })
 
-	_, err := flow.Switch(resolve, cases).Run(context.Background(), 1)
+	_, err := flow.Switch(resolve, cases).Run(t.Context(), 1)
 	if !errors.Is(err, flow.ErrNoCase) {
 		t.Fatalf("error = %v, want ErrNoCase", err)
 	}
@@ -53,14 +53,14 @@ func TestSwitch_resolveError(t *testing.T) {
 	cases := map[string]flow.Node[int, int]{}
 	resolve := flow.NodeFunc[int, string](func(_ context.Context, _ int) (string, error) { return "", boom })
 
-	_, err := flow.Switch(resolve, cases).Run(context.Background(), 1)
+	_, err := flow.Switch(resolve, cases).Run(t.Context(), 1)
 	if !errors.Is(err, boom) {
 		t.Fatalf("error = %v, want boom", err)
 	}
 }
 
 func TestSwitch_nilResolver(t *testing.T) {
-	_, err := flow.Switch[string, int, int](nil, nil).Run(context.Background(), 1)
+	_, err := flow.Switch[string, int, int](nil, nil).Run(t.Context(), 1)
 	if !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("error = %v, want ErrNilNode", err)
 	}
@@ -75,7 +75,7 @@ func TestSwitch_validatesCasesBeforeRunningResolver(t *testing.T) {
 	_, err := flow.Switch(resolve, map[string]flow.Node[int, int]{
 		"ok":      flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) { return value, nil }),
 		"invalid": nil,
-	}).Run(context.Background(), 1)
+	}).Run(t.Context(), 1)
 	if !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("err = %v; want ErrNilNode", err)
 	}
@@ -103,7 +103,7 @@ func TestSwitch_composedResolver(t *testing.T) {
 		"small": flow.NodeFunc[int, string](func(_ context.Context, _ int) (string, error) { return "small", nil }),
 	}
 
-	got, err := flow.Switch(router, cases).Run(context.Background(), 6) // 6*2=12 >= 10 -> "big"
+	got, err := flow.Switch(router, cases).Run(t.Context(), 6) // 6*2=12 >= 10 -> "big"
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

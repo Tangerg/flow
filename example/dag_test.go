@@ -9,8 +9,9 @@ import (
 	"github.com/Tangerg/flow/workflow"
 )
 
-// A Graph is a flat DAG. Dependencies are inferred from input ports: "twice"
-// and "plusTen" share a layer, while "total" waits for both.
+// A Graph is a flat DAG. Wiring an input port is what declares a dependency, so
+// the author never orders the nodes: "twice" and "plusTen" are independent and
+// run concurrently, while "total" waits because it reads both of them.
 func Example_dag() {
 	type unaryConfig struct {
 		Value int `json:"value"`

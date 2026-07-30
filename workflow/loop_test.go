@@ -28,7 +28,7 @@ func TestLoop_untilDone(t *testing.T) {
 
 	loop := workflow.Loop("loop", body, done, workflow.LoopConfig{MaxIterations: 10})
 
-	out, err := loop.Run(context.Background(), workflow.NewStore().WithOutput("start", 0))
+	out, err := loop.Run(t.Context(), workflow.NewStore().WithOutput("start", 0))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestLoop_nilCondition(t *testing.T) {
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 
-	_, err := workflow.Loop("loop", body, nil, workflow.LoopConfig{}).Run(context.Background(), workflow.NewStore().WithOutput("start", 1))
+	_, err := workflow.Loop("loop", body, nil, workflow.LoopConfig{}).Run(t.Context(), workflow.NewStore().WithOutput("start", 1))
 	if !errors.Is(err, flow.ErrNilFunc) {
 		t.Fatalf("err = %v; want ErrNilFunc", err)
 	}
@@ -55,7 +55,7 @@ func TestLoop_nilBody(t *testing.T) {
 		nil,
 		func(context.Context, int, workflow.Store) (bool, error) { return true, nil },
 		workflow.LoopConfig{},
-	).Run(context.Background(), workflow.NewStore())
+	).Run(t.Context(), workflow.NewStore())
 	if !errors.Is(err, workflow.ErrNilStep) {
 		t.Fatalf("error = %v; want ErrNilStep", err)
 	}
@@ -68,7 +68,7 @@ func TestLoop_maxIterations(t *testing.T) {
 	)
 	done := func(context.Context, int, workflow.Store) (bool, error) { return false, nil } // never done
 
-	_, err := workflow.Loop("loop", body, done, workflow.LoopConfig{MaxIterations: 3}).Run(context.Background(), workflow.NewStore())
+	_, err := workflow.Loop("loop", body, done, workflow.LoopConfig{MaxIterations: 3}).Run(t.Context(), workflow.NewStore())
 	if !errors.Is(err, flow.ErrMaxIterations) {
 		t.Fatalf("err = %v; want ErrMaxIterations", err)
 	}
@@ -82,7 +82,7 @@ func TestLoop_rejectsNegativeMaxIterations(t *testing.T) {
 	done := func(context.Context, int, workflow.Store) (bool, error) { return true, nil }
 
 	_, err := workflow.Loop("loop", body, done, workflow.LoopConfig{MaxIterations: -1}).
-		Run(context.Background(), workflow.NewStore())
+		Run(t.Context(), workflow.NewStore())
 	if !errors.Is(err, flow.ErrInvalidConfig) {
 		t.Fatalf("err = %v; want ErrInvalidConfig", err)
 	}
@@ -96,7 +96,7 @@ func TestLoop_conditionError(t *testing.T) {
 	)
 	done := func(context.Context, int, workflow.Store) (bool, error) { return false, boom }
 
-	_, err := workflow.Loop("loop", body, done, workflow.LoopConfig{}).Run(context.Background(), workflow.NewStore())
+	_, err := workflow.Loop("loop", body, done, workflow.LoopConfig{}).Run(t.Context(), workflow.NewStore())
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v; want condition error", err)
 	}
@@ -128,7 +128,7 @@ func TestLoop_siblingBodiesWithTheSameIDHaveDistinctJournalScopes(t *testing.T) 
 	cfg := workflow.RunConfig{Journal: journal}
 	for range 2 {
 		output, err := workflow.Run(
-			context.Background(),
+			t.Context(),
 			pipeline,
 			workflow.NewStore(),
 			cfg,
@@ -226,7 +226,7 @@ func TestLoop_rejectsInvalidStaticIdentities(t *testing.T) {
 	for name, step := range tests {
 		t.Run(name, func(t *testing.T) {
 			if _, err := step.Run(
-				context.Background(),
+				t.Context(),
 				workflow.NewStore(),
 			); !errors.Is(err, workflow.ErrDuplicateStep) {
 				t.Fatalf("error = %v; want ErrDuplicateStep", err)
@@ -257,7 +257,7 @@ func TestLoop_rejectsDuplicateOpaqueInvocation(t *testing.T) {
 		},
 	)
 	if _, err := workflow.Run(
-		context.Background(),
+		t.Context(),
 		twice,
 		workflow.NewStore(),
 		workflow.RunConfig{},
@@ -280,7 +280,7 @@ func TestLoop_stopRejectsIdentityClaimedByOpaqueBody(t *testing.T) {
 		workflow.LoopConfig{},
 	)
 	_, err := workflow.Run(
-		context.Background(),
+		t.Context(),
 		loop,
 		workflow.NewStore().WithOutput("ready", true),
 		workflow.RunConfig{},
@@ -311,7 +311,7 @@ func TestLoop_reportsJournalDecisionConflict(t *testing.T) {
 		workflow.LoopConfig{},
 	)
 	_, err := workflow.Run(
-		context.Background(),
+		t.Context(),
 		loop,
 		workflow.NewStore(),
 		workflow.RunConfig{Journal: journal},

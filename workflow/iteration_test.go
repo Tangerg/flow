@@ -25,7 +25,7 @@ func TestIteration_mapsAndCollects(t *testing.T) {
 	})
 
 	in := workflow.NewStore().WithOutput("start", []any{1, 2, 3})
-	out, err := iter.Run(context.Background(), in)
+	out, err := iter.Run(t.Context(), in)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestIteration_usesIndex(t *testing.T) {
 	})
 
 	in := workflow.NewStore().WithOutput("start", []any{"a", "b", "c"})
-	out, err := iter.Run(context.Background(), in)
+	out, err := iter.Run(t.Context(), in)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestIteration_inputNotArray(t *testing.T) {
 	)
 	iter := workflow.Iteration(workflow.IterationConfig{ID: "iter", Input: workflow.Output("start"), Body: body, BodyOutput: workflow.Output("el")})
 
-	_, err := iter.Run(context.Background(), workflow.NewStore().WithOutput("start", 42))
+	_, err := iter.Run(t.Context(), workflow.NewStore().WithOutput("start", 42))
 	if err == nil {
 		t.Fatal("expected error for non-array input")
 	}
@@ -130,7 +130,7 @@ func TestIteration_validatesItsStructureBeforeReadingInput(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, err := workflow.Iteration(tt.config).Run(context.Background(), empty)
+			_, err := workflow.Iteration(tt.config).Run(t.Context(), empty)
 			if !errors.Is(err, tt.want) {
 				t.Fatalf("err = %v; want %v", err, tt.want)
 			}
@@ -157,7 +157,7 @@ func TestIteration_rejectsInvalidStaticBodyDefinition(t *testing.T) {
 		BodyOutput: workflow.Output("body"),
 	})
 	_, err := step.Run(
-		context.Background(),
+		t.Context(),
 		workflow.NewStore().WithOutput("start", []any{}),
 	)
 	if !errors.Is(err, workflow.ErrInvalidStepID) {
@@ -176,7 +176,7 @@ func TestIteration_rejectsIDUsedBeforeIteration(t *testing.T) {
 		}),
 	)
 	_, err := step.Run(
-		context.Background(),
+		t.Context(),
 		workflow.NewStore().WithOutput("start", []any{}),
 	)
 	if !errors.Is(err, workflow.ErrDuplicateStep) {
@@ -206,7 +206,7 @@ func TestIteration_rejectsDuplicateOpaqueInvocation(t *testing.T) {
 		},
 	)
 	_, err := workflow.Run(
-		context.Background(),
+		t.Context(),
 		twice,
 		workflow.NewStore().WithOutput("start", []any{}),
 		workflow.RunConfig{},
@@ -251,7 +251,7 @@ func TestIteration_reportsBodyFailureAndMissingOutput(t *testing.T) {
 				BodyOutput: test.bodyOutput,
 			})
 			_, err := step.Run(
-				context.Background(),
+				t.Context(),
 				workflow.NewStore().WithOutput("start", []any{1}),
 			)
 			if !errors.Is(err, test.want) {

@@ -8,7 +8,7 @@ import (
 )
 
 func BenchmarkFunc(b *testing.B) {
-	ctx := context.Background()
+	ctx := b.Context()
 	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 		return in + 1, nil
 	})
@@ -20,7 +20,7 @@ func BenchmarkFunc(b *testing.B) {
 }
 
 func BenchmarkThen(b *testing.B) {
-	ctx := context.Background()
+	ctx := b.Context()
 	inc := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 		return in + 1, nil
 	})
@@ -33,7 +33,7 @@ func BenchmarkThen(b *testing.B) {
 }
 
 func BenchmarkMap(b *testing.B) {
-	ctx := context.Background()
+	ctx := b.Context()
 	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 		return in + 1, nil
 	})

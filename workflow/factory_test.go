@@ -49,7 +49,7 @@ func TestFactory(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Factory: %v", err)
 			}
-			out, err := step.Run(context.Background(), workflow.NewStore().WithOutput("input", 1))
+			out, err := step.Run(t.Context(), workflow.NewStore().WithOutput("input", 1))
 			if err != nil {
 				t.Fatalf("Run: %v", err)
 			}
@@ -165,7 +165,7 @@ func TestBindFactory_bindsNamedPorts(t *testing.T) {
 	}
 
 	in := workflow.NewStore().WithOutput("x", 3).WithOutput("y", 4)
-	out, err := step.Run(context.Background(), in)
+	out, err := step.Run(t.Context(), in)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

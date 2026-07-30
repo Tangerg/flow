@@ -128,7 +128,7 @@ func TestBranchAndLoop_requireAnID(t *testing.T) {
 		"loop":   workflow.Loop("", body, stop, workflow.LoopConfig{}),
 	} {
 		t.Run(kind, func(t *testing.T) {
-			_, err := step.Run(context.Background(), workflow.NewStore())
+			_, err := step.Run(t.Context(), workflow.NewStore())
 			if !errors.Is(err, workflow.ErrInvalidStepID) {
 				t.Fatalf("err = %v; want ErrInvalidStepID", err)
 			}
@@ -143,14 +143,14 @@ func TestBranchAndLoop_propagateDecisionErrors(t *testing.T) {
 
 	// A resolver or condition that fails is a step error naming the composite.
 	_, err := workflow.Branch("route", func(context.Context, workflow.Store) (string, error) { return "", boom },
-		map[string]workflow.Step{"a": leafStep("a")}).Run(context.Background(), workflow.NewStore())
+		map[string]workflow.Step{"a": leafStep("a")}).Run(t.Context(), workflow.NewStore())
 	var stepErr *workflow.StepError
 	if !errors.As(err, &stepErr) || stepErr.ID != "route" || !errors.Is(err, boom) {
 		t.Fatalf("branch err = %v; want a StepError for route wrapping boom", err)
 	}
 
 	_, err = workflow.Loop("repeat", body, func(context.Context, int, workflow.Store) (bool, error) { return false, boom }, workflow.LoopConfig{}).
-		Run(context.Background(), workflow.NewStore())
+		Run(t.Context(), workflow.NewStore())
 	if !errors.As(err, &stepErr) || stepErr.ID != "repeat" || !errors.Is(err, boom) {
 		t.Fatalf("loop err = %v; want a StepError for repeat wrapping boom", err)
 	}
@@ -158,7 +158,7 @@ func TestBranchAndLoop_propagateDecisionErrors(t *testing.T) {
 	// A resolver or condition may also suspend, which is not a step error.
 	_, err = workflow.Branch("route", func(context.Context, workflow.Store) (string, error) {
 		return "", workflow.Suspend("routing needs a person")
-	}, map[string]workflow.Step{"a": leafStep("a")}).Run(context.Background(), workflow.NewStore())
+	}, map[string]workflow.Step{"a": leafStep("a")}).Run(t.Context(), workflow.NewStore())
 	if suspensions := workflow.Suspensions(err); len(suspensions) != 1 || suspensions[0].ID != "route" {
 		t.Fatalf("branch err = %v; want a suspension naming route", err)
 	}
@@ -166,7 +166,7 @@ func TestBranchAndLoop_propagateDecisionErrors(t *testing.T) {
 	_, err = workflow.Loop("repeat", body, func(context.Context, int, workflow.Store) (bool, error) {
 		return false, workflow.Suspend("deciding needs a person")
 	}, workflow.LoopConfig{}).
-		Run(context.Background(), workflow.NewStore())
+		Run(t.Context(), workflow.NewStore())
 	if suspensions := workflow.Suspensions(err); len(suspensions) != 1 || suspensions[0].ID != "repeat" {
 		t.Fatalf("loop err = %v; want a suspension naming repeat", err)
 	}

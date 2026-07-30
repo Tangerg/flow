@@ -57,7 +57,8 @@ func ExampleBindings() {
 	})
 	label := workflow.Factory(func(cfg struct {
 		Text string `json:"text"`
-	}) (flow.Node[int, string], error) {
+	},
+	) (flow.Node[int, string], error) {
 		return flow.NodeFunc[int, string](func(_ context.Context, x int) (string, error) {
 			return fmt.Sprintf("%s:%d", cfg.Text, x), nil
 		}), nil

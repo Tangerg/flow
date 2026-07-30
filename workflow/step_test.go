@@ -20,7 +20,7 @@ func TestSequence_threadsStore(t *testing.T) {
 	flow := workflow.Sequence(step1, step2)
 
 	in := workflow.NewStore().WithOutput("start", 5)
-	out, err := flow.Run(context.Background(), in)
+	out, err := flow.Run(t.Context(), in)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestLeaf_missingInput(t *testing.T) {
 	leaf := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil })
 	step := workflow.Leaf("n", workflow.From[int](workflow.Ref{NodeID: "absent", Path: "/output"}), leaf)
 
-	if _, err := step.Run(context.Background(), workflow.NewStore()); err == nil {
+	if _, err := step.Run(t.Context(), workflow.NewStore()); err == nil {
 		t.Fatal("expected error for missing input")
 	}
 }
@@ -53,7 +53,7 @@ func TestLeafFunc_andFirstOf(t *testing.T) {
 		},
 	)
 	if _, err := step.Run(
-		context.Background(),
+		t.Context(),
 		workflow.NewStore().WithOutput("input", 21),
 	); !errors.Is(err, workflow.ErrNotFound) {
 		t.Fatalf("LeafFunc missing input error = %v; want ErrNotFound", err)
@@ -72,7 +72,7 @@ func TestLeafFunc_andFirstOf(t *testing.T) {
 		flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
 			return value * 2, nil
 		}),
-	).Run(context.Background(), workflow.NewStore().WithOutput("input", 21))
+	).Run(t.Context(), workflow.NewStore().WithOutput("input", 21))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestLeaf_propagatesLeafError(t *testing.T) {
 	leaf := flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom })
 	step := workflow.Leaf("n", workflow.From[int](workflow.Ref{NodeID: "start", Path: "/output"}), leaf)
 
-	_, err := step.Run(context.Background(), workflow.NewStore().WithOutput("start", 1))
+	_, err := step.Run(t.Context(), workflow.NewStore().WithOutput("start", 1))
 	if !errors.Is(err, boom) {
 		t.Fatalf("error = %v, want boom", err)
 	}
@@ -115,7 +115,7 @@ func TestLeaf_errorIncludesStepAndOperation(t *testing.T) {
 		flow.NodeFunc[int, int](func(context.Context, int) (int, error) { return 0, boom }),
 	)
 
-	_, err := step.Run(context.Background(), workflow.NewStore())
+	_, err := step.Run(t.Context(), workflow.NewStore())
 	var stepErr *workflow.StepError
 	if !errors.As(err, &stepErr) || stepErr.ID != "load" || stepErr.Op != workflow.OpRun || !errors.Is(err, boom) {
 		t.Fatalf("err = %v; want load/run StepError", err)
@@ -125,7 +125,7 @@ func TestLeaf_errorIncludesStepAndOperation(t *testing.T) {
 func TestSequence_empty(t *testing.T) {
 	s := workflow.NewStore().WithOutput("x", 1)
 
-	out, err := workflow.Sequence().Run(context.Background(), s)
+	out, err := workflow.Sequence().Run(t.Context(), s)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestSequence_empty(t *testing.T) {
 }
 
 func TestSequence_singleNilStep(t *testing.T) {
-	_, err := workflow.Sequence(nil).Run(context.Background(), workflow.NewStore())
+	_, err := workflow.Sequence(nil).Run(t.Context(), workflow.NewStore())
 	if !errors.Is(err, workflow.ErrNilStep) {
 		t.Fatalf("err = %v; want ErrNilStep", err)
 	}
@@ -147,7 +147,7 @@ func TestSequence_validatesEveryStepBeforeRunning(t *testing.T) {
 		ran = true
 		return store, nil
 	})
-	_, err := workflow.Sequence(first, nil).Run(context.Background(), workflow.NewStore())
+	_, err := workflow.Sequence(first, nil).Run(t.Context(), workflow.NewStore())
 	if !errors.Is(err, workflow.ErrNilStep) {
 		t.Fatalf("err = %v; want ErrNilStep", err)
 	}
@@ -163,22 +163,22 @@ func TestSequence_validatesEveryStepBeforeRunning(t *testing.T) {
 func TestLeaf_rejectsEmptyIDAndNilBind(t *testing.T) {
 	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
 	if _, err := workflow.Leaf("", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }), node).
-		Run(context.Background(), workflow.NewStore()); !errors.Is(err, workflow.ErrInvalidStepID) {
+		Run(t.Context(), workflow.NewStore()); !errors.Is(err, workflow.ErrInvalidStepID) {
 		t.Fatalf("empty ID err = %v", err)
 	}
 	if _, err := workflow.Leaf("x", nil, node).
-		Run(context.Background(), workflow.NewStore()); !errors.Is(err, flow.ErrNilFunc) {
+		Run(t.Context(), workflow.NewStore()); !errors.Is(err, flow.ErrNilFunc) {
 		t.Fatalf("nil binder err = %v", err)
 	}
 	var bind workflow.BindFunc[int]
 	if _, err := workflow.Leaf("x", bind, node).
-		Run(context.Background(), workflow.NewStore()); !errors.Is(err, flow.ErrNilFunc) {
+		Run(t.Context(), workflow.NewStore()); !errors.Is(err, flow.ErrNilFunc) {
 		t.Fatalf("nil BindFunc err = %v", err)
 	}
 }
 
 func TestSequence_rejectsExcessiveDefinitionNesting(t *testing.T) {
-	var step workflow.Step = workflow.Leaf(
+	step := workflow.Leaf(
 		"leaf",
 		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
@@ -190,7 +190,7 @@ func TestSequence_rejectsExcessiveDefinitionNesting(t *testing.T) {
 	}
 
 	if _, err := step.Run(
-		context.Background(),
+		t.Context(),
 		workflow.NewStore(),
 	); !errors.Is(err, workflow.ErrMaxDepth) {
 		t.Fatalf("err = %v; want ErrMaxDepth", err)
@@ -205,7 +205,7 @@ func TestLeaf_validatesDefinitionBeforeJournalReplay(t *testing.T) {
 	bind := workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil })
 	step := workflow.Leaf[int, int]("broken", bind, nil)
 
-	if _, err := workflow.Run(context.Background(), step, workflow.NewStore(),
+	if _, err := workflow.Run(t.Context(), step, workflow.NewStore(),
 		workflow.RunConfig{Journal: journal}); !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("err = %v; want ErrNilNode instead of Journal replay", err)
 	}
@@ -220,7 +220,7 @@ func TestLeaf_validatesNilNodeFuncBeforeJournalReplay(t *testing.T) {
 	var node flow.NodeFunc[int, int]
 	step := workflow.Leaf("broken", bind, node)
 
-	if _, err := workflow.Run(context.Background(), step, workflow.NewStore(),
+	if _, err := workflow.Run(t.Context(), step, workflow.NewStore(),
 		workflow.RunConfig{Journal: journal}); !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("err = %v; want ErrNilNode instead of Journal replay", err)
 	}
@@ -230,7 +230,7 @@ func TestLeaf_acceptsCustomBindFunc(t *testing.T) {
 	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in * 2, nil })
 	// A custom binder is just a BindFunc; this one ignores the store.
 	bind := workflow.BindFunc[int](func(workflow.Store) (int, error) { return 21, nil })
-	out, err := workflow.Leaf("double", bind, node).Run(context.Background(), workflow.NewStore())
+	out, err := workflow.Leaf("double", bind, node).Run(t.Context(), workflow.NewStore())
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestLeaf_acceptsCustomBindFunc(t *testing.T) {
 }
 
 func TestLeaf_rejectsExcessiveExecutionScopeDepth(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	for index := range workflow.MaxNestingDepth + 1 {
 		ctx = workflow.WithScope(ctx, fmt.Sprintf("scope-%d", index))
 	}

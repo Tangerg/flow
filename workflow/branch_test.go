@@ -29,7 +29,7 @@ func TestBranch_routes(t *testing.T) {
 	}
 	b := workflow.Branch("route", resolve, cases)
 
-	out, err := b.Run(context.Background(), workflow.NewStore().WithOutput("start", 5))
+	out, err := b.Run(t.Context(), workflow.NewStore().WithOutput("start", 5))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestValidateSpec_branchCasesMayShareAStepID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompileSpec: %v", err)
 	}
-	out, err := step.Run(context.Background(), workflow.NewStore().WithOutput("start", 5))
+	out, err := step.Run(t.Context(), workflow.NewStore().WithOutput("start", 5))
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestValidateSpec_stillRejectsIDsThatCanCollide(t *testing.T) {
 func TestBranch_noCase(t *testing.T) {
 	resolve := func(_ context.Context, _ workflow.Store) (string, error) { return "missing", nil }
 
-	_, err := workflow.Branch("route", resolve, map[string]workflow.Step{}).Run(context.Background(), workflow.NewStore())
+	_, err := workflow.Branch("route", resolve, map[string]workflow.Step{}).Run(t.Context(), workflow.NewStore())
 	var stepErr *workflow.StepError
 	if !errors.Is(err, flow.ErrNoCase) ||
 		!errors.As(err, &stepErr) ||
@@ -156,13 +156,13 @@ func TestBranch_doesNotJournalAnUnknownDecision(t *testing.T) {
 	})
 	input := workflow.NewStore().WithOutput("start", 1)
 
-	if _, err := workflow.Run(context.Background(), branch, input, cfg); !errors.Is(err, flow.ErrNoCase) {
+	if _, err := workflow.Run(t.Context(), branch, input, cfg); !errors.Is(err, flow.ErrNoCase) {
 		t.Fatalf("first run err = %v; want ErrNoCase", err)
 	}
 	if journal.Len() != 0 {
 		t.Fatalf("unknown decision polluted Journal: %v", journal.Keys())
 	}
-	if _, err := workflow.Run(context.Background(), branch, input, cfg); err != nil {
+	if _, err := workflow.Run(t.Context(), branch, input, cfg); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
 	if calls.Load() != 2 {
@@ -183,7 +183,7 @@ func TestBranch_doesNotJournalANilCase(t *testing.T) {
 		map[string]workflow.Step{"broken": nil},
 	)
 
-	if _, err := workflow.Run(context.Background(), branch, workflow.NewStore(), cfg); !errors.Is(err, workflow.ErrNilStep) {
+	if _, err := workflow.Run(t.Context(), branch, workflow.NewStore(), cfg); !errors.Is(err, workflow.ErrNilStep) {
 		t.Fatalf("err = %v; want ErrNilStep", err)
 	}
 	if journal.Len() != 0 {
@@ -196,7 +196,7 @@ func TestBranch_doesNotJournalANilCase(t *testing.T) {
 
 func TestBranch_nilResolver(t *testing.T) {
 	_, err := workflow.Branch("route", nil, map[string]workflow.Step{"x": leafStep("x")}).
-		Run(context.Background(), workflow.NewStore())
+		Run(t.Context(), workflow.NewStore())
 	if !errors.Is(err, flow.ErrNilFunc) {
 		t.Fatalf("err = %v; want ErrNilFunc", err)
 	}
@@ -235,7 +235,7 @@ func TestBranch_rejectsInvalidStaticIdentities(t *testing.T) {
 	for name, step := range tests {
 		t.Run(name, func(t *testing.T) {
 			if _, err := step.Run(
-				context.Background(),
+				t.Context(),
 				workflow.NewStore(),
 			); !errors.Is(err, workflow.ErrDuplicateStep) {
 				t.Fatalf("error = %v; want ErrDuplicateStep", err)
@@ -266,7 +266,7 @@ func TestBranch_rejectsDuplicateOpaqueInvocation(t *testing.T) {
 		},
 	)
 	if _, err := workflow.Run(
-		context.Background(),
+		t.Context(),
 		twice,
 		workflow.NewStore(),
 		workflow.RunConfig{},
@@ -288,7 +288,7 @@ func TestBranch_reportsJournalDecisionConflict(t *testing.T) {
 		map[string]workflow.Step{"ok": leafStep("ok")},
 	)
 	_, err := workflow.Run(
-		context.Background(),
+		t.Context(),
 		branch,
 		workflow.NewStore().WithOutput("start", 1),
 		workflow.RunConfig{Journal: journal},
@@ -309,7 +309,7 @@ func TestBranch_rejectsJournaledDecisionOfWrongType(t *testing.T) {
 		map[string]workflow.Step{"ok": leafStep("ok")},
 	)
 	_, err := workflow.Run(
-		context.Background(),
+		t.Context(),
 		branch,
 		workflow.NewStore().WithOutput("start", 1),
 		workflow.RunConfig{Journal: journal},

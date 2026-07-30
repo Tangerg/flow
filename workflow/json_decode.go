@@ -22,17 +22,6 @@ func (j jsonDocument) decode(dst any) error {
 	return j.decodeParsed(dst)
 }
 
-// decodeWithValue returns the ordinary JSON value and decodes the same document
-// into dst. Callers that need both representations can share the strict parse
-// instead of reparsing nested raw messages.
-func (j jsonDocument) decodeWithValue(dst any) (any, error) {
-	value, err := j.value()
-	if err != nil {
-		return nil, err
-	}
-	return value, j.decodeParsed(dst)
-}
-
 // decodeParsed maps a document already accepted by value into a Go type.
 func (j jsonDocument) decodeParsed(dst any) error {
 	decoder := json.NewDecoder(bytes.NewReader(j))
@@ -145,6 +134,8 @@ func (j *jsonReader) readMemberName() (string, error) {
 	}
 	// More reports true inside an object only when the next token is a member
 	// name, so a successful Token call is necessarily a string.
+	//
+	//nolint:forcetypeassert // Guaranteed by encoding/json's Decoder.More contract.
 	return token.(string), nil
 }
 

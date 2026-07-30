@@ -19,7 +19,7 @@ func TestCondition(t *testing.T) {
 	}
 
 	for value, want := range map[int]bool{2: false, 3: true, 4: true} {
-		stop, err := condition(context.Background(), 0, store("loop.output", value))
+		stop, err := condition(t.Context(), 0, store("loop.output", value))
 		if err != nil {
 			t.Fatalf("condition(%d): %v", value, err)
 		}
@@ -35,7 +35,7 @@ func TestCondition_reportsEvaluationFailureRatherThanFalse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Condition: %v", err)
 	}
-	if _, err := condition(context.Background(), 0, workflow.NewStore()); !errors.Is(err, expr.ErrUndefined) {
+	if _, err := condition(t.Context(), 0, workflow.NewStore()); !errors.Is(err, expr.ErrUndefined) {
 		t.Fatalf("err = %v; want ErrUndefined", err)
 	}
 }
@@ -45,7 +45,7 @@ func TestCondition_rejectsNonBoolean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Condition: %v", err)
 	}
-	if _, err := condition(context.Background(), 0, store("n.output", 1)); !errors.Is(err, expr.ErrType) {
+	if _, err := condition(t.Context(), 0, store("n.output", 1)); !errors.Is(err, expr.ErrType) {
 		t.Fatalf("err = %v; want ErrType", err)
 	}
 }
@@ -63,12 +63,12 @@ func TestResolver(t *testing.T) {
 	}
 
 	s := store("classify.output", map[string]any{"intent": "refund"})
-	got, err := resolver(context.Background(), s)
+	got, err := resolver(t.Context(), s)
 	if err != nil || got != "refund" {
 		t.Fatalf("resolver = %q, %v; want refund", got, err)
 	}
 
-	if _, err := resolver(context.Background(), store("classify.output", map[string]any{"intent": 1})); !errors.Is(err, expr.ErrType) {
+	if _, err := resolver(t.Context(), store("classify.output", map[string]any{"intent": 1})); !errors.Is(err, expr.ErrType) {
 		t.Fatalf("non-string branch name err = %v; want ErrType", err)
 	}
 }
@@ -111,7 +111,7 @@ func TestSwitch(t *testing.T) {
 	}
 
 	for score, want := range map[float64]string{0.95: "auto", 0.5: "review", 0.1: "escalate"} {
-		got, err := resolver(context.Background(), store("score.output", score))
+		got, err := resolver(t.Context(), store("score.output", score))
 		if err != nil {
 			t.Fatalf("resolver(%v): %v", score, err)
 		}
@@ -128,7 +128,7 @@ func TestSwitch_withoutFallbackFailsOnNoMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Switch: %v", err)
 	}
-	if _, err := resolver(context.Background(), store("n.output", 1)); !errors.Is(err, expr.ErrUndefined) {
+	if _, err := resolver(t.Context(), store("n.output", 1)); !errors.Is(err, expr.ErrUndefined) {
 		t.Fatalf("err = %v; want an error naming the unmatched switch", err)
 	}
 }
@@ -141,7 +141,7 @@ func TestSwitch_reportsCaseEvaluationError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Switch: %v", err)
 	}
-	if _, err := resolver(context.Background(), workflow.NewStore()); !errors.Is(err, expr.ErrUndefined) {
+	if _, err := resolver(t.Context(), workflow.NewStore()); !errors.Is(err, expr.ErrUndefined) {
 		t.Fatalf("error = %v; want ErrUndefined", err)
 	}
 }

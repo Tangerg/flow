@@ -15,7 +15,7 @@ func TestThen(t *testing.T) {
 
 	pipe := flow.Then(double, str)
 
-	got, err := pipe.Run(context.Background(), 5)
+	got, err := pipe.Run(t.Context(), 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestThen_shortCircuitsOnFirstError(t *testing.T) {
 		return x, nil
 	})
 
-	_, err := flow.Then(first, second).Run(context.Background(), 1)
+	_, err := flow.Then(first, second).Run(t.Context(), 1)
 	if !errors.Is(err, boom) {
 		t.Fatalf("error = %v, want boom", err)
 	}
@@ -46,7 +46,7 @@ func TestThen_shortCircuitsOnFirstError(t *testing.T) {
 func TestThen_nilNode(t *testing.T) {
 	ok := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil })
 
-	_, err := flow.Then(flow.Node[int, int](nil), ok).Run(context.Background(), 1)
+	_, err := flow.Then(flow.Node[int, int](nil), ok).Run(t.Context(), 1)
 	if !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("error = %v, want ErrNilNode", err)
 	}
@@ -59,7 +59,7 @@ func TestThen_validatesBothNodesBeforeRunningEither(t *testing.T) {
 		return x, nil
 	})
 
-	_, err := flow.Then(first, flow.Node[int, int](nil)).Run(context.Background(), 1)
+	_, err := flow.Then(first, flow.Node[int, int](nil)).Run(t.Context(), 1)
 	if !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("err = %v; want ErrNilNode", err)
 	}

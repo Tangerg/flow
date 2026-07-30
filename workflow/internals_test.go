@@ -27,8 +27,8 @@ func (opaqueTestStep) Run(_ context.Context, store Store) (Store, error) {
 
 func TestJSONDocument_reportsMalformedStructure(t *testing.T) {
 	var target any
-	if _, err := jsonDocument(`{`).decodeWithValue(&target); err == nil {
-		t.Fatal("decodeWithValue unexpectedly accepted a truncated object")
+	if err := jsonDocument(`{`).decode(&target); err == nil {
+		t.Fatal("decode unexpectedly accepted a truncated object")
 	}
 	if _, err := jsonDocument(`1 x`).value(); err == nil {
 		t.Fatal("value unexpectedly accepted malformed trailing data")

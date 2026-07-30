@@ -92,7 +92,7 @@ func BenchmarkStoreJSONScaling(b *testing.B) {
 }
 
 func BenchmarkSequenceRun(b *testing.B) {
-	ctx := context.Background()
+	ctx := b.Context()
 	inc := func(id, input string) workflow.Step {
 		node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 			return in + 1, nil
@@ -113,7 +113,7 @@ func BenchmarkSequenceRun(b *testing.B) {
 }
 
 func BenchmarkStreamLeaf(b *testing.B) {
-	ctx := context.Background()
+	ctx := b.Context()
 	node := workflow.StreamNodeFunc[int, int, int](
 		func(_ context.Context, input int, yield func(int) bool) (int, error) {
 			for value := range 4 {
@@ -150,7 +150,7 @@ func BenchmarkStreamLeaf(b *testing.B) {
 }
 
 func BenchmarkSequenceRunScaling(b *testing.B) {
-	ctx := context.Background()
+	ctx := b.Context()
 	for _, size := range []int{1, 16, 128, 512} {
 		b.Run(strconv.Itoa(size), func(b *testing.B) {
 			steps := make([]workflow.Step, size)
@@ -173,7 +173,7 @@ func BenchmarkSequenceRunScaling(b *testing.B) {
 }
 
 func BenchmarkParallelMerge(b *testing.B) {
-	ctx := context.Background()
+	ctx := b.Context()
 	base := workflow.NewStore()
 	for i := range 128 {
 		base = base.WithOutput("base-"+strconv.Itoa(i), i)
@@ -194,7 +194,7 @@ func BenchmarkParallelMerge(b *testing.B) {
 }
 
 func BenchmarkParallelArity(b *testing.B) {
-	ctx := context.Background()
+	ctx := b.Context()
 	for _, size := range []int{0, 1, 2, 8} {
 		b.Run(strconv.Itoa(size), func(b *testing.B) {
 			branches := make([]workflow.Step, size)
@@ -217,7 +217,7 @@ func BenchmarkParallelArity(b *testing.B) {
 }
 
 func BenchmarkParallelBaseScaling(b *testing.B) {
-	ctx := context.Background()
+	ctx := b.Context()
 	for _, size := range []int{0, 63, 64, 128} {
 		b.Run(strconv.Itoa(size), func(b *testing.B) {
 			branches := make([]workflow.Step, 8)

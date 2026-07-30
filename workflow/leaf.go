@@ -85,7 +85,7 @@ type leafStep[I, O any] struct {
 // journaling, and output publication in one execution path.
 type leafRunner[I, O any] interface {
 	validate() error
-	run(context.Context, I, leafInvocation) (O, error)
+	run(ctx context.Context, input I, invocation leafInvocation) (O, error)
 }
 
 type nodeRunner[I, O any] struct {

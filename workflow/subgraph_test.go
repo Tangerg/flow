@@ -122,15 +122,15 @@ func TestSubgraph_resumeReplaysInnerBodyAcrossJSONRoundTrip(t *testing.T) {
 		t.Fatalf("marshal Journal: %v", err)
 	}
 	var restoredStore workflow.Store
-	if err := json.Unmarshal(storeJSON, &restoredStore); err != nil {
-		t.Fatalf("unmarshal Store: %v", err)
+	if unmarshalErr := json.Unmarshal(storeJSON, &restoredStore); unmarshalErr != nil {
+		t.Fatalf("unmarshal Store: %v", unmarshalErr)
 	}
 	restoredJournal := workflow.NewJournal()
-	if err := json.Unmarshal(journalJSON, restoredJournal); err != nil {
-		t.Fatalf("unmarshal Journal: %v", err)
+	if unmarshalErr := json.Unmarshal(journalJSON, restoredJournal); unmarshalErr != nil {
+		t.Fatalf("unmarshal Journal: %v", unmarshalErr)
 	}
-	if err := restoredJournal.Record(suspensions[0].Key(), "yes"); err != nil {
-		t.Fatalf("Record: %v", err)
+	if recordErr := restoredJournal.Record(suspensions[0].Key(), "yes"); recordErr != nil {
+		t.Fatalf("Record: %v", recordErr)
 	}
 
 	resumed, err := workflow.Run(

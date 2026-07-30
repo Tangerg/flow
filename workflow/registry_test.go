@@ -38,7 +38,7 @@ func TestRegistry_compileSequenceJSON(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 
-	out, err := step.Run(context.Background(), workflow.NewStore().WithOutput("start", 1))
+	out, err := step.Run(t.Context(), workflow.NewStore().WithOutput("start", 1))
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestRegistry_compileBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	out, err := step.Run(context.Background(), workflow.NewStore().WithOutput("start", 5))
+	out, err := step.Run(t.Context(), workflow.NewStore().WithOutput("start", 5))
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestRegistry_compileIteration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	out, err := step.Run(context.Background(), workflow.NewStore().WithOutput("start", []any{1, 2, 3}))
+	out, err := step.Run(t.Context(), workflow.NewStore().WithOutput("start", []any{1, 2, 3}))
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -472,7 +472,7 @@ func TestValidateSpec_iterationBodyIDsAreLocalToEachElement(t *testing.T) {
 	in := workflow.NewStore().
 		WithOutput("seed", 10).
 		WithOutput("items", []any{1, 2})
-	out, compileErr := step.Run(context.Background(), in)
+	out, compileErr := step.Run(t.Context(), in)
 	if compileErr != nil {
 		t.Fatalf("Run: %v", compileErr)
 	}

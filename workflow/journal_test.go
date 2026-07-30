@@ -23,7 +23,7 @@ func TestJournal_recordsOnlyCompletedSteps(t *testing.T) {
 
 	journal := workflow.NewJournal()
 	cfg := workflow.RunConfig{Journal: journal}
-	if _, err := workflow.Run(context.Background(), workflow.Sequence(ok, bad),
+	if _, err := workflow.Run(t.Context(), workflow.Sequence(ok, bad),
 		workflow.NewStore(), cfg); !errors.Is(err, boom) {
 		t.Fatalf("err = %v; want boom", err)
 	}
@@ -47,7 +47,7 @@ func TestSequence_rejectsDuplicateIDsBeforeRunning(t *testing.T) {
 	}
 
 	_, err := workflow.Sequence(step(), step()).
-		Run(context.Background(), workflow.NewStore())
+		Run(t.Context(), workflow.NewStore())
 	if !errors.Is(err, workflow.ErrDuplicateStep) {
 		t.Fatalf("err = %v; want ErrDuplicateStep", err)
 	}
@@ -75,7 +75,7 @@ func TestRun_rejectsDuplicateIDsHiddenByOpaqueStepsOnFreshAndReplay(t *testing.T
 
 	for attempt := range 2 {
 		_, err := workflow.Run(
-			context.Background(),
+			t.Context(),
 			pipeline,
 			workflow.NewStore(),
 			cfg,
@@ -106,7 +106,7 @@ func TestJournal_internalConflictIsReturnedByRun(t *testing.T) {
 	)
 
 	_, err := workflow.Run(
-		context.Background(),
+		t.Context(),
 		step,
 		workflow.NewStore(),
 		workflow.RunConfig{Journal: journal},
@@ -150,7 +150,7 @@ func TestJournal_forgetAndReset(t *testing.T) {
 	cfg := workflow.RunConfig{Journal: journal}
 
 	for range 3 {
-		if _, err := workflow.Run(context.Background(), step, workflow.NewStore(), cfg); err != nil {
+		if _, err := workflow.Run(t.Context(), step, workflow.NewStore(), cfg); err != nil {
 			t.Fatalf("run: %v", err)
 		}
 	}
@@ -159,7 +159,7 @@ func TestJournal_forgetAndReset(t *testing.T) {
 	}
 
 	journal.Forget(workflow.JournalKey{ID: "a"})
-	if _, err := workflow.Run(context.Background(), step, workflow.NewStore(), cfg); err != nil {
+	if _, err := workflow.Run(t.Context(), step, workflow.NewStore(), cfg); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if runs != 2 {
@@ -170,7 +170,7 @@ func TestJournal_forgetAndReset(t *testing.T) {
 	if journal.Len() != 0 {
 		t.Fatalf("Len after Reset = %d; want 0", journal.Len())
 	}
-	if _, err := workflow.Run(context.Background(), step, workflow.NewStore(), cfg); err != nil {
+	if _, err := workflow.Run(t.Context(), step, workflow.NewStore(), cfg); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if runs != 3 {
@@ -280,7 +280,7 @@ func TestJournal_jsonRoundTrip(t *testing.T) {
 		step("b", true),
 		step("struct", payload{N: 7}),
 	)
-	if _, err := workflow.Run(context.Background(), pipeline, workflow.NewStore(), cfg); err != nil {
+	if _, err := workflow.Run(t.Context(), pipeline, workflow.NewStore(), cfg); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -297,7 +297,7 @@ func TestJournal_jsonRoundTrip(t *testing.T) {
 	}
 
 	// A restored record has to read back as the type the reading step asks for.
-	out, marshalErr := workflow.Run(context.Background(), pipeline, workflow.NewStore(),
+	out, marshalErr := workflow.Run(t.Context(), pipeline, workflow.NewStore(),
 		workflow.RunConfig{Journal: restored})
 	if marshalErr != nil {
 		t.Fatalf("resumed run: %v", marshalErr)
@@ -334,11 +334,11 @@ func TestJournal_keysAreStructuredAndCollisionFree(t *testing.T) {
 	cfg := workflow.RunConfig{Journal: journal}
 	run := func() {
 		t.Helper()
-		if _, err := workflow.Run(workflow.WithScope(context.Background(), "a/b"),
+		if _, err := workflow.Run(workflow.WithScope(t.Context(), "a/b"),
 			first, workflow.NewStore(), cfg); err != nil {
 			t.Fatalf("first: %v", err)
 		}
-		if _, err := workflow.Run(workflow.WithScope(context.Background(), "a"),
+		if _, err := workflow.Run(workflow.WithScope(t.Context(), "a"),
 			second, workflow.NewStore(), cfg); err != nil {
 			t.Fatalf("second: %v", err)
 		}
@@ -402,11 +402,54 @@ func TestJournal_jsonFormatIsVersionedAndRejectsDuplicateKeys(t *testing.T) {
 	}
 }
 
+// encoding/json matches member names case-insensitively, so "reCords" fills the
+// same field as "records". A decode that also consulted a second, case-sensitive
+// view of the same bytes would disagree with itself on such a document.
+func TestJournal_unmarshalToleratesMemberNameCase(t *testing.T) {
+	journal := workflow.NewJournal()
+	mixedCase := []byte(`{"version":1,"reCords":[{"id":"0","vAlue":0}]}`)
+	if err := json.Unmarshal(mixedCase, journal); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if journal.Len() != 1 {
+		t.Fatalf("records = %d; want 1", journal.Len())
+	}
+	if keys := journal.Keys(); len(keys) != 1 || keys[0].ID != "0" {
+		t.Fatalf("keys = %+v; want one record named 0", keys)
+	}
+}
+
+// A recorded nil is a completed step, while an omitted value is a malformed
+// record. Both encode as an absent Go value, so only the member's presence tells
+// them apart.
+func TestJournal_unmarshalSeparatesRecordedNilFromAbsentValue(t *testing.T) {
+	journal := workflow.NewJournal()
+	if err := json.Unmarshal(
+		[]byte(`{"version":1,"records":[{"id":"a","value":null}]}`),
+		journal,
+	); err != nil {
+		t.Fatalf("Unmarshal explicit null: %v", err)
+	}
+	encoded, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if got, want := string(encoded), `{"version":1,"records":[{"id":"a","value":null}]}`; got != want {
+		t.Fatalf("round trip = %s; want %s", got, want)
+	}
+	if err := json.Unmarshal(
+		[]byte(`{"version":1,"records":[{"id":"a"}]}`),
+		workflow.NewJournal(),
+	); err == nil {
+		t.Fatal("record without a value unexpectedly decoded")
+	}
+}
+
 func TestJournal_marshalReportsTheOffendingRecord(t *testing.T) {
 	journal := workflow.NewJournal()
 	step := workflow.Leaf("bad", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
 		flow.NodeFunc[int, any](func(context.Context, int) (any, error) { return func() {}, nil }))
-	if _, err := workflow.Run(context.Background(), step, workflow.NewStore(),
+	if _, err := workflow.Run(t.Context(), step, workflow.NewStore(),
 		workflow.RunConfig{Journal: journal}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -441,7 +484,7 @@ func TestJournal_nilIsSafe(t *testing.T) {
 	// A nil Journal disables resumption rather than being attached.
 	step := workflow.Leaf("a", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
-	if _, err := workflow.Run(context.Background(), step, workflow.NewStore(),
+	if _, err := workflow.Run(t.Context(), step, workflow.NewStore(),
 		workflow.RunConfig{Journal: nil}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -458,7 +501,7 @@ func TestJournal_concurrentBranchesRecordSafely(t *testing.T) {
 
 	journal := workflow.NewJournal()
 	cfg := workflow.RunConfig{Journal: journal}
-	if _, err := workflow.Run(context.Background(),
+	if _, err := workflow.Run(t.Context(),
 		workflow.Parallel(steps, workflow.ParallelConfig{}), workflow.NewStore(), cfg); err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -490,10 +533,10 @@ func TestAwaitFactory(t *testing.T) {
 	}
 
 	in := workflow.NewStore().WithOutput("start", 1)
-	if _, err := step.Run(context.Background(), in); !errors.Is(err, workflow.ErrSuspended) {
+	if _, err := step.Run(t.Context(), in); !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("err = %v; want ErrSuspended", err)
 	}
-	out, compileErr := step.Run(context.Background(), in.With("inbox", "decision", "yes"))
+	out, compileErr := step.Run(t.Context(), in.With("inbox", "decision", "yes"))
 	if compileErr != nil {
 		t.Fatalf("run: %v", compileErr)
 	}
@@ -538,7 +581,7 @@ func TestInterruptFactory_roundTripsStructuredRequestAndResponse(t *testing.T) {
 
 	journal := workflow.NewJournal()
 	cfg := workflow.RunConfig{Journal: journal}
-	_, compileErr = workflow.Run(context.Background(), step, workflow.NewStore(), cfg)
+	_, compileErr = workflow.Run(t.Context(), step, workflow.NewStore(), cfg)
 	waits := workflow.Suspensions(compileErr)
 	if len(waits) != 1 {
 		t.Fatalf("Suspensions = %+v; want one", waits)
@@ -551,7 +594,7 @@ func TestInterruptFactory_roundTripsStructuredRequestAndResponse(t *testing.T) {
 	if err := journal.Record(waits[0].Key(), map[string]any{"approved": true}); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
-	out, compileErr := workflow.Run(context.Background(), step, workflow.NewStore(), cfg)
+	out, compileErr := workflow.Run(t.Context(), step, workflow.NewStore(), cfg)
 	if compileErr != nil {
 		t.Fatalf("resume: %v", compileErr)
 	}

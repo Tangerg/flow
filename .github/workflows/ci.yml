@@ -36,3 +36,27 @@ jobs:
       - run: golangci-lint run ./...
       - run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
       - run: govulncheck ./...
+
+  # The committed seed corpus runs as part of `go test`, which only replays
+  # inputs someone already found. Every other check in this workflow passed on a
+  # Journal.UnmarshalJSON panic that a short fuzz run reached in seconds, so the
+  # generator itself has to run on every push.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - name: Fuzz every target
+        run: |
+          set -euo pipefail
+          grep -rl '^func Fuzz' --include='*_test.go' . | while read -r file; do
+            package="./$(dirname "$file")"
+            grep -o '^func Fuzz[A-Za-z0-9_]*' "$file" | cut -d' ' -f2 | while read -r target; do
+              echo "::group::$package $target"
+              go test "$package" -run '^$' -fuzz "^${target}\$" -fuzztime=30s
+              echo "::endgroup::"
+            done
+          done

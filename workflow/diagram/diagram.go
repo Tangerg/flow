@@ -44,8 +44,8 @@ type renderer struct {
 	externals   []string
 }
 
-func newRenderer(graph workflow.Graph) renderer {
-	r := renderer{
+func newRenderer(graph workflow.Graph) *renderer {
+	r := &renderer{
 		graph:       graph,
 		nodeIndexes: make(map[string]int, len(graph.Nodes)),
 	}
@@ -119,7 +119,7 @@ func (r *renderer) collectExternals() {
 	r.externals = slices.Sorted(maps.Keys(external))
 }
 
-func (r renderer) ascii() string {
+func (r *renderer) ascii() string {
 	var output strings.Builder
 	output.WriteString("nodes:\n")
 	if len(r.graph.Nodes) == 0 {
@@ -156,7 +156,7 @@ func (r renderer) ascii() string {
 	return output.String()
 }
 
-func (r renderer) mermaid() string {
+func (r *renderer) mermaid() string {
 	var output strings.Builder
 	output.WriteString("flowchart LR\n")
 	for index, node := range r.graph.Nodes {
@@ -199,7 +199,7 @@ func (r renderer) mermaid() string {
 	return output.String()
 }
 
-func (r renderer) mermaidSource(
+func (r *renderer) mermaidSource(
 	edge edge,
 	externalIndexes map[string]int,
 ) string {

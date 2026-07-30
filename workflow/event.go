@@ -65,7 +65,7 @@ type Event struct {
 // goroutines and should return promptly. A slow Observer delays the step
 // emitting the event. Use [Emitter] for intermediate application values.
 type Observer interface {
-	Observe(context.Context, Event)
+	Observe(ctx context.Context, event Event)
 }
 
 // ObserverFunc adapts a function into an [Observer].

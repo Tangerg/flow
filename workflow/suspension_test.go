@@ -129,7 +129,7 @@ func TestSuspend_leafObserverReceivesSuspension(t *testing.T) {
 	)
 	var event workflow.Event
 	_, err := workflow.Run(
-		context.Background(),
+		t.Context(),
 		step,
 		workflow.NewStore(),
 		workflow.RunConfig{Observer: workflow.ObserverFunc(
@@ -279,7 +279,7 @@ func TestAwaitAndInterrupt_rejectDuplicateOpaqueInvocation(t *testing.T) {
 		},
 	)
 	_, runErr := workflow.Run(
-		context.Background(),
+		t.Context(),
 		awaitTwice,
 		workflow.NewStore().WithOutput("ready", true),
 		workflow.RunConfig{},
@@ -303,7 +303,7 @@ func TestAwaitAndInterrupt_rejectDuplicateOpaqueInvocation(t *testing.T) {
 		},
 	)
 	_, runErr = workflow.Run(
-		context.Background(),
+		t.Context(),
 		interruptTwice,
 		workflow.NewStore(),
 		workflow.RunConfig{Journal: journal},
@@ -315,7 +315,7 @@ func TestAwaitAndInterrupt_rejectDuplicateOpaqueInvocation(t *testing.T) {
 
 func TestInterrupt_rejectsEmptyID(t *testing.T) {
 	if _, err := workflow.Interrupt("", "continue?").Run(
-		context.Background(),
+		t.Context(),
 		workflow.NewStore(),
 	); !errors.Is(err, workflow.ErrInvalidStepID) {
 		t.Fatalf("error = %v; want ErrInvalidStepID", err)
@@ -452,7 +452,7 @@ func TestSuspend_parallelReportsEverySuspension(t *testing.T) {
 		workflow.Await("third", workflow.Output("c")),
 	}, workflow.ParallelConfig{})
 
-	_, err := p.Run(context.Background(), workflow.NewStore())
+	_, err := p.Run(t.Context(), workflow.NewStore())
 	if !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("err = %v; want ErrSuspended", err)
 	}
@@ -487,7 +487,7 @@ func TestSuspend_nestedParallelPreservesSuspensionsAndCompletedWork(t *testing.T
 		workflow.Await("c", workflow.Output("input-c")),
 	}, workflow.ParallelConfig{})
 
-	out, err := outer.Run(context.Background(), workflow.NewStore())
+	out, err := outer.Run(t.Context(), workflow.NewStore())
 	if !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("err = %v; want ErrSuspended", err)
 	}
@@ -516,7 +516,7 @@ func TestSuspend_iterationPreservesNestedSuspensions(t *testing.T) {
 		BodyOutput: workflow.Output("unused"),
 	})
 
-	_, err := iteration.Run(context.Background(),
+	_, err := iteration.Run(t.Context(),
 		workflow.NewStore().WithOutput("items", []any{1}))
 	suspensions := workflow.Suspensions(err)
 	if len(suspensions) != 2 ||
@@ -538,7 +538,7 @@ func TestSuspend_parallelStillFailsFastOnRealErrors(t *testing.T) {
 		workflow.Await("waiting", workflow.Output("approval")),
 		bad,
 	}, workflow.ParallelConfig{}).
-		Run(context.Background(), workflow.NewStore())
+		Run(t.Context(), workflow.NewStore())
 
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v; want boom to dominate", err)
@@ -555,7 +555,7 @@ func TestSuspend_joinedFailureIsNotClassifiedAsPureSuspension(t *testing.T) {
 	})
 
 	_, err := workflow.Parallel([]workflow.Step{mixed}, workflow.ParallelConfig{}).
-		Run(context.Background(), workflow.NewStore())
+		Run(t.Context(), workflow.NewStore())
 	var indexErr *flow.IndexError
 	if !errors.As(err, &indexErr) || indexErr.Index != 0 || !errors.Is(err, boom) {
 		t.Fatalf("err = %v; want branch failure at index 0", err)
@@ -576,7 +576,7 @@ func TestSuspend_typedNilRemainsASuspension(t *testing.T) {
 		node,
 	)
 
-	_, err := step.Run(context.Background(), workflow.NewStore())
+	_, err := step.Run(t.Context(), workflow.NewStore())
 	suspensions := workflow.Suspensions(err)
 	if !errors.Is(err, workflow.ErrSuspended) || len(suspensions) != 1 ||
 		suspensions[0].ID != "approval" {
@@ -670,7 +670,7 @@ func TestSuspend_iterationWritesNoPartialCollection(t *testing.T) {
 		BodyOutput: workflow.Output("el"), Concurrency: 1,
 	})
 
-	out, err := step.Run(context.Background(), workflow.NewStore().WithOutput("start", []any{1, 2, 3}))
+	out, err := step.Run(t.Context(), workflow.NewStore().WithOutput("start", []any{1, 2, 3}))
 	if !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("err = %v; want ErrSuspended", err)
 	}
@@ -738,7 +738,7 @@ func TestSuspend_awaitPassesThroughOnceSatisfied(t *testing.T) {
 	gate := workflow.Await("gate", workflow.At("inbox", "decision"))
 	in := workflow.NewStore().With("inbox", "decision", "approve")
 
-	out, err := gate.Run(context.Background(), in)
+	out, err := gate.Run(t.Context(), in)
 	if err != nil {
 		t.Fatalf("Await: %v", err)
 	}
@@ -770,14 +770,14 @@ func TestSuspend_awaitIsNotJournaled(t *testing.T) {
 }
 
 func TestSuspend_emptyStepIDIsAnError(t *testing.T) {
-	_, err := workflow.Await("", workflow.Output("x")).Run(context.Background(), workflow.NewStore())
+	_, err := workflow.Await("", workflow.Output("x")).Run(t.Context(), workflow.NewStore())
 	if !errors.Is(err, workflow.ErrInvalidStepID) {
 		t.Fatalf("err = %v; want ErrInvalidStepID", err)
 	}
 }
 
 func TestAwait_rejectsAnInvalidReference(t *testing.T) {
-	_, err := workflow.Await("approval", workflow.Ref{}).Run(context.Background(), workflow.NewStore())
+	_, err := workflow.Await("approval", workflow.Ref{}).Run(t.Context(), workflow.NewStore())
 	if !errors.Is(err, workflow.ErrInvalidSpec) || errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("err = %v; want ErrInvalidSpec only", err)
 	}
@@ -985,7 +985,7 @@ func TestSuspend_eventsReportTheThirdOutcome(t *testing.T) {
 
 	cfg := workflow.RunConfig{Observer: observe, Journal: journal}
 	in := workflow.NewStore().WithOutput("start", 1)
-	if _, err := workflow.Run(context.Background(), pipeline, in, cfg); !errors.Is(err, workflow.ErrSuspended) {
+	if _, err := workflow.Run(t.Context(), pipeline, in, cfg); !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("err = %v; want ErrSuspended", err)
 	}
 	if want := []string{"started:a", "completed:a", "suspended:gate"}; !slices.Equal(kinds, want) {
@@ -994,7 +994,7 @@ func TestSuspend_eventsReportTheThirdOutcome(t *testing.T) {
 
 	// On resume, the replayed step reports that it was skipped rather than started.
 	kinds = nil
-	if _, err := workflow.Run(context.Background(), pipeline, in.WithOutput("approval", true), cfg); err != nil {
+	if _, err := workflow.Run(t.Context(), pipeline, in.WithOutput("approval", true), cfg); err != nil {
 		t.Fatalf("resumed run: %v", err)
 	}
 	if want := []string{"skipped:a", "completed:gate"}; !slices.Equal(kinds, want) {
@@ -1013,7 +1013,7 @@ func TestInterrupt_eventsReportSuspensionThenReplay(t *testing.T) {
 	}
 	step := workflow.Interrupt("approval", map[string]any{"question": "approve?"})
 
-	_, runErr := workflow.Run(context.Background(), step, workflow.NewStore(), cfg)
+	_, runErr := workflow.Run(t.Context(), step, workflow.NewStore(), cfg)
 	waits := workflow.Suspensions(runErr)
 	if len(events) != 1 || events[0].Kind != workflow.EventSuspended ||
 		len(waits) != 1 || events[0].Err == nil {
@@ -1024,7 +1024,7 @@ func TestInterrupt_eventsReportSuspensionThenReplay(t *testing.T) {
 	}
 
 	events = nil
-	out, runErr := workflow.Run(context.Background(), step, workflow.NewStore(), cfg)
+	out, runErr := workflow.Run(t.Context(), step, workflow.NewStore(), cfg)
 	if runErr != nil {
 		t.Fatalf("resume: %v", runErr)
 	}

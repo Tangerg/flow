@@ -78,7 +78,7 @@ func (g graphStep) Run(ctx context.Context, store Store) (Store, error) {
 	if err := ctx.Err(); err != nil {
 		return input, err
 	}
-	return (graphExecution{graph: g, input: input}).run(ctx)
+	return (&graphExecution{graph: g, input: input}).run(ctx)
 }
 
 func (g graphStep) Describe() Description {

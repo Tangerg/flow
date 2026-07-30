@@ -35,7 +35,7 @@ func TestCompileGraph_diamond(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
-	out, err := step.Run(context.Background(), workflow.NewStore().WithOutput("start", 0))
+	out, err := step.Run(t.Context(), workflow.NewStore().WithOutput("start", 0))
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -59,7 +59,8 @@ func TestCompileGraph_portsInferDependencies(t *testing.T) {
 		MustRegisterLeaf("addN", addN()).
 		MustRegisterLeaf("sum", sumPorts())
 
-	// b is declared before its producer a; layering must still order them.
+	// b is declared before its producer a, so passing proves execution order
+	// comes from the wired ports rather than from declaration order.
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
 		{ID: "b", Type: "sum", Inputs: workflow.Inputs{"a": workflow.Output("a"), "b": workflow.Output("start")}},
 		{ID: "a", Type: "addN", Input: workflow.Output("start"), Config: json.RawMessage(`{"n":1}`)},
@@ -69,7 +70,7 @@ func TestCompileGraph_portsInferDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
-	out, err := step.Run(context.Background(), workflow.NewStore().WithOutput("start", 5))
+	out, err := step.Run(t.Context(), workflow.NewStore().WithOutput("start", 5))
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -78,7 +79,7 @@ func TestCompileGraph_portsInferDependencies(t *testing.T) {
 	}
 }
 
-func TestCompileGraph_limitsLayerConcurrency(t *testing.T) {
+func TestCompileGraph_limitsConcurrencyAcrossTheWholeGraph(t *testing.T) {
 	started := make(chan struct{}, 3)
 	release := make(chan struct{})
 	registry := workflow.NewRegistry().MustRegisterLeaf(
@@ -111,7 +112,7 @@ func TestCompileGraph_limitsLayerConcurrency(t *testing.T) {
 	}
 
 	done := make(chan error, 1)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go func() {
 		_, err := step.Run(
@@ -460,7 +461,7 @@ func TestCompileGraphJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
-	out, err := step.Run(context.Background(), workflow.NewStore().WithOutput("start", 0))
+	out, err := step.Run(t.Context(), workflow.NewStore().WithOutput("start", 0))
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -670,8 +671,10 @@ func TestGraph_inputsSkipMalformedNodes(t *testing.T) {
 	// A node whose default port is wired twice cannot be resolved; Graph.Inputs
 	// reports what it can and leaves rejecting the graph to ValidateGraph.
 	g := workflow.Graph{Nodes: []workflow.NodeSpec{
-		{ID: "bad", Type: "addN", Input: workflow.Output("x"),
-			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("y")}},
+		{
+			ID: "bad", Type: "addN", Input: workflow.Output("x"),
+			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("y")},
+		},
 		{ID: "ok", Type: "addN", Input: workflow.Output("z")},
 	}}
 	if got := g.Inputs(); !slices.Equal(got, []workflow.Ref{workflow.Output("z")}) {
@@ -868,8 +871,8 @@ func TestCompileGraph_suspensionBlocksDependentsButNotUnrelatedWork(t *testing.T
 		t.Fatalf("unrelated output = %v, %v; want 1", value, getErr)
 	}
 
-	if err := journal.Record(suspensions[0].Key(), "yes"); err != nil {
-		t.Fatalf("Record: %v", err)
+	if recordErr := journal.Record(suspensions[0].Key(), "yes"); recordErr != nil {
+		t.Fatalf("Record: %v", recordErr)
 	}
 	second, err := workflow.Run(t.Context(), step, first, workflow.RunConfig{Journal: journal})
 	if err != nil {

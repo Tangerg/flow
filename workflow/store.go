@@ -28,6 +28,12 @@ import (
 // stored, which after a round trip is the JSON-domain value.
 //
 // The zero Store is empty and ready to use; prefer [NewStore] for clarity.
+//
+// Every method takes a value receiver so a Store cannot be mutated through a
+// copy. UnmarshalJSON is the one exception: json.Unmarshaler requires a pointer,
+// and replacing a Store wholesale is the only way to decode one.
+//
+//nolint:recvcheck // UnmarshalJSON must be a pointer method to satisfy json.Unmarshaler.
 type Store struct {
 	snapshot *storeSnapshot
 	delta    *storeDelta

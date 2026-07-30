@@ -110,6 +110,15 @@ All notable changes to this project are documented here. The format follows
 - Vulnerability, race, vet, lint, fuzz, and benchmark coverage in the
   development workflow.
 
+### Fixed
+
+- `Journal.UnmarshalJSON` no longer panics on a document whose `records` member
+  is spelled in another case, such as `reCords`. encoding/json matches member
+  names case-insensitively when filling a struct but not when building a generic
+  map, so the decode's two views of the same bytes could disagree about whether
+  the array existed. Decoding now happens once, and a record's value is read
+  through the same typed document that reports the value's presence.
+
 ### Changed
 
 - Compiled Graphs now schedule from dependency readiness instead of inserting

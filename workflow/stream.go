@@ -18,7 +18,7 @@ import (
 // runs again from the beginning and may repeat a prefix. A step replayed as
 // complete from a [Journal] does not run and yields nothing.
 type StreamNode[I, O, C any] interface {
-	RunStream(context.Context, I, func(C) bool) (O, error)
+	RunStream(ctx context.Context, input I, yield func(C) bool) (O, error)
 }
 
 // StreamNodeFunc adapts a function into a [StreamNode].
@@ -60,7 +60,7 @@ type Chunk struct {
 // the producing node. Returning an error stops that stream and returns the
 // error through the leaf's normal failure or suspension classification.
 type Emitter interface {
-	Emit(context.Context, Chunk) error
+	Emit(ctx context.Context, chunk Chunk) error
 }
 
 // EmitterFunc adapts a function into an [Emitter].
@@ -167,6 +167,14 @@ func (s streamRunner[I, O, C]) run(
 }
 
 // chunkStream owns the emission state of one StreamLeaf invocation.
+//
+// Unlike the rest of this package, which passes context as an explicit method
+// argument, chunkStream retains one. [StreamNode.RunStream] hands the producer a
+// bare yield func(C) bool, so there is no parameter through which the
+// cancel-scoped context could reach [chunkStream.yield]; storing it is what lets
+// an Emitter error cancel the stream it belongs to and nothing else.
+//
+//nolint:containedctx // yield func(C) bool has nowhere to pass a context.
 type chunkStream[C any] struct {
 	ctx     context.Context
 	cancel  context.CancelCauseFunc

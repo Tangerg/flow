@@ -25,6 +25,13 @@ var ErrSuspended = errors.New("workflow: suspended")
 // [Interrupt] or for a node that called [Suspend]. Value is the information
 // exposed to the caller: commonly a string, but it may be any application value
 // such as an approval request, form, or external-job descriptor.
+//
+// The name deliberately omits an Error suffix. A suspension travels as an error
+// so that it propagates without a parallel return path, but it reports a third
+// outcome rather than a failure; calling it SuspensionError would contradict the
+// semantics every composite in this package is built around.
+//
+//nolint:errname // A suspension is a third outcome, not a failure.
 type Suspension struct {
 	// ID is the step that suspended.
 	ID string `json:"id,omitempty"`
@@ -119,6 +126,8 @@ func (s suspensionTree) collect() (suspensionList, bool) {
 	// This intentionally inspects the current node rather than using errors.As:
 	// As would skip wrappers and could misclassify a mixed joined tree as a pure
 	// suspension tree.
+	//
+	//nolint:errorlint // Unwrapping here would defeat the per-node classification.
 	if suspension, ok := err.(*Suspension); ok {
 		if suspension == nil {
 			// A typed nil still satisfies error and matches ErrSuspended through
@@ -129,6 +138,8 @@ func (s suspensionTree) collect() (suspensionList, bool) {
 		return suspensionList{suspension.clone()}, true
 	}
 	// Exact identity preserves a wrapper's own message in collectOne below.
+	//
+	//nolint:errorlint,err113 // errors.Is would match wrappers this must not consume.
 	if err == ErrSuspended {
 		return suspensionList{{}}, true
 	}
@@ -166,6 +177,8 @@ func (s suspensionTree) collectMany(children []error) (suspensionList, bool) {
 func (s suspensionTree) collectOne(child error) (suspensionList, bool) {
 	// Exact identity distinguishes a wrapper directly around ErrSuspended from
 	// a wrapper whose deeper tree merely contains one.
+	//
+	//nolint:errorlint,err113 // errors.Is cannot tell those two shapes apart.
 	if child == ErrSuspended {
 		return suspensionList{{Value: s.err.Error()}}, true
 	}
@@ -246,6 +259,8 @@ func (s *Suspension) clone() *Suspension {
 }
 
 // multiSuspension carries every suspension of one fan-out.
+//
+//nolint:errname // Named for [Suspension], which is a third outcome, not a failure.
 type multiSuspension struct {
 	suspensions []*Suspension
 	message     string

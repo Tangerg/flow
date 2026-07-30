@@ -66,8 +66,11 @@ func (o operand) normalized() any {
 		return floatNumber(floating).normalized()
 	case reflect.Float64:
 		return floatNumber(value.Float()).normalized()
+	default:
+		// Composites and unsupported kinds are carried through untouched; only a
+		// scalar has a canonical Store representation to normalize towards.
+		return o.raw
 	}
-	return o.raw
 }
 
 func (u unsignedNumber) normalized() any {
@@ -89,6 +92,8 @@ func (f floatNumber) normalized() any {
 		return float64(f)
 	}
 	// Finite float64 values are always representable by encoding/json.
+	//
+	//nolint:errchkjson // NaN and Inf, the only failing float64 values, return above.
 	encoded, _ := json.Marshal(float64(f))
 	if integer, err := strconv.ParseInt(string(encoded), 10, 64); err == nil {
 		return integer
@@ -164,6 +169,7 @@ func (o operand) negate() (any, error) {
 func (o operand) length() (any, error) {
 	if o.raw != nil {
 		value := reflect.ValueOf(o.raw)
+		//nolint:exhaustive // Filters the four countable kinds; the rest share one error below.
 		switch value.Kind() {
 		case reflect.String, reflect.Array, reflect.Slice, reflect.Map:
 			return int64(value.Len()), nil
@@ -195,7 +201,7 @@ func (b binaryOperator) applyEquality(
 		if err != nil {
 			return nil, true, err
 		}
-		return !equal.(bool), true, nil
+		return !equal, true, nil
 	default:
 		return nil, false, nil
 	}
@@ -229,9 +235,9 @@ func (b binaryOperator) applyArithmetic(left, right operand) (any, error) {
 // equal compares two values for identity of kind and value. Slices and maps are
 // rejected rather than compared, since Go's == panics on them and a deep
 // comparison is not what a workflow condition should silently do.
-func (b binaryOperator) equal(left, right operand) (any, error) {
+func (b binaryOperator) equal(left, right operand) (bool, error) {
 	if !left.scalar() || !right.scalar() {
-		return nil, fmt.Errorf("%w: %s wants scalar operands, got %s and %s",
+		return false, fmt.Errorf("%w: %s wants scalar operands, got %s and %s",
 			ErrType, b.String(), left.typeName(), right.typeName())
 	}
 	if order, unordered, ok := left.compareNumber(right); ok {

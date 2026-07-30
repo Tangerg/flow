@@ -366,7 +366,7 @@ func TestCompileGraph_gatedStepPreservesDuplicateIDValidation(t *testing.T) {
 			return workflow.LeafFunc(
 				"duplicate",
 				workflow.Output("start"),
-				func(_ context.Context, input int) (string, error) {
+				func(_ context.Context, _ int) (string, error) {
 					calls.Add(1)
 					return "yes", nil
 				},

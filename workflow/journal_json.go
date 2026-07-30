@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,8 @@ var (
 
 const journalJSONVersion = 1
 
+// journalDocument is the shape [Journal.MarshalJSON] writes: each value arrives
+// already encoded, so the document is assembled without re-encoding.
 type journalDocument struct {
 	Version int                 `json:"version"`
 	Records []journalJSONRecord `json:"records"`
@@ -23,6 +26,41 @@ type journalJSONRecord struct {
 	Path  []string        `json:"path,omitempty"`
 	ID    string          `json:"id"`
 	Value json.RawMessage `json:"value"`
+}
+
+// journalDecodedDocument reads that same shape. It exists separately from
+// journalDocument because the two directions need different value
+// representations, and deriving one from the other would mean decoding the
+// document twice — once for its typed fields and once for its raw values — which
+// only works while both views agree on how a member name is spelled.
+type journalDecodedDocument struct {
+	Version int                    `json:"version"`
+	Records []journalDecodedRecord `json:"records"`
+}
+
+type journalDecodedRecord struct {
+	Path  []string            `json:"path,omitempty"`
+	ID    string              `json:"id"`
+	Value journalDecodedValue `json:"value"`
+}
+
+// journalDecodedValue remembers that a "value" member appeared, which is what
+// separates a step that recorded nil from a record that omitted its result
+// entirely. An omitted member never reaches UnmarshalJSON, while an explicit
+// null does.
+type journalDecodedValue struct {
+	value   any
+	present bool
+}
+
+func (j *journalDecodedValue) UnmarshalJSON(data []byte) error {
+	j.present = true
+	// The enclosing decoder's UseNumber setting does not reach a custom
+	// Unmarshaler, so this repeats it: a recorded number must survive a round
+	// trip without being widened to float64.
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	return decoder.Decode(&j.value)
 }
 
 type journalEntry struct {
@@ -95,9 +133,8 @@ func (j *Journal) UnmarshalJSON(data []byte) error {
 		return errors.New("workflow: unmarshal journal: nil journal")
 	}
 
-	var document journalDocument
-	decoded, err := jsonDocument(data).decodeWithValue(&document)
-	if err != nil {
+	var document journalDecodedDocument
+	if err := jsonDocument(data).decode(&document); err != nil {
 		return fmt.Errorf("workflow: unmarshal journal: %w", err)
 	}
 	if document.Version != journalJSONVersion {
@@ -108,21 +145,6 @@ func (j *Journal) UnmarshalJSON(data []byte) error {
 		)
 	}
 
-	// Keep the semantic tree only to distinguish an absent value from an explicit
-	// null, which a json.RawMessage would otherwise have to be parsed again to
-	// tell apart.
-	//
-	// Each assertion below depends on a check that precedes it, so reordering
-	// them would turn malformed input into a panic. A document that is not an
-	// object — including a bare null, which decodes into the zero struct rather
-	// than failing — is rejected by the version check. A non-empty Records slice
-	// means typed decoding accepted "records" as an array. A null array element
-	// also decodes into a zero record, so it is the empty-ID check inside the
-	// loop that rejects it before its element is asserted to be an object.
-	var decodedRecords []any
-	if len(document.Records) > 0 {
-		decodedRecords = decoded.(map[string]any)["records"].([]any)
-	}
 	var root journalNode
 	count := 0
 	for index, record := range document.Records {
@@ -130,12 +152,14 @@ func (j *Journal) UnmarshalJSON(data []byte) error {
 		if err := key.validate(); err != nil {
 			return fmt.Errorf("workflow: unmarshal journal record %d: %w", index, err)
 		}
-		object := decodedRecords[index].(map[string]any)
-		value, present := object["value"]
-		if !present {
+		if !record.Value.present {
 			return fmt.Errorf("workflow: unmarshal journal record %d: value is missing", index)
 		}
-		if inserted := root.record(record.Path, record.ID, journalValue{value: value}); !inserted {
+		if inserted := root.record(
+			record.Path,
+			record.ID,
+			journalValue{value: record.Value.value},
+		); !inserted {
 			return fmt.Errorf(
 				"workflow: unmarshal journal record %d: duplicate step %q at path %q",
 				index,

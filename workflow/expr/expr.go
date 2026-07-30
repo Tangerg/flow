@@ -34,12 +34,12 @@ func Parse(src string) (*Expr, error) {
 		return nil, &Error{Source: src, Err: fmt.Errorf("%w: %w", ErrSyntax, err)}
 	}
 
-	compiler := compiler{source: src}
-	eval, err := compiler.compile(node)
+	c := compiler{source: src}
+	eval, err := c.compile(node)
 	if err != nil {
 		return nil, err
 	}
-	refs := refList(compiler.refs).sortedUnique()
+	refs := refList(c.refs).sortedUnique()
 	return &Expr{source: src, eval: eval, refs: refs}, nil
 }
 
@@ -368,6 +368,8 @@ func (c *compiler) compileBinary(n *ast.BinaryExpr) (evalFunc, error) {
 	}
 
 	// && and || short-circuit, so has(x) && x > 1 is a usable guard.
+	//
+	//nolint:exhaustive // Lifts out the two short-circuiting operators; the rest fall through.
 	switch n.Op {
 	case token.LAND, token.LOR:
 		stopAt := n.Op == token.LOR

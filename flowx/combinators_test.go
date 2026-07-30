@@ -16,7 +16,7 @@ func TestFanOut(t *testing.T) {
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 2, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 3, nil }),
 	}
-	got, err := flowx.FanOut(nodes, flow.MapConfig{}).Run(context.Background(), 10)
+	got, err := flowx.FanOut(nodes, flow.MapConfig{}).Run(t.Context(), 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestFanOut_boundsConcurrency(t *testing.T) {
 	})
 	done := make(chan error, 1)
 	go func() {
-		_, err := flowx.FanOut([]flow.Node[int, int]{node, node, node, node}, flow.MapConfig{Concurrency: 2}).Run(context.Background(), 1)
+		_, err := flowx.FanOut([]flow.Node[int, int]{node, node, node, node}, flow.MapConfig{Concurrency: 2}).Run(t.Context(), 1)
 		done <- err
 	}()
 
@@ -65,7 +65,7 @@ func TestFanOut_failFast(t *testing.T) {
 		flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in + 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom }),
 	}
-	if _, err := flowx.FanOut(nodes, flow.MapConfig{}).Run(context.Background(), 1); !errors.Is(err, boom) {
+	if _, err := flowx.FanOut(nodes, flow.MapConfig{}).Run(t.Context(), 1); !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want boom", err)
 	}
 }
@@ -79,7 +79,7 @@ func TestFanOut_validatesEveryNodeBeforeRunning(t *testing.T) {
 	_, err := flowx.FanOut(
 		[]flow.Node[int, int]{node, nil},
 		flow.MapConfig{},
-	).Run(context.Background(), 0)
+	).Run(t.Context(), 0)
 	var indexErr *flow.IndexError
 	if !errors.As(err, &indexErr) || indexErr.Index != 1 || !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("err = %v; want IndexError(1, ErrNilNode)", err)
@@ -96,7 +96,7 @@ func TestFanOut_clonesNodes(t *testing.T) {
 	fan := flowx.FanOut(nodes, flow.MapConfig{})
 	nodes[0] = flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in + 100, nil })
 
-	got, err := fan.Run(context.Background(), 1)
+	got, err := fan.Run(t.Context(), 1)
 	if err != nil || len(got) != 1 || got[0] != 2 {
 		t.Fatalf("FanOut after source mutation = %v, %v", got, err)
 	}
@@ -109,7 +109,7 @@ func TestCombine(t *testing.T) {
 	node := flowx.Combine(length, upper, func(_ context.Context, _ int, s string) (string, error) {
 		return s, nil
 	})
-	got, err := node.Run(context.Background(), "hi")
+	got, err := node.Run(t.Context(), "hi")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -120,11 +120,11 @@ func TestCombine(t *testing.T) {
 
 func TestCombine_rejectsNilInputs(t *testing.T) {
 	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
-	if _, err := flowx.Combine[int, int, int, int](node, node, nil).Run(context.Background(), 1); !errors.Is(err, flow.ErrNilFunc) {
+	if _, err := flowx.Combine[int, int, int, int](node, node, nil).Run(t.Context(), 1); !errors.Is(err, flow.ErrNilFunc) {
 		t.Fatalf("nil merge err = %v", err)
 	}
 	merge := func(_ context.Context, a, b int) (int, error) { return a + b, nil }
-	if _, err := flowx.Combine[int, int, int, int](nil, node, merge).Run(context.Background(), 1); !errors.Is(err, flow.ErrNilNode) {
+	if _, err := flowx.Combine[int, int, int, int](nil, node, merge).Run(t.Context(), 1); !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("nil node err = %v", err)
 	}
 }
@@ -139,7 +139,7 @@ func TestCombine_validatesBothNodesBeforeRunning(t *testing.T) {
 		node,
 		flow.Node[int, string](nil),
 		func(context.Context, int, string) (int, error) { return 0, nil },
-	).Run(context.Background(), 0)
+	).Run(t.Context(), 0)
 	if !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("err = %v; want ErrNilNode", err)
 	}
@@ -161,7 +161,7 @@ func TestCombine_propagatesNodeFailure(t *testing.T) {
 		failing,
 		ok,
 		func(context.Context, int, string) (string, error) { return "", nil },
-	).Run(context.Background(), 1)
+	).Run(t.Context(), 1)
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v; want node failure", err)
 	}
@@ -169,7 +169,7 @@ func TestCombine_propagatesNodeFailure(t *testing.T) {
 
 func TestChain(t *testing.T) {
 	inc := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil })
-	got, err := flowx.Chain(inc, inc, inc).Run(context.Background(), 0)
+	got, err := flowx.Chain(inc, inc, inc).Run(t.Context(), 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -179,19 +179,19 @@ func TestChain(t *testing.T) {
 }
 
 func TestChain_emptyAndSingle(t *testing.T) {
-	got, err := flowx.Chain[int]().Run(context.Background(), 4)
+	got, err := flowx.Chain[int]().Run(t.Context(), 4)
 	if err != nil || got != 4 {
 		t.Fatalf("empty Chain = %d, %v", got, err)
 	}
 	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in + 1, nil })
-	got, err = flowx.Chain(node).Run(context.Background(), 4)
+	got, err = flowx.Chain(node).Run(t.Context(), 4)
 	if err != nil || got != 5 {
 		t.Fatalf("single Chain = %d, %v", got, err)
 	}
 }
 
 func TestChain_singleNilReturnsError(t *testing.T) {
-	_, err := flowx.Chain[int](nil).Run(context.Background(), 0)
+	_, err := flowx.Chain[int](nil).Run(t.Context(), 0)
 	if !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("err = %v; want ErrNilNode", err)
 	}

@@ -36,7 +36,7 @@ type graphOutcome struct {
 	err   error
 }
 
-func (g graphExecution) run(ctx context.Context) (Store, error) {
+func (g *graphExecution) run(ctx context.Context) (Store, error) {
 	if len(g.graph.steps) == 0 {
 		return g.input, nil
 	}

@@ -50,6 +50,10 @@ edges:
 }
 
 func TestMermaid(t *testing.T) {
+	// Node identifiers repeat across the golden diagram because every edge names
+	// its endpoints; they are data, not prose.
+	//
+	//nolint:dupword // Repeated node IDs are the expected Mermaid output.
 	const want = `flowchart LR
   n0["route<br/>switch"]
   n1["approve<br/>send"]

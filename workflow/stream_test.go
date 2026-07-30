@@ -41,13 +41,13 @@ func TestStreamLeaf_emitsChunksAndPublishesFinalOutput(t *testing.T) {
 			signals = append(signals, signal{kind: event.Kind, seq: event.Seq})
 		}),
 		Emitter: workflow.EmitterFunc(func(_ context.Context, chunk workflow.Chunk) error {
-			copy := chunk
-			signals = append(signals, signal{seq: chunk.Seq, chunk: &copy})
+			captured := chunk
+			signals = append(signals, signal{seq: chunk.Seq, chunk: &captured})
 			return nil
 		}),
 	}
 
-	ctx := workflow.WithScope(context.Background(), "outer")
+	ctx := workflow.WithScope(t.Context(), "outer")
 	out, err := workflow.Run(
 		ctx,
 		step,
@@ -108,7 +108,7 @@ func TestStreamLeafFunc(t *testing.T) {
 	)
 	var chunks []workflow.Chunk
 	out, err := workflow.Run(
-		context.Background(),
+		t.Context(),
 		step,
 		workflow.NewStore().WithOutput("start", 21),
 		workflow.RunConfig{Emitter: workflow.EmitterFunc(
@@ -172,7 +172,7 @@ func TestStreamLeaf_emitterErrorStopsAndFailsTheLeaf(t *testing.T) {
 		Journal: journal,
 	}
 	in := workflow.NewStore().WithOutput("start", 1)
-	out, err := workflow.Run(context.Background(), step, in, cfg)
+	out, err := workflow.Run(t.Context(), step, in, cfg)
 	if !errors.Is(err, emitErr) {
 		t.Fatalf("Run error = %v; want emitter error", err)
 	}
@@ -209,7 +209,7 @@ func TestStreamLeaf_emitterSuspensionRemainsAThirdOutcome(t *testing.T) {
 		node,
 	)
 	out, err := workflow.Run(
-		context.Background(),
+		t.Context(),
 		step,
 		workflow.NewStore().WithOutput("start", 1),
 		workflow.RunConfig{Emitter: workflow.EmitterFunc(
@@ -250,7 +250,7 @@ func TestStreamLeaf_completedReplayDoesNotReemit(t *testing.T) {
 	in := workflow.NewStore().WithOutput("start", 10)
 
 	var first []workflow.Chunk
-	out, err := workflow.Run(context.Background(), step, in, workflow.RunConfig{
+	out, err := workflow.Run(t.Context(), step, in, workflow.RunConfig{
 		Journal: journal,
 		Emitter: workflow.EmitterFunc(func(_ context.Context, chunk workflow.Chunk) error {
 			first = append(first, chunk)
@@ -268,7 +268,7 @@ func TestStreamLeaf_completedReplayDoesNotReemit(t *testing.T) {
 	}
 
 	var replayed []workflow.Chunk
-	out, err = workflow.Run(context.Background(), step, out, workflow.RunConfig{
+	out, err = workflow.Run(t.Context(), step, out, workflow.RunConfig{
 		Journal: journal,
 		Emitter: workflow.EmitterFunc(func(_ context.Context, chunk workflow.Chunk) error {
 			replayed = append(replayed, chunk)
@@ -312,7 +312,7 @@ func TestStreamLeaf_incompleteReplayRepeatsTheAttemptPrefix(t *testing.T) {
 	in := workflow.NewStore().WithOutput("start", 10)
 
 	var first []workflow.Chunk
-	_, err := workflow.Run(context.Background(), step, in, workflow.RunConfig{
+	_, err := workflow.Run(t.Context(), step, in, workflow.RunConfig{
 		Journal: journal,
 		Emitter: workflow.EmitterFunc(func(_ context.Context, chunk workflow.Chunk) error {
 			first = append(first, chunk)
@@ -331,7 +331,7 @@ func TestStreamLeaf_incompleteReplayRepeatsTheAttemptPrefix(t *testing.T) {
 	}
 
 	var second []workflow.Chunk
-	out, err := workflow.Run(context.Background(), step, in, workflow.RunConfig{
+	out, err := workflow.Run(t.Context(), step, in, workflow.RunConfig{
 		Journal: journal,
 		Emitter: workflow.EmitterFunc(func(_ context.Context, chunk workflow.Chunk) error {
 			second = append(second, chunk)
@@ -344,10 +344,12 @@ func TestStreamLeaf_incompleteReplayRepeatsTheAttemptPrefix(t *testing.T) {
 	if got := chunkValues(second); !slices.Equal(got, []int{10, 11, 12}) {
 		t.Fatalf("second chunks = %v; want [10 11 12]", got)
 	}
+	var wantIndex uint64
 	for index, chunk := range second {
-		if chunk.Index != uint64(index) {
-			t.Fatalf("second chunk %d Index = %d; want reset to %d", index, chunk.Index, index)
+		if chunk.Index != wantIndex {
+			t.Fatalf("second chunk %d Index = %d; want reset to %d", index, chunk.Index, wantIndex)
 		}
+		wantIndex++
 	}
 	if got, err := workflow.Get[int](out, workflow.Output("stream")); err != nil || got != 13 {
 		t.Fatalf("final output = %v, %v; want 13", got, err)
@@ -385,7 +387,7 @@ func TestStreamLeaf_iterationEmitsConcurrentScopedStreams(t *testing.T) {
 		},
 	)}
 	out, err := workflow.Run(
-		context.Background(),
+		t.Context(),
 		step,
 		workflow.NewStore().WithOutput("start", []any{1, 2, 3, 4}),
 		cfg,
@@ -458,7 +460,7 @@ func TestStreamLeaf_parallelStreamsShareRunSequence(t *testing.T) {
 		},
 	)}
 	_, err := workflow.Run(
-		context.Background(),
+		t.Context(),
 		step,
 		workflow.NewStore().WithOutput("start", 1),
 		cfg,
@@ -492,7 +494,7 @@ func TestStreamLeaf_nilEmitterDiscardsWithoutChangingEventSequence(t *testing.T)
 		},
 	)}
 	_, err := workflow.Run(
-		context.Background(),
+		t.Context(),
 		step,
 		workflow.NewStore().WithOutput("start", 1),
 		cfg,
@@ -511,7 +513,7 @@ func TestStreamLeaf_nilEmitterDiscardsWithoutChangingEventSequence(t *testing.T)
 		Emitter:  nilEmitter,
 	}
 	if _, err := workflow.Run(
-		context.Background(),
+		t.Context(),
 		step,
 		workflow.NewStore().WithOutput("start", 1),
 		cfg,
@@ -532,7 +534,7 @@ func TestStreamLeaf_nilEmitterDiscardsWithoutChangingEventSequence(t *testing.T)
 		}),
 	}
 	if _, err := workflow.Run(
-		context.Background(),
+		t.Context(),
 		step,
 		workflow.NewStore().WithOutput("start", 1),
 		cfg,
@@ -545,7 +547,7 @@ func TestStreamLeaf_nilEmitterDiscardsWithoutChangingEventSequence(t *testing.T)
 }
 
 func TestStreamLeaf_cancellationCannotPublishAPartialFinalOutput(t *testing.T) {
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	cancel(errors.New("caller stopped"))
 	node := workflow.StreamNodeFunc[int, int, int](
 		func(_ context.Context, input int, yield func(int) bool) (int, error) {
@@ -573,7 +575,7 @@ func TestStreamLeaf_cancellationCannotPublishAPartialFinalOutput(t *testing.T) {
 
 func TestStreamLeaf_cancellationDuringEmissionStopsCompletion(t *testing.T) {
 	stopErr := errors.New("caller stopped")
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	node := workflow.StreamNodeFunc[int, int, int](
 		func(_ context.Context, input int, yield func(int) bool) (int, error) {
 			if yield(input) {
@@ -619,7 +621,7 @@ func TestStreamLeaf_validatesNode(t *testing.T) {
 		workflow.From[int](workflow.Output("start")),
 		nilNode,
 	)
-	if _, err := step.Run(context.Background(), in); !errors.Is(err, flow.ErrNilNode) {
+	if _, err := step.Run(t.Context(), in); !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("nil StreamNode error = %v; want ErrNilNode", err)
 	}
 
@@ -629,11 +631,11 @@ func TestStreamLeaf_validatesNode(t *testing.T) {
 		workflow.From[int](workflow.Output("start")),
 		nilFunc,
 	)
-	if _, err := step.Run(context.Background(), in); !errors.Is(err, flow.ErrNilNode) {
+	if _, err := step.Run(t.Context(), in); !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("nil StreamNodeFunc error = %v; want ErrNilNode", err)
 	}
 	if _, err := nilFunc.RunStream(
-		context.Background(),
+		t.Context(),
 		1,
 		func(int) bool { return true },
 	); !errors.Is(err, flow.ErrNilNode) {
@@ -645,7 +647,7 @@ func TestStreamLeaf_validatesNode(t *testing.T) {
 		t.Fatalf("Record: %v", err)
 	}
 	if _, err := workflow.Run(
-		context.Background(),
+		t.Context(),
 		step,
 		in,
 		workflow.RunConfig{Journal: journal},
@@ -656,7 +658,7 @@ func TestStreamLeaf_validatesNode(t *testing.T) {
 
 func TestEmitterFunc_nilDiscards(t *testing.T) {
 	var emitter workflow.EmitterFunc
-	if err := emitter.Emit(context.Background(), workflow.Chunk{}); err != nil {
+	if err := emitter.Emit(t.Context(), workflow.Chunk{}); err != nil {
 		t.Fatalf("nil EmitterFunc: %v", err)
 	}
 }

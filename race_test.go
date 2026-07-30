@@ -21,7 +21,7 @@ func TestRace_firstWins(t *testing.T) {
 	})
 	fast := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 100, nil })
 
-	got, err := flow.Race(slow, fast).Run(context.Background(), 5)
+	got, err := flow.Race(slow, fast).Run(t.Context(), 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestRace_waitsForLosingNodesToStop(t *testing.T) {
 		return value, nil
 	})
 
-	if got, err := flow.Race(loser, winner).Run(context.Background(), 7); err != nil || got != 7 {
+	if got, err := flow.Race(loser, winner).Run(t.Context(), 7); err != nil || got != 7 {
 		t.Fatalf("Race = %d, %v; want 7, nil", got, err)
 	}
 	select {
@@ -55,7 +55,7 @@ func TestRace_waitsForLosingNodesToStop(t *testing.T) {
 }
 
 func TestRace_parentCancellationWaitsForNodesToStop(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	started := make(chan struct{})
 	stopped := make(chan struct{})
 	node := flow.NodeFunc[int, int](func(ctx context.Context, _ int) (int, error) {
@@ -84,7 +84,7 @@ func TestRace_allFail(t *testing.T) {
 	n1 := flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, e1 })
 	n2 := flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, e2 })
 
-	_, err := flow.Race(n1, n2).Run(context.Background(), 1)
+	_, err := flow.Race(n1, n2).Run(t.Context(), 1)
 	if !errors.Is(err, e1) || !errors.Is(err, e2) {
 		t.Fatalf("err = %v, want joined e1 and e2", err)
 	}
@@ -98,21 +98,21 @@ func TestRace_allFailErrorOrderIsStable(t *testing.T) {
 	})
 	n2 := flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, e2 })
 
-	_, err := flow.Race(n1, n2).Run(context.Background(), 0)
+	_, err := flow.Race(n1, n2).Run(t.Context(), 0)
 	if err == nil || err.Error() != "flow: index 0: first\nflow: index 1: second" {
 		t.Fatalf("joined error = %q; want input order", err)
 	}
 }
 
 func TestRace_noNodes(t *testing.T) {
-	_, err := flow.Race[int, int]().Run(context.Background(), 0)
+	_, err := flow.Race[int, int]().Run(t.Context(), 0)
 	if !errors.Is(err, flow.ErrNoNodes) {
 		t.Fatalf("err = %v; want ErrNoNodes", err)
 	}
 }
 
 func TestRace_cancelledBeforeRun(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
 
@@ -128,7 +128,7 @@ func TestRace_rejectsNilBeforeRunningAnyNode(t *testing.T) {
 		ran.Store(true)
 		return x, nil
 	})
-	_, err := flow.Race[int, int](nil, ok).Run(context.Background(), 7)
+	_, err := flow.Race[int, int](nil, ok).Run(t.Context(), 7)
 	if !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("err = %v; want ErrNilNode", err)
 	}

@@ -23,7 +23,7 @@ func TestEvents_emittedForSequence(t *testing.T) {
 		events = append(events, event)
 	})}
 
-	_, err := workflow.Run(context.Background(), workflow.Sequence(a, b),
+	_, err := workflow.Run(t.Context(), workflow.Sequence(a, b),
 		workflow.NewStore().WithOutput("start", 1), cfg)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -53,7 +53,7 @@ func TestEvents_failure(t *testing.T) {
 		events = append(events, event)
 	})}
 
-	_, _ = workflow.Run(context.Background(), bad, workflow.NewStore().WithOutput("start", 1), cfg)
+	_, _ = workflow.Run(t.Context(), bad, workflow.NewStore().WithOutput("start", 1), cfg)
 
 	if len(events) != 2 {
 		t.Fatalf("got %d events, want 2", len(events))
@@ -70,7 +70,7 @@ func TestEvents_noObserverIsFine(t *testing.T) {
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 	// No observer in context: emit must be a no-op, not panic.
-	if _, err := a.Run(context.Background(), workflow.NewStore().WithOutput("start", 1)); err != nil {
+	if _, err := a.Run(t.Context(), workflow.NewStore().WithOutput("start", 1)); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 }
@@ -87,7 +87,7 @@ func TestEvents_carrySequenceElapsedAndStore(t *testing.T) {
 	})}
 
 	in := workflow.NewStore().WithOutput("start", 21)
-	if _, err := workflow.Run(context.Background(), a, in, cfg); err != nil {
+	if _, err := workflow.Run(t.Context(), a, in, cfg); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -124,7 +124,7 @@ func TestEvents_failedCarriesNoStore(t *testing.T) {
 			failed = event
 		}
 	})}
-	_, _ = workflow.Run(context.Background(), bad, workflow.NewStore().WithOutput("start", 1), cfg)
+	_, _ = workflow.Run(t.Context(), bad, workflow.NewStore().WithOutput("start", 1), cfg)
 
 	if _, ok := failed.Store.Lookup(workflow.Output("bad")); ok {
 		t.Fatal("failed event Store holds an output; a failed step produces none")
@@ -154,7 +154,7 @@ func TestEvents_scopePathDistinguishesIterationElements(t *testing.T) {
 		}
 	})}
 
-	if _, err := workflow.Run(context.Background(), step,
+	if _, err := workflow.Run(t.Context(), step,
 		workflow.NewStore().WithOutput("start", []any{1, 2, 3}), cfg); err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestEvents_scopePathDistinguishesLoopIterations(t *testing.T) {
 		}
 	})}
 
-	if _, err := workflow.Run(context.Background(),
+	if _, err := workflow.Run(t.Context(),
 		workflow.Loop("loop", body, done, workflow.LoopConfig{}),
 		workflow.NewStore(), cfg); err != nil {
 		t.Fatalf("run: %v", err)
@@ -194,17 +194,17 @@ func TestWithScope_isMaintainedWithoutAnObserver(t *testing.T) {
 	// records by the scope, so it has to exist whether or not anything is
 	// watching. Tying it to the observer let a journaled Loop skip every
 	// iteration after the first.
-	bare := workflow.WithScope(context.Background(), "kept")
+	bare := workflow.WithScope(t.Context(), "kept")
 	if scope := workflow.Scope(bare); !slices.Equal(scope, []string{"kept"}) {
 		t.Fatalf("Scope = %v; want [kept] even with no observer", scope)
 	}
-	if scope := workflow.Scope(context.Background()); scope != nil {
+	if scope := workflow.Scope(t.Context()); scope != nil {
 		t.Fatalf("Scope = %v; want nil at the top level", scope)
 	}
 }
 
 func TestWithScope_nests(t *testing.T) {
-	outer := workflow.WithScope(context.Background(), "a")
+	outer := workflow.WithScope(t.Context(), "a")
 	inner := workflow.WithScope(outer, "b")
 	if !slices.Equal(workflow.Scope(inner), []string{"a", "b"}) {
 		t.Fatalf("inner scope = %v; want [a b]", workflow.Scope(inner))
@@ -216,7 +216,7 @@ func TestWithScope_nests(t *testing.T) {
 }
 
 func TestScope_returnsACopy(t *testing.T) {
-	ctx := workflow.WithScope(context.Background(), "original")
+	ctx := workflow.WithScope(t.Context(), "original")
 	path := workflow.Scope(ctx)
 	path[0] = "changed"
 	if got := workflow.Scope(ctx); !slices.Equal(got, []string{"original"}) {
@@ -229,7 +229,7 @@ func TestWithObserver_nilObserverIsInert(t *testing.T) {
 		workflow.From[int](workflow.Output("start")),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
-	if _, err := workflow.Run(context.Background(), a,
+	if _, err := workflow.Run(t.Context(), a,
 		workflow.NewStore().WithOutput("start", 1), workflow.RunConfig{}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestWithObserver_nilObserverIsInert(t *testing.T) {
 func TestObserverFunc(t *testing.T) {
 	var got workflow.Event
 	observer := workflow.ObserverFunc(func(_ context.Context, event workflow.Event) { got = event })
-	observer.Observe(context.Background(), workflow.Event{Kind: workflow.EventStarted, ID: "a"})
+	observer.Observe(t.Context(), workflow.Event{Kind: workflow.EventStarted, ID: "a"})
 	if got.Kind != workflow.EventStarted || got.ID != "a" {
 		t.Fatalf("event = %#v", got)
 	}
@@ -253,7 +253,7 @@ func TestRun_startsEachEventSequenceAtOne(t *testing.T) {
 		cfg := workflow.RunConfig{Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
 			sequence = append(sequence, event.Seq)
 		})}
-		if _, err := workflow.Run(context.Background(), step, workflow.NewStore(), cfg); err != nil {
+		if _, err := workflow.Run(t.Context(), step, workflow.NewStore(), cfg); err != nil {
 			t.Fatalf("run %d: %v", run, err)
 		}
 		if !slices.Equal(sequence, []uint64{1, 2}) {
@@ -264,7 +264,7 @@ func TestRun_startsEachEventSequenceAtOne(t *testing.T) {
 
 func TestRun_rejectsNilStep(t *testing.T) {
 	in := workflow.NewStore().WithOutput("start", 1)
-	out, err := workflow.Run(context.Background(), nil, in, workflow.RunConfig{})
+	out, err := workflow.Run(t.Context(), nil, in, workflow.RunConfig{})
 	if !errors.Is(err, workflow.ErrNilStep) {
 		t.Fatalf("err = %v; want ErrNilStep", err)
 	}
@@ -282,7 +282,7 @@ func TestRunConfig_eitherHalfAlone(t *testing.T) {
 	onlyObserver := workflow.RunConfig{
 		Observer: workflow.ObserverFunc(func(context.Context, workflow.Event) { seen++ }),
 	}
-	if _, err := workflow.Run(context.Background(), step, workflow.NewStore(), onlyObserver); err != nil {
+	if _, err := workflow.Run(t.Context(), step, workflow.NewStore(), onlyObserver); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if seen != 2 {
@@ -291,7 +291,7 @@ func TestRunConfig_eitherHalfAlone(t *testing.T) {
 
 	journal := workflow.NewJournal()
 	onlyJournal := workflow.RunConfig{Journal: journal}
-	if _, err := workflow.Run(context.Background(), step, workflow.NewStore(), onlyJournal); err != nil {
+	if _, err := workflow.Run(t.Context(), step, workflow.NewStore(), onlyJournal); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if journal.Len() != 1 {

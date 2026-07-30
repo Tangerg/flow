@@ -40,7 +40,7 @@ type schemaSource struct {
 
 type compiledSchema struct {
 	validator interface {
-		Validate(any) error
+		Validate(document any) error
 	}
 }
 
@@ -99,6 +99,11 @@ func (s schemaSource) compile() (*compiledSchema, error) {
 	return &compiledSchema{validator: schema}, nil
 }
 
+// compileOptional reports an absent schema as a nil validator rather than a
+// sentinel error, because "this node type declares no config schema" is a
+// supported registration and not a condition any caller recovers from.
+//
+//nolint:nilnil // A nil validator is the documented "no schema" result.
 func (s schemaSource) compileOptional() (*compiledSchema, error) {
 	if len(bytes.TrimSpace(s.document)) == 0 {
 		return nil, nil
