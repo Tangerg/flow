@@ -176,6 +176,8 @@ func (group indexGroup) startCalls(
 			return
 		}
 		workers.Go(func() {
+			// Cancellation may happen after dispatch but before this
+			// goroutine starts. Do not enter user code in that window.
 			if ctx.Err() != nil {
 				return
 			}

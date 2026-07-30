@@ -92,7 +92,7 @@ func (renderer *renderer) collectEdges() {
 
 func (renderer *renderer) addDataEdge(target, port string, ref workflow.Ref) {
 	label := port
-	if ref.Path != "/output" {
+	if ref != workflow.Output(ref.NodeID) {
 		label += ": " + ref.Path
 	}
 	renderer.edges = append(renderer.edges, edge{
