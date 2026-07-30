@@ -150,7 +150,7 @@ func TestEvents_scopePathDistinguishesIterationElements(t *testing.T) {
 	var paths []string
 	cfg := workflow.RunConfig{Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
 		if event.Kind == workflow.EventCompleted {
-			paths = append(paths, strings.Join(event.Path, "/"))
+			paths = append(paths, strings.Join(event.Scope, "/"))
 		}
 	})}
 
@@ -175,7 +175,7 @@ func TestEvents_scopePathDistinguishesLoopIterations(t *testing.T) {
 	var paths []string
 	cfg := workflow.RunConfig{Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
 		if event.Kind == workflow.EventCompleted {
-			paths = append(paths, strings.Join(event.Path, "/"))
+			paths = append(paths, strings.Join(event.Scope, "/"))
 		}
 	})}
 

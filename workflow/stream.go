@@ -48,7 +48,7 @@ func (s StreamNodeFunc[I, O, C]) RunStream(
 // is application-owned and must be treated as immutable.
 type Chunk struct {
 	ID    string
-	Path  []string
+	Scope []string
 	Seq   uint64
 	Index uint64
 	Value any
@@ -125,9 +125,9 @@ func (s streamRunner[I, O, C]) validate() error {
 func (s streamRunner[I, O, C]) run(
 	ctx context.Context,
 	input I,
-	invocation leafInvocation,
+	identity leafIdentity,
 ) (O, error) {
-	emitter := invocation.run.emitter()
+	emitter := identity.run.emitter()
 	if emitter == nil {
 		stopped := false
 		output, err := s.node.RunStream(ctx, input, func(C) bool {
@@ -149,10 +149,10 @@ func (s streamRunner[I, O, C]) run(
 	stream := chunkStream[C]{
 		ctx:     streamCtx,
 		cancel:  cancel,
-		run:     invocation.run,
+		run:     identity.run,
 		emitter: emitter,
-		id:      invocation.id,
-		path:    invocation.path,
+		id:      identity.id,
+		scope:   identity.scope,
 	}
 	output, err := s.node.RunStream(streamCtx, input, stream.yield)
 	if stream.err != nil {
@@ -181,7 +181,7 @@ type chunkStream[C any] struct {
 	run     *runState
 	emitter Emitter
 	id      string
-	path    []string
+	scope   []string
 	index   uint64
 	stopped bool
 	err     error
@@ -196,7 +196,7 @@ func (c *chunkStream[C]) yield(value C) bool {
 	index := c.index
 	chunk := Chunk{
 		ID:    c.id,
-		Path:  slices.Clone(c.path),
+		Scope: slices.Clone(c.scope),
 		Seq:   c.run.nextSeq(),
 		Index: index,
 		Value: value,

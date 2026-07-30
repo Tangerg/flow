@@ -79,7 +79,7 @@ output remains absent.
 ## 4. Register the boundary as a Graph node
 
 ```go
-registry.MustRegisterLeaf(
+registry.MustRegisterNode(
 	"double-region",
 	workflow.SubgraphFactory(body, workflow.Output("double")),
 )
@@ -98,7 +98,7 @@ body remains sealed, while the boundary stays visible to Graph validation:
 - the body validates its own inner Graph or Spec.
 
 Do not hide additional references inside factory config. A dependency is
-statically useful only when it crosses the boundary through `NodeSpec.Inputs`.
+statically useful only when it crosses the boundary through `GraphNode.Inputs`.
 
 ## 5. Use the JSON Spec form
 

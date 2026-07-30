@@ -14,7 +14,7 @@ type unaryConfig struct {
 	Value int `json:"value"`
 }
 
-unary := func(op func(int, int) int) workflow.LeafFactory {
+unary := func(op func(int, int) int) workflow.NodeFactory {
 	return workflow.Factory(
 		func(cfg unaryConfig) (flow.Node[int, int], error) {
 			return flow.NodeFunc[int, int](
@@ -34,11 +34,11 @@ Register node **types**, not graph instances:
 
 ```go
 registry := workflow.NewRegistry().
-	MustRegisterLeaf(
+	MustRegisterNode(
 		"add",
 		unary(func(a, b int) int { return a + b }),
 	).
-	MustRegisterLeaf(
+	MustRegisterNode(
 		"multiply",
 		unary(func(a, b int) int { return a * b }),
 	)
@@ -127,7 +127,7 @@ domain type aligned; they are two views of the same boundary.
 ## 4. Describe data flow with a Graph
 
 ```go
-graph := workflow.Graph{Concurrency: 2, Nodes: []workflow.NodeSpec{
+graph := workflow.Graph{Concurrency: 2, Nodes: []workflow.GraphNode{
 	{
 		ID:    "twice",
 		Type:  "multiply",

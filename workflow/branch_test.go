@@ -46,7 +46,7 @@ func TestBranch_routes(t *testing.T) {
 // without knowing which case ran.
 func TestValidateSpec_branchCasesMayShareAStepID(t *testing.T) {
 	reg := workflow.NewRegistry().
-		MustRegisterLeaf("addN", addN()).
+		MustRegisterNode("addN", addN()).
 		MustRegisterResolver("pick", func(context.Context, workflow.Store) (string, error) { return "a", nil })
 
 	leaf := func(n string) workflow.Spec {
@@ -89,7 +89,7 @@ func TestValidateSpec_branchCasesMayShareAStepID(t *testing.T) {
 
 func TestValidateSpec_stillRejectsIDsThatCanCollide(t *testing.T) {
 	reg := workflow.NewRegistry().
-		MustRegisterLeaf("addN", addN()).
+		MustRegisterNode("addN", addN()).
 		MustRegisterResolver("pick", func(context.Context, workflow.Store) (string, error) { return "a", nil })
 
 	leaf := func(id string) workflow.Spec {

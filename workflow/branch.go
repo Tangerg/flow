@@ -120,7 +120,7 @@ func (b branchStep) Describe() Description {
 	return Description{ID: b.id, Kind: "branch", Children: children}
 }
 
-func (b branchStep) workflowDefinition() stepDefinition {
+func (b branchStep) definition() stepDefinition {
 	return stepDefinition{
 		kind:  definitionBranch,
 		id:    b.id,

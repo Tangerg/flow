@@ -15,7 +15,7 @@ All notable changes to this project are documented here. The format follows
   and the `Spec` JSON DSL now includes a `subgraph` kind.
 - Conditional execution for flat `workflow.Graph` definitions.
   `NodeSchema.Outlets` declares a routing node's possible string outputs;
-  `NodeSpec.When`, `Gate`, `When`, and `TriggerAny` gate targets and
+  `GraphNode.When`, `Gate`, `When`, and `TriggerAny` gate targets and
   re-convergence points; and `EventBypassed` distinguishes an unselected node
   from Journal replay. Gate sources participate in dependency ordering and
   cycle detection, and both schema validation and execution reject undeclared
@@ -64,7 +64,7 @@ All notable changes to this project are documented here. The format follows
 - `Journal` for checkpointed resumption, passed to `workflow.Run` through
   `RunConfig`: a later run skips every completed leaf boundary the Journal holds
   and restores its result.
-  Records are keyed by scope path and step ID, so this is correct where one leaf
+  Records are keyed by scope and step ID, so this is correct where one leaf
   runs many times. `Branch` and `Loop` also record the decisions they made — a
   resolver or condition that is not a pure function of the Store cannot send a
   resumed run down a different path, and is not consulted twice. A Journal
@@ -95,10 +95,10 @@ All notable changes to this project are documented here. The format follows
   missing value.
 - `Registry.NodeTypes` and `Registry.NodeSchema` expose the registered node
   vocabulary and each type's declared ports for editors and tooling.
-- `Event` now carries `Seq` (per-run ordering), `Path` (the enclosing `Loop` and
+- `Event` now carries `Seq` (per-run ordering), `Scope` (the enclosing `Loop` and
   `Iteration` scopes, so repeated executions of one step are distinguishable),
   `Elapsed`, and the `Store` the step produced. `WithScope` and `Scope` let a
-  custom composite contribute a path segment. Together these make an external
+  custom composite contribute a scope segment. Together these make an external
   tracker or state persister implementable without the package owning durability.
 - `Store.Changes` returns the writes distinguishing a Store from a base snapshot
   — the delta an audit log records instead of a whole snapshot.
@@ -121,13 +121,23 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The module requires Go 1.26.5. `errors.AsType` and the other 1.26 additions are
+  used where they replace an older idiom, so 1.25 can no longer build it.
+- `flow` now depends on `golang.org/x/sync`. `Map` delegates first-error
+  collection and group cancellation to `errgroup`, which replaces a hand-rolled
+  `sync.Once` guarding an error and a cancel func. The dependency links only
+  `errgroup` and pulls in nothing beyond the standard library. Bounded fan-out
+  keeps its own worker pool rather than using `errgroup.SetLimit`: SetLimit
+  bounds calls in flight by queueing every element on a semaphore, which
+  allocates per element instead of per worker, and a caller who sets a limit
+  means it to bound what the fan-out consumes.
 - Compiled Graphs now schedule from dependency readiness instead of inserting
   topological `Sequence(Parallel(...))` barriers. `Graph.Concurrency` is a
   graph-wide limit. Nodes receive only the input Store and their declared
   dependencies, and completed Stores merge in declaration order. Suspension
   blocks descendants while unrelated work finishes; a real failure returns
   already completed writes together with the error.
-- `NodeSpec` and `NodeSchema` gained routing fields. Unkeyed composite literals
+- `GraphNode` and `NodeSchema` gained routing fields. Unkeyed composite literals
   for either type must be converted to keyed fields; keyed literals require no
   migration.
 - A compiled `workflow.Graph` now owns every Store cell whose node ID belongs to
@@ -136,7 +146,7 @@ All notable changes to this project are documented here. The format follows
   Store from leaking output from a now-bypassed branch. Callers that seeded
   values under an internal node ID must move them to an external input ID and
   wire that reference through a port.
-- `Spec.Input`, `Spec.BodyOutput`, and `NodeSpec.Input` are now `Ref` values
+- `Spec.Input`, `Spec.BodyOutput`, and `GraphNode.Input` are now `Ref` values
   rather than pointers. Callers can write `Input: workflow.Output("source")`
   directly; a zero `Ref` remains omitted from JSON and means the field is unset.
 - `RunConfig` now includes an `Emitter`. Callers should continue to construct
@@ -313,9 +323,29 @@ All notable changes to this project are documented here. The format follows
 
 ### Breaking
 
+- `Path` named two unrelated things. It now names only one: the RFC 6901 pointer
+  in `Ref.Path`, spelled the way JSON Patch spells it. The execution scope it
+  used to share the word with is `Scope` on `Event`, `Chunk`, `Suspension`, and
+  `JournalKey`, matching the `Scope` and `WithScope` accessors those values were
+  always paired with. `Journal` JSON writes `"scope"` and its format version is
+  now 2, so a journal persisted under version 1 is rejected rather than
+  misread. The variadic segments of `At` and `Ref.Child` are named `segments`,
+  since they are unencoded segments rather than a pointer.
+- The registry named one concept two ways. It is now `Node` throughout, matching
+  the `NodeTypes` and `NodeSchema` it always had: `LeafFactory` is
+  `NodeFactory`, `RegisterLeaf` and `MustRegisterLeaf` are `RegisterNode` and
+  `MustRegisterNode`, and their `RegistrationError.Kind` is `"node"`. A factory
+  may return any Step, so calling it a leaf factory was wrong once
+  `SubgraphFactory` existed. The flat graph's node declaration is `GraphNode`,
+  which frees `NodeSpec` for the value a factory receives — the former
+  `LeafSpec`. JSON field names are unchanged in both DSLs.
+- `Store.With` is `Store.WithCell`, naming the unit the Store's own
+  documentation uses and pairing with `WithOutput`.
+- `Index` is `ItemIndex`, pairing with `Item` and no longer colliding with the
+  universal meaning of an index.
 - Graph nodes can no longer observe an unrelated node merely because a former
   layer barrier happened to run it earlier; wire every Store read through
-  `NodeSpec.Input` or `NodeSpec.Inputs`, or declare a pure control edge with
+  `GraphNode.Input` or `GraphNode.Inputs`, or declare a pure control edge with
   `DependsOn`. Failure may now return writes from nodes that completed before
   the error instead of discarding the whole in-flight layer.
 - Invalid `expr.SwitchSpec` values and conflicting `expr.Bindings` names now
@@ -353,14 +383,14 @@ All notable changes to this project are documented here. The format follows
   step ID.
 - `WithScope` is no longer inert without an observer.
 - `Event.Kind` has two new values, `EventSuspended` and `EventSkipped`.
-- `workflow.LeafFactory` takes a single `LeafSpec` value instead of positional
+- `workflow.NodeFactory` takes a single `NodeSpec` value instead of positional
   `(id string, input Ref, config json.RawMessage)` arguments, so a factory sees
   every wired port and the signature can grow without breaking callers.
 - `NodeSchema.Input ValueType` became `NodeSchema.Inputs Ports`, keyed by port
   name. Use `workflow.OnePort(t)` for a single-input node.
 - `workflow.Factory` reports `ErrMissingPort` when the default port is unwired.
   Such a node could never have run, so the failure moved from run time to compile
-  time; a node that takes no input needs a custom `LeafFactory` supplying its own
+  time; a node that takes no input needs a custom `NodeFactory` supplying its own
   `BindFunc`.
 - A registered schema that declares ports now makes wiring mandatory. Graphs that
   relied on a declared input being optional will fail validation.
@@ -396,7 +426,7 @@ All notable changes to this project are documented here. The format follows
   and `flowx.Identity` were removed. Use `flow.Race`/`flowx.FanOut` for control
   flow, aggregate errors yourself, and write a one-line `NodeFunc` (or
   `flowx.Chain()`) for a pass-through.
-- Use `Output`, `Item`, and `Index` instead of exported Store path constants;
+- Use `Output`, `Item`, and `ItemIndex` instead of exported Store path constants;
   use `ObserverFunc` instead of the removed event collector.
 - Consume `workflow.Description` directly; Mermaid rendering is no longer part
   of the core workflow package.

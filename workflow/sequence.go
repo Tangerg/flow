@@ -32,6 +32,6 @@ func (s sequenceStep) Describe() Description {
 	return Description{Kind: "sequence", Children: s.steps.describe()}
 }
 
-func (s sequenceStep) workflowDefinition() stepDefinition {
+func (s sequenceStep) definition() stepDefinition {
 	return stepDefinition{kind: definitionSteps, steps: s.steps}
 }

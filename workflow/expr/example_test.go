@@ -65,8 +65,8 @@ func ExampleBindings() {
 	})
 
 	reg := workflow.NewRegistry().
-		MustRegisterLeaf("double", double).
-		MustRegisterLeaf("label", label)
+		MustRegisterNode("double", double).
+		MustRegisterNode("label", label)
 	if err := bindings.Register(reg); err != nil {
 		fmt.Println(err)
 		return

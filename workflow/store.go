@@ -77,11 +77,11 @@ func NewStore() Store {
 	return Store{}
 }
 
-// With returns a copy of the Store with value written at (nodeID, key). The
+// WithCell returns a copy of the Store with value written at (nodeID, key). The
 // receiver is not modified. Most writes add a constant-size overlay, which is
 // periodically compacted. Value is not cloned and must not be mutated after
 // insertion.
-func (s Store) With(nodeID, key string, value any) Store {
+func (s Store) WithCell(nodeID, key string, value any) Store {
 	next := cell{value: value, revision: revisionCounter.Add(1)}
 	identity := storeKey{nodeID: nodeID, key: key}
 	if s.depth < storeOverlayLimit {
@@ -148,7 +148,7 @@ func (s Store) hasNode(nodeIDs map[string]struct{}) bool {
 // WithOutput returns a copy of the Store with value written to the conventional
 // output key for nodeID.
 func (s Store) WithOutput(nodeID string, value any) Store {
-	return s.With(nodeID, outputKey, value)
+	return s.WithCell(nodeID, outputKey, value)
 }
 
 // Lookup returns the value at ref. The path's first segment is the key under the

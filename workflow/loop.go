@@ -123,6 +123,6 @@ func (l loopStep) Describe() Description {
 	return Description{ID: l.id, Kind: "loop", Children: []Description{Describe(l.body)}}
 }
 
-func (l loopStep) workflowDefinition() stepDefinition {
+func (l loopStep) definition() stepDefinition {
 	return stepDefinition{kind: definitionLoop, id: l.id, body: l.body}
 }

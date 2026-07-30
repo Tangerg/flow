@@ -5,7 +5,7 @@ import (
 	"slices"
 )
 
-// NodeSpec describes one node in a flat [Graph]: a leaf built by the registry
+// GraphNode describes one node in a flat [Graph]: a leaf built by the registry
 // plus the edges into it. Dependencies are inferred from every wired input port
 // that points at another graph node, and from DependsOn. An input may reference
 // an external seed Store value; every explicit DependsOn entry must name a graph
@@ -15,7 +15,7 @@ import (
 // zero value means absent. Inputs wires ports by name. Setting the default port
 // both ways is rejected as [ErrDuplicatePort]. When gates execution on routing
 // outputs; its zero Trigger requires every gate, while [TriggerAny] requires one.
-type NodeSpec struct {
+type GraphNode struct {
 	ID        string          `json:"id"`
 	Type      string          `json:"type"`
 	Input     Ref             `json:"input,omitzero"`
@@ -30,7 +30,7 @@ type NodeSpec struct {
 // editor produces. Unlike a nested [Spec], any node may depend on any other as
 // long as the result is acyclic. [Registry.CompileGraph] starts each node as
 // soon as its dependencies complete. Routing nodes select conditional targets
-// through [NodeSpec.When]. Concurrency limits the whole graph; zero means
+// through [GraphNode.When]. Concurrency limits the whole graph; zero means
 // unbounded.
 //
 // Each node sees the invocation's input Store plus the completed Stores of its
@@ -49,8 +49,8 @@ type NodeSpec struct {
 // replay, so a Store returned by an earlier invocation is safe to reuse with new
 // external inputs.
 type Graph struct {
-	Nodes       []NodeSpec `json:"nodes"`
-	Concurrency int        `json:"concurrency,omitempty"`
+	Nodes       []GraphNode `json:"nodes"`
+	Concurrency int         `json:"concurrency,omitempty"`
 }
 
 // Inputs returns the external references the Graph reads: wired input ports
@@ -66,7 +66,6 @@ func (g Graph) Inputs() []Ref {
 		internalNodeIDs[node.ID] = struct{}{}
 	}
 
-	seen := make(map[Ref]struct{})
 	externalRefs := make([]Ref, 0, len(g.Nodes))
 	for _, node := range g.Nodes {
 		inputs, err := node.Inputs.withDefault(node.Input)
@@ -77,15 +76,13 @@ func (g Graph) Inputs() []Ref {
 			if _, internal := internalNodeIDs[ref.NodeID]; internal {
 				continue
 			}
-			if _, duplicate := seen[ref]; duplicate {
-				continue
-			}
-			seen[ref] = struct{}{}
 			externalRefs = append(externalRefs, ref)
 		}
 	}
+	// Sorting is part of the contract, so duplicates end up adjacent and need no
+	// separate set to detect.
 	slices.SortFunc(externalRefs, Ref.compare)
-	return externalRefs
+	return slices.Compact(externalRefs)
 }
 
 // MissingInputs returns the references from [Graph.Inputs] that s does not

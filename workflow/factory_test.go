@@ -15,7 +15,7 @@ type addConfig struct {
 	N int `json:"n"`
 }
 
-func addFactory() workflow.LeafFactory {
+func addFactory() workflow.NodeFactory {
 	return workflow.Factory(func(cfg addConfig) (flow.Node[int, int], error) {
 		return flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 			return in + cfg.N, nil
@@ -24,8 +24,8 @@ func addFactory() workflow.LeafFactory {
 }
 
 // wired returns the LeafSpec of a node whose default port reads input.output.
-func wired(config json.RawMessage) workflow.LeafSpec {
-	return workflow.LeafSpec{
+func wired(config json.RawMessage) workflow.NodeSpec {
+	return workflow.NodeSpec{
 		ID:     "add",
 		Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("input")},
 		Config: config,
@@ -100,7 +100,7 @@ func TestFactory_rejectsDuplicateConfigMembers(t *testing.T) {
 func TestFactory_rejectsUnwiredDefaultPort(t *testing.T) {
 	// A Factory node always reads one port, so an unwired default port can never
 	// work and must be reported at build time rather than mid-run.
-	_, err := addFactory()(workflow.LeafSpec{ID: "add"})
+	_, err := addFactory()(workflow.NodeSpec{ID: "add"})
 	if !errors.Is(err, workflow.ErrMissingPort) {
 		t.Fatalf("err = %v; want ErrMissingPort", err)
 	}
@@ -127,7 +127,7 @@ func TestFactory_rejectsNilFunctionsAndNodes(t *testing.T) {
 }
 
 // sumPorts adds the two numbers wired to its "a" and "b" ports.
-func sumPorts() workflow.LeafFactory {
+func sumPorts() workflow.NodeFactory {
 	return workflow.BindFactory(
 		func(_ struct{}, inputs workflow.Inputs) (workflow.BindFunc[[2]int], error) {
 			a, aOK := inputs.Ref("a")
@@ -156,7 +156,7 @@ func sumPorts() workflow.LeafFactory {
 }
 
 func TestBindFactory_bindsNamedPorts(t *testing.T) {
-	step, err := sumPorts()(workflow.LeafSpec{
+	step, err := sumPorts()(workflow.NodeSpec{
 		ID:     "sum",
 		Inputs: workflow.Inputs{"a": workflow.Output("x"), "b": workflow.Output("y")},
 	})
@@ -175,7 +175,7 @@ func TestBindFactory_bindsNamedPorts(t *testing.T) {
 }
 
 func TestBindFactory_reportsMissingPort(t *testing.T) {
-	_, err := sumPorts()(workflow.LeafSpec{
+	_, err := sumPorts()(workflow.NodeSpec{
 		ID:     "sum",
 		Inputs: workflow.Inputs{"a": workflow.Output("x")},
 	})
@@ -193,7 +193,7 @@ func TestBindFactory_rejectsUnknownConfigField(t *testing.T) {
 			return flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }), nil
 		},
 	)
-	_, err := factory(workflow.LeafSpec{ID: "a", Config: json.RawMessage(`{"unknown": true}`)})
+	_, err := factory(workflow.NodeSpec{ID: "a", Config: json.RawMessage(`{"unknown": true}`)})
 	if !errors.Is(err, workflow.ErrInvalidSpec) {
 		t.Fatalf("err = %v; want ErrInvalidSpec", err)
 	}
@@ -207,7 +207,7 @@ func TestBindFactory_reportsBuildError(t *testing.T) {
 		},
 		func(struct{}) (flow.Node[int, int], error) { return nil, boom },
 	)
-	if _, err := factory(workflow.LeafSpec{ID: "a"}); !errors.Is(err, boom) {
+	if _, err := factory(workflow.NodeSpec{ID: "a"}); !errors.Is(err, boom) {
 		t.Fatalf("err = %v; want boom", err)
 	}
 }
@@ -216,13 +216,13 @@ func TestBindFactory_rejectsNilFunctions(t *testing.T) {
 	build := func(struct{}) (flow.Node[int, int], error) { return flow.NodeFunc[int, int](nil), nil }
 	bind := func(struct{}, workflow.Inputs) (workflow.BindFunc[int], error) { return nil, nil }
 
-	for name, factory := range map[string]workflow.LeafFactory{
+	for name, factory := range map[string]workflow.NodeFactory{
 		"nil bind":   workflow.BindFactory(nil, build),
 		"nil build":  workflow.BindFactory[struct{}, int, int](bind, nil),
 		"nil binder": workflow.BindFactory(bind, build),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := factory(workflow.LeafSpec{ID: "a"}); !errors.Is(err, flow.ErrNilFunc) {
+			if _, err := factory(workflow.NodeSpec{ID: "a"}); !errors.Is(err, flow.ErrNilFunc) {
 				t.Fatalf("err = %v; want ErrNilFunc", err)
 			}
 		})

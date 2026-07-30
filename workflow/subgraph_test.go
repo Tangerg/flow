@@ -106,7 +106,7 @@ func TestSubgraph_resumeReplaysInnerBodyAcrossJSONRoundTrip(t *testing.T) {
 	suspensions := workflow.Suspensions(err)
 	if len(suspensions) != 1 ||
 		suspensions[0].ID != "answer" ||
-		!slices.Equal(suspensions[0].Path, []string{"approval"}) {
+		!slices.Equal(suspensions[0].Scope, []string{"approval"}) {
 		t.Fatalf("Run error = %v; want answer suspension in approval scope", err)
 	}
 	if _, ok := paused.Lookup(workflow.Output("approval")); ok {
@@ -314,12 +314,12 @@ func TestSubgraphFactory_rejectsConfigAndInvalidBoundary(t *testing.T) {
 		},
 	)
 	if _, err := workflow.SubgraphFactory(body, workflow.Output("value"))(
-		workflow.LeafSpec{ID: "sub", Config: json.RawMessage(`{}`)},
+		workflow.NodeSpec{ID: "sub", Config: json.RawMessage(`{}`)},
 	); !errors.Is(err, workflow.ErrInvalidSpec) {
 		t.Fatalf("config error = %v; want ErrInvalidSpec", err)
 	}
 	if _, err := workflow.SubgraphFactory(nil, workflow.Output("value"))(
-		workflow.LeafSpec{ID: "sub"},
+		workflow.NodeSpec{ID: "sub"},
 	); !errors.Is(err, workflow.ErrNilStep) {
 		t.Fatalf("nil body error = %v; want ErrNilStep", err)
 	}
@@ -334,7 +334,7 @@ func TestSubgraphFactory_makesBoundaryVisibleToGraphValidation(t *testing.T) {
 		},
 	)
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("number", func(spec workflow.LeafSpec) (workflow.Step, error) {
+		MustRegisterNode("number", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
 				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
@@ -346,7 +346,7 @@ func TestSubgraphFactory_makesBoundaryVisibleToGraphValidation(t *testing.T) {
 			), nil
 		}).
 		MustRegisterSchema("number", workflow.NodeSchema{Output: workflow.TypeNumber}).
-		MustRegisterLeaf("text", func(spec workflow.LeafSpec) (workflow.Step, error) {
+		MustRegisterNode("text", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
 				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
@@ -358,13 +358,13 @@ func TestSubgraphFactory_makesBoundaryVisibleToGraphValidation(t *testing.T) {
 			), nil
 		}).
 		MustRegisterSchema("text", workflow.NodeSchema{Output: workflow.TypeString}).
-		MustRegisterLeaf("sealed", workflow.SubgraphFactory(body, workflow.Output("inner"))).
+		MustRegisterNode("sealed", workflow.SubgraphFactory(body, workflow.Output("inner"))).
 		MustRegisterSchema("sealed", workflow.NodeSchema{
 			Inputs: workflow.Ports{"value": workflow.TypeNumber},
 			Output: workflow.TypeNumber,
 		})
 
-	graph := workflow.Graph{Nodes: []workflow.NodeSpec{
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "source", Type: "number"},
 		{ID: "sub", Type: "sealed", Inputs: workflow.Inputs{"value": workflow.Output("source")}},
 	}}
@@ -380,7 +380,7 @@ func TestSubgraphFactory_makesBoundaryVisibleToGraphValidation(t *testing.T) {
 		t.Fatalf("sub = %v, %v; want 6", value, getErr)
 	}
 
-	cycle := workflow.Graph{Nodes: []workflow.NodeSpec{
+	cycle := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "left", Type: "sealed", Inputs: workflow.Inputs{"value": workflow.Output("right")}},
 		{ID: "right", Type: "sealed", Inputs: workflow.Inputs{"value": workflow.Output("left")}},
 	}}
@@ -388,7 +388,7 @@ func TestSubgraphFactory_makesBoundaryVisibleToGraphValidation(t *testing.T) {
 		t.Fatalf("cycle error = %v; want ErrCycle", err)
 	}
 
-	external := workflow.Graph{Nodes: []workflow.NodeSpec{{
+	external := workflow.Graph{Nodes: []workflow.GraphNode{{
 		ID: "sub", Type: "sealed",
 		Inputs: workflow.Inputs{"value": workflow.Output("request")},
 	}}}
@@ -396,7 +396,7 @@ func TestSubgraphFactory_makesBoundaryVisibleToGraphValidation(t *testing.T) {
 		t.Fatalf("Graph.Inputs = %v; want request output", got)
 	}
 
-	incompatible := workflow.Graph{Nodes: []workflow.NodeSpec{
+	incompatible := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "source", Type: "text"},
 		{ID: "sub", Type: "sealed", Inputs: workflow.Inputs{"value": workflow.Output("source")}},
 	}}
@@ -414,12 +414,12 @@ func TestCompiledGraph_withSubgraphIsSafeForConcurrentReuse(t *testing.T) {
 		},
 	)
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("sealed", workflow.SubgraphFactory(body, workflow.Output("inner"))).
+		MustRegisterNode("sealed", workflow.SubgraphFactory(body, workflow.Output("inner"))).
 		MustRegisterSchema("sealed", workflow.NodeSchema{
 			Inputs: workflow.Ports{"value": workflow.TypeNumber},
 			Output: workflow.TypeNumber,
 		})
-	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.NodeSpec{{
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
 		ID: "sub", Type: "sealed",
 		Inputs: workflow.Inputs{"value": workflow.Output("seed")},
 	}}})
@@ -458,7 +458,7 @@ func TestCompiledGraph_withSubgraphIsSafeForConcurrentReuse(t *testing.T) {
 
 func TestCompileSpecJSON_subgraph(t *testing.T) {
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("double", workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
+		MustRegisterNode("double", workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
 			return flow.NodeFunc[int, int](func(_ context.Context, input int) (int, error) {
 				return input * 2, nil
 			}), nil

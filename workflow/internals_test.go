@@ -112,7 +112,7 @@ func TestJSONSchemaError_deduplicatesAndUnwraps(t *testing.T) {
 func TestSpecCompiler_defendsItsValidatedInputContract(t *testing.T) {
 	buildErr := errors.New("build")
 	registry := NewRegistry().
-		MustRegisterLeaf("broken", func(LeafSpec) (Step, error) {
+		MustRegisterNode("broken", func(NodeSpec) (Step, error) {
 			return nil, buildErr
 		}).
 		MustRegisterResolver("resolver", func(context.Context, Store) (string, error) {
@@ -227,7 +227,7 @@ func TestGraphDecorators_preserveDefinitionAndStoreBoundaries(t *testing.T) {
 			id:   "opaque",
 			step: opaqueTestStep{},
 		}
-		definition := step.workflowDefinition()
+		definition := step.definition()
 		if definition.kind != definitionNamed || definition.id != "opaque" {
 			t.Fatalf("definition = %+v; want named opaque", definition)
 		}

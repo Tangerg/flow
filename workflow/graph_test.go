@@ -20,10 +20,10 @@ func TestCompileGraph_diamond(t *testing.T) {
 	//   c = a + 100          (= 101)
 	//   d = b + c            (= 112)   <- fan-in through two named ports
 	reg := workflow.NewRegistry().
-		MustRegisterLeaf("addN", addN()).
-		MustRegisterLeaf("sum", sumPorts())
+		MustRegisterNode("addN", addN()).
+		MustRegisterNode("sum", sumPorts())
 
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+	g := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "a", Type: "addN", Input: workflow.Output("start"), Config: json.RawMessage(`{"n":1}`)},
 		{ID: "b", Type: "addN", Input: workflow.Output("a"), Config: json.RawMessage(`{"n":10}`)},
 		{ID: "c", Type: "addN", Input: workflow.Output("a"), Config: json.RawMessage(`{"n":100}`)},
@@ -56,12 +56,12 @@ func TestCompileGraph_diamond(t *testing.T) {
 
 func TestCompileGraph_portsInferDependencies(t *testing.T) {
 	reg := workflow.NewRegistry().
-		MustRegisterLeaf("addN", addN()).
-		MustRegisterLeaf("sum", sumPorts())
+		MustRegisterNode("addN", addN()).
+		MustRegisterNode("sum", sumPorts())
 
 	// b is declared before its producer a, so passing proves execution order
 	// comes from the wired ports rather than from declaration order.
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+	g := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "b", Type: "sum", Inputs: workflow.Inputs{"a": workflow.Output("a"), "b": workflow.Output("start")}},
 		{ID: "a", Type: "addN", Input: workflow.Output("start"), Config: json.RawMessage(`{"n":1}`)},
 	}}
@@ -82,7 +82,7 @@ func TestCompileGraph_portsInferDependencies(t *testing.T) {
 func TestCompileGraph_limitsConcurrencyAcrossTheWholeGraph(t *testing.T) {
 	started := make(chan struct{}, 3)
 	release := make(chan struct{})
-	registry := workflow.NewRegistry().MustRegisterLeaf(
+	registry := workflow.NewRegistry().MustRegisterNode(
 		"blocking",
 		workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
 			return flow.NodeFunc[int, int](
@@ -100,7 +100,7 @@ func TestCompileGraph_limitsConcurrencyAcrossTheWholeGraph(t *testing.T) {
 	)
 	graph := workflow.Graph{
 		Concurrency: 2,
-		Nodes: []workflow.NodeSpec{
+		Nodes: []workflow.GraphNode{
 			{ID: "a", Type: "blocking", Input: workflow.Output("start")},
 			{ID: "b", Type: "blocking", Input: workflow.Output("start")},
 			{ID: "c", Type: "blocking", Input: workflow.Output("start")},
@@ -169,7 +169,7 @@ func TestCompileGraph_emptyGraphIsAnIdentity(t *testing.T) {
 
 func TestCompileGraph_checksContextBeforeStartingNodes(t *testing.T) {
 	calls := 0
-	registry := workflow.NewRegistry().MustRegisterLeaf("node", func(spec workflow.LeafSpec) (workflow.Step, error) {
+	registry := workflow.NewRegistry().MustRegisterNode("node", func(spec workflow.NodeSpec) (workflow.Step, error) {
 		return workflow.Leaf(
 			spec.ID,
 			workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
@@ -181,7 +181,7 @@ func TestCompileGraph_checksContextBeforeStartingNodes(t *testing.T) {
 			}),
 		), nil
 	})
-	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.NodeSpec{{
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
 		ID: "node", Type: "node",
 	}}})
 	if err != nil {
@@ -199,7 +199,7 @@ func TestCompileGraph_checksContextBeforeStartingNodes(t *testing.T) {
 
 func TestCompileGraph_parentCancellationStopsRunningNodes(t *testing.T) {
 	started := make(chan struct{})
-	registry := workflow.NewRegistry().MustRegisterLeaf("blocking", func(spec workflow.LeafSpec) (workflow.Step, error) {
+	registry := workflow.NewRegistry().MustRegisterNode("blocking", func(spec workflow.NodeSpec) (workflow.Step, error) {
 		return workflow.Leaf(
 			spec.ID,
 			workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
@@ -212,7 +212,7 @@ func TestCompileGraph_parentCancellationStopsRunningNodes(t *testing.T) {
 			}),
 		), nil
 	})
-	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.NodeSpec{{
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
 		ID: "blocking", Type: "blocking",
 	}}})
 	if err != nil {
@@ -237,7 +237,7 @@ func TestCompileGraph_failureKeepsCompletedNodesAndCancelsSiblings(t *testing.T)
 	blockedStarted := make(chan struct{})
 	descendantCalls := 0
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("complete", func(spec workflow.LeafSpec) (workflow.Step, error) {
+		MustRegisterNode("complete", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
 				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
@@ -248,7 +248,7 @@ func TestCompileGraph_failureKeepsCompletedNodesAndCancelsSiblings(t *testing.T)
 				}),
 			), nil
 		}).
-		MustRegisterLeaf("fail", func(spec workflow.LeafSpec) (workflow.Step, error) {
+		MustRegisterNode("fail", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
 				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
@@ -259,7 +259,7 @@ func TestCompileGraph_failureKeepsCompletedNodesAndCancelsSiblings(t *testing.T)
 				}),
 			), nil
 		}).
-		MustRegisterLeaf("blocking", func(spec workflow.LeafSpec) (workflow.Step, error) {
+		MustRegisterNode("blocking", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
 				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
@@ -272,7 +272,7 @@ func TestCompileGraph_failureKeepsCompletedNodesAndCancelsSiblings(t *testing.T)
 				}),
 			), nil
 		}).
-		MustRegisterLeaf("descendant", func(spec workflow.LeafSpec) (workflow.Step, error) {
+		MustRegisterNode("descendant", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
 				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
@@ -284,7 +284,7 @@ func TestCompileGraph_failureKeepsCompletedNodesAndCancelsSiblings(t *testing.T)
 				}),
 			), nil
 		})
-	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.NodeSpec{
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "complete", Type: "complete"},
 		{ID: "blocking", Type: "blocking"},
 		{ID: "fail", Type: "fail", DependsOn: []string{"complete"}},
@@ -310,7 +310,7 @@ func TestCompileGraph_failureKeepsCompletedNodesAndCancelsSiblings(t *testing.T)
 func TestCompileGraph_mergesCompletedStoresInDeclarationOrder(t *testing.T) {
 	secondCompleted := make(chan struct{})
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("first", func(workflow.LeafSpec) (workflow.Step, error) {
+		MustRegisterNode("first", func(workflow.NodeSpec) (workflow.Step, error) {
 			return flow.NodeFunc[workflow.Store, workflow.Store](
 				func(_ context.Context, store workflow.Store) (workflow.Store, error) {
 					<-secondCompleted
@@ -318,7 +318,7 @@ func TestCompileGraph_mergesCompletedStoresInDeclarationOrder(t *testing.T) {
 				},
 			), nil
 		}).
-		MustRegisterLeaf("second", func(workflow.LeafSpec) (workflow.Step, error) {
+		MustRegisterNode("second", func(workflow.NodeSpec) (workflow.Step, error) {
 			return flow.NodeFunc[workflow.Store, workflow.Store](
 				func(_ context.Context, store workflow.Store) (workflow.Store, error) {
 					close(secondCompleted)
@@ -326,7 +326,7 @@ func TestCompileGraph_mergesCompletedStoresInDeclarationOrder(t *testing.T) {
 				},
 			), nil
 		}).
-		MustRegisterLeaf("reader", func(spec workflow.LeafSpec) (workflow.Step, error) {
+		MustRegisterNode("reader", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
 				workflow.From[string](workflow.Output("shared")),
@@ -335,7 +335,7 @@ func TestCompileGraph_mergesCompletedStoresInDeclarationOrder(t *testing.T) {
 				}),
 			), nil
 		})
-	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.NodeSpec{
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "first", Type: "first"},
 		{ID: "second", Type: "second"},
 		{ID: "reader", Type: "reader", DependsOn: []string{"second", "first"}},
@@ -357,7 +357,7 @@ func TestCompileGraph_mergesCompletedStoresInDeclarationOrder(t *testing.T) {
 
 func TestCompileGraph_nodesSeeOnlyDeclaredDependencies(t *testing.T) {
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("constant", func(spec workflow.LeafSpec) (workflow.Step, error) {
+		MustRegisterNode("constant", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
 				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
@@ -368,7 +368,7 @@ func TestCompileGraph_nodesSeeOnlyDeclaredDependencies(t *testing.T) {
 				}),
 			), nil
 		}).
-		MustRegisterLeaf("hidden-read", func(spec workflow.LeafSpec) (workflow.Step, error) {
+		MustRegisterNode("hidden-read", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			// This deliberately violates the factory contract by hiding a Store
 			// reference instead of declaring it in spec.Inputs.
 			return workflow.Leaf(
@@ -381,7 +381,7 @@ func TestCompileGraph_nodesSeeOnlyDeclaredDependencies(t *testing.T) {
 		})
 	step, err := registry.CompileGraph(workflow.Graph{
 		Concurrency: 1,
-		Nodes: []workflow.NodeSpec{
+		Nodes: []workflow.GraphNode{
 			{ID: "unrelated", Type: "constant"},
 			{ID: "reader", Type: "hidden-read"},
 		},
@@ -400,8 +400,8 @@ func TestCompileGraph_nodesSeeOnlyDeclaredDependencies(t *testing.T) {
 }
 
 func TestCompileGraph_deduplicatesExplicitAndInferredDependency(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
-	graph := workflow.Graph{Nodes: []workflow.NodeSpec{
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "a", Type: "addN", Input: workflow.Output("start")},
 		{
 			ID:        "b",
@@ -416,8 +416,8 @@ func TestCompileGraph_deduplicatesExplicitAndInferredDependency(t *testing.T) {
 }
 
 func TestCompileGraph_rejectsDuplicateDefaultPort(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{{
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
+	g := workflow.Graph{Nodes: []workflow.GraphNode{{
 		ID:     "a",
 		Type:   "addN",
 		Input:  workflow.Output("start"),
@@ -429,8 +429,8 @@ func TestCompileGraph_rejectsDuplicateDefaultPort(t *testing.T) {
 }
 
 func TestCompileGraph_cycle(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
+	g := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "a", Type: "addN", Input: workflow.Output("b")},
 		{ID: "b", Type: "addN", Input: workflow.Output("a")},
 	}}
@@ -440,8 +440,8 @@ func TestCompileGraph_cycle(t *testing.T) {
 }
 
 func TestCompileGraph_duplicateID(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
+	g := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "a", Type: "addN"},
 		{ID: "a", Type: "addN"},
 	}}
@@ -451,7 +451,7 @@ func TestCompileGraph_duplicateID(t *testing.T) {
 }
 
 func TestCompileGraphJSON(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
 	g := `{"nodes":[
 	  {"id":"a","type":"addN","input":{"nodeID":"start","path":"/output"},"config":{"n":2}},
 	  {"id":"b","type":"addN","input":{"nodeID":"a","path":"/output"},"config":{"n":3}}
@@ -471,7 +471,7 @@ func TestCompileGraphJSON(t *testing.T) {
 }
 
 func TestCompileGraphJSON_rejectsUnknownAndTrailingData(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
 	for _, data := range []string{
 		`{"nodes":[],"unknown":true}`,
 		`{"nodes":[]} {"nodes":[]}`,
@@ -483,8 +483,8 @@ func TestCompileGraphJSON_rejectsUnknownAndTrailingData(t *testing.T) {
 }
 
 func TestCompileGraph_keepsFactoryErrorsAtTheGraphBoundary(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{{
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
+	g := workflow.Graph{Nodes: []workflow.GraphNode{{
 		ID:     "a",
 		Type:   "addN",
 		Input:  workflow.Output("start"),
@@ -505,18 +505,18 @@ func TestCompileGraph_keepsFactoryErrorsAtTheGraphBoundary(t *testing.T) {
 }
 
 func TestCompileGraph_rejectsANilStepFromAFactory(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("broken", func(workflow.LeafSpec) (workflow.Step, error) {
+	reg := workflow.NewRegistry().MustRegisterNode("broken", func(workflow.NodeSpec) (workflow.Step, error) {
 		return nil, nil
 	})
-	_, err := reg.CompileGraph(workflow.Graph{Nodes: []workflow.NodeSpec{{ID: "a", Type: "broken"}}})
+	_, err := reg.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{ID: "a", Type: "broken"}}})
 	if !errors.Is(err, workflow.ErrNilStep) || !errors.Is(err, workflow.ErrInvalidGraph) {
 		t.Fatalf("err = %v; want ErrNilStep and ErrInvalidGraph", err)
 	}
 }
 
 func TestCompileGraph_rejectsSelfDependency(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
+	g := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "a", Type: "addN", DependsOn: []string{"a"}},
 	}}
 	_, err := reg.CompileGraph(g)
@@ -527,8 +527,8 @@ func TestCompileGraph_rejectsSelfDependency(t *testing.T) {
 }
 
 func TestCompileGraph_reportsSelfInputAsInputError(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{{
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
+	g := workflow.Graph{Nodes: []workflow.GraphNode{{
 		ID:    "a",
 		Type:  "addN",
 		Input: workflow.Output("a"),
@@ -541,8 +541,8 @@ func TestCompileGraph_reportsSelfInputAsInputError(t *testing.T) {
 }
 
 func TestCompileGraph_rejectsUnknownExplicitDependency(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
+	g := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "a", Type: "addN", DependsOn: []string{"typo"}},
 	}}
 	if _, err := reg.CompileGraph(g); err == nil {
@@ -551,8 +551,8 @@ func TestCompileGraph_rejectsUnknownExplicitDependency(t *testing.T) {
 }
 
 func TestCompileGraph_programmaticValidationMatchesJSONSchema(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
-	tests := map[string]workflow.NodeSpec{
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
+	tests := map[string]workflow.GraphNode{
 		"empty type": {
 			ID: "a",
 		},
@@ -568,7 +568,7 @@ func TestCompileGraph_programmaticValidationMatchesJSONSchema(t *testing.T) {
 	}
 	for name, node := range tests {
 		t.Run(name, func(t *testing.T) {
-			g := workflow.Graph{Nodes: []workflow.NodeSpec{
+			g := workflow.Graph{Nodes: []workflow.GraphNode{
 				{ID: "parent", Type: "addN"},
 				node,
 			}}
@@ -580,8 +580,8 @@ func TestCompileGraph_programmaticValidationMatchesJSONSchema(t *testing.T) {
 }
 
 func TestValidateGraph_rejectsMalformedConfigWithoutANodeSchema(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{{
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
+	g := workflow.Graph{Nodes: []workflow.GraphNode{{
 		ID: "a", Type: "addN", Config: json.RawMessage(`{"n":`),
 	}}}
 	if err := reg.ValidateGraph(g); !errors.Is(err, workflow.ErrInvalidGraph) {
@@ -591,11 +591,11 @@ func TestValidateGraph_rejectsMalformedConfigWithoutANodeSchema(t *testing.T) {
 
 func TestCompileGraph_runsSchemaValidation(t *testing.T) {
 	reg := workflow.NewRegistry().
-		MustRegisterLeaf("addN", addN()).
+		MustRegisterNode("addN", addN()).
 		MustRegisterSchema("addN", workflow.NodeSchema{Inputs: workflow.OnePort(workflow.TypeNumber), Output: workflow.TypeNumber}).
-		MustRegisterLeaf("stringNode", addN()).
+		MustRegisterNode("stringNode", addN()).
 		MustRegisterSchema("stringNode", workflow.NodeSchema{Inputs: workflow.OnePort(workflow.TypeString), Output: workflow.TypeString})
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+	g := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "a", Type: "addN", Input: workflow.Output("start")},
 		{ID: "b", Type: "stringNode", Input: workflow.Output("a")},
 	}}
@@ -606,7 +606,7 @@ func TestCompileGraph_runsSchemaValidation(t *testing.T) {
 
 func TestCompileGraph_reportsUnwiredAndUnknownPorts(t *testing.T) {
 	reg := workflow.NewRegistry().
-		MustRegisterLeaf("sum", sumPorts()).
+		MustRegisterNode("sum", sumPorts()).
 		MustRegisterSchema("sum", workflow.NodeSchema{
 			Inputs: workflow.Ports{"a": workflow.TypeNumber, "b": workflow.TypeNumber},
 			Output: workflow.TypeNumber,
@@ -627,7 +627,7 @@ func TestCompileGraph_reportsUnwiredAndUnknownPorts(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			g := workflow.Graph{Nodes: []workflow.NodeSpec{{ID: "n", Type: "sum", Inputs: tt.inputs}}}
+			g := workflow.Graph{Nodes: []workflow.GraphNode{{ID: "n", Type: "sum", Inputs: tt.inputs}}}
 			if err := reg.ValidateGraph(g); !errors.Is(err, tt.want) {
 				t.Fatalf("err = %v; want %v", err, tt.want)
 			}
@@ -636,13 +636,13 @@ func TestCompileGraph_reportsUnwiredAndUnknownPorts(t *testing.T) {
 }
 
 func TestCompileGraph_rejectsMalformedPortRef(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("sum", sumPorts())
+	reg := workflow.NewRegistry().MustRegisterNode("sum", sumPorts())
 	for name, ref := range map[string]workflow.Ref{
 		"empty nodeID": {Path: "/output"},
 		"empty path":   {NodeID: "start"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			g := workflow.Graph{Nodes: []workflow.NodeSpec{
+			g := workflow.Graph{Nodes: []workflow.GraphNode{
 				{ID: "n", Type: "sum", Inputs: workflow.Inputs{"a": ref, "b": workflow.Output("start")}},
 			}}
 			if err := reg.ValidateGraph(g); !errors.Is(err, workflow.ErrInvalidGraph) {
@@ -653,8 +653,8 @@ func TestCompileGraph_rejectsMalformedPortRef(t *testing.T) {
 }
 
 func TestValidateGraph_identifiesEmptyNodeIDByIndex(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
-	err := reg.ValidateGraph(workflow.Graph{Nodes: []workflow.NodeSpec{
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
+	err := reg.ValidateGraph(workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "valid", Type: "addN"},
 		{Type: "addN"},
 	}})
@@ -670,7 +670,7 @@ func TestValidateGraph_identifiesEmptyNodeIDByIndex(t *testing.T) {
 func TestGraph_inputsSkipMalformedNodes(t *testing.T) {
 	// A node whose default port is wired twice cannot be resolved; Graph.Inputs
 	// reports what it can and leaves rejecting the graph to ValidateGraph.
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+	g := workflow.Graph{Nodes: []workflow.GraphNode{
 		{
 			ID: "bad", Type: "addN", Input: workflow.Output("x"),
 			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("y")},
@@ -683,7 +683,7 @@ func TestGraph_inputsSkipMalformedNodes(t *testing.T) {
 }
 
 func TestGraph_inputs(t *testing.T) {
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+	g := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "a", Type: "addN", Input: workflow.Output("seed")},
 		{ID: "b", Type: "sum", Inputs: workflow.Inputs{
 			"a": workflow.Output("a"),          // internal
@@ -703,22 +703,22 @@ func TestGraph_inputs(t *testing.T) {
 		t.Fatalf("Graph.MissingInputs = %v; want params.rate", missing)
 	}
 
-	complete := seeded.With("params", "rate", 0.5)
+	complete := seeded.WithCell("params", "rate", 0.5)
 	if missing := g.MissingInputs(complete); len(missing) != 0 {
 		t.Fatalf("Graph.MissingInputs = %v; want none", missing)
 	}
 }
 
 func TestCompileGraph_descriptionPreservesDeclarationOrder(t *testing.T) {
-	constant := func(spec workflow.LeafSpec) (workflow.Step, error) {
+	constant := func(spec workflow.NodeSpec) (workflow.Step, error) {
 		return workflow.Leaf(
 			spec.ID,
 			workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
 			flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) { return value, nil }),
 		), nil
 	}
-	reg := workflow.NewRegistry().MustRegisterLeaf("constant", constant)
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+	reg := workflow.NewRegistry().MustRegisterNode("constant", constant)
+	g := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "parent-a", Type: "constant"},
 		{ID: "parent-b", Type: "constant"},
 		{ID: "child-b", Type: "constant", DependsOn: []string{"parent-b"}},
@@ -749,7 +749,7 @@ func TestCompileGraph_startsReadyDescendantWithoutWaitingForUnrelatedRoot(t *tes
 	afterCompleted := make(chan struct{})
 
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("slow", func(spec workflow.LeafSpec) (workflow.Step, error) {
+		MustRegisterNode("slow", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
 				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
@@ -766,7 +766,7 @@ func TestCompileGraph_startsReadyDescendantWithoutWaitingForUnrelatedRoot(t *tes
 				}),
 			), nil
 		}).
-		MustRegisterLeaf("constant", func(spec workflow.LeafSpec) (workflow.Step, error) {
+		MustRegisterNode("constant", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
 				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
@@ -777,14 +777,14 @@ func TestCompileGraph_startsReadyDescendantWithoutWaitingForUnrelatedRoot(t *tes
 				}),
 			), nil
 		}).
-		MustRegisterLeaf("after", workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
+		MustRegisterNode("after", workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
 			return flow.NodeFunc[int, int](func(_ context.Context, input int) (int, error) {
 				close(afterCompleted)
 				return input + 1, nil
 			}), nil
 		}))
 
-	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.NodeSpec{
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "slow", Type: "slow"},
 		{ID: "fetch", Type: "constant"},
 		{ID: "after-fetch", Type: "after", Input: workflow.Output("fetch")},
@@ -817,12 +817,12 @@ func TestCompileGraph_suspensionBlocksDependentsButNotUnrelatedWork(t *testing.T
 	unrelatedCalls := 0
 	targetCalls := 0
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("route", workflow.InterruptFactory()).
+		MustRegisterNode("route", workflow.InterruptFactory()).
 		MustRegisterSchema("route", workflow.NodeSchema{
 			Output:  workflow.TypeString,
 			Outlets: []string{"yes", "no"},
 		}).
-		MustRegisterLeaf("unrelated", func(spec workflow.LeafSpec) (workflow.Step, error) {
+		MustRegisterNode("unrelated", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
 				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
@@ -834,7 +834,7 @@ func TestCompileGraph_suspensionBlocksDependentsButNotUnrelatedWork(t *testing.T
 				}),
 			), nil
 		}).
-		MustRegisterLeaf("target", func(spec workflow.LeafSpec) (workflow.Step, error) {
+		MustRegisterNode("target", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
 				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
@@ -849,7 +849,7 @@ func TestCompileGraph_suspensionBlocksDependentsButNotUnrelatedWork(t *testing.T
 
 	step, err := registry.CompileGraph(workflow.Graph{
 		Concurrency: 1,
-		Nodes: []workflow.NodeSpec{
+		Nodes: []workflow.GraphNode{
 			{ID: "route", Type: "route"},
 			{ID: "unrelated", Type: "unrelated"},
 			{ID: "target", Type: "target", When: []workflow.Gate{workflow.When("route", "yes")}},
@@ -890,9 +890,9 @@ func TestCompileGraph_suspensionBlocksDependentsButNotUnrelatedWork(t *testing.T
 }
 
 func TestCompileGraph_preservesWritesReturnedWithSuspension(t *testing.T) {
-	registry := workflow.NewRegistry().MustRegisterLeaf(
+	registry := workflow.NewRegistry().MustRegisterNode(
 		"composite",
-		func(workflow.LeafSpec) (workflow.Step, error) {
+		func(workflow.NodeSpec) (workflow.Step, error) {
 			completed := workflow.Leaf(
 				"completed",
 				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
@@ -908,7 +908,7 @@ func TestCompileGraph_preservesWritesReturnedWithSuspension(t *testing.T) {
 			), nil
 		},
 	)
-	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.NodeSpec{{
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
 		ID: "composite", Type: "composite",
 	}}})
 	if err != nil {

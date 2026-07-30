@@ -157,12 +157,12 @@ func TestParallel_rejectsNegativeConcurrencyEvenWhenEmpty(t *testing.T) {
 
 func TestParallel_mergesOnlyBranchWrites(t *testing.T) {
 	writeExisting := flow.NodeFunc[workflow.Store, workflow.Store](func(_ context.Context, s workflow.Store) (workflow.Store, error) {
-		return s.With("existing", "value", 1), nil
+		return s.WithCell("existing", "value", 1), nil
 	})
 	writeOther := flow.NodeFunc[workflow.Store, workflow.Store](func(_ context.Context, s workflow.Store) (workflow.Store, error) {
-		return s.With("other", "value", 2), nil
+		return s.WithCell("other", "value", 2), nil
 	})
-	base := workflow.NewStore().With("existing", "value", 0)
+	base := workflow.NewStore().WithCell("existing", "value", 0)
 
 	out, err := workflow.Parallel([]workflow.Step{writeExisting, writeOther}, workflow.ParallelConfig{}).Run(t.Context(), base)
 	if err != nil {
@@ -179,7 +179,7 @@ func TestParallel_mergesOnlyBranchWrites(t *testing.T) {
 func TestParallel_laterBranchWinsCellConflict(t *testing.T) {
 	write := func(value int) workflow.Step {
 		return flow.NodeFunc[workflow.Store, workflow.Store](func(_ context.Context, s workflow.Store) (workflow.Store, error) {
-			return s.With("shared", "value", value), nil
+			return s.WithCell("shared", "value", value), nil
 		})
 	}
 

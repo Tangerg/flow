@@ -171,7 +171,7 @@ func (r *Registry) NodeSchema(nodeType string) (NodeSchema, bool) {
 func (r *Registry) NodeTypes() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return slices.Sorted(maps.Keys(r.leaves))
+	return slices.Sorted(maps.Keys(r.nodes))
 }
 
 func (v ValueType) valid() bool {

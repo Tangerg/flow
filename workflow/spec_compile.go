@@ -93,7 +93,7 @@ type leafCompiler struct {
 }
 
 func (l leafCompiler) compile(spec Spec) (Step, string, error) {
-	factory, ok := l.registry.lookupLeaf(spec.Type)
+	factory, ok := l.registry.lookupNode(spec.Type)
 	if !ok {
 		return nil, "type", fmt.Errorf("%w %q", ErrUnknownNodeType, spec.Type)
 	}
@@ -101,7 +101,7 @@ func (l leafCompiler) compile(spec Spec) (Step, string, error) {
 	if err != nil {
 		return nil, "inputs", err
 	}
-	step, err := factory(LeafSpec{
+	step, err := factory(NodeSpec{
 		ID:     spec.ID,
 		Inputs: inputs,
 		Config: bytes.Clone(spec.Config),

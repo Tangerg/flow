@@ -11,7 +11,8 @@ jobs:
   test:
     strategy:
       matrix:
-        go: ["1.25.x", "1.26.x"]
+        # go.mod requires 1.26.5, so 1.25 can no longer build this module.
+        go: ["1.26.x"]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

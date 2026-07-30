@@ -11,7 +11,7 @@ import (
 	"github.com/Tangerg/flow/workflow"
 )
 
-func routingFactory(selectOutlet func(int) string) workflow.LeafFactory {
+func routingFactory(selectOutlet func(int) string) workflow.NodeFactory {
 	return workflow.Factory(func(struct{}) (flow.Node[int, string], error) {
 		return flow.NodeFunc[int, string](
 			func(_ context.Context, input int) (string, error) {
@@ -33,27 +33,27 @@ func TestCompileGraph_routesAndRemovesStaleBranchOutputs(t *testing.T) {
 	var yesCalls atomic.Int64
 	var noCalls atomic.Int64
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("route", routingFactory(func(input int) string {
+		MustRegisterNode("route", routingFactory(func(input int) string {
 			if input >= 0 {
 				return "yes"
 			}
 			return "no"
 		})).
 		MustRegisterSchema("route", routingSchema("yes", "no")).
-		MustRegisterLeaf("yes", workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
+		MustRegisterNode("yes", workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
 			return flow.NodeFunc[int, int](func(_ context.Context, input int) (int, error) {
 				yesCalls.Add(1)
 				return input + 10, nil
 			}), nil
 		})).
-		MustRegisterLeaf("no", workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
+		MustRegisterNode("no", workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
 			return flow.NodeFunc[int, int](func(_ context.Context, input int) (int, error) {
 				noCalls.Add(1)
 				return input - 10, nil
 			}), nil
 		}))
 
-	graph := workflow.Graph{Nodes: []workflow.NodeSpec{
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "route", Type: "route", Input: workflow.Output("start")},
 		{
 			ID: "yes", Type: "yes", Input: workflow.Output("start"),
@@ -116,10 +116,10 @@ func TestCompileGraph_routesAndRemovesStaleBranchOutputs(t *testing.T) {
 
 func TestCompileGraph_triggerAnyAndFirstOfMerge(t *testing.T) {
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("route", routingFactory(func(int) string { return "left" })).
+		MustRegisterNode("route", routingFactory(func(int) string { return "left" })).
 		MustRegisterSchema("route", routingSchema("left", "right")).
-		MustRegisterLeaf("copy", addN()).
-		MustRegisterLeaf("merge", func(spec workflow.LeafSpec) (workflow.Step, error) {
+		MustRegisterNode("copy", addN()).
+		MustRegisterNode("merge", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			left, _ := spec.Inputs.Ref("left")
 			right, _ := spec.Inputs.Ref("right")
 			return workflow.Leaf(
@@ -130,7 +130,7 @@ func TestCompileGraph_triggerAnyAndFirstOfMerge(t *testing.T) {
 				}),
 			), nil
 		})
-	graph := workflow.Graph{Nodes: []workflow.NodeSpec{
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "route", Type: "route", Input: workflow.Output("start")},
 		{
 			ID: "left", Type: "copy", Input: workflow.Output("start"),
@@ -170,18 +170,18 @@ func TestCompileGraph_triggerAnyAndFirstOfMerge(t *testing.T) {
 func TestCompileGraph_recomputesGatesAfterJournalReplay(t *testing.T) {
 	var routeCalls atomic.Int64
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("route", routingFactory(func(int) string {
+		MustRegisterNode("route", routingFactory(func(int) string {
 			routeCalls.Add(1)
 			return "approve"
 		})).
 		MustRegisterSchema("route", routingSchema("approve", "reject")).
-		MustRegisterLeaf("wait", workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
+		MustRegisterNode("wait", workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
 			return flow.NodeFunc[int, int](func(_ context.Context, input int) (int, error) {
 				return 0, workflow.Suspend(map[string]any{"input": input})
 			}), nil
 		})).
-		MustRegisterLeaf("reject", addN())
-	graph := workflow.Graph{Nodes: []workflow.NodeSpec{
+		MustRegisterNode("reject", addN())
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "route", Type: "route", Input: workflow.Output("start")},
 		{
 			ID: "wait", Type: "wait", Input: workflow.Output("start"),
@@ -234,7 +234,7 @@ func TestCompileGraph_recomputesGatesAfterJournalReplay(t *testing.T) {
 func TestCompileGraph_suspendedRouterStopsBeforeGateEvaluation(t *testing.T) {
 	var targetCalls atomic.Int64
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("route", workflow.Factory(
+		MustRegisterNode("route", workflow.Factory(
 			func(struct{}) (flow.Node[int, string], error) {
 				return flow.NodeFunc[int, string](
 					func(_ context.Context, input int) (string, error) {
@@ -244,7 +244,7 @@ func TestCompileGraph_suspendedRouterStopsBeforeGateEvaluation(t *testing.T) {
 			},
 		)).
 		MustRegisterSchema("route", routingSchema("yes")).
-		MustRegisterLeaf("target", workflow.Factory(
+		MustRegisterNode("target", workflow.Factory(
 			func(struct{}) (flow.Node[int, int], error) {
 				return flow.NodeFunc[int, int](
 					func(_ context.Context, input int) (int, error) {
@@ -254,7 +254,7 @@ func TestCompileGraph_suspendedRouterStopsBeforeGateEvaluation(t *testing.T) {
 				), nil
 			},
 		))
-	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.NodeSpec{
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "route", Type: "route", Input: workflow.Output("start")},
 		{
 			ID: "target", Type: "target", Input: workflow.Output("start"),
@@ -291,10 +291,10 @@ func TestCompileGraph_suspendedRouterStopsBeforeGateEvaluation(t *testing.T) {
 
 func TestCompileGraph_doesNotInferBypassFromMissingInput(t *testing.T) {
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("route", routingFactory(func(int) string { return "no" })).
+		MustRegisterNode("route", routingFactory(func(int) string { return "no" })).
 		MustRegisterSchema("route", routingSchema("yes", "no")).
-		MustRegisterLeaf("copy", addN())
-	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.NodeSpec{
+		MustRegisterNode("copy", addN())
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "route", Type: "route", Input: workflow.Output("start")},
 		{
 			ID: "selected-only", Type: "copy", Input: workflow.Output("start"),
@@ -321,12 +321,12 @@ func TestCompileGraph_doesNotInferBypassFromMissingInput(t *testing.T) {
 
 func TestCompileGraph_propagatesBypassThroughConditionalRegions(t *testing.T) {
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("route", routingFactory(func(int) string { return "no" })).
+		MustRegisterNode("route", routingFactory(func(int) string { return "no" })).
 		MustRegisterSchema("route", routingSchema("yes", "no")).
-		MustRegisterLeaf("nested-route", routingFactory(func(int) string { return "next" })).
+		MustRegisterNode("nested-route", routingFactory(func(int) string { return "next" })).
 		MustRegisterSchema("nested-route", routingSchema("next")).
-		MustRegisterLeaf("target", addN())
-	graph := workflow.Graph{Nodes: []workflow.NodeSpec{
+		MustRegisterNode("target", addN())
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "route", Type: "route", Input: workflow.Output("start")},
 		{
 			ID: "nested", Type: "nested-route", Input: workflow.Output("start"),
@@ -362,7 +362,7 @@ func TestCompileGraph_propagatesBypassThroughConditionalRegions(t *testing.T) {
 func TestCompileGraph_gatedStepPreservesDuplicateIDValidation(t *testing.T) {
 	var calls atomic.Int64
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("route", func(workflow.LeafSpec) (workflow.Step, error) {
+		MustRegisterNode("route", func(workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.LeafFunc(
 				"duplicate",
 				workflow.Output("start"),
@@ -373,7 +373,7 @@ func TestCompileGraph_gatedStepPreservesDuplicateIDValidation(t *testing.T) {
 			), nil
 		}).
 		MustRegisterSchema("route", routingSchema("yes")).
-		MustRegisterLeaf("target", func(workflow.LeafSpec) (workflow.Step, error) {
+		MustRegisterNode("target", func(workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.LeafFunc(
 				"duplicate",
 				workflow.Output("start"),
@@ -383,7 +383,7 @@ func TestCompileGraph_gatedStepPreservesDuplicateIDValidation(t *testing.T) {
 				},
 			), nil
 		})
-	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.NodeSpec{
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "route", Type: "route", Input: workflow.Output("start")},
 		{
 			ID: "target", Type: "target", Input: workflow.Output("start"),
@@ -403,9 +403,9 @@ func TestCompileGraph_gatedStepPreservesDuplicateIDValidation(t *testing.T) {
 }
 
 func TestCompileGraph_rejectsRuntimeRoutingContractViolations(t *testing.T) {
-	tests := map[string]workflow.LeafFactory{
+	tests := map[string]workflow.NodeFactory{
 		"unknown outlet": routingFactory(func(int) string { return "other" }),
-		"wrong output type": func(spec workflow.LeafSpec) (workflow.Step, error) {
+		"wrong output type": func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
 				workflow.From[int](spec.Inputs[workflow.DefaultPort]),
@@ -414,7 +414,7 @@ func TestCompileGraph_rejectsRuntimeRoutingContractViolations(t *testing.T) {
 				}),
 			), nil
 		},
-		"missing output": func(workflow.LeafSpec) (workflow.Step, error) {
+		"missing output": func(workflow.NodeSpec) (workflow.Step, error) {
 			return flow.NodeFunc[workflow.Store, workflow.Store](
 				func(_ context.Context, store workflow.Store) (workflow.Store, error) {
 					return store, nil
@@ -425,10 +425,10 @@ func TestCompileGraph_rejectsRuntimeRoutingContractViolations(t *testing.T) {
 	for name, factory := range tests {
 		t.Run(name, func(t *testing.T) {
 			registry := workflow.NewRegistry().
-				MustRegisterLeaf("route", factory).
+				MustRegisterNode("route", factory).
 				MustRegisterSchema("route", routingSchema("yes")).
-				MustRegisterLeaf("target", addN())
-			graph := workflow.Graph{Nodes: []workflow.NodeSpec{
+				MustRegisterNode("target", addN())
+			graph := workflow.Graph{Nodes: []workflow.GraphNode{
 				{ID: "route", Type: "route", Input: workflow.Output("start")},
 				{
 					ID: "target", Type: "target", Input: workflow.Output("start"),
@@ -471,12 +471,12 @@ func TestCompileGraph_rejectsRuntimeRoutingContractViolations(t *testing.T) {
 
 func TestCompileGraph_validatesEveryGateBeforeApplyingTrigger(t *testing.T) {
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("good-route", routingFactory(func(int) string { return "yes" })).
+		MustRegisterNode("good-route", routingFactory(func(int) string { return "yes" })).
 		MustRegisterSchema("good-route", routingSchema("yes")).
-		MustRegisterLeaf("bad-route", routingFactory(func(int) string { return "undeclared" })).
+		MustRegisterNode("bad-route", routingFactory(func(int) string { return "undeclared" })).
 		MustRegisterSchema("bad-route", routingSchema("no")).
-		MustRegisterLeaf("target", addN())
-	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.NodeSpec{
+		MustRegisterNode("target", addN())
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "good", Type: "good-route", Input: workflow.Output("start")},
 		{ID: "bad", Type: "bad-route", Input: workflow.Output("start")},
 		{
@@ -500,12 +500,12 @@ func TestCompileGraph_validatesEveryGateBeforeApplyingTrigger(t *testing.T) {
 func TestValidateGraph_rejectsInvalidGates(t *testing.T) {
 	baseRegistry := func() *workflow.Registry {
 		return workflow.NewRegistry().
-			MustRegisterLeaf("route", routingFactory(func(int) string { return "yes" })).
+			MustRegisterNode("route", routingFactory(func(int) string { return "yes" })).
 			MustRegisterSchema("route", workflow.NodeSchema{
 				Output:  workflow.TypeString,
 				Outlets: []string{"yes", "no"},
 			}).
-			MustRegisterLeaf("target", addN())
+			MustRegisterNode("target", addN())
 	}
 	tests := map[string]struct {
 		graph   workflow.Graph
@@ -514,31 +514,31 @@ func TestValidateGraph_rejectsInvalidGates(t *testing.T) {
 		prepare func(*workflow.Registry)
 	}{
 		"unknown trigger": {
-			graph: workflow.Graph{Nodes: []workflow.NodeSpec{
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{
 				{ID: "a", Type: "target", Trigger: "sometimes"},
 			}},
 			want: workflow.ErrInvalidGraph, field: "trigger",
 		},
 		"any without gates": {
-			graph: workflow.Graph{Nodes: []workflow.NodeSpec{
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{
 				{ID: "a", Type: "target", Trigger: workflow.TriggerAny},
 			}},
 			want: workflow.ErrInvalidGraph, field: "trigger",
 		},
 		"empty source": {
-			graph: workflow.Graph{Nodes: []workflow.NodeSpec{
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{
 				{ID: "a", Type: "target", When: []workflow.Gate{{Outlet: "yes"}}},
 			}},
 			want: workflow.ErrInvalidGraph, field: "when",
 		},
 		"empty outlet": {
-			graph: workflow.Graph{Nodes: []workflow.NodeSpec{
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{
 				{ID: "a", Type: "target", When: []workflow.Gate{{NodeID: "route"}}},
 			}},
 			want: workflow.ErrInvalidGraph, field: "when",
 		},
 		"duplicate gate": {
-			graph: workflow.Graph{Nodes: []workflow.NodeSpec{
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{
 				{ID: "route", Type: "route"},
 				{
 					ID: "a", Type: "target",
@@ -552,7 +552,7 @@ func TestValidateGraph_rejectsInvalidGates(t *testing.T) {
 			want: workflow.ErrInvalidGraph, field: "when",
 		},
 		"contradictory all": {
-			graph: workflow.Graph{Nodes: []workflow.NodeSpec{
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{
 				{ID: "route", Type: "route"},
 				{
 					ID: "a", Type: "target",
@@ -565,7 +565,7 @@ func TestValidateGraph_rejectsInvalidGates(t *testing.T) {
 			want: workflow.ErrInvalidGraph, field: "when",
 		},
 		"unknown source": {
-			graph: workflow.Graph{Nodes: []workflow.NodeSpec{
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{
 				{
 					ID: "a", Type: "target",
 					When: []workflow.Gate{workflow.When("missing", "yes")},
@@ -574,7 +574,7 @@ func TestValidateGraph_rejectsInvalidGates(t *testing.T) {
 			want: workflow.ErrUnknownNode, field: "when",
 		},
 		"self source": {
-			graph: workflow.Graph{Nodes: []workflow.NodeSpec{
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{
 				{
 					ID: "a", Type: "target",
 					When: []workflow.Gate{workflow.When("a", "yes")},
@@ -583,7 +583,7 @@ func TestValidateGraph_rejectsInvalidGates(t *testing.T) {
 			want: workflow.ErrCycle, field: "when",
 		},
 		"conditional cycle": {
-			graph: workflow.Graph{Nodes: []workflow.NodeSpec{
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{
 				{ID: "route", Type: "route", Input: workflow.Output("a")},
 				{
 					ID: "a", Type: "target",
@@ -593,7 +593,7 @@ func TestValidateGraph_rejectsInvalidGates(t *testing.T) {
 			want: workflow.ErrCycle,
 		},
 		"unknown outlet": {
-			graph: workflow.Graph{Nodes: []workflow.NodeSpec{
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{
 				{ID: "route", Type: "route"},
 				{
 					ID: "a", Type: "target",
@@ -603,7 +603,7 @@ func TestValidateGraph_rejectsInvalidGates(t *testing.T) {
 			want: workflow.ErrUnknownOutlet, field: "when",
 		},
 		"source without schema": {
-			graph: workflow.Graph{Nodes: []workflow.NodeSpec{
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{
 				{ID: "route", Type: "plain"},
 				{
 					ID: "a", Type: "target",
@@ -612,11 +612,11 @@ func TestValidateGraph_rejectsInvalidGates(t *testing.T) {
 			}},
 			want: workflow.ErrInvalidGraph, field: "when",
 			prepare: func(registry *workflow.Registry) {
-				registry.MustRegisterLeaf("plain", addN())
+				registry.MustRegisterNode("plain", addN())
 			},
 		},
 		"source without outlets": {
-			graph: workflow.Graph{Nodes: []workflow.NodeSpec{
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{
 				{ID: "route", Type: "plain"},
 				{
 					ID: "a", Type: "target",
@@ -626,7 +626,7 @@ func TestValidateGraph_rejectsInvalidGates(t *testing.T) {
 			want: workflow.ErrInvalidGraph, field: "when",
 			prepare: func(registry *workflow.Registry) {
 				registry.
-					MustRegisterLeaf("plain", addN()).
+					MustRegisterNode("plain", addN()).
 					MustRegisterSchema("plain", workflow.NodeSchema{Output: workflow.TypeNumber})
 			},
 		},
@@ -696,9 +696,9 @@ func TestGraphConditionalJSON(t *testing.T) {
 	  ]
 	}`)
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("route", routingFactory(func(int) string { return "yes" })).
+		MustRegisterNode("route", routingFactory(func(int) string { return "yes" })).
 		MustRegisterSchema("route", routingSchema("yes")).
-		MustRegisterLeaf("target", addN())
+		MustRegisterNode("target", addN())
 	step, err := registry.CompileGraphJSON(data)
 	if err != nil {
 		t.Fatalf("CompileGraphJSON: %v", err)

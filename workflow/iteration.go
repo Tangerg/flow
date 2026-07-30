@@ -17,9 +17,9 @@ const (
 // Item returns the reference under which [Iteration] stores the current item.
 func Item(id string) Ref { return Ref{NodeID: id, Path: itemPath} }
 
-// Index returns the reference under which [Iteration] stores the current
+// ItemIndex returns the reference under which [Iteration] stores the current
 // item's zero-based index.
-func Index(id string) Ref { return Ref{NodeID: id, Path: indexPath} }
+func ItemIndex(id string) Ref { return Ref{NodeID: id, Path: indexPath} }
 
 // IterationConfig configures [Iteration].
 type IterationConfig struct {
@@ -27,7 +27,7 @@ type IterationConfig struct {
 	ID string
 	// Input references the JSON-compatible array to iterate over.
 	Input Ref
-	// Body runs once per element on a scoped Store (see [Item] and [Index]).
+	// Body runs once per element on a scoped Store (see [Item] and [ItemIndex]).
 	Body Step
 	// BodyOutput references the value in each post-run Store to collect.
 	BodyOutput Ref
@@ -41,10 +41,10 @@ type IterationConfig struct {
 // Output(cfg.ID). Typed slices are accepted through [Get]'s JSON conversion.
 //
 // For element i, Body runs on a scoped Store that adds the element under
-// [Item](cfg.ID) and its index via [Index](cfg.ID). The value at cfg.Input must
+// [Item](cfg.ID) and its index via [ItemIndex](cfg.ID). The value at cfg.Input must
 // be a []any. The first element to fail cancels the rest.
 //
-// Because Body runs once per element, each element adds an [Event.Path] segment
+// Because Body runs once per element, each element adds an [Event.Scope] segment
 // naming the iteration node and the element index, so an observer can tell the
 // elements' steps apart. That segment is also what lets a [Journal] resume an
 // iteration element by element.
@@ -148,7 +148,7 @@ func (i iterationStep) runElements(
 	}
 
 	apply := flow.NodeFunc[int, elementOutcome](func(ctx context.Context, index int) (elementOutcome, error) {
-		scoped := s.With(i.id, itemKey, items[index]).With(i.id, indexKey, index)
+		scoped := s.WithCell(i.id, itemKey, items[index]).WithCell(i.id, indexKey, index)
 		body := (scopedStep{step: i.body}).indexed(i.id, index)
 		result, err := body.run(ctx, scoped)
 		if err != nil {
@@ -191,6 +191,6 @@ func (i iterationStep) Describe() Description {
 	return Description{ID: i.id, Kind: "iteration", Children: []Description{Describe(i.body)}}
 }
 
-func (i iterationStep) workflowDefinition() stepDefinition {
+func (i iterationStep) definition() stepDefinition {
 	return stepDefinition{kind: definitionIteration, id: i.id, body: i.body}
 }

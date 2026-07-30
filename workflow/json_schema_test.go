@@ -72,7 +72,7 @@ func TestSpecAndNodeSpecOmitZeroReferences(t *testing.T) {
 			ID:   "leaf",
 			Type: "node",
 		},
-		"node": workflow.NodeSpec{
+		"node": workflow.GraphNode{
 			ID:   "leaf",
 			Type: "node",
 		},
@@ -146,7 +146,7 @@ func TestJSONSchemasValidateNamedInputs(t *testing.T) {
 
 func TestCompileSpecJSONAcceptsEveryKind(t *testing.T) {
 	reg := workflow.NewRegistry().
-		MustRegisterLeaf("addN", addN()).
+		MustRegisterNode("addN", addN()).
 		MustRegisterResolver("pick", func(context.Context, workflow.Store) (string, error) {
 			return "yes", nil
 		}).
@@ -241,7 +241,7 @@ func TestJSONBoundariesRejectExcessiveNesting(t *testing.T) {
 		t.Fatalf("ValidateGraphJSON error = %v; want ErrMaxDepth", err)
 	}
 
-	_, err := workflow.InterruptFactory()(workflow.LeafSpec{
+	_, err := workflow.InterruptFactory()(workflow.NodeSpec{
 		ID:     "deep",
 		Config: json.RawMessage(deep),
 	})
@@ -337,7 +337,7 @@ func TestRegisterSchemaValidatesNodeConfig(t *testing.T) {
 		"$defs":{"positiveInteger":{"type":"integer","minimum":1}}
 	}`)
 	reg := workflow.NewRegistry().
-		MustRegisterLeaf("addN", addN()).
+		MustRegisterNode("addN", addN()).
 		MustRegisterSchema("addN", workflow.NodeSchema{
 			Inputs: workflow.OnePort(workflow.TypeNumber), Output: workflow.TypeNumber, ConfigSchema: configSchema,
 		})
@@ -367,7 +367,7 @@ func TestRegisterSchemaValidatesNodeConfig(t *testing.T) {
 		})
 	}
 
-	graph := workflow.Graph{Nodes: []workflow.NodeSpec{{ID: "bad", Type: "addN"}}}
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{{ID: "bad", Type: "addN"}}}
 	err := reg.ValidateGraph(graph)
 	var graphErr *workflow.GraphError
 	if !errors.As(err, &graphErr) || graphErr.Field != "config" {

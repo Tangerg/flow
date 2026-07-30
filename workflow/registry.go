@@ -2,15 +2,29 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 )
 
-// LeafFactory builds a leaf [Step] from a [LeafSpec]. The factory knows the
-// leaf's concrete input/output types and typically ends in a call to [Leaf].
-// [Factory] covers the common single-input case; write a LeafFactory directly
+// NodeSpec carries everything a [NodeFactory] needs to build one node: the ID it
+// must report in events and Store writes, its wired input ports, and its raw JSON
+// config. It is the part of a [GraphNode] or [Spec] that survives compilation;
+// wiring and ordering are the enclosing definition's concern, not the factory's.
+type NodeSpec struct {
+	ID     string
+	Inputs Inputs
+	Config json.RawMessage
+}
+
+// NodeFactory builds the [Step] behind one registered node type. The factory
+// knows the node's concrete input and output types and usually ends in a call to
+// [Leaf]; [Subgraph] and the other composites are equally valid results, which is
+// why this is not called a leaf factory.
+//
+// [Factory] covers the common single-input case; write a NodeFactory directly
 // when a node reads several ports.
-type LeafFactory func(LeafSpec) (Step, error)
+type NodeFactory func(NodeSpec) (Step, error)
 
 // Resolver picks a branch or outlet name from the Store (see [Branch] and
 // [Route]).
@@ -21,7 +35,7 @@ type Resolver func(ctx context.Context, s Store) (string, error)
 // Store.
 type Condition func(ctx context.Context, iter int, s Store) (bool, error)
 
-// Registry holds the named building blocks that a [Spec] refers to: leaf node
+// Registry holds the named building blocks that a [Spec] refers to: node
 // types, branch resolvers, and loop conditions.
 //
 // A serialized graph cannot carry closures, so it names its behavior and the
@@ -33,7 +47,7 @@ type Condition func(ctx context.Context, iter int, s Store) (bool, error)
 // after first use.
 type Registry struct {
 	mu         sync.RWMutex
-	leaves     map[string]LeafFactory
+	nodes      map[string]NodeFactory
 	resolvers  map[string]Resolver
 	conditions map[string]Condition
 	schemas    map[string]registeredNodeSchema
@@ -44,36 +58,36 @@ func NewRegistry() *Registry {
 	return &Registry{}
 }
 
-// RegisterLeaf registers a leaf factory under a node type name. It reports an
+// RegisterNode registers the factory for a node type. It reports an
 // empty name, nil factory, or duplicate registration immediately.
-func (r *Registry) RegisterLeaf(nodeType string, factory LeafFactory) error {
+func (r *Registry) RegisterNode(nodeType string, factory NodeFactory) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.initLocked()
 	switch {
 	case nodeType == "":
 		return &RegistrationError{
-			Kind: "leaf",
+			Kind: "node",
 			Err:  fmt.Errorf("%w: node type is empty", ErrInvalidRegistration),
 		}
 	case factory == nil:
 		return &RegistrationError{
-			Kind: "leaf",
+			Kind: "node",
 			Name: nodeType,
 			Err:  fmt.Errorf("%w: factory is nil", ErrInvalidRegistration),
 		}
-	case r.leaves[nodeType] != nil:
-		return &RegistrationError{Kind: "leaf", Name: nodeType, Err: ErrDuplicateRegistration}
+	case r.nodes[nodeType] != nil:
+		return &RegistrationError{Kind: "node", Name: nodeType, Err: ErrDuplicateRegistration}
 	default:
-		r.leaves[nodeType] = factory
+		r.nodes[nodeType] = factory
 	}
 	return nil
 }
 
-// MustRegisterLeaf is like [Registry.RegisterLeaf] but panics on error. It
+// MustRegisterNode is like [Registry.RegisterNode] but panics on error. It
 // returns r so startup-time registrations can be chained.
-func (r *Registry) MustRegisterLeaf(nodeType string, factory LeafFactory) *Registry {
-	if err := r.RegisterLeaf(nodeType, factory); err != nil {
+func (r *Registry) MustRegisterNode(nodeType string, factory NodeFactory) *Registry {
+	if err := r.RegisterNode(nodeType, factory); err != nil {
 		panic(err)
 	}
 	return r
@@ -147,8 +161,8 @@ func (r *Registry) MustRegisterCondition(name string, condition Condition) *Regi
 }
 
 func (r *Registry) initLocked() {
-	if r.leaves == nil {
-		r.leaves = make(map[string]LeafFactory)
+	if r.nodes == nil {
+		r.nodes = make(map[string]NodeFactory)
 	}
 	if r.resolvers == nil {
 		r.resolvers = make(map[string]Resolver)
@@ -161,10 +175,10 @@ func (r *Registry) initLocked() {
 	}
 }
 
-func (r *Registry) lookupLeaf(nodeType string) (LeafFactory, bool) {
+func (r *Registry) lookupNode(nodeType string) (NodeFactory, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	factory, ok := r.leaves[nodeType]
+	factory, ok := r.nodes[nodeType]
 	return factory, ok
 }
 

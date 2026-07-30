@@ -59,20 +59,20 @@ func TestRefError(t *testing.T) {
 
 func TestRegistrationError(t *testing.T) {
 	reg := workflow.NewRegistry()
-	if err := reg.RegisterLeaf("add", addN()); err != nil {
+	if err := reg.RegisterNode("add", addN()); err != nil {
 		t.Fatalf("first registration: %v", err)
 	}
-	err := reg.RegisterLeaf("add", addN())
+	err := reg.RegisterNode("add", addN())
 	var registrationErr *workflow.RegistrationError
 	if !errors.Is(err, workflow.ErrDuplicateRegistration) ||
-		!errors.As(err, &registrationErr) || registrationErr.Kind != "leaf" || registrationErr.Name != "add" {
-		t.Fatalf("err = %v; want duplicate leaf RegistrationError", err)
+		!errors.As(err, &registrationErr) || registrationErr.Kind != "node" || registrationErr.Name != "add" {
+		t.Fatalf("err = %v; want duplicate node RegistrationError", err)
 	}
 }
 
 func TestGraphError(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("add", addN())
-	graph := workflow.Graph{Nodes: []workflow.NodeSpec{
+	reg := workflow.NewRegistry().MustRegisterNode("add", addN())
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "same", Type: "add"},
 		{ID: "same", Type: "add"},
 	}}
@@ -85,7 +85,7 @@ func TestGraphError(t *testing.T) {
 }
 
 func TestSpecError(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("add", addN())
+	reg := workflow.NewRegistry().MustRegisterNode("add", addN())
 	spec := workflow.Spec{Kind: workflow.KindParallel, Steps: []workflow.Spec{
 		{Kind: workflow.KindLeaf, ID: "same", Type: "add"},
 		{Kind: workflow.KindLeaf, ID: "same", Type: "add"},

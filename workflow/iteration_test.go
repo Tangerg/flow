@@ -49,7 +49,7 @@ func TestIteration_mapsAndCollects(t *testing.T) {
 func TestIteration_usesIndex(t *testing.T) {
 	// body returns the element's index, proving the scope carries it.
 	body := workflow.Leaf("el",
-		workflow.From[int](workflow.Index("iter")),
+		workflow.From[int](workflow.ItemIndex("iter")),
 		flow.NodeFunc[int, int](func(_ context.Context, i int) (int, error) { return i, nil }),
 	)
 

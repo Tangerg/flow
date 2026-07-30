@@ -1,6 +1,7 @@
 package expr
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -48,10 +49,10 @@ type refList []workflow.Ref
 func (r refList) sortedUnique() []workflow.Ref {
 	r = slices.Clone(r)
 	slices.SortFunc(r, func(left, right workflow.Ref) int {
-		if order := strings.Compare(left.NodeID, right.NodeID); order != 0 {
-			return order
-		}
-		return strings.Compare(left.Path, right.Path)
+		return cmp.Or(
+			strings.Compare(left.NodeID, right.NodeID),
+			strings.Compare(left.Path, right.Path),
+		)
 	})
 	return slices.Compact(r)
 }
@@ -114,8 +115,7 @@ func (e *Expr) String(s workflow.Store) (string, error) {
 // wrap attaches the expression source to an evaluation error, leaving an error
 // that already carries it untouched.
 func (e *Expr) wrap(err error) error {
-	var exprErr *Error
-	if errors.As(err, &exprErr) {
+	if _, wrapped := errors.AsType[*Error](err); wrapped {
 		return err
 	}
 	return &Error{Source: e.source, Err: err}

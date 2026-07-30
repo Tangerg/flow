@@ -181,7 +181,7 @@ func TestInterrupt_resumesAsARecordedStepOutput(t *testing.T) {
 	if !ok || request.Question != "publish?" || !slices.Equal(request.Actions, []string{"approve", "reject"}) {
 		t.Fatalf("Value = %#v; want structured approval request", waits[0].Value)
 	}
-	if got := waits[0].Key(); got.ID != "approval" || len(got.Path) != 0 {
+	if got := waits[0].Key(); got.ID != "approval" || len(got.Scope) != 0 {
 		t.Fatalf("Key = %+v; want approval at root", got)
 	}
 	if _, ok := paused.Lookup(workflow.Output("approval")); ok {
@@ -234,10 +234,10 @@ func TestInterrupt_resolvesRepeatedScopesIndependently(t *testing.T) {
 	if len(waits) != 3 {
 		t.Fatalf("first Suspensions = %+v; want three", waits)
 	}
-	if !slices.Equal(waits[0].Path, []string{"items[0]"}) ||
-		!slices.Equal(waits[1].Path, []string{"items[1]"}) ||
-		!slices.Equal(waits[2].Path, []string{"items[2]"}) {
-		t.Fatalf("paths = %v, %v, %v; want one per item", waits[0].Path, waits[1].Path, waits[2].Path)
+	if !slices.Equal(waits[0].Scope, []string{"items[0]"}) ||
+		!slices.Equal(waits[1].Scope, []string{"items[1]"}) ||
+		!slices.Equal(waits[2].Scope, []string{"items[2]"}) {
+		t.Fatalf("paths = %v, %v, %v; want one per item", waits[0].Scope, waits[1].Scope, waits[2].Scope)
 	}
 
 	if err := journal.Record(waits[1].Key(), false); err != nil {
@@ -246,8 +246,8 @@ func TestInterrupt_resolvesRepeatedScopesIndependently(t *testing.T) {
 	_, runErr = runJournal(step, in, journal)
 	remaining := workflow.Suspensions(runErr)
 	if len(remaining) != 2 ||
-		!slices.Equal(remaining[0].Path, []string{"items[0]"}) ||
-		!slices.Equal(remaining[1].Path, []string{"items[2]"}) {
+		!slices.Equal(remaining[0].Scope, []string{"items[0]"}) ||
+		!slices.Equal(remaining[1].Scope, []string{"items[2]"}) {
 		t.Fatalf("remaining = %+v; want only items 0 and 2", remaining)
 	}
 
@@ -521,8 +521,8 @@ func TestSuspend_iterationPreservesNestedSuspensions(t *testing.T) {
 	suspensions := workflow.Suspensions(err)
 	if len(suspensions) != 2 ||
 		suspensions[0].ID != "a" || suspensions[1].ID != "b" ||
-		!slices.Equal(suspensions[0].Path, []string{"iter[0]"}) ||
-		!slices.Equal(suspensions[1].Path, []string{"iter[0]"}) {
+		!slices.Equal(suspensions[0].Scope, []string{"iter[0]"}) ||
+		!slices.Equal(suspensions[1].Scope, []string{"iter[0]"}) {
 		t.Fatalf("suspensions = %+v; want a and b in iter[0]", suspensions)
 	}
 }
@@ -594,7 +594,7 @@ func TestSuspend_iterationResumesElementByElement(t *testing.T) {
 				return x * 2, nil
 			})),
 		workflow.Leaf("check", workflow.BindFunc[int](func(s workflow.Store) (int, error) {
-			index, err := workflow.Get[int](s, workflow.Index("iter"))
+			index, err := workflow.Get[int](s, workflow.ItemIndex("iter"))
 			if err != nil {
 				return 0, err
 			}
@@ -624,11 +624,11 @@ func TestSuspend_iterationResumesElementByElement(t *testing.T) {
 	}
 	// Each element's record is scoped, so they are distinct.
 	if keys := journal.Keys(); !equalJournalKeys(keys, []workflow.JournalKey{
-		{Path: []string{"iter[0]"}, ID: "check"},
-		{Path: []string{"iter[0]"}, ID: "double"},
-		{Path: []string{"iter[1]"}, ID: "double"},
-		{Path: []string{"iter[2]"}, ID: "check"},
-		{Path: []string{"iter[2]"}, ID: "double"},
+		{Scope: []string{"iter[0]"}, ID: "check"},
+		{Scope: []string{"iter[0]"}, ID: "double"},
+		{Scope: []string{"iter[1]"}, ID: "double"},
+		{Scope: []string{"iter[2]"}, ID: "check"},
+		{Scope: []string{"iter[2]"}, ID: "double"},
 	}) {
 		t.Fatalf("journal keys = %v", keys)
 	}
@@ -655,7 +655,7 @@ func TestSuspend_iterationResumesElementByElement(t *testing.T) {
 
 func TestSuspend_iterationWritesNoPartialCollection(t *testing.T) {
 	body := workflow.Leaf("el", workflow.BindFunc[int](func(s workflow.Store) (int, error) {
-		index, err := workflow.Get[int](s, workflow.Index("iter"))
+		index, err := workflow.Get[int](s, workflow.ItemIndex("iter"))
 		if err != nil {
 			return 0, err
 		}
@@ -712,10 +712,10 @@ func TestSuspend_loopResumesAtTheWaitingIteration(t *testing.T) {
 	// Each completed iteration records both the body's output and the loop's own
 	// stop decision, so a resumed loop cannot stop somewhere else.
 	if keys := journal.Keys(); !equalJournalKeys(keys, []workflow.JournalKey{
-		{Path: []string{"loop[0]"}, ID: "loop"},
-		{Path: []string{"loop[0]"}, ID: "tick"},
-		{Path: []string{"loop[1]"}, ID: "loop"},
-		{Path: []string{"loop[1]"}, ID: "tick"},
+		{Scope: []string{"loop[0]"}, ID: "loop"},
+		{Scope: []string{"loop[0]"}, ID: "tick"},
+		{Scope: []string{"loop[1]"}, ID: "loop"},
+		{Scope: []string{"loop[1]"}, ID: "tick"},
 	}) {
 		t.Fatalf("journal keys = %v; want a body and a decision record per iteration", keys)
 	}
@@ -736,7 +736,7 @@ func TestSuspend_loopResumesAtTheWaitingIteration(t *testing.T) {
 
 func TestSuspend_awaitPassesThroughOnceSatisfied(t *testing.T) {
 	gate := workflow.Await("gate", workflow.At("inbox", "decision"))
-	in := workflow.NewStore().With("inbox", "decision", "approve")
+	in := workflow.NewStore().WithCell("inbox", "decision", "approve")
 
 	out, err := gate.Run(t.Context(), in)
 	if err != nil {
@@ -791,7 +791,7 @@ func TestSuspension_errorMessage(t *testing.T) {
 	tests := map[string]*workflow.Suspension{
 		`workflow: step "a" suspended: waiting on a person`: {ID: "a", Value: "waiting on a person"},
 		`workflow: step "a" suspended: awaiting x#/output`:  {ID: "a", Await: workflow.Output("x")},
-		`workflow: step "a" in iter[2] suspended`:           {ID: "a", Path: []string{"iter[2]"}},
+		`workflow: step "a" in iter[2] suspended`:           {ID: "a", Scope: []string{"iter[2]"}},
 		`workflow: step "a" suspended`:                      {ID: "a", Value: map[string]any{"private": "payload"}},
 		`workflow: suspended`:                               nil,
 	}
@@ -808,12 +808,12 @@ func TestSuspension_errorMessage(t *testing.T) {
 func TestSuspension_keyAndJSONOwnTheirStructure(t *testing.T) {
 	suspension := &workflow.Suspension{
 		ID:    `approve"item`,
-		Path:  []string{"items/0"},
+		Scope: []string{"items/0"},
 		Value: map[string]any{"question": "approve?", "actions": []string{"yes", "no"}},
 	}
 	key := suspension.Key()
-	key.Path[0] = "changed"
-	if suspension.Path[0] != "items/0" {
+	key.Scope[0] = "changed"
+	if suspension.Scope[0] != "items/0" {
 		t.Fatalf("Key leaked Suspension.Path: %+v", suspension)
 	}
 	if got := suspension.Error(); got != `workflow: step "approve\"item" in items/0 suspended` {
@@ -851,16 +851,16 @@ func TestSuspensions_ofOtherErrors(t *testing.T) {
 	}
 
 	joined := errors.Join(
-		&workflow.Suspension{ID: "b", Path: []string{"outer"}},
-		fmt.Errorf("wrapped: %w", &workflow.Suspension{ID: "a", Path: []string{"inner"}}),
+		&workflow.Suspension{ID: "b", Scope: []string{"outer"}},
+		fmt.Errorf("wrapped: %w", &workflow.Suspension{ID: "a", Scope: []string{"inner"}}),
 		errors.New("ordinary failure"),
 	)
 	got := workflow.Suspensions(joined)
 	if len(got) != 2 || got[0].ID != "a" || got[1].ID != "b" {
 		t.Fatalf("Suspensions(joined error tree) = %+v; want a and b", got)
 	}
-	got[0].Path[0] = "changed"
-	if again := workflow.Suspensions(joined); again[0].Path[0] != "inner" {
+	got[0].Scope[0] = "changed"
+	if again := workflow.Suspensions(joined); again[0].Scope[0] != "inner" {
 		t.Fatalf("Suspensions leaked its internal path: %+v", again)
 	}
 }
@@ -925,7 +925,7 @@ func TestSuspendedOnly_classifiesTheWholeErrorTree(t *testing.T) {
 
 func TestJoinSuspensions_normalizesAndCopies(t *testing.T) {
 	path := []string{"items[1]"}
-	second := &workflow.Suspension{ID: "b", Path: path, Value: "second"}
+	second := &workflow.Suspension{ID: "b", Scope: path, Value: "second"}
 	err := workflow.JoinSuspensions(
 		second,
 		nil,
@@ -942,7 +942,7 @@ func TestJoinSuspensions_normalizesAndCopies(t *testing.T) {
 	path[0] = "changed"
 	second.ID = "changed"
 	if got = workflow.Suspensions(err); got[1].ID != "b" ||
-		!slices.Equal(got[1].Path, []string{"items[1]"}) {
+		!slices.Equal(got[1].Scope, []string{"items[1]"}) {
 		t.Fatalf("joined suspension changed with its input: %+v", got[1])
 	}
 	if err := workflow.JoinSuspensions(nil, nil); err != nil {
@@ -965,7 +965,7 @@ func TestJoinSuspensions_ordersByAwaitAfterIdentity(t *testing.T) {
 
 func TestSuspension_nilKey(t *testing.T) {
 	var suspension *workflow.Suspension
-	if key := suspension.Key(); key.ID != "" || key.Path != nil {
+	if key := suspension.Key(); key.ID != "" || key.Scope != nil {
 		t.Fatalf("nil Suspension Key = %+v; want zero", key)
 	}
 }
@@ -1127,9 +1127,9 @@ func TestSuspend_journaledDecisionOfTheWrongTypeIsReported(t *testing.T) {
 	journal := workflow.NewJournal()
 	// A journal from a different definition could hold anything under these keys.
 	// A loop records one decision per iteration, so its key carries the scope.
-	if err := json.Unmarshal([]byte(`{"version":1,"records":[
+	if err := json.Unmarshal([]byte(`{"version":2,"records":[
 		{"id":"route","value":"not-a-case"},
-		{"path":["repeat[0]"],"id":"repeat","value":"not-a-bool"}
+		{"scope":["repeat[0]"],"id":"repeat","value":"not-a-bool"}
 	]}`), journal); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}

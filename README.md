@@ -202,7 +202,7 @@ leaf. `yield` returns `false` after cancellation or an emitter error, and
 producers must stop promptly. Different leaves may emit concurrently, so an
 emitter must be concurrency-safe.
 
-Chunks carry the leaf ID, repeated-scope path, a zero-based per-invocation
+Chunks carry the leaf ID, repeated-scope, a zero-based per-invocation
 index, and a run-wide sequence shared with lifecycle events. They are attempt
 output rather than checkpoints: replaying a completed Journal record emits no
 chunks, while rerunning an incomplete or suspended leaf starts at index zero
@@ -273,13 +273,13 @@ control flow with `When`; the zero trigger requires every gate, while
 `TriggerAny` supports a merge reached through either arm:
 
 ```go
-approve := workflow.NodeSpec{
+approve := workflow.GraphNode{
 	ID: "approve", Type: "send",
 	When: []workflow.Gate{
 		workflow.When("route", "approve"),
 	},
 }
-result := workflow.NodeSpec{
+result := workflow.GraphNode{
 	ID: "result", Type: "merge",
 	When: []workflow.Gate{
 		workflow.When("route", "approve"),
@@ -342,7 +342,7 @@ if errors.Is(err, workflow.ErrSuspended) {
 
 A resumed run re-enters the workflow at its root. The Journal skips completed
 Leaf boundaries, restores their outputs, and preserves branch and loop
-decisions. Keys include the scope path as well as the step ID, so repeated
+decisions. Keys include the scope as well as the step ID, so repeated
 instances remain distinct.
 
 Store and Journal both support JSON persistence. The application must separately
@@ -370,7 +370,7 @@ out, err := workflow.Run(ctx, step, input, workflow.RunConfig{
 })
 ```
 
-Events carry the step ID, scope path, per-run sequence number, elapsed time, and
+Events carry the step ID, scope, per-run sequence number, elapsed time, and
 produced Store. `Store.Changes` narrows one snapshot to its writes for audit or
 persistence code. A compiled Step remains reusable; run configuration belongs
 to the call. Use Observer for low-volume lifecycle transitions and Emitter for
@@ -441,7 +441,7 @@ After v1, exported behavior and error contracts become compatibility
 commitments.
 
 Use keyed fields for exported structs and prefer constructors such as `Output`,
-`At`, `Item`, and `Index` where provided. This leaves room for compatible
+`At`, `Item`, and `ItemIndex` where provided. This leaves room for compatible
 additions.
 
 ## Development

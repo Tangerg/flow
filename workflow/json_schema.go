@@ -163,8 +163,7 @@ func (c *compiledSchema) validate(doc any) error {
 	if err == nil {
 		return nil
 	}
-	var validationErr *jschema.ValidationError
-	if errors.As(err, &validationErr) {
+	if validationErr, ok := errors.AsType[*jschema.ValidationError](err); ok {
 		return &jsonSchemaError{err: validationErr}
 	}
 	return err
@@ -179,7 +178,15 @@ type jsonSchemaError struct {
 // Error reports the deduplicated leaf diagnostics. leaves always yields at least
 // the root error, so the joined message is never empty.
 func (j *jsonSchemaError) Error() string {
-	leaves := j.leaves()
+	return strings.Join(uniqueMessages(j.leaves()), "; ")
+}
+
+// uniqueMessages renders each leaf once, keeping the order the validator
+// reported. One document error commonly surfaces the same message under several
+// sub-schemas, and repeating it buries the part a reader needs. Sorting to let
+// slices.Compact do this would destroy that diagnostic order, which is why the
+// first position is tracked explicitly.
+func uniqueMessages(leaves []*jschema.ValidationError) []string {
 	messages := make([]string, 0, len(leaves))
 	seen := make(map[string]struct{}, len(leaves))
 	for _, leaf := range leaves {
@@ -190,7 +197,7 @@ func (j *jsonSchemaError) Error() string {
 		seen[message] = struct{}{}
 		messages = append(messages, message)
 	}
-	return strings.Join(messages, "; ")
+	return messages
 }
 
 func (j *jsonSchemaError) Unwrap() error { return j.err }

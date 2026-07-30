@@ -13,7 +13,7 @@ import (
 // [Leaf] then records its output as it completes and skips any step the Journal
 // already holds.
 //
-// Records are keyed by scope path and step ID, not by step ID alone. That is what
+// Records are keyed by scope and step ID, not by step ID alone. That is what
 // makes resumption correct inside [Loop] and [Iteration], where the same step
 // runs many times: element 2 is not mistaken for element 1. It is also why a
 // resumed [Parallel] recovers every branch that finished, whatever the branch
@@ -47,15 +47,15 @@ type Journal struct {
 // most [MaxNestingDepth] segments. Construct JournalKey values with keyed fields
 // so the type can grow without breaking callers.
 type JournalKey struct {
-	ID   string   `json:"id"`
-	Path []string `json:"path,omitempty"`
+	ID    string   `json:"id"`
+	Scope []string `json:"scope,omitempty"`
 }
 
 func (j JournalKey) compare(other JournalKey) int {
-	if order := slices.Compare(j.Path, other.Path); order != 0 {
-		return order
-	}
-	return cmp.Compare(j.ID, other.ID)
+	return cmp.Or(
+		slices.Compare(j.Scope, other.Scope),
+		cmp.Compare(j.ID, other.ID),
+	)
 }
 
 // journalNode is a trie over scope segments. Keeping the path structured avoids
@@ -92,11 +92,11 @@ func (j *Journal) Record(key JournalKey, value any) error {
 
 // record stores a step's output. A nil Journal discards it, so callers need not
 // check whether resumption is enabled.
-func (j *Journal) record(path []string, id string, value any) error {
+func (j *Journal) record(scope []string, id string, value any) error {
 	if j == nil {
 		return nil
 	}
-	return j.insert(JournalKey{ID: id, Path: path}, value)
+	return j.insert(JournalKey{ID: id, Scope: scope}, value)
 }
 
 func (j *Journal) insert(key JournalKey, value any) error {
@@ -105,12 +105,12 @@ func (j *Journal) insert(key JournalKey, value any) error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if _, exists := j.root.lookup(key.Path, key.ID); exists {
+	if _, exists := j.root.lookup(key.Scope, key.ID); exists {
 		return fmt.Errorf("workflow: record journal step %q at %q: %w",
-			key.ID, key.Path, ErrJournalConflict)
+			key.ID, key.Scope, ErrJournalConflict)
 	}
 	j.revision++
-	j.root.record(key.Path, key.ID, journalValue{
+	j.root.record(key.Scope, key.ID, journalValue{
 		value:    value,
 		revision: j.revision,
 	})
@@ -122,11 +122,11 @@ func (j JournalKey) validate() error {
 	switch {
 	case j.ID == "":
 		return ErrInvalidStepID
-	case len(j.Path) > MaxNestingDepth:
+	case len(j.Scope) > MaxNestingDepth:
 		return fmt.Errorf(
-			"%w: scope path depth %d exceeds limit %d",
+			"%w: scope depth %d exceeds limit %d",
 			ErrMaxDepth,
-			len(j.Path),
+			len(j.Scope),
 			MaxNestingDepth,
 		)
 	default:
@@ -134,8 +134,8 @@ func (j JournalKey) validate() error {
 	}
 }
 
-func (j *journalNode) record(path []string, id string, value journalValue) bool {
-	for _, segment := range path {
+func (j *journalNode) record(scope []string, id string, value journalValue) bool {
+	for _, segment := range scope {
 		if j.children == nil {
 			j.children = make(map[string]*journalNode)
 		}
@@ -159,10 +159,10 @@ func (j *journalNode) record(path []string, id string, value journalValue) bool 
 // lookupAt returns a record no newer than revision, which is how a run replays
 // only work that predates it. The receiver is never nil: [runState.replay]
 // resolves a nil Journal to "no record" before calling.
-func (j *Journal) lookupAt(path []string, id string, revision uint64) (any, bool) {
+func (j *Journal) lookupAt(scope []string, id string, revision uint64) (any, bool) {
 	j.mu.RLock()
 	defer j.mu.RUnlock()
-	value, ok := j.root.lookup(path, id)
+	value, ok := j.root.lookup(scope, id)
 	if !ok || value.revision > revision {
 		return nil, false
 	}
@@ -178,8 +178,8 @@ func (j *Journal) snapshotRevision() uint64 {
 	return j.revision
 }
 
-func (j *journalNode) lookup(path []string, id string) (journalValue, bool) {
-	for _, segment := range path {
+func (j *journalNode) lookup(scope []string, id string) (journalValue, bool) {
+	for _, segment := range scope {
 		j = j.children[segment]
 		if j == nil {
 			return journalValue{}, false
@@ -214,14 +214,14 @@ func (j *Journal) Keys() []JournalKey {
 	return keys
 }
 
-func (j *journalNode) appendKeys(path []string, keys *[]JournalKey) {
+func (j *journalNode) appendKeys(scope []string, keys *[]JournalKey) {
 	for id := range j.records {
-		*keys = append(*keys, JournalKey{Path: slices.Clone(path), ID: id})
+		*keys = append(*keys, JournalKey{Scope: slices.Clone(scope), ID: id})
 	}
 	for segment, child := range j.children {
-		path = append(path, segment)
-		child.appendKeys(path, keys)
-		path = path[:len(path)-1]
+		scope = append(scope, segment)
+		child.appendKeys(scope, keys)
+		scope = scope[:len(scope)-1]
 	}
 }
 
@@ -244,7 +244,7 @@ func (j *Journal) Forget(key JournalKey) {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if j.root.forget(key.Path, key.ID) {
+	if j.root.forget(key.Scope, key.ID) {
 		j.count--
 		j.revision++
 	}
@@ -252,8 +252,8 @@ func (j *Journal) Forget(key JournalKey) {
 
 // forget reports whether it removed a record and prunes empty scope nodes on
 // the way back up.
-func (j *journalNode) forget(path []string, id string) bool {
-	if len(path) == 0 {
+func (j *journalNode) forget(scope []string, id string) bool {
+	if len(scope) == 0 {
 		if _, ok := j.records[id]; !ok {
 			return false
 		}
@@ -264,12 +264,12 @@ func (j *journalNode) forget(path []string, id string) bool {
 		return true
 	}
 
-	child := j.children[path[0]]
-	if child == nil || !child.forget(path[1:], id) {
+	child := j.children[scope[0]]
+	if child == nil || !child.forget(scope[1:], id) {
 		return false
 	}
 	if child.empty() {
-		delete(j.children, path[0])
+		delete(j.children, scope[0])
 		if len(j.children) == 0 {
 			j.children = nil
 		}

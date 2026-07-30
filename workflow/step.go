@@ -29,9 +29,9 @@ func (d decoratedStep) Describe() Description {
 	return description
 }
 
-func (d decoratedStep) workflowDefinition() stepDefinition {
-	if defined, ok := d.step.(definitionStep); ok {
-		return defined.workflowDefinition()
+func (d decoratedStep) definition() stepDefinition {
+	if defined, ok := d.step.(definedStep); ok {
+		return defined.definition()
 	}
 	return stepDefinition{kind: definitionNamed, id: d.id}
 }

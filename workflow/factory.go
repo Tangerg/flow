@@ -7,7 +7,7 @@ import (
 	"github.com/Tangerg/flow"
 )
 
-// Factory adapts a typed node constructor into a [LeafFactory]. It strictly
+// Factory adapts a typed node constructor into a [NodeFactory]. It strictly
 // decodes the raw JSON config into C, binds the node's input from the
 // [DefaultPort] reference, calls build, and wraps the node with [Leaf]. An empty
 // config uses the zero value of C.
@@ -15,9 +15,9 @@ import (
 // A node built this way always reads exactly one port, so an unwired
 // [DefaultPort] is reported as [ErrMissingPort] at build time rather than
 // failing mid-run, and every other port is [ErrUnknownPort]. Use [BindFactory]
-// to bind several ports, or write a [LeafFactory] directly for a non-standard
+// to bind several ports, or write a [NodeFactory] directly for a non-standard
 // binding strategy.
-func Factory[C, I, O any](build func(C) (flow.Node[I, O], error)) LeafFactory {
+func Factory[C, I, O any](build func(C) (flow.Node[I, O], error)) NodeFactory {
 	return BindFactory(func(_ C, inputs Inputs) (BindFunc[I], error) {
 		for _, port := range inputs.PortNames() {
 			if port != DefaultPort {
@@ -33,7 +33,7 @@ func Factory[C, I, O any](build func(C) (flow.Node[I, O], error)) LeafFactory {
 }
 
 // BindFactory adapts a typed node constructor that reads several input ports
-// into a [LeafFactory]. It strictly decodes the raw JSON config into C, calls
+// into a [NodeFactory]. It strictly decodes the raw JSON config into C, calls
 // bind to build the node's [BindFunc] from the wired ports, calls build, and
 // wraps the result with [Leaf].
 //
@@ -52,8 +52,8 @@ func Factory[C, I, O any](build func(C) (flow.Node[I, O], error)) LeafFactory {
 //		},
 //		func(struct{}) (flow.Node[[2]float64, float64], error) { ... },
 //	)
-func BindFactory[C, I, O any](bind func(cfg C, inputs Inputs) (BindFunc[I], error), build func(C) (flow.Node[I, O], error)) LeafFactory {
-	return func(spec LeafSpec) (Step, error) {
+func BindFactory[C, I, O any](bind func(cfg C, inputs Inputs) (BindFunc[I], error), build func(C) (flow.Node[I, O], error)) NodeFactory {
+	return func(spec NodeSpec) (Step, error) {
 		if bind == nil || build == nil {
 			return nil, flow.ErrNilFunc
 		}

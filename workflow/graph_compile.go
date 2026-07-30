@@ -21,7 +21,7 @@ func (r *Registry) CompileGraph(graph Graph) (Step, error) {
 
 	steps := make(stepList, len(graph.Nodes))
 	for index, node := range graph.Nodes {
-		step, field, err := (leafCompiler{registry: r}).compile(node.leafSpec())
+		step, field, err := (leafCompiler{registry: r}).compile(node.nodeSpec())
 		if err != nil {
 			return nil, &GraphError{
 				NodeID: node.ID,
@@ -85,11 +85,11 @@ func (g graphStep) Describe() Description {
 	return Description{Kind: "graph", Children: g.steps.describe()}
 }
 
-func (g graphStep) workflowDefinition() stepDefinition {
+func (g graphStep) definition() stepDefinition {
 	return stepDefinition{kind: definitionSteps, steps: g.steps}
 }
 
-func (r *Registry) gate(node NodeSpec, plan graphPlan, step Step) Step {
+func (r *Registry) gate(node GraphNode, plan graphPlan, step Step) Step {
 	gates := make([]compiledGate, len(node.When))
 	for index, gate := range node.When {
 		source := plan.nodesByID[gate.NodeID]
@@ -115,7 +115,7 @@ func (r *Registry) CompileGraphJSON(data []byte) (Step, error) {
 	return r.CompileGraph(graph)
 }
 
-func (n NodeSpec) leafSpec() Spec {
+func (n GraphNode) nodeSpec() Spec {
 	return Spec{
 		Kind:   KindLeaf,
 		ID:     n.ID,

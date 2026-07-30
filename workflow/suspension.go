@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"slices"
@@ -35,8 +36,8 @@ var ErrSuspended = errors.New("workflow: suspended")
 type Suspension struct {
 	// ID is the step that suspended.
 	ID string `json:"id,omitempty"`
-	// Path is the step's enclosing repeated scopes, as on [Event.Path].
-	Path []string `json:"path,omitempty"`
+	// Scope is the step's enclosing repeated scopes, as on [Event.Scope].
+	Scope []string `json:"scope,omitempty"`
 	// Await is the reference whose absence caused the suspension, if any.
 	Await Ref `json:"await,omitzero"`
 	// Value is application-owned and must be treated as immutable. A caller that
@@ -55,9 +56,9 @@ func (s *Suspension) Error() string {
 		message.WriteString(" step ")
 		message.WriteString(strconv.Quote(s.ID))
 	}
-	if len(s.Path) > 0 {
+	if len(s.Scope) > 0 {
 		message.WriteString(" in ")
-		message.WriteString(strings.Join(s.Path, "/"))
+		message.WriteString(strings.Join(s.Scope, "/"))
 	}
 	message.WriteString(" suspended")
 	reason, _ := s.Value.(string)
@@ -96,7 +97,7 @@ func (s *Suspension) Key() JournalKey {
 	if s == nil {
 		return JournalKey{}
 	}
-	return JournalKey{ID: s.ID, Path: slices.Clone(s.Path)}
+	return JournalKey{ID: s.ID, Scope: slices.Clone(s.Scope)}
 }
 
 // suspensionTree owns classification of the standard Go error tree.
@@ -189,13 +190,13 @@ type suspensionList []*Suspension
 
 // identify fills in the workflow boundary that owns an otherwise anonymous
 // suspension. Already-identified nested waits keep their identity.
-func (s suspensionList) identify(id string, path []string) suspensionList {
+func (s suspensionList) identify(id string, scope []string) suspensionList {
 	for _, suspension := range s {
 		if suspension.ID == "" {
 			suspension.ID = id
 		}
-		if suspension.Path == nil {
-			suspension.Path = slices.Clone(path)
+		if suspension.Scope == nil {
+			suspension.Scope = slices.Clone(scope)
 		}
 	}
 	return s
@@ -240,13 +241,11 @@ func (s suspensionList) normalized() suspensionList {
 }
 
 func (s *Suspension) compare(other *Suspension) int {
-	if order := strings.Compare(s.ID, other.ID); order != 0 {
-		return order
-	}
-	if order := slices.Compare(s.Path, other.Path); order != 0 {
-		return order
-	}
-	return s.Await.compare(other.Await)
+	return cmp.Or(
+		strings.Compare(s.ID, other.ID),
+		slices.Compare(s.Scope, other.Scope),
+		s.Await.compare(other.Await),
+	)
 }
 
 // clone copies a suspension and its path so identifying a wait at a workflow
@@ -254,7 +253,7 @@ func (s *Suspension) compare(other *Suspension) int {
 // first, so the receiver is never nil.
 func (s *Suspension) clone() *Suspension {
 	clone := *s
-	clone.Path = slices.Clone(s.Path)
+	clone.Scope = slices.Clone(s.Scope)
 	return &clone
 }
 

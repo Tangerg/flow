@@ -59,19 +59,19 @@ func conditionalRegistry() *workflow.Registry {
 	}`)
 
 	return workflow.NewRegistry().
-		MustRegisterLeaf("route", route).
+		MustRegisterNode("route", route).
 		MustRegisterSchema("route", workflow.NodeSchema{
 			Inputs:  workflow.OnePort(workflow.TypeNumber),
 			Output:  workflow.TypeString,
 			Outlets: []string{"approve", "review"},
 		}).
-		MustRegisterLeaf("decision", decision).
+		MustRegisterNode("decision", decision).
 		MustRegisterSchema("decision", workflow.NodeSchema{
 			Inputs:       workflow.OnePort(workflow.TypeNumber),
 			Output:       workflow.TypeString,
 			ConfigSchema: configSchema,
 		}).
-		MustRegisterLeaf("merge", merge).
+		MustRegisterNode("merge", merge).
 		MustRegisterSchema("merge", workflow.NodeSchema{
 			Inputs: workflow.Ports{
 				"approve": workflow.TypeString,
@@ -82,7 +82,7 @@ func conditionalRegistry() *workflow.Registry {
 }
 
 func conditionalGraph() workflow.Graph {
-	return workflow.Graph{Nodes: []workflow.NodeSpec{
+	return workflow.Graph{Nodes: []workflow.GraphNode{
 		{
 			ID: "route", Type: "route",
 			Input: workflow.Output("score"),
@@ -143,7 +143,7 @@ func Example_conditionalGraph() {
 // The optional diagram package renders a Graph without becoming part of its
 // execution contract.
 func Example_graphDiagram() {
-	graph := workflow.Graph{Nodes: []workflow.NodeSpec{
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "route", Type: "route", Input: workflow.Output("score")},
 		{
 			ID: "approve", Type: "decision",

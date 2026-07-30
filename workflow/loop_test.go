@@ -146,16 +146,16 @@ func TestLoop_siblingBodiesWithTheSameIDHaveDistinctJournalScopes(t *testing.T) 
 	}
 
 	want := []workflow.JournalKey{
-		{ID: "first", Path: []string{"first[0]"}},
-		{ID: "tick", Path: []string{"first[0]"}},
-		{ID: "second", Path: []string{"second[0]"}},
-		{ID: "tick", Path: []string{"second[0]"}},
+		{ID: "first", Scope: []string{"first[0]"}},
+		{ID: "tick", Scope: []string{"first[0]"}},
+		{ID: "second", Scope: []string{"second[0]"}},
+		{ID: "tick", Scope: []string{"second[0]"}},
 	}
 	if keys := journal.Keys(); !slices.EqualFunc(
 		keys,
 		want,
 		func(left, right workflow.JournalKey) bool {
-			return left.ID == right.ID && slices.Equal(left.Path, right.Path)
+			return left.ID == right.ID && slices.Equal(left.Scope, right.Scope)
 		},
 	) {
 		t.Fatalf("journal keys = %v; want %v", keys, want)
@@ -164,7 +164,7 @@ func TestLoop_siblingBodiesWithTheSameIDHaveDistinctJournalScopes(t *testing.T) 
 
 func TestValidateSpec_siblingLoopBodiesMayReuseAnID(t *testing.T) {
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("addN", addN()).
+		MustRegisterNode("addN", addN()).
 		MustRegisterCondition(
 			"done",
 			func(context.Context, int, workflow.Store) (bool, error) {
@@ -301,7 +301,7 @@ func TestLoop_reportsJournalDecisionConflict(t *testing.T) {
 		),
 		func(ctx context.Context, _ int, _ workflow.Store) (bool, error) {
 			if err := journal.Record(
-				workflow.JournalKey{ID: "loop", Path: workflow.Scope(ctx)},
+				workflow.JournalKey{ID: "loop", Scope: workflow.Scope(ctx)},
 				true,
 			); err != nil {
 				return false, err

@@ -16,7 +16,7 @@ func Example_dag() {
 	type unaryConfig struct {
 		Value int `json:"value"`
 	}
-	unary := func(op func(int, int) int) workflow.LeafFactory {
+	unary := func(op func(int, int) int) workflow.NodeFactory {
 		return workflow.Factory(func(cfg unaryConfig) (flow.Node[int, int], error) {
 			return flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 				return op(in, cfg.Value), nil
@@ -58,9 +58,9 @@ func Example_dag() {
 		"additionalProperties":false
 	}`)
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("add", unary(func(a, b int) int { return a + b })).
-		MustRegisterLeaf("multiply", unary(func(a, b int) int { return a * b })).
-		MustRegisterLeaf("sum", sum).
+		MustRegisterNode("add", unary(func(a, b int) int { return a + b })).
+		MustRegisterNode("multiply", unary(func(a, b int) int { return a * b })).
+		MustRegisterNode("sum", sum).
 		MustRegisterSchema("add", workflow.NodeSchema{
 			Inputs: workflow.OnePort(workflow.TypeNumber), Output: workflow.TypeNumber,
 			ConfigSchema: configSchema,
@@ -74,7 +74,7 @@ func Example_dag() {
 			Output: workflow.TypeNumber,
 		})
 
-	graph := workflow.Graph{Concurrency: 2, Nodes: []workflow.NodeSpec{
+	graph := workflow.Graph{Concurrency: 2, Nodes: []workflow.GraphNode{
 		{
 			ID: "twice", Type: "multiply",
 			Input:  workflow.Output("start"),

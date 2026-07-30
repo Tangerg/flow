@@ -117,15 +117,15 @@ the workflow simply has no output destination.
 Each Chunk carries:
 
 - `ID`: the `StreamLeaf` ID.
-- `Path`: enclosing loop or iteration scopes.
+- `Scope`: enclosing loop or iteration scopes.
 - `Index`: a zero-based counter for this leaf invocation.
 - `Seq`: a run-wide number shared with lifecycle `Event` values.
 - `Value`: the typed chunk stored as `any`.
 
-`ID`, `Path`, and `Index` distinguish concurrent streams inside one run.
+`ID`, `Scope`, and `Index` distinguish concurrent streams inside one run.
 `Seq` lets a caller combine event and chunk logs after concurrent callbacks;
 either receiver can see gaps occupied by the other signal type. Treat `Value`
-and `Path` as immutable.
+and `Scope` as immutable.
 
 These fields do not identify a business run globally. A durable sink should
 also record an application run ID and workflow-definition version.
@@ -142,7 +142,7 @@ The Journal checkpoints final leaf results, not chunks:
 
 This is intentional checkpoint-and-restart behavior. Do not describe chunk
 delivery as exactly once. If repeated attempt output matters, make the external
-sink idempotent using application identity plus `ID`, `Path`, and `Index`.
+sink idempotent using application identity plus `ID`, `Scope`, and `Index`.
 
 ## 6. Keep streaming separate from observation
 

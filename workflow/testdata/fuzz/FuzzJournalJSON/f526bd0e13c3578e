@@ -1,2 +1,2 @@
 go test fuzz v1
-[]byte("{\"version\":1,\"reCords\":[{\"id\":\"0\",\"vAlue\":0}]}")
+[]byte("{\"version\":2,\"reCords\":[{\"id\":\"0\",\"vAlue\":0}]}")

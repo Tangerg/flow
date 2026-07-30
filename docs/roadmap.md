@@ -40,7 +40,7 @@ There is no orchestrator object, hidden worker pool, or provider abstraction.
 The former largest Graph gap is complete.
 
 A routing node publishes its selected outlet as its ordinary string output and
-declares the complete set in `NodeSchema.Outlets`. A target uses `NodeSpec.When`;
+declares the complete set in `NodeSchema.Outlets`. A target uses `GraphNode.When`;
 the zero `Trigger` requires every gate and `TriggerAny` requires one. Gate
 sources participate in topological ordering and cycle detection.
 
@@ -120,7 +120,7 @@ This rule keeps fresh execution and Journal replay equivalent.
 ### Retry and timeout wrap typed work
 
 Retry, timeout, hedging, and circuit breaking are policies around the typed node
-inside a workflow leaf. They are not fields on `NodeSpec` or `Spec`.
+inside a workflow leaf. They are not fields on `GraphNode` or `Spec`.
 
 Applying them to a named `Step` would invoke the same execution identity more
 than once, conflict with Journal replay, and risk retrying suspension. A generic

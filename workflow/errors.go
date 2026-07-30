@@ -37,7 +37,7 @@ var (
 )
 
 // MaxNestingDepth is the maximum nesting accepted at recursive workflow
-// boundaries, including JSON values and Journal scope paths. Keeping one limit
+// boundaries, including JSON values and Journal scopes. Keeping one limit
 // prevents a document from passing one boundary only to exhaust the stack in
 // the next one.
 const MaxNestingDepth = 1024

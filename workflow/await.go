@@ -52,7 +52,7 @@ func (a awaitStep) Run(ctx context.Context, store Store) (Store, error) {
 		run.emit(ctx, Event{Kind: EventCompleted, ID: a.id, Store: store})
 		return store, nil
 	}
-	suspension := &Suspension{ID: a.id, Path: Scope(ctx), Await: a.ref}
+	suspension := &Suspension{ID: a.id, Scope: Scope(ctx), Await: a.ref}
 	run.emit(ctx, Event{Kind: EventSuspended, ID: a.id, Err: suspension})
 	return store, suspension
 }
@@ -61,19 +61,19 @@ func (a awaitStep) Describe() Description {
 	return Description{ID: a.id, Kind: "await", Label: a.ref.String()}
 }
 
-func (a awaitStep) workflowDefinition() stepDefinition {
+func (a awaitStep) definition() stepDefinition {
 	return stepDefinition{kind: definitionNamed, id: a.id}
 }
 
-// AwaitFactory is the [LeafFactory] form of [Await]: a node type a serialized
+// AwaitFactory is the [NodeFactory] form of [Await]: a node type a serialized
 // workflow can name to place a wait in a graph. It waits on whatever its
 // [DefaultPort] is wired to and accepts no config. Use [InterruptFactory] when
 // the wait must expose a structured request.
 //
-//	reg.MustRegisterLeaf("await", workflow.AwaitFactory())
+//	reg.MustRegisterNode("await", workflow.AwaitFactory())
 //	// {"id":"approval","type":"await","input":{"nodeID":"inbox","path":"/decision"}}
-func AwaitFactory() LeafFactory {
-	return func(spec LeafSpec) (Step, error) {
+func AwaitFactory() NodeFactory {
+	return func(spec NodeSpec) (Step, error) {
 		for _, port := range spec.Inputs.PortNames() {
 			if port != DefaultPort {
 				return nil, fmt.Errorf("%w %q", ErrUnknownPort, port)

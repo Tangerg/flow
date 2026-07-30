@@ -13,7 +13,7 @@ var (
 	_ json.Unmarshaler = (*Journal)(nil)
 )
 
-const journalJSONVersion = 1
+const journalJSONVersion = 2
 
 // journalDocument is the shape [Journal.MarshalJSON] writes: each value arrives
 // already encoded, so the document is assembled without re-encoding.
@@ -23,7 +23,7 @@ type journalDocument struct {
 }
 
 type journalJSONRecord struct {
-	Path  []string        `json:"path,omitempty"`
+	Scope []string        `json:"scope,omitempty"`
 	ID    string          `json:"id"`
 	Value json.RawMessage `json:"value"`
 }
@@ -39,7 +39,7 @@ type journalDecodedDocument struct {
 }
 
 type journalDecodedRecord struct {
-	Path  []string            `json:"path,omitempty"`
+	Scope []string            `json:"scope,omitempty"`
 	ID    string              `json:"id"`
 	Value journalDecodedValue `json:"value"`
 }
@@ -93,14 +93,14 @@ func (j *Journal) MarshalJSON() ([]byte, error) {
 		encoded, err := json.Marshal(entry.value)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"workflow: marshal journal record %q at path %q: %w",
+				"workflow: marshal journal record %q in scope %q: %w",
 				entry.key.ID,
-				entry.key.Path,
+				entry.key.Scope,
 				err,
 			)
 		}
 		records = append(records, journalJSONRecord{
-			Path:  entry.key.Path,
+			Scope: entry.key.Scope,
 			ID:    entry.key.ID,
 			Value: encoded,
 		})
@@ -108,17 +108,17 @@ func (j *Journal) MarshalJSON() ([]byte, error) {
 	return json.Marshal(journalDocument{Version: journalJSONVersion, Records: records})
 }
 
-func (j *journalNode) appendEntries(path []string, entries *[]journalEntry) {
+func (j *journalNode) appendEntries(scope []string, entries *[]journalEntry) {
 	for id, value := range j.records {
 		*entries = append(*entries, journalEntry{
-			key:   JournalKey{Path: slices.Clone(path), ID: id},
+			key:   JournalKey{Scope: slices.Clone(scope), ID: id},
 			value: value.value,
 		})
 	}
 	for segment, child := range j.children {
-		path = append(path, segment)
-		child.appendEntries(path, entries)
-		path = path[:len(path)-1]
+		scope = append(scope, segment)
+		child.appendEntries(scope, entries)
+		scope = scope[:len(scope)-1]
 	}
 }
 
@@ -148,7 +148,7 @@ func (j *Journal) UnmarshalJSON(data []byte) error {
 	var root journalNode
 	count := 0
 	for index, record := range document.Records {
-		key := JournalKey{ID: record.ID, Path: record.Path}
+		key := JournalKey{ID: record.ID, Scope: record.Scope}
 		if err := key.validate(); err != nil {
 			return fmt.Errorf("workflow: unmarshal journal record %d: %w", index, err)
 		}
@@ -156,15 +156,15 @@ func (j *Journal) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("workflow: unmarshal journal record %d: value is missing", index)
 		}
 		if inserted := root.record(
-			record.Path,
+			record.Scope,
 			record.ID,
 			journalValue{value: record.Value.value},
 		); !inserted {
 			return fmt.Errorf(
-				"workflow: unmarshal journal record %d: duplicate step %q at path %q",
+				"workflow: unmarshal journal record %d: duplicate step %q in scope %q",
 				index,
 				record.ID,
-				record.Path,
+				record.Scope,
 			)
 		}
 		count++

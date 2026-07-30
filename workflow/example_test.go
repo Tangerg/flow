@@ -112,7 +112,7 @@ func ExampleRegistry_CompileGraphJSON() {
 			return x + cfg.N, nil
 		}), nil
 	})
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN)
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN)
 
 	graph := `{"nodes":[
 	  {"id":"a","type":"addN","input":{"nodeID":"start","path":"/output"},"config":{"n":10}},
@@ -167,8 +167,8 @@ func ExampleBindFactory() {
 	})
 
 	reg := workflow.NewRegistry().
-		MustRegisterLeaf("sum", sum).
-		MustRegisterLeaf("double", double).
+		MustRegisterNode("sum", sum).
+		MustRegisterNode("double", double).
 		MustRegisterSchema("sum", workflow.NodeSchema{
 			Inputs: workflow.Ports{"left": workflow.TypeNumber, "right": workflow.TypeNumber},
 			Output: workflow.TypeNumber,
@@ -200,7 +200,7 @@ func ExampleBindFactory() {
 // This example reports a graph's external inputs before running it, which is how
 // an editor renders a workflow's parameters and how a caller pre-flights a run.
 func ExampleGraph_Inputs() {
-	graph := workflow.Graph{Nodes: []workflow.NodeSpec{
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "greet", Type: "template", Inputs: workflow.Inputs{
 			"name":     workflow.At("params", "name"),
 			"greeting": workflow.At("params", "greeting"),
@@ -211,7 +211,7 @@ func ExampleGraph_Inputs() {
 		fmt.Println("input:", ref)
 	}
 
-	store := workflow.NewStore().With("params", "name", "Ada")
+	store := workflow.NewStore().WithCell("params", "name", "Ada")
 	fmt.Println("missing:", graph.MissingInputs(store))
 
 	// Output:
@@ -312,7 +312,7 @@ func ExampleAwait() {
 	}
 
 	out, runErr := workflow.Run(context.Background(), pipeline,
-		store.With("editor", "verdict", "approved"),
+		store.WithCell("editor", "verdict", "approved"),
 		workflow.RunConfig{Journal: resumed})
 	if runErr != nil {
 		fmt.Println(runErr)

@@ -25,7 +25,7 @@ add := workflow.Factory(
 )
 
 registry := workflow.NewRegistry().
-	MustRegisterLeaf("add", add).
+	MustRegisterNode("add", add).
 	MustRegisterSchema("add", workflow.NodeSchema{
 		Inputs: workflow.OnePort(workflow.TypeNumber),
 		Output: workflow.TypeNumber,

@@ -13,7 +13,7 @@ import (
 )
 
 // addN is a reusable leaf factory that reads its int input and adds config "n".
-func addN() workflow.LeafFactory {
+func addN() workflow.NodeFactory {
 	type config struct {
 		N int `json:"n"`
 	}
@@ -23,7 +23,7 @@ func addN() workflow.LeafFactory {
 }
 
 func TestRegistry_compileSequenceJSON(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
 
 	spec := `{
 	  "kind": "sequence",
@@ -49,7 +49,7 @@ func TestRegistry_compileSequenceJSON(t *testing.T) {
 
 func TestRegistry_compileBranch(t *testing.T) {
 	reg := workflow.NewRegistry().
-		MustRegisterLeaf("addN", addN()).
+		MustRegisterNode("addN", addN()).
 		MustRegisterResolver("sign", func(_ context.Context, s workflow.Store) (string, error) {
 			v, _ := s.Lookup(workflow.At("start", "output"))
 			if v.(int) >= 0 {
@@ -82,7 +82,7 @@ func TestRegistry_compileBranch(t *testing.T) {
 }
 
 func TestRegistry_compileIteration(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
 
 	spec := workflow.Spec{
 		Kind:       workflow.KindIteration,
@@ -137,15 +137,15 @@ func TestRegistry_unknownKind(t *testing.T) {
 func TestRegistry_reportsInvalidAndDuplicateRegistrations(t *testing.T) {
 	factory := addN()
 	reg := workflow.NewRegistry()
-	for name, f := range map[string]workflow.LeafFactory{"": factory, "nil": nil} {
-		if err := reg.RegisterLeaf(name, f); err == nil {
+	for name, f := range map[string]workflow.NodeFactory{"": factory, "nil": nil} {
+		if err := reg.RegisterNode(name, f); err == nil {
 			t.Fatalf("RegisterLeaf(%q) unexpectedly succeeded", name)
 		}
 	}
-	if err := reg.RegisterLeaf("addN", factory); err != nil {
+	if err := reg.RegisterNode("addN", factory); err != nil {
 		t.Fatalf("first registration: %v", err)
 	}
-	if err := reg.RegisterLeaf("addN", factory); err == nil {
+	if err := reg.RegisterNode("addN", factory); err == nil {
 		t.Fatal("duplicate registration unexpectedly succeeded")
 	}
 }
@@ -195,7 +195,7 @@ func TestRegistry_reportsInvalidResolverAndConditionRegistrations(t *testing.T) 
 func TestRegistry_mustRegisterPanics(t *testing.T) {
 	tests := map[string]func(){
 		"leaf": func() {
-			workflow.NewRegistry().MustRegisterLeaf("", addN())
+			workflow.NewRegistry().MustRegisterNode("", addN())
 		},
 		"resolver": func() {
 			workflow.NewRegistry().MustRegisterResolver("", func(context.Context, workflow.Store) (string, error) {
@@ -221,7 +221,7 @@ func TestRegistry_mustRegisterPanics(t *testing.T) {
 }
 
 func TestRegistry_rejectsDuplicateIDsInNestedSpec(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
 	spec := workflow.Spec{Kind: workflow.KindParallel, Steps: []workflow.Spec{
 		{Kind: workflow.KindLeaf, ID: "same", Type: "addN"},
 		{Kind: workflow.KindLeaf, ID: "same", Type: "addN"},
@@ -232,7 +232,7 @@ func TestRegistry_rejectsDuplicateIDsInNestedSpec(t *testing.T) {
 }
 
 func TestRegistry_rejectsNegativeConcurrency(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
 	spec := workflow.Spec{Kind: workflow.KindParallel, Concurrency: -1}
 	if _, err := reg.CompileSpec(spec); err == nil {
 		t.Fatal("expected negative concurrency error")
@@ -240,7 +240,7 @@ func TestRegistry_rejectsNegativeConcurrency(t *testing.T) {
 }
 
 func TestValidateSpec_rejectsFieldsItsKindWouldIgnore(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
 	tests := map[string]struct {
 		spec  workflow.Spec
 		field string
@@ -270,7 +270,7 @@ func TestValidateSpec_rejectsFieldsItsKindWouldIgnore(t *testing.T) {
 }
 
 func TestValidateSpec_rejectsMalformedConfigWithoutANodeSchema(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
 	spec := workflow.Spec{
 		Kind:   workflow.KindLeaf,
 		ID:     "a",
@@ -284,7 +284,7 @@ func TestValidateSpec_rejectsMalformedConfigWithoutANodeSchema(t *testing.T) {
 
 func TestValidateSpec_rejectsEveryStructuralBoundary(t *testing.T) {
 	reg := workflow.NewRegistry().
-		MustRegisterLeaf("addN", addN()).
+		MustRegisterNode("addN", addN()).
 		MustRegisterResolver("pick", func(context.Context, workflow.Store) (string, error) {
 			return "case", nil
 		}).
@@ -427,7 +427,7 @@ func TestValidateSpec_rejectsEveryStructuralBoundary(t *testing.T) {
 
 func TestValidateSpec_requiresDeclaredLeafPorts(t *testing.T) {
 	reg := workflow.NewRegistry().
-		MustRegisterLeaf("addN", addN()).
+		MustRegisterNode("addN", addN()).
 		MustRegisterSchema("addN", workflow.NodeSchema{
 			Inputs: workflow.OnePort(workflow.TypeNumber),
 			Output: workflow.TypeNumber,
@@ -443,7 +443,7 @@ func TestValidateSpec_requiresDeclaredLeafPorts(t *testing.T) {
 }
 
 func TestValidateSpec_iterationBodyIDsAreLocalToEachElement(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
 	spec := workflow.Spec{
 		Kind: workflow.KindSequence,
 		Steps: []workflow.Spec{
@@ -490,7 +490,7 @@ func TestRegistry_concurrentRegistrationIsRaceFree(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range 32 {
 		wg.Go(func() {
-			if err := reg.RegisterLeaf(fmt.Sprintf("leaf-%d", i), addN()); err != nil {
+			if err := reg.RegisterNode(fmt.Sprintf("leaf-%d", i), addN()); err != nil {
 				t.Errorf("RegisterLeaf: %v", err)
 			}
 		})
@@ -500,7 +500,7 @@ func TestRegistry_concurrentRegistrationIsRaceFree(t *testing.T) {
 
 func TestRegistry_zeroValueIsUsable(t *testing.T) {
 	var reg workflow.Registry
-	if err := reg.RegisterLeaf("addN", addN()); err != nil {
+	if err := reg.RegisterNode("addN", addN()); err != nil {
 		t.Fatalf("zero Registry: %v", err)
 	}
 	spec := workflow.Spec{Kind: workflow.KindLeaf, ID: "a", Type: "addN", Input: workflow.Output("start")}

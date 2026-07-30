@@ -42,7 +42,7 @@ func TestRef_helpers(t *testing.T) {
 	if workflow.Item("each") != workflow.At("each", "item") {
 		t.Fatal("Item returned the wrong reference")
 	}
-	if workflow.Index("each") != workflow.At("each", "index") {
+	if workflow.ItemIndex("each") != workflow.At("each", "index") {
 		t.Fatal("Index returned the wrong reference")
 	}
 
@@ -69,7 +69,7 @@ func TestStore_LookupRejectsMalformedJSONPointers(t *testing.T) {
 
 func TestStore_Changes(t *testing.T) {
 	base := workflow.NewStore().WithOutput("a", 1)
-	next := base.WithOutput("b", 2).With("c", "key", 3)
+	next := base.WithOutput("b", 2).WithCell("c", "key", 3)
 
 	changes := next.Changes(base)
 	if len(changes) != 2 {
@@ -327,8 +327,8 @@ func TestGet_reportsValuesThatCannotBeMarshaled(t *testing.T) {
 
 func TestStore_JSONRoundTrip(t *testing.T) {
 	original := workflow.NewStore().
-		With("a", "output", map[string]any{"items": []any{"x", true}}).
-		With("b", "output", 42)
+		WithCell("a", "output", map[string]any{"items": []any{"x", true}}).
+		WithCell("b", "output", 42)
 	data, err := json.Marshal(original)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -525,8 +525,8 @@ func TestStore_MarshalReportsCell(t *testing.T) {
 func TestStore_MarshalReportsTheFirstBadCellDeterministically(t *testing.T) {
 	store := workflow.NewStore().
 		WithOutput("z", func() {}).
-		With("a", "z", func() {}).
-		With("a", "a", func() {})
+		WithCell("a", "z", func() {}).
+		WithCell("a", "a", func() {})
 
 	_, err := json.Marshal(store)
 	if err == nil || !strings.Contains(err.Error(), `node "a" key "a"`) {

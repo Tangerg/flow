@@ -151,6 +151,6 @@ func (p parallelStep) Describe() Description {
 	return Description{Kind: "parallel", Children: p.branches.describe()}
 }
 
-func (p parallelStep) workflowDefinition() stepDefinition {
+func (p parallelStep) definition() stepDefinition {
 	return stepDefinition{kind: definitionSteps, steps: p.branches}
 }

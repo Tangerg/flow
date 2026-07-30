@@ -12,7 +12,7 @@ the complete set on its node type:
 
 ```go
 registry.
-	MustRegisterLeaf("route", routeFactory).
+	MustRegisterNode("route", routeFactory).
 	MustRegisterSchema("route", workflow.NodeSchema{
 		Inputs:  workflow.OnePort(workflow.TypeNumber),
 		Output:  workflow.TypeString,
@@ -31,7 +31,7 @@ ordinary output, so the same decision remains available after resumption.
 ## 2. Gate mutually exclusive arms
 
 ```go
-graph := workflow.Graph{Nodes: []workflow.NodeSpec{
+graph := workflow.Graph{Nodes: []workflow.GraphNode{
 	{
 		ID: "route", Type: "route",
 		Input: workflow.Output("score"),

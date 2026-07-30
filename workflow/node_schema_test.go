@@ -13,10 +13,10 @@ import (
 
 func TestValidateGraph_compatible(t *testing.T) {
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf("toNumber", addN()).
+		MustRegisterNode("toNumber", addN()).
 		MustRegisterSchema("toNumber", workflow.NodeSchema{Inputs: workflow.OnePort(workflow.TypeNumber), Output: workflow.TypeNumber})
 
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+	g := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "a", Type: "toNumber", Input: workflow.Output("start")},
 		{ID: "b", Type: "toNumber", Input: workflow.Output("a")},
 	}}
@@ -28,13 +28,13 @@ func TestValidateGraph_compatible(t *testing.T) {
 
 func TestValidateGraph_incompatible(t *testing.T) {
 	reg := workflow.NewRegistry().
-		MustRegisterLeaf("num", addN()).
-		MustRegisterLeaf("str", addN()).
+		MustRegisterNode("num", addN()).
+		MustRegisterNode("str", addN()).
 		MustRegisterSchema("num", workflow.NodeSchema{Inputs: workflow.OnePort(workflow.TypeNumber), Output: workflow.TypeNumber}).
 		MustRegisterSchema("str", workflow.NodeSchema{Inputs: workflow.OnePort(workflow.TypeString), Output: workflow.TypeString})
 
 	// num.output (number) -> str.input (string): incompatible.
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+	g := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "a", Type: "num", Input: workflow.Output("start")},
 		{ID: "b", Type: "str", Input: workflow.Output("a")},
 	}}
@@ -46,8 +46,8 @@ func TestValidateGraph_incompatible(t *testing.T) {
 
 func TestValidateGraph_doesNotGuessNestedOutputTypes(t *testing.T) {
 	reg := workflow.NewRegistry().
-		MustRegisterLeaf("object", addN()).
-		MustRegisterLeaf("string", addN()).
+		MustRegisterNode("object", addN()).
+		MustRegisterNode("string", addN()).
 		MustRegisterSchema("object", workflow.NodeSchema{Output: workflow.TypeObject}).
 		MustRegisterSchema("string", workflow.NodeSchema{
 			Inputs: workflow.OnePort(workflow.TypeString),
@@ -55,7 +55,7 @@ func TestValidateGraph_doesNotGuessNestedOutputTypes(t *testing.T) {
 		})
 
 	nested := workflow.Output("a").Child("name")
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+	g := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "a", Type: "object"},
 		{ID: "b", Type: "string", Input: nested},
 	}}
@@ -66,15 +66,15 @@ func TestValidateGraph_doesNotGuessNestedOutputTypes(t *testing.T) {
 
 func TestValidateGraph_unknownType(t *testing.T) {
 	reg := workflow.NewRegistry()
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{{ID: "a", Type: "nope"}}}
+	g := workflow.Graph{Nodes: []workflow.GraphNode{{ID: "a", Type: "nope"}}}
 	if err := reg.ValidateGraph(g); err == nil {
 		t.Fatal("expected unknown-type error")
 	}
 }
 
 func TestValidateGraph_cycle(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
+	g := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "a", Type: "addN", Input: workflow.Output("b")},
 		{ID: "b", Type: "addN", Input: workflow.Output("a")},
 	}}
@@ -85,8 +85,8 @@ func TestValidateGraph_cycle(t *testing.T) {
 
 func TestValidateGraph_unregisteredSchemaIsAny(t *testing.T) {
 	// No schemas registered: everything is TypeAny, so any wiring validates.
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
+	g := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "a", Type: "addN", Input: workflow.Output("start")},
 		{ID: "b", Type: "addN", Input: workflow.Output("a")},
 	}}
@@ -135,8 +135,8 @@ func TestMustRegisterSchema_panics(t *testing.T) {
 func TestRegistry_introspection(t *testing.T) {
 	configSchema := json.RawMessage(`{"type":"object"}`)
 	reg := workflow.NewRegistry().
-		MustRegisterLeaf("sum", sumPorts()).
-		MustRegisterLeaf("addN", addN()).
+		MustRegisterNode("sum", sumPorts()).
+		MustRegisterNode("addN", addN()).
 		MustRegisterSchema("sum", workflow.NodeSchema{
 			Inputs:       workflow.Ports{"a": workflow.TypeNumber, "b": workflow.TypeNumber},
 			Output:       workflow.TypeNumber,
@@ -170,13 +170,13 @@ func TestRegistry_introspection(t *testing.T) {
 func TestRegisterSchema_clonesPorts(t *testing.T) {
 	ports := workflow.OnePort(workflow.TypeNumber)
 	reg := workflow.NewRegistry().
-		MustRegisterLeaf("addN", addN()).
+		MustRegisterNode("addN", addN()).
 		MustRegisterSchema("addN", workflow.NodeSchema{Inputs: ports, Output: workflow.TypeNumber})
 
 	// Mutating the caller's map must not change what the Registry enforces.
 	ports["sneaky"] = workflow.TypeString
 
-	g := workflow.Graph{Nodes: []workflow.NodeSpec{
+	g := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "a", Type: "addN", Input: workflow.Output("start")},
 	}}
 	if err := reg.ValidateGraph(g); err != nil {

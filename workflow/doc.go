@@ -32,7 +32,7 @@
 // # Conditional graphs
 //
 // A flat Graph routes through ordinary node output. A routing node declares its
-// possible string [NodeSchema.Outlets], and a target's [NodeSpec.When] gates it
+// possible string [NodeSchema.Outlets], and a target's [GraphNode.When] gates it
 // on one or more selected outlets. The zero [Trigger] requires every gate;
 // [TriggerAny] runs a merge reached through any one arm. An unsatisfied target
 // does not run, writes no output, and emits [EventBypassed]. Bypass is explicit:
@@ -68,7 +68,7 @@
 // hidden checkpoint.
 //
 // [SubgraphFactory] installs the same boundary as a registered Graph node.
-// Because its inputs still come from [LeafSpec.Inputs], the enclosing Graph can
+// Because its inputs still come from [GraphNode.Inputs], the enclosing Graph can
 // detect cycles, report external inputs, and check registered port types without
 // inspecting or exposing the subgraph body. [Spec] and its JSON Schema also
 // provide the "subgraph" kind for structured definitions.
@@ -118,11 +118,11 @@
 //
 // Pass a [Journal] to [Run] through [RunConfig] and a later run continues instead
 // of starting over: every completed leaf boundary is skipped and its result
-// restored. Records are keyed by scope path and step ID, so this stays correct
+// restored. Records are keyed by scope and step ID, so this stays correct
 // where one leaf runs many times, and [Branch] and [Loop] also record the decisions
 // they made — a resolver that is not a pure function of the Store cannot send a
 // resumed run down the other branch. Both a [Store] and a Journal serialize; the
-// Journal uses versioned records with structured scope paths, so the run that
+// Journal uses versioned records with structured scopes, so the run that
 // resumes need not be the process that started. Recording an Interrupt response
 // under its ID and path makes repeated instances independently resumable without
 // positional matching or delimiter-encoded keys.
@@ -156,7 +156,7 @@
 // and returns through the leaf's normal failure or suspension classification.
 // Different leaf invocations may emit concurrently.
 //
-// A [Chunk] carries the leaf ID, scope path, a zero-based invocation index, and
+// A [Chunk] carries the leaf ID, scope, a zero-based invocation index, and
 // a run sequence shared with [Event]. Chunks describe execution attempts rather
 // than durable delivery: replaying a completed Journal record emits nothing,
 // while rerunning an incomplete leaf starts again at index zero and may repeat a
@@ -167,7 +167,7 @@
 //
 // Distribution and deterministic replay stay out of scope, but the package
 // carries enough on each [Event] to build tracing and durability outside it:
-// [Event.Seq] orders a run, [Event.Path] distinguishes repeated executions of one
+// [Event.Seq] orders a run, [Event.Scope] distinguishes repeated executions of one
 // leaf or wait boundary under [Loop], [Iteration], and [Subgraph], and
 // [Event.Store] is the serializable snapshot that boundary produced.
 // [Store.Changes] narrows that snapshot to just its writes, the delta an audit

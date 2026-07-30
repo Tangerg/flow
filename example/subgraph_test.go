@@ -42,7 +42,7 @@ func Example_subgraph() {
 	)
 
 	registry := workflow.NewRegistry().
-		MustRegisterLeaf(
+		MustRegisterNode(
 			"double-region",
 			workflow.SubgraphFactory(body, workflow.Output("double")),
 		).
@@ -50,7 +50,7 @@ func Example_subgraph() {
 			Inputs: workflow.Ports{"value": workflow.TypeNumber},
 			Output: workflow.TypeNumber,
 		}).
-		MustRegisterLeaf("sum", sum).
+		MustRegisterNode("sum", sum).
 		MustRegisterSchema("sum", workflow.NodeSchema{
 			Inputs: workflow.Ports{
 				"left":  workflow.TypeNumber,
@@ -59,7 +59,7 @@ func Example_subgraph() {
 			Output: workflow.TypeNumber,
 		})
 
-	graph := workflow.Graph{Nodes: []workflow.NodeSpec{
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
 		{
 			ID: "left", Type: "double-region",
 			Inputs: workflow.Inputs{"value": workflow.Output("leftInput")},

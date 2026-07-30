@@ -18,7 +18,7 @@ func store(pairs ...any) workflow.Store {
 	for i := 0; i+1 < len(pairs); i += 2 {
 		ref := pairs[i].(string)
 		nodeID, key, _ := strings.Cut(ref, ".")
-		s = s.With(nodeID, key, pairs[i+1])
+		s = s.WithCell(nodeID, key, pairs[i+1])
 	}
 	return s
 }
@@ -439,7 +439,7 @@ func TestParse_quotedNodeID(t *testing.T) {
 	e := expr.MustParse(`node["load-user"].output == 7 && has(node["space id"].result)`)
 	s := workflow.NewStore().
 		WithOutput("load-user", 7).
-		With("space id", "result", true)
+		WithCell("space id", "result", true)
 	got, err := e.Bool(s)
 	if err != nil || !got {
 		t.Fatalf("Bool = %v, %v; want true", got, err)
@@ -692,7 +692,7 @@ func TestEval_typeErrors(t *testing.T) {
 		`list.output == list.output`, // slice equality
 	} {
 		t.Run(src, func(t *testing.T) {
-			_, err := expr.MustParse(src).Eval(s.With("f", "output", 1.5))
+			_, err := expr.MustParse(src).Eval(s.WithCell("f", "output", 1.5))
 			if !errors.Is(err, expr.ErrType) && !errors.Is(err, expr.ErrUndefined) {
 				t.Fatalf("Eval err = %v; want ErrType", err)
 			}

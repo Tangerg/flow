@@ -24,7 +24,7 @@ func FuzzStoreLookupPath(f *testing.F) {
 func FuzzCompileGraphJSON(f *testing.F) {
 	f.Add([]byte(`{"nodes":[]}`))
 	f.Add([]byte(`{"nodes":[{"id":"a","type":"addN"}]}`))
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
 
 	f.Fuzz(func(_ *testing.T, data []byte) {
 		_, _ = reg.CompileGraphJSON(data)
@@ -34,7 +34,7 @@ func FuzzCompileGraphJSON(f *testing.F) {
 func FuzzCompileSpecJSON(f *testing.F) {
 	f.Add([]byte(`{"kind":"sequence","steps":[]}`))
 	f.Add([]byte(`{"kind":"leaf","id":"a","type":"addN"}`))
-	reg := workflow.NewRegistry().MustRegisterLeaf("addN", addN())
+	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
 
 	f.Fuzz(func(_ *testing.T, data []byte) {
 		_, _ = reg.CompileSpecJSON(data)
@@ -96,11 +96,11 @@ func FuzzStoreJSON(f *testing.F) {
 // FuzzJournalJSON checks the same properties for a Journal, which carries a run's
 // recorded results across a restart.
 func FuzzJournalJSON(f *testing.F) {
-	f.Add([]byte(`{"version":1,"records":[]}`))
-	f.Add([]byte(`{"version":1,"records":[{"id":"a","value":1}]}`))
-	f.Add([]byte(`{"version":1,"records":[{"path":["iter[0]"],"id":"el","value":{"n":1}}]}`))
-	f.Add([]byte(`{"version":1,"records":[{"path":["[0]"],"id":"loop","value":true},{"id":"route","value":"case"}]}`))
-	f.Add([]byte(`{"version":1,"records":[{"path":["a/b"],"id":"c","value":1},{"path":["a"],"id":"b/c","value":2}]}`))
+	f.Add([]byte(`{"version":2,"records":[]}`))
+	f.Add([]byte(`{"version":2,"records":[{"id":"a","value":1}]}`))
+	f.Add([]byte(`{"version":2,"records":[{"scope":["iter[0]"],"id":"el","value":{"n":1}}]}`))
+	f.Add([]byte(`{"version":2,"records":[{"scope":["[0]"],"id":"loop","value":true},{"id":"route","value":"case"}]}`))
+	f.Add([]byte(`{"version":2,"records":[{"scope":["a/b"],"id":"c","value":1},{"scope":["a"],"id":"b/c","value":2}]}`))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		journal := workflow.NewJournal()

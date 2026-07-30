@@ -35,10 +35,10 @@ type Event struct {
 	// ID is the step's ID.
 	ID string
 
-	// Path is the chain of enclosing repeated scopes, outermost first: a [Loop]
+	// Scope is the chain of enclosing repeated scopes, outermost first: a [Loop]
 	// iteration or an [Iteration] element. It is empty for a step that runs at
 	// most once per run. Each event owns its slice.
-	Path []string
+	Scope []string
 
 	// Seq numbers events and [Chunk] values within one run, starting at 1. It is
 	// assigned immediately before delivery, so sorting both signal types by Seq

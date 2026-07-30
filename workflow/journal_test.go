@@ -137,7 +137,7 @@ func TestNilJournalJSONMethods(t *testing.T) {
 
 func equalJournalKeys(a, b []workflow.JournalKey) bool {
 	return slices.EqualFunc(a, b, func(a, b workflow.JournalKey) bool {
-		return a.ID == b.ID && slices.Equal(a.Path, b.Path)
+		return a.ID == b.ID && slices.Equal(a.Scope, b.Scope)
 	})
 }
 
@@ -180,29 +180,29 @@ func TestJournal_forgetAndReset(t *testing.T) {
 
 func TestJournal_recordExternalCompletion(t *testing.T) {
 	var journal workflow.Journal
-	key := workflow.JournalKey{ID: "approval", Path: []string{"items[0]"}}
+	key := workflow.JournalKey{ID: "approval", Scope: []string{"items[0]"}}
 	if err := journal.Record(key, map[string]any{"approved": true}); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
-	key.Path[0] = "changed"
+	key.Scope[0] = "changed"
 	if keys := journal.Keys(); !equalJournalKeys(keys, []workflow.JournalKey{
-		{ID: "approval", Path: []string{"items[0]"}},
+		{ID: "approval", Scope: []string{"items[0]"}},
 	}) {
 		t.Fatalf("Keys = %+v; Record retained the caller's path slice", keys)
 	}
 	if err := journal.Record(workflow.JournalKey{
-		ID: "approval", Path: []string{"items[0]"},
+		ID: "approval", Scope: []string{"items[0]"},
 	}, false); !errors.Is(err, workflow.ErrJournalConflict) {
 		t.Fatalf("duplicate Record error = %v; want ErrJournalConflict", err)
 	}
 
-	journal.Forget(workflow.JournalKey{ID: "approval", Path: []string{"items[0]"}})
+	journal.Forget(workflow.JournalKey{ID: "approval", Scope: []string{"items[0]"}})
 	if err := journal.Record(workflow.JournalKey{
-		ID: "approval", Path: []string{"items[0]"},
+		ID: "approval", Scope: []string{"items[0]"},
 	}, false); err != nil {
 		t.Fatalf("Record after Forget: %v", err)
 	}
-	journal.Forget(workflow.JournalKey{ID: "approval", Path: []string{"missing"}})
+	journal.Forget(workflow.JournalKey{ID: "approval", Scope: []string{"missing"}})
 	if journal.Len() != 1 {
 		t.Fatalf("Len after forgetting a missing scope = %d; want 1", journal.Len())
 	}
@@ -224,13 +224,13 @@ func TestJournal_enforcesOneSharedDepthLimit(t *testing.T) {
 
 	journal := workflow.NewJournal()
 	if err := journal.Record(
-		workflow.JournalKey{ID: "deep", Path: deepPath},
+		workflow.JournalKey{ID: "deep", Scope: deepPath},
 		true,
 	); err != nil {
 		t.Fatalf("Record at limit: %v", err)
 	}
 	keys := journal.Keys()
-	if len(keys) != 1 || !slices.Equal(keys[0].Path, deepPath) {
+	if len(keys) != 1 || !slices.Equal(keys[0].Scope, deepPath) {
 		t.Fatalf("Keys = %v; want one key with path depth %d", keys, len(deepPath))
 	}
 	encoded, marshalErr := json.Marshal(journal)
@@ -244,16 +244,16 @@ func TestJournal_enforcesOneSharedDepthLimit(t *testing.T) {
 
 	tooDeep := append(slices.Clone(deepPath), "too-deep")
 	if err := journal.Record(
-		workflow.JournalKey{ID: "rejected", Path: tooDeep},
+		workflow.JournalKey{ID: "rejected", Scope: tooDeep},
 		true,
 	); !errors.Is(err, workflow.ErrMaxDepth) {
 		t.Fatalf("Record error = %v; want ErrMaxDepth", err)
 	}
 
 	document, marshalErr := json.Marshal(map[string]any{
-		"version": 1,
+		"version": 2,
 		"records": []any{map[string]any{
-			"id": "rejected", "path": tooDeep, "value": true,
+			"id": "rejected", "scope": tooDeep, "value": true,
 		}},
 	})
 	if marshalErr != nil {
@@ -351,14 +351,14 @@ func TestJournal_keysAreStructuredAndCollisionFree(t *testing.T) {
 	}
 
 	want := []workflow.JournalKey{
-		{Path: []string{"a"}, ID: "b/c"},
-		{Path: []string{"a/b"}, ID: "c"},
+		{Scope: []string{"a"}, ID: "b/c"},
+		{Scope: []string{"a/b"}, ID: "c"},
 	}
 	if got := journal.Keys(); !equalJournalKeys(got, want) {
 		t.Fatalf("Keys = %v; want %v", got, want)
 	}
 	keys := journal.Keys()
-	keys[0].Path[0] = "changed"
+	keys[0].Scope[0] = "changed"
 	if got := journal.Keys(); !equalJournalKeys(got, want) {
 		t.Fatalf("Keys leaked its path storage: %v", got)
 	}
@@ -375,14 +375,14 @@ func TestJournal_jsonFormatIsVersionedAndRejectsDuplicateKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	if got, want := string(empty), `{"version":1,"records":[]}`; got != want {
+	if got, want := string(empty), `{"version":2,"records":[]}`; got != want {
 		t.Fatalf("empty Journal JSON = %s; want %s", got, want)
 	}
 
 	journal := workflow.NewJournal()
-	duplicate := []byte(`{"version":1,"records":[
-		{"path":["a/b"],"id":"c","value":1},
-		{"path":["a/b"],"id":"c","value":2}
+	duplicate := []byte(`{"version":2,"records":[
+		{"scope":["a/b"],"id":"c","value":1},
+		{"scope":["a/b"],"id":"c","value":2}
 	]}`)
 	if err := json.Unmarshal(duplicate, journal); err == nil {
 		t.Fatal("duplicate structured key unexpectedly decoded")
@@ -391,10 +391,10 @@ func TestJournal_jsonFormatIsVersionedAndRejectsDuplicateKeys(t *testing.T) {
 		t.Fatalf("failed decode changed Journal: %d records", journal.Len())
 	}
 	for _, data := range [][]byte{
-		[]byte(`{"version":2,"records":[]}`),
-		[]byte(`{"version":1,"records":[],"extra":true}`),
-		[]byte(`{"version":1,"records":[{"id":"","value":1}]}`),
-		[]byte(`{"version":1,"records":[{"id":"a"}]}`),
+		[]byte(`{"version":3,"records":[]}`),
+		[]byte(`{"version":2,"records":[],"extra":true}`),
+		[]byte(`{"version":2,"records":[{"id":"","value":1}]}`),
+		[]byte(`{"version":2,"records":[{"id":"a"}]}`),
 	} {
 		if err := json.Unmarshal(data, journal); err == nil {
 			t.Fatalf("invalid Journal JSON decoded: %s", data)
@@ -407,7 +407,7 @@ func TestJournal_jsonFormatIsVersionedAndRejectsDuplicateKeys(t *testing.T) {
 // view of the same bytes would disagree with itself on such a document.
 func TestJournal_unmarshalToleratesMemberNameCase(t *testing.T) {
 	journal := workflow.NewJournal()
-	mixedCase := []byte(`{"version":1,"reCords":[{"id":"0","vAlue":0}]}`)
+	mixedCase := []byte(`{"version":2,"reCords":[{"id":"0","vAlue":0}]}`)
 	if err := json.Unmarshal(mixedCase, journal); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestJournal_unmarshalToleratesMemberNameCase(t *testing.T) {
 func TestJournal_unmarshalSeparatesRecordedNilFromAbsentValue(t *testing.T) {
 	journal := workflow.NewJournal()
 	if err := json.Unmarshal(
-		[]byte(`{"version":1,"records":[{"id":"a","value":null}]}`),
+		[]byte(`{"version":2,"records":[{"id":"a","value":null}]}`),
 		journal,
 	); err != nil {
 		t.Fatalf("Unmarshal explicit null: %v", err)
@@ -434,11 +434,11 @@ func TestJournal_unmarshalSeparatesRecordedNilFromAbsentValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	if got, want := string(encoded), `{"version":1,"records":[{"id":"a","value":null}]}`; got != want {
+	if got, want := string(encoded), `{"version":2,"records":[{"id":"a","value":null}]}`; got != want {
 		t.Fatalf("round trip = %s; want %s", got, want)
 	}
 	if err := json.Unmarshal(
-		[]byte(`{"version":1,"records":[{"id":"a"}]}`),
+		[]byte(`{"version":2,"records":[{"id":"a"}]}`),
 		workflow.NewJournal(),
 	); err == nil {
 		t.Fatal("record without a value unexpectedly decoded")
@@ -462,7 +462,7 @@ func TestJournal_marshalReportsTheOffendingRecord(t *testing.T) {
 
 func TestJournal_unmarshalIsAtomic(t *testing.T) {
 	journal := workflow.NewJournal()
-	if err := json.Unmarshal([]byte(`{"version":1,"records":[{"id":"a","value":1}]}`), journal); err != nil {
+	if err := json.Unmarshal([]byte(`{"version":2,"records":[{"id":"a","value":1}]}`), journal); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	if err := json.Unmarshal([]byte(`{"b":`), journal); err == nil {
@@ -520,8 +520,8 @@ func TestJournal_concurrentBranchesRecordSafely(t *testing.T) {
 
 func TestAwaitFactory(t *testing.T) {
 	reg := workflow.NewRegistry().
-		MustRegisterLeaf("addN", addN()).
-		MustRegisterLeaf("await", workflow.AwaitFactory())
+		MustRegisterNode("addN", addN()).
+		MustRegisterNode("await", workflow.AwaitFactory())
 
 	spec := []byte(`{"kind":"sequence","steps":[
 	  {"id":"approval","type":"await","kind":"leaf","input":{"nodeID":"inbox","path":"/decision"}},
@@ -536,7 +536,7 @@ func TestAwaitFactory(t *testing.T) {
 	if _, err := step.Run(t.Context(), in); !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("err = %v; want ErrSuspended", err)
 	}
-	out, compileErr := step.Run(t.Context(), in.With("inbox", "decision", "yes"))
+	out, compileErr := step.Run(t.Context(), in.WithCell("inbox", "decision", "yes"))
 	if compileErr != nil {
 		t.Fatalf("run: %v", compileErr)
 	}
@@ -546,10 +546,10 @@ func TestAwaitFactory(t *testing.T) {
 }
 
 func TestAwaitFactory_requiresAWiredPort(t *testing.T) {
-	if _, err := workflow.AwaitFactory()(workflow.LeafSpec{ID: "a"}); !errors.Is(err, workflow.ErrMissingPort) {
+	if _, err := workflow.AwaitFactory()(workflow.NodeSpec{ID: "a"}); !errors.Is(err, workflow.ErrMissingPort) {
 		t.Fatalf("err = %v; want ErrMissingPort", err)
 	}
-	if _, err := workflow.AwaitFactory()(workflow.LeafSpec{
+	if _, err := workflow.AwaitFactory()(workflow.NodeSpec{
 		ID: "a",
 		Inputs: workflow.Inputs{
 			workflow.DefaultPort: workflow.Output("x"),
@@ -558,7 +558,7 @@ func TestAwaitFactory_requiresAWiredPort(t *testing.T) {
 	}); !errors.Is(err, workflow.ErrUnknownPort) {
 		t.Fatalf("extra port error = %v; want ErrUnknownPort", err)
 	}
-	if _, err := workflow.AwaitFactory()(workflow.LeafSpec{
+	if _, err := workflow.AwaitFactory()(workflow.NodeSpec{
 		ID:     "a",
 		Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("x")},
 		Config: json.RawMessage(`{}`),
@@ -568,7 +568,7 @@ func TestAwaitFactory_requiresAWiredPort(t *testing.T) {
 }
 
 func TestInterruptFactory_roundTripsStructuredRequestAndResponse(t *testing.T) {
-	reg := workflow.NewRegistry().MustRegisterLeaf("interrupt", workflow.InterruptFactory())
+	reg := workflow.NewRegistry().MustRegisterNode("interrupt", workflow.InterruptFactory())
 	step, compileErr := reg.CompileSpecJSON([]byte(`{
 		"kind":"leaf",
 		"id":"approval",
@@ -608,19 +608,19 @@ func TestInterruptFactory_roundTripsStructuredRequestAndResponse(t *testing.T) {
 
 func TestInterruptFactory_rejectsInputsAndInvalidConfig(t *testing.T) {
 	factory := workflow.InterruptFactory()
-	if _, err := factory(workflow.LeafSpec{
+	if _, err := factory(workflow.NodeSpec{
 		ID:     "approval",
 		Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("x")},
 	}); !errors.Is(err, workflow.ErrUnknownPort) {
 		t.Fatalf("input error = %v; want ErrUnknownPort", err)
 	}
-	if _, err := factory(workflow.LeafSpec{
+	if _, err := factory(workflow.NodeSpec{
 		ID:     "approval",
 		Config: json.RawMessage(`{`),
 	}); !errors.Is(err, workflow.ErrInvalidSpec) {
 		t.Fatalf("config error = %v; want ErrInvalidSpec", err)
 	}
-	if _, err := factory(workflow.LeafSpec{
+	if _, err := factory(workflow.NodeSpec{
 		ID:     "approval",
 		Config: json.RawMessage(`{"question":"first","question":"second"}`),
 	}); !errors.Is(err, workflow.ErrInvalidSpec) {

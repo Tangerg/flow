@@ -264,7 +264,7 @@ func TestLeaf_rejectsExcessiveExecutionScopeDepth(t *testing.T) {
 }
 
 func TestGet_nilValue(t *testing.T) {
-	store := workflow.NewStore().With("n", "value", nil)
+	store := workflow.NewStore().WithCell("n", "value", nil)
 
 	if got, err := workflow.Get[any](store, workflow.At("n", "value")); err != nil || got != nil {
 		t.Fatalf("From[any](nil) = %v, %v", got, err)

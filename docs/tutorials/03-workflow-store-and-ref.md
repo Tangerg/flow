@@ -137,7 +137,7 @@ out, err := workflow.Run(
 - Lifting every static pipeline into `Step`. Do so only for runtime composition
   or named data.
 - Hand-building reference strings instead of using `Output`, `At`, `Item`,
-  `Index`, and `Ref.Child`.
+  `ItemIndex`, and `Ref.Child`.
 - Spreading type assertions from `Lookup` throughout application code.
 - Changing a step ID casually. IDs are data addresses, diagnostics, and replay
   keys.

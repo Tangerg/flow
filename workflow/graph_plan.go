@@ -11,7 +11,7 @@ func (g Graph) plan() (graphPlan, error) {
 	planner := graphPlanner{
 		graph: g,
 		plan: graphPlan{
-			nodesByID:             make(map[string]NodeSpec, len(g.Nodes)),
+			nodesByID:             make(map[string]GraphNode, len(g.Nodes)),
 			inputsByNode:          make(map[string]Inputs, len(g.Nodes)),
 			dependencyCounts:      make([]int, len(g.Nodes)),
 			dependencyNodeIndexes: make([][]int, len(g.Nodes)),
@@ -25,7 +25,7 @@ func (g Graph) plan() (graphPlan, error) {
 // graphPlan is the stable output of graph planning. Mutable traversal state
 // remains on graphPlanner and cannot leak into validation or compilation.
 type graphPlan struct {
-	nodesByID             map[string]NodeSpec
+	nodesByID             map[string]GraphNode
 	inputsByNode          map[string]Inputs
 	dependencyCounts      []int
 	dependencyNodeIndexes [][]int
@@ -104,7 +104,7 @@ func (g *graphPlanner) indexNodes() error {
 	return nil
 }
 
-func (*graphPlanner) validateGates(node NodeSpec) error {
+func (*graphPlanner) validateGates(node GraphNode) error {
 	if !node.Trigger.valid() {
 		return &GraphError{
 			NodeID: node.ID,

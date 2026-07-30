@@ -85,7 +85,7 @@ type leafStep[I, O any] struct {
 // journaling, and output publication in one execution path.
 type leafRunner[I, O any] interface {
 	validate() error
-	run(ctx context.Context, input I, invocation leafInvocation) (O, error)
+	run(ctx context.Context, input I, identity leafIdentity) (O, error)
 }
 
 type nodeRunner[I, O any] struct {
@@ -105,18 +105,19 @@ func (n nodeRunner[I, O]) validate() error {
 func (n nodeRunner[I, O]) run(
 	ctx context.Context,
 	input I,
-	_ leafInvocation,
+	_ leafIdentity,
 ) (O, error) {
 	return n.node.Run(ctx, input)
 }
 
-// leafInvocation identifies one execution of a leaf. Runners receive only the
-// state that belongs to the invocation; the immutable step definition remains
-// safe to reuse concurrently.
-type leafInvocation struct {
-	id   string
-	path []string
-	run  *runState
+// leafIdentity names one execution of a leaf: which step it is, which repeated
+// scope it runs in, and which run owns it. A runner receives this rather than the
+// leafExecution so that it can label a Chunk without reaching the step
+// definition, which stays immutable and safe to reuse concurrently.
+type leafIdentity struct {
+	id    string
+	scope []string
+	run   *runState
 }
 
 func (l leafStep[I, O]) Run(ctx context.Context, store Store) (Store, error) {
@@ -132,12 +133,12 @@ func (l leafStep[I, O]) Describe() Description {
 	return Description{ID: l.id, Kind: "leaf"}
 }
 
-func (l leafStep[I, O]) workflowDefinition() stepDefinition {
+func (l leafStep[I, O]) definition() stepDefinition {
 	return stepDefinition{kind: definitionNamed, id: l.id}
 }
 
-// leafExecution owns the mutable state of one leaf invocation. The leaf
-// definition remains immutable and safe for concurrent use.
+// leafExecution owns everything that changes while one leaf runs, so the
+// leafStep it came from stays immutable and safe for concurrent use.
 type leafExecution[I, O any] struct {
 	leaf    leafStep[I, O]
 	store   Store
@@ -163,10 +164,10 @@ func (l *leafExecution[I, O]) execute(ctx context.Context) (Store, error) {
 	if err != nil {
 		return l.fail(ctx, OpBind, err)
 	}
-	output, err := l.leaf.runner.run(ctx, input, leafInvocation{
-		id:   l.leaf.id,
-		path: scope(ctx),
-		run:  l.run,
+	output, err := l.leaf.runner.run(ctx, input, leafIdentity{
+		id:    l.leaf.id,
+		scope: scope(ctx),
+		run:   l.run,
 	})
 	if err != nil {
 		return l.fail(ctx, OpRun, err)

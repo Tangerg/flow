@@ -3,8 +3,9 @@ package flow
 import (
 	"context"
 	"fmt"
-	"sync"
 	"sync/atomic"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // MapConfig configures [Map]. Its zero value runs every element concurrently.
@@ -48,7 +49,7 @@ func (m mapNode[I, O]) Run(ctx context.Context, input []I) ([]O, error) {
 		)
 	}
 	outputs := make([]O, len(input))
-	group := indexGroup{
+	fan := fanOut{
 		count: len(input),
 		limit: m.limit,
 		call: func(ctx context.Context, index int) error {
@@ -60,50 +61,52 @@ func (m mapNode[I, O]) Run(ctx context.Context, input []I) ([]O, error) {
 			return nil
 		},
 	}
-	if err := group.run(ctx); err != nil {
+	if err := fan.run(ctx); err != nil {
 		return nil, err
 	}
 	return outputs, nil
 }
 
-// indexGroup owns one bounded or unbounded fan-out over [0, count).
-type indexGroup struct {
+// fanOut calls call once for every index in [0, count), optionally limiting how
+// many run at a time. It exists apart from mapNode so the scheduling rules are
+// stated once, independent of the element types being mapped.
+type fanOut struct {
 	count int
 	limit int
 	call  func(context.Context, int) error
 }
 
-func (i indexGroup) run(parent context.Context) error {
-	if i.count <= 0 {
+func (f fanOut) run(parent context.Context) error {
+	if f.count <= 0 {
 		return parent.Err()
 	}
 	switch {
-	case i.count == 1:
-		return i.runOne(parent)
-	case i.limit == 1:
-		return i.runSequential(parent)
+	case f.count == 1:
+		return f.runOne(parent)
+	case f.limit == 1:
+		return f.runSequential(parent)
 	default:
-		return i.runConcurrent(parent)
+		return f.runConcurrent(parent)
 	}
 }
 
-func (i indexGroup) runOne(parent context.Context) error {
+func (f fanOut) runOne(parent context.Context) error {
 	if err := parent.Err(); err != nil {
 		return err
 	}
-	err := i.call(parent, 0)
+	err := f.call(parent, 0)
 	if parentErr := parent.Err(); parentErr != nil {
 		return parentErr
 	}
 	return err
 }
 
-func (i indexGroup) runSequential(parent context.Context) error {
-	for index := range i.count {
+func (f fanOut) runSequential(parent context.Context) error {
+	for index := range f.count {
 		if err := parent.Err(); err != nil {
 			return err
 		}
-		if err := i.call(parent, index); err != nil {
+		if err := f.call(parent, index); err != nil {
 			if parentErr := parent.Err(); parentErr != nil {
 				return parentErr
 			}
@@ -113,90 +116,79 @@ func (i indexGroup) runSequential(parent context.Context) error {
 	return parent.Err()
 }
 
-func (i indexGroup) runConcurrent(parent context.Context) error {
-	ctx, cancel := context.WithCancel(parent)
-	defer cancel()
-
-	failure := firstFailure{cancel: cancel}
-	var workers sync.WaitGroup
-	if i.bounded() {
-		i.startWorkers(ctx, &workers, &failure)
+func (f fanOut) runConcurrent(parent context.Context) error {
+	// errgroup owns the bookkeeping: the first error cancels the derived context,
+	// and Wait reports that error rather than a later one. Spreading the work
+	// across goroutines stays local — see startWorkers.
+	group, ctx := errgroup.WithContext(parent)
+	if f.bounded() {
+		f.startWorkers(ctx, group)
 	} else {
-		i.startCalls(ctx, &workers, &failure)
+		f.startCalls(ctx, group)
 	}
-	workers.Wait()
-
-	if err := parent.Err(); err != nil {
-		return err
+	err := group.Wait()
+	// Wait cancels ctx before returning, so ctx.Err() is useless here. The parent
+	// is the only context whose cancellation still means something, and it
+	// outranks a call's error: a cancelled run has no trustworthy result.
+	if parentErr := parent.Err(); parentErr != nil {
+		return parentErr
 	}
-	if failure.err != nil {
-		return failure.err
-	}
-	return ctx.Err()
+	return err
 }
 
-func (i indexGroup) bounded() bool {
-	return i.limit > 1 && i.limit < i.count
+func (f fanOut) bounded() bool {
+	return f.limit > 1 && f.limit < f.count
 }
 
-func (i indexGroup) startWorkers(
-	ctx context.Context,
-	workers *sync.WaitGroup,
-	failure *firstFailure,
-) {
+// startWorkers claims indexes from a shared counter with a pool of exactly limit
+// goroutines.
+//
+// errgroup.SetLimit would express the same bound in one line, but it bounds
+// concurrency by making every element wait on a semaphore, so it allocates per
+// element rather than per worker: at 256 elements with a limit of 8, 518
+// allocations against 23. A caller sets a limit to bound what the fan-out
+// consumes, and Map is what Parallel, Iteration, and Graph all fan out through,
+// so the bound has to hold for goroutines too — not just for calls in flight.
+func (f fanOut) startWorkers(ctx context.Context, group *errgroup.Group) {
 	var next atomic.Int64
-	count, call := i.count, i.call
-	for range i.limit {
-		workers.Go(func() {
+	count, call := f.count, f.call
+	for range f.limit {
+		group.Go(func() error {
+			// A worker that stops because the group was already cancelled has no
+			// error of its own: the failure that cancelled it is the group's
+			// error, and a cancelled parent is reported by the check after Wait.
+			//
+			//nolint:nilerr // A worker that never called the node reports nothing.
 			for {
 				if ctx.Err() != nil {
-					return
+					return nil
 				}
 				index := int(next.Add(1) - 1)
 				if index >= count || ctx.Err() != nil {
-					return
+					return nil
 				}
 				if err := call(ctx, index); err != nil {
-					failure.record(err)
-					return
+					return err
 				}
 			}
 		})
 	}
 }
 
-func (i indexGroup) startCalls(
-	ctx context.Context,
-	workers *sync.WaitGroup,
-	failure *firstFailure,
-) {
-	call := i.call
-	for index := range i.count {
+func (f fanOut) startCalls(ctx context.Context, group *errgroup.Group) {
+	for index := range f.count {
 		if ctx.Err() != nil {
 			return
 		}
-		workers.Go(func() {
-			// Cancellation may happen after dispatch but before this
-			// goroutine starts. Do not enter user code in that window.
+		group.Go(func() error {
+			// Cancellation may happen after dispatch but before this goroutine
+			// starts. Do not enter user code in that window.
+			//
+			//nolint:nilerr // A skipped call has no error of its own to report.
 			if ctx.Err() != nil {
-				return
+				return nil
 			}
-			if err := call(ctx, index); err != nil {
-				failure.record(err)
-			}
+			return f.call(ctx, index)
 		})
 	}
-}
-
-type firstFailure struct {
-	once   sync.Once
-	err    error
-	cancel context.CancelFunc
-}
-
-func (f *firstFailure) record(err error) {
-	f.once.Do(func() {
-		f.err = err
-		f.cancel()
-	})
 }

@@ -133,7 +133,7 @@ func (s specValidator) validateLeaf(spec Spec, stepIDs map[string]struct{}) erro
 			fmt.Errorf("%w: node type is empty", ErrInvalidSpec),
 		)
 	}
-	if _, ok := s.registry.lookupLeaf(spec.Type); !ok {
+	if _, ok := s.registry.lookupNode(spec.Type); !ok {
 		return spec.fieldError("type", fmt.Errorf("%w %q", ErrUnknownNodeType, spec.Type))
 	}
 	registered, _ := s.registry.lookupNodeSchema(spec.Type)

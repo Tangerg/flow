@@ -82,7 +82,7 @@ func TestStreamLeaf_emitsChunksAndPublishesFinalOutput(t *testing.T) {
 			t.Fatalf("signal %d is not a chunk", index+1)
 		}
 		if chunk.ID != "stream" ||
-			!slices.Equal(chunk.Path, []string{"outer"}) ||
+			!slices.Equal(chunk.Scope, []string{"outer"}) ||
 			chunk.Index != wantIndex ||
 			chunk.Value != fmt.Sprintf("chunk-%d", index) {
 			t.Fatalf("chunk %d = %+v; want identified, scoped chunk", index, chunk)
@@ -91,9 +91,9 @@ func TestStreamLeaf_emitsChunksAndPublishesFinalOutput(t *testing.T) {
 	}
 
 	// Each Chunk owns its Path.
-	signals[1].chunk.Path[0] = "changed"
-	if signals[2].chunk.Path[0] != "outer" {
-		t.Fatalf("mutating one Path changed another: %+v", signals[2].chunk.Path)
+	signals[1].chunk.Scope[0] = "changed"
+	if signals[2].chunk.Scope[0] != "outer" {
+		t.Fatalf("mutating one Path changed another: %+v", signals[2].chunk.Scope)
 	}
 }
 
@@ -323,7 +323,7 @@ func TestStreamLeaf_incompleteReplayRepeatsTheAttemptPrefix(t *testing.T) {
 		t.Fatalf("first Run error = %v; want ErrSuspended", err)
 	}
 	waits := workflow.Suspensions(err)
-	if len(waits) != 1 || waits[0].ID != "stream" || len(waits[0].Path) != 0 {
+	if len(waits) != 1 || waits[0].ID != "stream" || len(waits[0].Scope) != 0 {
 		t.Fatalf("Suspensions = %+v; want root stream", waits)
 	}
 	if got := chunkValues(first); !slices.Equal(got, []int{10, 11}) {
@@ -406,10 +406,10 @@ func TestStreamLeaf_iterationEmitsConcurrentScopedStreams(t *testing.T) {
 	byPath := make(map[string][]workflow.Chunk)
 	seqs := make(map[uint64]struct{})
 	for _, chunk := range chunks {
-		if chunk.ID != "double" || len(chunk.Path) != 1 {
+		if chunk.ID != "double" || len(chunk.Scope) != 1 {
 			t.Fatalf("chunk identity = %+v; want scoped double", chunk)
 		}
-		byPath[chunk.Path[0]] = append(byPath[chunk.Path[0]], chunk)
+		byPath[chunk.Scope[0]] = append(byPath[chunk.Scope[0]], chunk)
 		if chunk.Seq == 0 {
 			t.Fatal("chunk has zero Seq")
 		}

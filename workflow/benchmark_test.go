@@ -240,9 +240,9 @@ func BenchmarkParallelBaseScaling(b *testing.B) {
 }
 
 func BenchmarkCompileGraphScaling(b *testing.B) {
-	registry := workflow.NewRegistry().MustRegisterLeaf(
+	registry := workflow.NewRegistry().MustRegisterNode(
 		"noop",
-		func(workflow.LeafSpec) (workflow.Step, error) {
+		func(workflow.NodeSpec) (workflow.Step, error) {
 			return flow.NodeFunc[workflow.Store, workflow.Store](func(_ context.Context, store workflow.Store) (workflow.Store, error) {
 				return store, nil
 			}), nil
@@ -265,9 +265,9 @@ func BenchmarkCompileGraphScaling(b *testing.B) {
 }
 
 func BenchmarkGraphRunScaling(b *testing.B) {
-	registry := workflow.NewRegistry().MustRegisterLeaf(
+	registry := workflow.NewRegistry().MustRegisterNode(
 		"noop",
-		func(spec workflow.LeafSpec) (workflow.Step, error) {
+		func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
 				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
@@ -327,7 +327,7 @@ func BenchmarkJournalDeepTraversal(b *testing.B) {
 		}
 		journal := workflow.NewJournal()
 		if err := journal.Record(
-			workflow.JournalKey{ID: "leaf", Path: path},
+			workflow.JournalKey{ID: "leaf", Scope: path},
 			true,
 		); err != nil {
 			b.Fatalf("Record setup: %v", err)
@@ -369,10 +369,10 @@ func benchmarkStore(size int) workflow.Store {
 }
 
 func benchmarkGraph(shape string, size int) workflow.Graph {
-	nodes := make([]workflow.NodeSpec, size)
+	nodes := make([]workflow.GraphNode, size)
 	for i := range size {
 		id := "node-" + strconv.Itoa(i)
-		nodes[i] = workflow.NodeSpec{ID: id, Type: "noop"}
+		nodes[i] = workflow.GraphNode{ID: id, Type: "noop"}
 		if shape == "chain" && i > 0 {
 			nodes[i].DependsOn = []string{"node-" + strconv.Itoa(i-1)}
 		}

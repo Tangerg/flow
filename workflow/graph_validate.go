@@ -21,7 +21,7 @@ func (r *Registry) validateGraph(graph Graph) (graphPlan, error) {
 	}
 
 	for _, node := range graph.Nodes {
-		if _, ok := r.lookupLeaf(node.Type); !ok {
+		if _, ok := r.lookupNode(node.Type); !ok {
 			return graphPlan{}, &GraphError{
 				NodeID: node.ID,
 				Field:  "type",
@@ -63,7 +63,7 @@ func (r *Registry) validateGraph(graph Graph) (graphPlan, error) {
 	return plan, nil
 }
 
-func (r *Registry) validateGates(node NodeSpec, plan graphPlan) error {
+func (r *Registry) validateGates(node GraphNode, plan graphPlan) error {
 	for _, gate := range node.When {
 		source := plan.nodesByID[gate.NodeID]
 		registered, ok := r.lookupNodeSchema(source.Type)

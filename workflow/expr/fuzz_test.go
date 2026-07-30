@@ -50,12 +50,12 @@ func FuzzParse(f *testing.F) {
 	s := workflow.NewStore().
 		WithOutput("a", 3).
 		WithOutput("b", 1.5).
-		With("a", "k", "text").
-		With("b", "flag", true).
-		With("c", "list", []any{1, 2}).
-		With("c", "obj", map[string]any{"x": 1}).
-		With("d", "null", nil).
-		With("d", "chan", make(chan int))
+		WithCell("a", "k", "text").
+		WithCell("b", "flag", true).
+		WithCell("c", "list", []any{1, 2}).
+		WithCell("c", "obj", map[string]any{"x": 1}).
+		WithCell("d", "null", nil).
+		WithCell("d", "chan", make(chan int))
 
 	f.Fuzz(func(t *testing.T, src string) {
 		e, err := expr.Parse(src)

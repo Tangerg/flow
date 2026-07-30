@@ -49,7 +49,7 @@ func (i interruptStep) Run(ctx context.Context, store Store) (Store, error) {
 
 	suspension := &Suspension{
 		ID:    i.id,
-		Path:  Scope(ctx),
+		Scope: Scope(ctx),
 		Value: i.value,
 	}
 	run.emit(ctx, Event{Kind: EventSuspended, ID: i.id, Err: suspension})
@@ -60,18 +60,18 @@ func (i interruptStep) Describe() Description {
 	return Description{ID: i.id, Kind: "interrupt"}
 }
 
-func (i interruptStep) workflowDefinition() stepDefinition {
+func (i interruptStep) definition() stepDefinition {
 	return stepDefinition{kind: definitionNamed, id: i.id}
 }
 
-// InterruptFactory is the [LeafFactory] form of [Interrupt]. The leaf's JSON
+// InterruptFactory is the [NodeFactory] form of [Interrupt]. The leaf's JSON
 // config becomes the value exposed by the suspension; an omitted config becomes
 // nil. Interrupt leaves accept no input ports.
 //
-//	reg.MustRegisterLeaf("interrupt", workflow.InterruptFactory())
+//	reg.MustRegisterNode("interrupt", workflow.InterruptFactory())
 //	// {"id":"approval","type":"interrupt","config":{"question":"approve?"}}
-func InterruptFactory() LeafFactory {
-	return func(spec LeafSpec) (Step, error) {
+func InterruptFactory() NodeFactory {
+	return func(spec NodeSpec) (Step, error) {
 		if ports := spec.Inputs.PortNames(); len(ports) > 0 {
 			return nil, fmt.Errorf("%w %q", ErrUnknownPort, ports[0])
 		}

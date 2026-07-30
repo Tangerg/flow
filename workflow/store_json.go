@@ -121,12 +121,7 @@ func (s *Store) UnmarshalJSON(data []byte) error {
 	nextData := make(map[storeKey]cell, size)
 	for _, nodeID := range nodeIDs {
 		values := nodes[nodeID]
-		keys := make([]string, 0, len(values))
-		for key := range values {
-			keys = append(keys, key)
-		}
-		slices.Sort(keys)
-		for _, key := range keys {
+		for _, key := range slices.Sorted(maps.Keys(values)) {
 			nextData[storeKey{nodeID: nodeID, key: key}] = cell{
 				value:    values[key],
 				revision: revisionCounter.Add(1),

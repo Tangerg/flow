@@ -122,16 +122,16 @@ func (s subgraphStep) Describe() Description {
 	}
 }
 
-func (s subgraphStep) workflowDefinition() stepDefinition {
+func (s subgraphStep) definition() stepDefinition {
 	return stepDefinition{kind: definitionSubgraph, id: s.id, body: s.body}
 }
 
-// SubgraphFactory returns a [LeafFactory] that instantiates body as a sealed
+// SubgraphFactory returns a [NodeFactory] that instantiates body as a sealed
 // subgraph. A Graph node's wired ports become the subgraph's inner seed IDs.
 // The factory accepts no config because body and bodyOutput are fixed by the
 // registration.
-func SubgraphFactory(body Step, bodyOutput Ref) LeafFactory {
-	return func(spec LeafSpec) (Step, error) {
+func SubgraphFactory(body Step, bodyOutput Ref) NodeFactory {
+	return func(spec NodeSpec) (Step, error) {
 		if len(bytes.TrimSpace(spec.Config)) > 0 {
 			return nil, fmt.Errorf("%w: subgraph config must be omitted", ErrInvalidSpec)
 		}

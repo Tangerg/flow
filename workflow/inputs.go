@@ -1,7 +1,6 @@
 package workflow
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -9,7 +8,7 @@ import (
 )
 
 // DefaultPort is the port name of a node's single unnamed input. The [Spec] and
-// [NodeSpec] "input" field is sugar for wiring this port, and [Factory] binds it.
+// [GraphNode] "input" field is sugar for wiring this port, and [Factory] binds it.
 const DefaultPort = "in"
 
 // Inputs maps a node's input port names to the [Ref] each port reads. A node
@@ -41,15 +40,6 @@ func (i Inputs) Refs() []Ref {
 		refs = append(refs, i[port])
 	}
 	return refs
-}
-
-// LeafSpec carries everything a [LeafFactory] needs to build one leaf: the node
-// ID it must report in events and Store writes, its wired input ports, and its
-// raw JSON config.
-type LeafSpec struct {
-	ID     string
-	Inputs Inputs
-	Config json.RawMessage
 }
 
 // withDefault merges the single-input "input" sugar into the receiver. It

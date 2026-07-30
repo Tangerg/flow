@@ -69,7 +69,7 @@ Suspension is a third outcome, not an ordinary failure:
 - `paused` is the Store produced by completed work.
 - `err` matches `ErrSuspended`.
 - `Suspensions(err)` returns one or more structured waits.
-- `wait.Key()` combines the scope path and step ID, distinguishing repeated
+- `wait.Key()` combines the scope and step ID, distinguishing repeated
   instances inside loops and concurrent collections.
 
 Do not persist only `wait.ID`; one step can have several active scoped

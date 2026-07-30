@@ -28,10 +28,10 @@ type stepDefinition struct {
 	body  Step
 }
 
-// definitionStep can only be implemented inside this package. Caller-defined
+// definedStep can only be implemented inside this package. Caller-defined
 // steps remain opaque and are covered by runState.claim at execution time.
-type definitionStep interface {
-	workflowDefinition() stepDefinition
+type definedStep interface {
+	definition() stepDefinition
 }
 
 type definitionValidator struct{}
@@ -56,11 +56,11 @@ func (d definitionValidator) validateStep(
 			MaxNestingDepth,
 		)
 	}
-	defined, ok := step.(definitionStep)
+	defined, ok := step.(definedStep)
 	if !ok {
 		return nil
 	}
-	definition := defined.workflowDefinition()
+	definition := defined.definition()
 
 	switch definition.kind {
 	case definitionSteps:

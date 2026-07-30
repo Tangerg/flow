@@ -135,49 +135,49 @@ func (r *runState) nextSeq() uint64 {
 // replay returns a record that existed when this run began. Records written by
 // the current run are deliberately excluded: seeing one again means two steps
 // claimed the same identity, not that the later step is being resumed.
-func (r *runState) replay(path []string, id string) (any, bool) {
+func (r *runState) replay(scope []string, id string) (any, bool) {
 	if r == nil || r.config.Journal == nil {
 		return nil, false
 	}
-	return r.config.Journal.lookupAt(path, id, r.journalRevision)
+	return r.config.Journal.lookupAt(scope, id, r.journalRevision)
 }
 
 // claim enforces the execution identity invariant independently of the
 // Journal. This catches duplicate IDs even when both invocations would replay
 // the same historical record, and it also covers opaque caller-defined wrappers
 // that static definition validation cannot see through.
-func (r *runState) claim(path []string, id string) error {
+func (r *runState) claim(scope []string, id string) error {
 	if r == nil {
 		return nil
 	}
-	key := JournalKey{ID: id, Path: path}
+	key := JournalKey{ID: id, Scope: scope}
 	if err := key.validate(); err != nil {
 		return err
 	}
 
 	r.claimsMu.Lock()
 	defer r.claimsMu.Unlock()
-	if !r.claims.record(path, id, journalValue{}) {
+	if !r.claims.record(scope, id, journalValue{}) {
 		return fmt.Errorf(
-			"%w: step %q at path %q was invoked more than once in one run",
+			"%w: step %q in scope %q was invoked more than once in one run",
 			ErrDuplicateStep,
 			id,
-			path,
+			scope,
 		)
 	}
 	return nil
 }
 
-func (r *runState) markBypassed(path []string, id string) {
+func (r *runState) markBypassed(scope []string, id string) {
 	r.bypassedMu.Lock()
 	defer r.bypassedMu.Unlock()
-	r.bypassed.record(path, id, journalValue{})
+	r.bypassed.record(scope, id, journalValue{})
 }
 
-func (r *runState) wasBypassed(path []string, id string) bool {
+func (r *runState) wasBypassed(scope []string, id string) bool {
 	r.bypassedMu.RLock()
 	defer r.bypassedMu.RUnlock()
-	_, ok := r.bypassed.lookup(path, id)
+	_, ok := r.bypassed.lookup(scope, id)
 	return ok
 }
 
@@ -202,7 +202,7 @@ func (r *runState) emit(ctx context.Context, event Event) {
 		return
 	}
 	event.Seq = r.nextSeq()
-	event.Path = Scope(ctx)
+	event.Scope = Scope(ctx)
 	r.config.Observer.Observe(ctx, event)
 }
 
@@ -216,26 +216,26 @@ type scopeKey struct{}
 // A scope is execution state rather than configuration, which is why it is not a
 // [RunConfig] field: composites push segments as they run. It is maintained
 // whether or not anything is watching, because it identifies a step rather than
-// merely labelling it — [Event.Path] reports it, and a [Journal] keys its records
+// merely labelling it — [Event.Scope] reports it, and a [Journal] keys its records
 // by it, which is what keeps resumption correct where one step runs many times.
-// Each call copies the path, so concurrent branches never share a slice.
+// Each call copies the scope, so concurrent branches never share a slice.
 func WithScope(ctx context.Context, segment string) context.Context {
 	current := scope(ctx)
-	path := make([]string, len(current)+1)
-	copy(path, current)
-	path[len(current)] = segment
-	return context.WithValue(ctx, scopeKey{}, path)
+	extended := make([]string, len(current)+1)
+	copy(extended, current)
+	extended[len(current)] = segment
+	return context.WithValue(ctx, scopeKey{}, extended)
 }
 
-// Scope returns the scope path of a step running under ctx: its enclosing
-// repeated scopes, outermost first. The returned slice is a copy.
+// Scope returns the scope of a step running under ctx: its enclosing repeated
+// scopes, outermost first. The returned slice is a copy.
 func Scope(ctx context.Context) []string {
 	return slices.Clone(scope(ctx))
 }
 
-// scope returns the context-owned path for internal reads. Callers that retain
+// scope returns the context-owned scope for internal reads. Callers that retain
 // or expose it must clone it.
 func scope(ctx context.Context) []string {
-	path, _ := ctx.Value(scopeKey{}).([]string)
-	return path
+	current, _ := ctx.Value(scopeKey{}).([]string)
+	return current
 }

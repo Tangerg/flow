@@ -8,7 +8,7 @@ import (
 )
 
 func testGraph() workflow.Graph {
-	return workflow.Graph{Nodes: []workflow.NodeSpec{
+	return workflow.Graph{Nodes: []workflow.GraphNode{
 		{
 			ID:    "route",
 			Type:  "switch",
@@ -75,7 +75,7 @@ func TestEmptyAndEscapedGraphs(t *testing.T) {
 	if got := diagram.ASCII(workflow.Graph{}); got != "nodes:\n  (none)\nedges:\n  (none)\n" {
 		t.Fatalf("empty ASCII = %q", got)
 	}
-	graph := workflow.Graph{Nodes: []workflow.NodeSpec{
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
 		{
 			ID:   "say\n\"hello\"",
 			Type: "<script>",

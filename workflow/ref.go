@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,10 +21,10 @@ type Ref struct {
 // At returns a reference to key under nodeID, followed by any nested path. Each
 // argument is one literal segment; At performs JSON Pointer escaping, so keys
 // containing "/" or "~" need no special handling by the caller.
-func At(nodeID, key string, path ...string) Ref {
+func At(nodeID, key string, segments ...string) Ref {
 	var pointer pointerEncoder
 	pointer.write(key)
-	for _, segment := range path {
+	for _, segment := range segments {
 		pointer.write(segment)
 	}
 	return Ref{NodeID: nodeID, Path: pointer.String()}
@@ -41,10 +42,10 @@ func Output(nodeID string) Ref { return Ref{NodeID: nodeID, Path: outputPath} }
 func (r Ref) String() string { return r.NodeID + "#" + r.Path }
 
 func (r Ref) compare(other Ref) int {
-	if order := strings.Compare(r.NodeID, other.NodeID); order != 0 {
-		return order
-	}
-	return strings.Compare(r.Path, other.Path)
+	return cmp.Or(
+		strings.Compare(r.NodeID, other.NodeID),
+		strings.Compare(r.Path, other.Path),
+	)
 }
 
 func (r Ref) validate() error {
@@ -68,11 +69,11 @@ func (r Ref) validate() error {
 
 // Child returns a reference below r. Each argument is one literal path segment;
 // no arguments return r unchanged.
-func (r Ref) Child(path ...string) Ref {
-	if len(path) == 0 {
+func (r Ref) Child(segments ...string) Ref {
+	if len(segments) == 0 {
 		return r
 	}
-	r.Path += pointerPath(path).encode()
+	r.Path += pointerPath(segments).encode()
 	return r
 }
 
