@@ -188,7 +188,7 @@ func TestJournal_recordExternalCompletion(t *testing.T) {
 	if keys := journal.Keys(); !equalJournalKeys(keys, []workflow.JournalKey{
 		{ID: "approval", Scope: []string{"items[0]"}},
 	}) {
-		t.Fatalf("Keys = %+v; Record retained the caller's path slice", keys)
+		t.Fatalf("Keys = %+v; Record retained the caller's scope slice", keys)
 	}
 	if err := journal.Record(workflow.JournalKey{
 		ID: "approval", Scope: []string{"items[0]"},
@@ -217,21 +217,21 @@ func TestJournal_recordExternalCompletion(t *testing.T) {
 }
 
 func TestJournal_enforcesOneSharedDepthLimit(t *testing.T) {
-	deepPath := make([]string, workflow.MaxNestingDepth)
-	for index := range deepPath {
-		deepPath[index] = strconv.Itoa(index)
+	deepScope := make([]string, workflow.MaxNestingDepth)
+	for index := range deepScope {
+		deepScope[index] = strconv.Itoa(index)
 	}
 
 	journal := workflow.NewJournal()
 	if err := journal.Record(
-		workflow.JournalKey{ID: "deep", Scope: deepPath},
+		workflow.JournalKey{ID: "deep", Scope: deepScope},
 		true,
 	); err != nil {
 		t.Fatalf("Record at limit: %v", err)
 	}
 	keys := journal.Keys()
-	if len(keys) != 1 || !slices.Equal(keys[0].Scope, deepPath) {
-		t.Fatalf("Keys = %v; want one key with path depth %d", keys, len(deepPath))
+	if len(keys) != 1 || !slices.Equal(keys[0].Scope, deepScope) {
+		t.Fatalf("Keys = %v; want one key with scope depth %d", keys, len(deepScope))
 	}
 	encoded, marshalErr := json.Marshal(journal)
 	if marshalErr != nil {
@@ -242,7 +242,7 @@ func TestJournal_enforcesOneSharedDepthLimit(t *testing.T) {
 		t.Fatalf("Unmarshal deep Journal: %v", err)
 	}
 
-	tooDeep := append(slices.Clone(deepPath), "too-deep")
+	tooDeep := append(slices.Clone(deepScope), "too-deep")
 	if err := journal.Record(
 		workflow.JournalKey{ID: "rejected", Scope: tooDeep},
 		true,
@@ -360,7 +360,7 @@ func TestJournal_keysAreStructuredAndCollisionFree(t *testing.T) {
 	keys := journal.Keys()
 	keys[0].Scope[0] = "changed"
 	if got := journal.Keys(); !equalJournalKeys(got, want) {
-		t.Fatalf("Keys leaked its path storage: %v", got)
+		t.Fatalf("Keys leaked its scope storage: %v", got)
 	}
 
 	journal.Forget(want[1])
@@ -391,10 +391,21 @@ func TestJournal_jsonFormatIsVersionedAndRejectsDuplicateKeys(t *testing.T) {
 		t.Fatalf("failed decode changed Journal: %d records", journal.Len())
 	}
 	for _, data := range [][]byte{
+		[]byte(`[]`),
+		[]byte(`{"version":"2","records":[]}`),
+		[]byte(`{"version":2.0,"records":[]}`),
+		[]byte(`{"version":2,"version":2,"records":[]}`),
 		[]byte(`{"version":3,"records":[]}`),
+		[]byte(`{"version":2}`),
+		[]byte(`{"version":2,"records":null}`),
 		[]byte(`{"version":2,"records":[],"extra":true}`),
+		[]byte(`{"version":2,"records":[null]}`),
+		[]byte(`{"version":2,"records":[{"value":1}]}`),
+		[]byte(`{"version":2,"records":[{"id":1,"value":1}]}`),
 		[]byte(`{"version":2,"records":[{"id":"","value":1}]}`),
 		[]byte(`{"version":2,"records":[{"id":"a"}]}`),
+		[]byte(`{"version":2,"records":[{"scope":null,"id":"a","value":1}]}`),
+		[]byte(`{"version":2,"records":[{"scope":[1],"id":"a","value":1}]}`),
 	} {
 		if err := json.Unmarshal(data, journal); err == nil {
 			t.Fatalf("invalid Journal JSON decoded: %s", data)
@@ -402,20 +413,26 @@ func TestJournal_jsonFormatIsVersionedAndRejectsDuplicateKeys(t *testing.T) {
 	}
 }
 
-// encoding/json matches member names case-insensitively, so "reCords" fills the
-// same field as "records". A decode that also consulted a second, case-sensitive
-// view of the same bytes would disagree with itself on such a document.
-func TestJournal_unmarshalToleratesMemberNameCase(t *testing.T) {
-	journal := workflow.NewJournal()
-	mixedCase := []byte(`{"version":2,"reCords":[{"id":"0","vAlue":0}]}`)
-	if err := json.Unmarshal(mixedCase, journal); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
+// A versioned checkpoint has one canonical spelling for every member.
+// encoding/json folds struct field names by case, which would let a second
+// spelling silently replace records, scope, or a value if Journal delegated its
+// wire contract to ordinary struct decoding.
+func TestJournal_unmarshalRejectsNoncanonicalAndCaseCollidingMembers(t *testing.T) {
+	tests := []string{
+		`{"version":2,"reCords":[]}`,
+		`{"version":2,"records":[],"Records":[{"id":"a","value":1}]}`,
+		`{"version":2,"records":[{"id":"a","vAlue":1}]}`,
+		`{"version":2,"records":[{"id":"a","value":1,"Value":2}]}`,
+		`{"version":2,"records":[{"scope":[],"Scope":["changed"],"id":"a","value":1}]}`,
 	}
-	if journal.Len() != 1 {
-		t.Fatalf("records = %d; want 1", journal.Len())
-	}
-	if keys := journal.Keys(); len(keys) != 1 || keys[0].ID != "0" {
-		t.Fatalf("keys = %+v; want one record named 0", keys)
+	for _, data := range tests {
+		journal := workflow.NewJournal()
+		if err := json.Unmarshal([]byte(data), journal); err == nil {
+			t.Errorf("noncanonical Journal JSON decoded: %s", data)
+		}
+		if journal.Len() != 0 {
+			t.Errorf("failed decode changed Journal: %d records", journal.Len())
+		}
 	}
 }
 

@@ -26,7 +26,7 @@ type GraphNode struct {
 	Trigger   Trigger         `json:"trigger,omitempty"`
 }
 
-// Graph is a flat, arbitrarily wired DAG of leaf nodes — the shape a visual
+// Graph is a flat, arbitrarily wired DAG of registered nodes — the shape a visual
 // editor produces. Unlike a nested [Spec], any node may depend on any other as
 // long as the result is acyclic. [Registry.CompileGraph] starts each node as
 // soon as its dependencies complete. Routing nodes select conditional targets

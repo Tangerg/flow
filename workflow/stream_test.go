@@ -90,10 +90,10 @@ func TestStreamLeaf_emitsChunksAndPublishesFinalOutput(t *testing.T) {
 		wantIndex++
 	}
 
-	// Each Chunk owns its Path.
+	// Each Chunk owns its Scope.
 	signals[1].chunk.Scope[0] = "changed"
 	if signals[2].chunk.Scope[0] != "outer" {
-		t.Fatalf("mutating one Path changed another: %+v", signals[2].chunk.Scope)
+		t.Fatalf("mutating one Scope changed another: %+v", signals[2].chunk.Scope)
 	}
 }
 
@@ -403,13 +403,13 @@ func TestStreamLeaf_iterationEmitsConcurrentScopedStreams(t *testing.T) {
 	if len(chunks) != 8 {
 		t.Fatalf("chunks = %d; want 8", len(chunks))
 	}
-	byPath := make(map[string][]workflow.Chunk)
+	byScope := make(map[string][]workflow.Chunk)
 	seqs := make(map[uint64]struct{})
 	for _, chunk := range chunks {
 		if chunk.ID != "double" || len(chunk.Scope) != 1 {
 			t.Fatalf("chunk identity = %+v; want scoped double", chunk)
 		}
-		byPath[chunk.Scope[0]] = append(byPath[chunk.Scope[0]], chunk)
+		byScope[chunk.Scope[0]] = append(byScope[chunk.Scope[0]], chunk)
 		if chunk.Seq == 0 {
 			t.Fatal("chunk has zero Seq")
 		}
@@ -419,10 +419,10 @@ func TestStreamLeaf_iterationEmitsConcurrentScopedStreams(t *testing.T) {
 		seqs[chunk.Seq] = struct{}{}
 	}
 	for index := range 4 {
-		path := fmt.Sprintf("items[%d]", index)
-		stream := byPath[path]
+		scope := fmt.Sprintf("items[%d]", index)
+		stream := byScope[scope]
 		if len(stream) != 2 || stream[0].Index != 0 || stream[1].Index != 1 {
-			t.Fatalf("%s chunks = %+v; want indexes 0, 1", path, stream)
+			t.Fatalf("%s chunks = %+v; want indexes 0, 1", scope, stream)
 		}
 	}
 }

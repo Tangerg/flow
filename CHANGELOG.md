@@ -112,25 +112,26 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
-- `Journal.UnmarshalJSON` no longer panics on a document whose `records` member
-  is spelled in another case, such as `reCords`. encoding/json matches member
-  names case-insensitively when filling a struct but not when building a generic
-  map, so the decode's two views of the same bytes could disagree about whether
-  the array existed. Decoding now happens once, and a record's value is read
-  through the same typed document that reports the value's presence.
+- `Journal.UnmarshalJSON` now decodes its versioned wire format from one
+  case-sensitive JSON-domain view. It accepts only the canonical `version`,
+  `records`, `scope`, `id`, and `value` member names, so alternate casing can
+  neither panic nor silently overwrite a record, scope, or value through
+  encoding/json's case-insensitive struct matching. Missing required members
+  and non-array `records` or `scope` values are rejected atomically.
 
 ### Changed
 
-- The module requires Go 1.26.5. `errors.AsType` and the other 1.26 additions are
+- The module requires Go 1.26. `errors.AsType` and the other 1.26 additions are
   used where they replace an older idiom, so 1.25 can no longer build it.
+- The indirect `golang.org/x/text` requirement is raised to a release containing
+  the fix for GO-2026-5970.
 - `flow` now depends on `golang.org/x/sync`. `Map` delegates first-error
   collection and group cancellation to `errgroup`, which replaces a hand-rolled
-  `sync.Once` guarding an error and a cancel func. The dependency links only
-  `errgroup` and pulls in nothing beyond the standard library. Bounded fan-out
-  keeps its own worker pool rather than using `errgroup.SetLimit`: SetLimit
-  bounds calls in flight by queueing every element on a semaphore, which
-  allocates per element instead of per worker, and a caller who sets a limit
-  means it to bound what the fan-out consumes.
+  `sync.Once` guarding an error and a cancel func. Bounded fan-out keeps its own
+  worker pool rather than using `errgroup.SetLimit`: SetLimit bounds calls in
+  flight by queueing every element on a semaphore, which allocates per element
+  instead of per worker, and a caller who sets a limit means it to bound what
+  the fan-out consumes.
 - Compiled Graphs now schedule from dependency readiness instead of inserting
   topological `Sequence(Parallel(...))` barriers. `Graph.Concurrency` is a
   graph-wide limit. Nodes receive only the input Store and their declared

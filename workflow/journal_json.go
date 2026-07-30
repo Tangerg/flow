@@ -1,11 +1,12 @@
 package workflow
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
+	"strconv"
 )
 
 var (
@@ -28,44 +29,19 @@ type journalJSONRecord struct {
 	Value json.RawMessage `json:"value"`
 }
 
-// journalDecodedDocument reads that same shape. It exists separately from
-// journalDocument because the two directions need different value
-// representations, and deriving one from the other would mean decoding the
-// document twice — once for its typed fields and once for its raw values — which
-// only works while both views agree on how a member name is spelled.
-type journalDecodedDocument struct {
-	Version int                    `json:"version"`
-	Records []journalDecodedRecord `json:"records"`
-}
-
-type journalDecodedRecord struct {
-	Scope []string            `json:"scope,omitempty"`
-	ID    string              `json:"id"`
-	Value journalDecodedValue `json:"value"`
-}
-
-// journalDecodedValue remembers that a "value" member appeared, which is what
-// separates a step that recorded nil from a record that omitted its result
-// entirely. An omitted member never reaches UnmarshalJSON, while an explicit
-// null does.
-type journalDecodedValue struct {
-	value   any
-	present bool
-}
-
-func (j *journalDecodedValue) UnmarshalJSON(data []byte) error {
-	j.present = true
-	// The enclosing decoder's UseNumber setting does not reach a custom
-	// Unmarshaler, so this repeats it: a recorded number must survive a round
-	// trip without being widened to float64.
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	return decoder.Decode(&j.value)
-}
-
 type journalEntry struct {
 	key   JournalKey
 	value any
+}
+
+// journalDecoder owns the wire contract of Journal version 2. It reads the
+// ordinary JSON domain produced by jsonDocument exactly once, so member names
+// retain JSON's case-sensitive meaning instead of being folded by struct
+// decoding. A versioned checkpoint accepts only its canonical field names:
+// ambiguous documents must fail rather than silently change recorded work.
+type journalDecoder struct {
+	root  journalNode
+	count int
 }
 
 // MarshalJSON serializes the Journal as a versioned list of structured records.
@@ -123,7 +99,9 @@ func (j *journalNode) appendEntries(scope []string, entries *[]journalEntry) {
 }
 
 // UnmarshalJSON atomically replaces the Journal's records. On failure the
-// receiver is unchanged.
+// receiver is unchanged. Version 2 accepts only the canonical lower-case member
+// names written by [Journal.MarshalJSON]; alternate casing is rejected so two
+// spellings cannot be folded onto one field.
 //
 // As in a [Store], numbers decode as [json.Number] so nothing is rounded, and a
 // skipped step's recorded value is read back through [Get], which converts it to
@@ -133,49 +111,138 @@ func (j *Journal) UnmarshalJSON(data []byte) error {
 		return errors.New("workflow: unmarshal journal: nil journal")
 	}
 
-	var document journalDecodedDocument
-	if err := jsonDocument(data).decode(&document); err != nil {
+	var decoded journalDecoder
+	if err := decoded.decode(data); err != nil {
 		return fmt.Errorf("workflow: unmarshal journal: %w", err)
-	}
-	if document.Version != journalJSONVersion {
-		return fmt.Errorf(
-			"workflow: unmarshal journal: unsupported version %d; want %d",
-			document.Version,
-			journalJSONVersion,
-		)
-	}
-
-	var root journalNode
-	count := 0
-	for index, record := range document.Records {
-		key := JournalKey{ID: record.ID, Scope: record.Scope}
-		if err := key.validate(); err != nil {
-			return fmt.Errorf("workflow: unmarshal journal record %d: %w", index, err)
-		}
-		if !record.Value.present {
-			return fmt.Errorf("workflow: unmarshal journal record %d: value is missing", index)
-		}
-		if inserted := root.record(
-			record.Scope,
-			record.ID,
-			journalValue{value: record.Value.value},
-		); !inserted {
-			return fmt.Errorf(
-				"workflow: unmarshal journal record %d: duplicate step %q in scope %q",
-				index,
-				record.ID,
-				record.Scope,
-			)
-		}
-		count++
 	}
 
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.revision++
-	root.setRevision(j.revision)
-	j.root = root
-	j.count = count
+	decoded.root.setRevision(j.revision)
+	j.root = decoded.root
+	j.count = decoded.count
+	return nil
+}
+
+func (j *journalDecoder) decode(data []byte) error {
+	value, err := jsonDocument(data).value()
+	if err != nil {
+		return err
+	}
+	document, ok := value.(map[string]any)
+	if !ok {
+		return errors.New("document must be an object")
+	}
+	if fieldErr := j.allowFields(document, "version", "records"); fieldErr != nil {
+		return fieldErr
+	}
+	if fieldErr := j.requireFields(document, "document", "version", "records"); fieldErr != nil {
+		return fieldErr
+	}
+
+	versionNumber, ok := document["version"].(json.Number)
+	if !ok {
+		return errors.New("version must be an integer")
+	}
+	version, err := strconv.Atoi(versionNumber.String())
+	if err != nil {
+		return fmt.Errorf("version must be an integer: %w", err)
+	}
+	if version != journalJSONVersion {
+		return fmt.Errorf(
+			"unsupported version %d; want %d",
+			version,
+			journalJSONVersion,
+		)
+	}
+
+	records, ok := document["records"].([]any)
+	if !ok {
+		return errors.New("records must be an array")
+	}
+	for index, value := range records {
+		if err := j.decodeRecord(value); err != nil {
+			return fmt.Errorf("record %d: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func (j *journalDecoder) decodeRecord(value any) error {
+	record, ok := value.(map[string]any)
+	if !ok {
+		return errors.New("must be an object")
+	}
+	if err := j.allowFields(record, "scope", "id", "value"); err != nil {
+		return err
+	}
+	if err := j.requireFields(record, "record", "id", "value"); err != nil {
+		return err
+	}
+
+	id, ok := record["id"].(string)
+	if !ok {
+		return errors.New("id must be a string")
+	}
+	scope, err := j.decodeScope(record)
+	if err != nil {
+		return err
+	}
+	key := JournalKey{ID: id, Scope: scope}
+	if err := key.validate(); err != nil {
+		return err
+	}
+	if inserted := j.root.record(
+		scope,
+		id,
+		journalValue{value: record["value"]},
+	); !inserted {
+		return fmt.Errorf("duplicate step %q in scope %q", id, scope)
+	}
+	j.count++
+	return nil
+}
+
+func (j *journalDecoder) decodeScope(record map[string]any) ([]string, error) {
+	value, present := record["scope"]
+	if !present {
+		return nil, nil
+	}
+	values, ok := value.([]any)
+	if !ok {
+		return nil, errors.New("scope must be an array")
+	}
+	scope := make([]string, len(values))
+	for index, value := range values {
+		segment, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("scope segment %d must be a string", index)
+		}
+		scope[index] = segment
+	}
+	return scope, nil
+}
+
+func (j *journalDecoder) requireFields(
+	object map[string]any,
+	kind string,
+	required ...string,
+) error {
+	for _, name := range required {
+		if _, present := object[name]; !present {
+			return fmt.Errorf("%s field %q is missing", kind, name)
+		}
+	}
+	return nil
+}
+
+func (*journalDecoder) allowFields(object map[string]any, allowed ...string) error {
+	for _, name := range slices.Sorted(maps.Keys(object)) {
+		if !slices.Contains(allowed, name) {
+			return fmt.Errorf("unknown field %q", name)
+		}
+	}
 	return nil
 }
 

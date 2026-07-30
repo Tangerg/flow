@@ -42,7 +42,7 @@ func (s StreamNodeFunc[I, O, C]) RunStream(
 
 // Chunk is one intermediate value from a [StreamLeaf].
 //
-// ID and Path identify the leaf invocation; each Chunk owns its Path slice.
+// ID and Scope identify the leaf invocation; each Chunk owns its Scope slice.
 // Index starts at zero for each invocation. Seq shares a run-wide ordering with
 // [Event]; callbacks from concurrent invocations may arrive out of order. Value
 // is application-owned and must be treated as immutable.

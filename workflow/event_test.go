@@ -134,7 +134,7 @@ func TestEvents_failedCarriesNoStore(t *testing.T) {
 	}
 }
 
-func TestEvents_scopePathDistinguishesIterationElements(t *testing.T) {
+func TestEvents_scopeDistinguishesIterationElements(t *testing.T) {
 	body := workflow.Leaf("el",
 		workflow.From[int](workflow.Item("iter")),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
@@ -147,10 +147,10 @@ func TestEvents_scopePathDistinguishesIterationElements(t *testing.T) {
 		Concurrency: 1, // deterministic order for the assertion
 	})
 
-	var paths []string
+	var scopes []string
 	cfg := workflow.RunConfig{Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
 		if event.Kind == workflow.EventCompleted {
-			paths = append(paths, strings.Join(event.Scope, "/"))
+			scopes = append(scopes, strings.Join(event.Scope, "/"))
 		}
 	})}
 
@@ -159,12 +159,12 @@ func TestEvents_scopePathDistinguishesIterationElements(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 	want := []string{"iter[0]", "iter[1]", "iter[2]"}
-	if !slices.Equal(paths, want) {
-		t.Fatalf("paths = %v; want %v", paths, want)
+	if !slices.Equal(scopes, want) {
+		t.Fatalf("scopes = %v; want %v", scopes, want)
 	}
 }
 
-func TestEvents_scopePathDistinguishesLoopIterations(t *testing.T) {
+func TestEvents_scopeDistinguishesLoopIterations(t *testing.T) {
 	count := 0
 	body := workflow.Leaf("tick",
 		workflow.BindFunc[int](func(workflow.Store) (int, error) { count++; return count, nil }),
@@ -172,10 +172,10 @@ func TestEvents_scopePathDistinguishesLoopIterations(t *testing.T) {
 	)
 	done := func(_ context.Context, iter int, _ workflow.Store) (bool, error) { return iter >= 2, nil }
 
-	var paths []string
+	var scopes []string
 	cfg := workflow.RunConfig{Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
 		if event.Kind == workflow.EventCompleted {
-			paths = append(paths, strings.Join(event.Scope, "/"))
+			scopes = append(scopes, strings.Join(event.Scope, "/"))
 		}
 	})}
 
@@ -184,8 +184,8 @@ func TestEvents_scopePathDistinguishesLoopIterations(t *testing.T) {
 		workflow.NewStore(), cfg); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if want := []string{"loop[0]", "loop[1]", "loop[2]"}; !slices.Equal(paths, want) {
-		t.Fatalf("paths = %v; want %v", paths, want)
+	if want := []string{"loop[0]", "loop[1]", "loop[2]"}; !slices.Equal(scopes, want) {
+		t.Fatalf("scopes = %v; want %v", scopes, want)
 	}
 }
 
@@ -217,8 +217,8 @@ func TestWithScope_nests(t *testing.T) {
 
 func TestScope_returnsACopy(t *testing.T) {
 	ctx := workflow.WithScope(t.Context(), "original")
-	path := workflow.Scope(ctx)
-	path[0] = "changed"
+	scope := workflow.Scope(ctx)
+	scope[0] = "changed"
 	if got := workflow.Scope(ctx); !slices.Equal(got, []string{"original"}) {
 		t.Fatalf("Scope leaked context-owned storage: %v", got)
 	}

@@ -6,7 +6,7 @@ exported API, read the package boundaries in the
 
 ## Requirements
 
-- Go 1.25 or newer.
+- Go 1.26 or newer.
 - A clean module graph with no committed `replace` directives.
 - Tests written with the standard `testing` package.
 

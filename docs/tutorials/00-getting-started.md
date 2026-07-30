@@ -7,7 +7,7 @@ and resumption are optional layers built on that core.
 
 ## 1. Install
 
-`flow` requires Go 1.25 or newer:
+`flow` requires Go 1.26 or newer:
 
 ```sh
 go get github.com/Tangerg/flow

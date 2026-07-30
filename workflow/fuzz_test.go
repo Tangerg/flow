@@ -8,16 +8,17 @@ import (
 )
 
 func FuzzStoreLookupPath(f *testing.F) {
-	f.Add("output.items.0.name")
+	f.Add("/output/items/0/name")
 	f.Add("")
-	f.Add("output.-1")
+	f.Add("/output/~")
+	f.Add("/output/~2")
 
 	value := map[string]any{
 		"items": []any{map[string]any{"name": "first"}},
 	}
 	store := workflow.NewStore().WithOutput("node", value)
 	f.Fuzz(func(_ *testing.T, path string) {
-		_, _ = store.Lookup(workflow.At("node", path))
+		_, _ = store.Lookup(workflow.Ref{NodeID: "node", Path: path})
 	})
 }
 

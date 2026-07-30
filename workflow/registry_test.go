@@ -139,7 +139,7 @@ func TestRegistry_reportsInvalidAndDuplicateRegistrations(t *testing.T) {
 	reg := workflow.NewRegistry()
 	for name, f := range map[string]workflow.NodeFactory{"": factory, "nil": nil} {
 		if err := reg.RegisterNode(name, f); err == nil {
-			t.Fatalf("RegisterLeaf(%q) unexpectedly succeeded", name)
+			t.Fatalf("RegisterNode(%q) unexpectedly succeeded", name)
 		}
 	}
 	if err := reg.RegisterNode("addN", factory); err != nil {
@@ -491,7 +491,7 @@ func TestRegistry_concurrentRegistrationIsRaceFree(t *testing.T) {
 	for i := range 32 {
 		wg.Go(func() {
 			if err := reg.RegisterNode(fmt.Sprintf("leaf-%d", i), addN()); err != nil {
-				t.Errorf("RegisterLeaf: %v", err)
+				t.Errorf("RegisterNode: %v", err)
 			}
 		})
 	}

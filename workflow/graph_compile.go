@@ -6,7 +6,7 @@ import (
 	"slices"
 )
 
-// CompileGraph validates a flat Graph, builds its leaves, and returns a Step.
+// CompileGraph validates a flat Graph, builds its nodes, and returns a Step.
 // It rejects duplicate IDs, missing dependencies, cycles, unknown node types,
 // invalid node configs, nil factory results, incompatible registered schemas,
 // and invalid routing gates. A compiled graph starts a node as soon as all of

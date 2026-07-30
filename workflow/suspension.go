@@ -90,7 +90,7 @@ func Suspend(value any) error {
 	return &Suspension{Value: value}
 }
 
-// Key returns the structured identity of the suspended step. The returned Path
+// Key returns the structured identity of the suspended step. The returned Scope
 // is a copy. It is the key to pass to [Journal.Record] when supplying the result
 // of an [Interrupt] or another journaled boundary that called [Suspend].
 func (s *Suspension) Key() JournalKey {
@@ -248,7 +248,7 @@ func (s *Suspension) compare(other *Suspension) int {
 	)
 }
 
-// clone copies a suspension and its path so identifying a wait at a workflow
+// clone copies a suspension and its scope so identifying a wait at a workflow
 // boundary never mutates an error owned by a caller. Callers filter nil entries
 // first, so the receiver is never nil.
 func (s *Suspension) clone() *Suspension {
@@ -279,7 +279,7 @@ func (m *multiSuspension) Unwrap() []error {
 
 // Suspensions returns every suspension in err's error tree, ordered by step ID
 // and then scope. A run that stopped in one place yields one; nested fan-out may
-// yield several. The returned Suspension values and their paths are copies;
+// yield several. The returned Suspension values and their scopes are copies;
 // application-owned mutable Values remain borrowed and must not be modified.
 func Suspensions(err error) []*Suspension {
 	suspensions, _ := (suspensionTree{err: err}).suspensions()
@@ -300,7 +300,7 @@ func SuspendedOnly(err error) bool {
 
 // JoinSuspensions returns one error containing every non-nil suspension,
 // ordered by step ID and then scope. It returns nil when all arguments are nil.
-// The supplied suspensions and their paths are copied.
+// The supplied suspensions and their scopes are copied.
 //
 // Caller-defined fan-out composites use JoinSuspensions after allowing every
 // suspended branch to finish. Use [SuspendedOnly] to distinguish suspensions

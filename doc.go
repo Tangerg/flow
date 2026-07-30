@@ -24,7 +24,6 @@
 // instead of matching strings. Composites validate required child nodes before
 // invoking any of them, so an invalid composition cannot perform partial work.
 //
-// The package has no third-party dependencies. Durability, distribution, and
-// deterministic replay are out of scope; for those use a workflow engine such as
-// Temporal.
+// Durability, distribution, and deterministic replay are out of scope; for
+// those use a workflow engine such as Temporal.
 package flow

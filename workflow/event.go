@@ -24,7 +24,7 @@ const (
 // Event describes one step lifecycle transition.
 //
 // Together the fields carry enough to build tracing and durability outside this
-// package: Seq orders the externally visible signals of one run, Path
+// package: Seq orders the externally visible signals of one run, Scope
 // distinguishes repeated executions of the same step, and Store is the
 // snapshot a step produced, which is serializable. Keeping those concerns out
 // of the package is deliberate — see the package documentation.

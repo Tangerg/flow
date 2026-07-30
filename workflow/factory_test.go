@@ -23,7 +23,7 @@ func addFactory() workflow.NodeFactory {
 	})
 }
 
-// wired returns the LeafSpec of a node whose default port reads input.output.
+// wired returns the NodeSpec of a node whose default port reads input.output.
 func wired(config json.RawMessage) workflow.NodeSpec {
 	return workflow.NodeSpec{
 		ID:     "add",

@@ -321,13 +321,13 @@ func BenchmarkValidateGraphJSONScaling(b *testing.B) {
 
 func BenchmarkJournalDeepTraversal(b *testing.B) {
 	for _, depth := range []int{16, 256, workflow.MaxNestingDepth} {
-		path := make([]string, depth)
-		for index := range path {
-			path[index] = strconv.Itoa(index)
+		scope := make([]string, depth)
+		for index := range scope {
+			scope[index] = strconv.Itoa(index)
 		}
 		journal := workflow.NewJournal()
 		if err := journal.Record(
-			workflow.JournalKey{ID: "leaf", Scope: path},
+			workflow.JournalKey{ID: "leaf", Scope: scope},
 			true,
 		); err != nil {
 			b.Fatalf("Record setup: %v", err)

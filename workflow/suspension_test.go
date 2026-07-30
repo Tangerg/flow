@@ -237,7 +237,7 @@ func TestInterrupt_resolvesRepeatedScopesIndependently(t *testing.T) {
 	if !slices.Equal(waits[0].Scope, []string{"items[0]"}) ||
 		!slices.Equal(waits[1].Scope, []string{"items[1]"}) ||
 		!slices.Equal(waits[2].Scope, []string{"items[2]"}) {
-		t.Fatalf("paths = %v, %v, %v; want one per item", waits[0].Scope, waits[1].Scope, waits[2].Scope)
+		t.Fatalf("scopes = %v, %v, %v; want one per item", waits[0].Scope, waits[1].Scope, waits[2].Scope)
 	}
 
 	if err := journal.Record(waits[1].Key(), false); err != nil {
@@ -814,7 +814,7 @@ func TestSuspension_keyAndJSONOwnTheirStructure(t *testing.T) {
 	key := suspension.Key()
 	key.Scope[0] = "changed"
 	if suspension.Scope[0] != "items/0" {
-		t.Fatalf("Key leaked Suspension.Path: %+v", suspension)
+		t.Fatalf("Key leaked Suspension.Scope: %+v", suspension)
 	}
 	if got := suspension.Error(); got != `workflow: step "approve\"item" in items/0 suspended` {
 		t.Fatalf("Error = %q", got)
@@ -861,7 +861,7 @@ func TestSuspensions_ofOtherErrors(t *testing.T) {
 	}
 	got[0].Scope[0] = "changed"
 	if again := workflow.Suspensions(joined); again[0].Scope[0] != "inner" {
-		t.Fatalf("Suspensions leaked its internal path: %+v", again)
+		t.Fatalf("Suspensions leaked its internal scope: %+v", again)
 	}
 }
 
@@ -924,8 +924,8 @@ func TestSuspendedOnly_classifiesTheWholeErrorTree(t *testing.T) {
 }
 
 func TestJoinSuspensions_normalizesAndCopies(t *testing.T) {
-	path := []string{"items[1]"}
-	second := &workflow.Suspension{ID: "b", Scope: path, Value: "second"}
+	scope := []string{"items[1]"}
+	second := &workflow.Suspension{ID: "b", Scope: scope, Value: "second"}
 	err := workflow.JoinSuspensions(
 		second,
 		nil,
@@ -939,7 +939,7 @@ func TestJoinSuspensions_normalizesAndCopies(t *testing.T) {
 		t.Fatalf("Suspensions = %+v; want a, b", got)
 	}
 
-	path[0] = "changed"
+	scope[0] = "changed"
 	second.ID = "changed"
 	if got = workflow.Suspensions(err); got[1].ID != "b" ||
 		!slices.Equal(got[1].Scope, []string{"items[1]"}) {

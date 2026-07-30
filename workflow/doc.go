@@ -124,7 +124,7 @@
 // resumed run down the other branch. Both a [Store] and a Journal serialize; the
 // Journal uses versioned records with structured scopes, so the run that
 // resumes need not be the process that started. Recording an Interrupt response
-// under its ID and path makes repeated instances independently resumable without
+// under its ID and scope makes repeated instances independently resumable without
 // positional matching or delimiter-encoded keys.
 //
 // Suspension awareness lives in this package's composites. The generic

@@ -5,7 +5,7 @@ resumable workflow. Each level corresponds to an executable example in the
 [`example`](../../example/README.md) package. The tutorials explain the model
 and its trade-offs; the examples are the runnable source of truth.
 
-Install Go 1.25 or newer, then run the complete learning path from the
+Install Go 1.26 or newer, then run the complete learning path from the
 repository root:
 
 ```sh

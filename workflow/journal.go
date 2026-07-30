@@ -43,7 +43,7 @@ type Journal struct {
 }
 
 // JournalKey identifies one recorded execution of a step. ID is the step ID;
-// Path is the enclosing repeated scopes, outermost first, and may contain at
+// Scope contains the enclosing repeated scopes, outermost first, and may contain
 // most [MaxNestingDepth] segments. Construct JournalKey values with keyed fields
 // so the type can grow without breaking callers.
 type JournalKey struct {
@@ -58,7 +58,7 @@ func (j JournalKey) compare(other JournalKey) int {
 	)
 }
 
-// journalNode is a trie over scope segments. Keeping the path structured avoids
+// journalNode is a trie over scope segments. Keeping the scope structured avoids
 // delimiter escaping entirely: every possible segment and step ID has one
 // unambiguous place in the tree.
 type journalNode struct {
@@ -79,7 +79,7 @@ func NewJournal() *Journal { return &Journal{} }
 // [Suspend] represents an externally supplied result: record the response under
 // the suspension's [Suspension.Key], then run the same workflow again.
 //
-// Record rejects an empty step ID, a path deeper than [MaxNestingDepth], and an
+// Record rejects an empty step ID, a scope deeper than [MaxNestingDepth], and an
 // identity already present in the Journal. A recorded value is held as-is;
 // mutable values must not be modified afterward. The method is safe for
 // concurrent use.
@@ -199,8 +199,8 @@ func (j *Journal) Len() int {
 	return j.count
 }
 
-// Keys returns the identities of the recorded steps in path and ID order. Every
-// Path is a copy.
+// Keys returns the identities of the recorded steps in scope and ID order. Every
+// Scope is a copy.
 func (j *Journal) Keys() []JournalKey {
 	if j == nil {
 		return nil

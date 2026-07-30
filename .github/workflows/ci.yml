@@ -11,8 +11,8 @@ jobs:
   test:
     strategy:
       matrix:
-        # go.mod requires 1.26.5, so 1.25 can no longer build this module.
-        go: ["1.26.x"]
+        # Test both the declared language floor and the current patch release.
+        go: ["1.26.0", "1.26.x"]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -69,7 +69,7 @@ Subgraph performs four engine operations:
 4. It writes only that value to `left#/output` in the outer Store.
 
 No inner cell escapes. Another instance may reuse the same body under ID
-`right`; its inner leaf is identified by path `right`, so Journal replay and
+`right`; its inner leaf is identified by scope `right`, so Journal replay and
 events cannot collide with `left`.
 
 Subgraph does not add another Journal record. Completed inner leaves replay,

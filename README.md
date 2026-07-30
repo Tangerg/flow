@@ -15,7 +15,7 @@ The library is in-process and explicit:
 
 ## Requirements and installation
 
-`flow` requires Go 1.25 or newer.
+`flow` requires Go 1.26 or newer.
 
 ```sh
 go get github.com/Tangerg/flow
