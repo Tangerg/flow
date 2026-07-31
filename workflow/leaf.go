@@ -151,6 +151,7 @@ func (l *leafExecution[I, O]) runNode(ctx context.Context, input I) (O, error) {
 		scope(ctx),
 		emitter,
 	)
+	defer emission.cancel(nil)
 	output, err := l.leaf.node.Run(emissionCtx, input)
 	if emissionErr := emission.close(); emissionErr != nil {
 		var zero O
@@ -159,9 +160,9 @@ func (l *leafExecution[I, O]) runNode(ctx context.Context, input I) (O, error) {
 	return output, err
 }
 
-// validate runs before replay so stale Journal data cannot hide an invalid
-// workflow definition. Known function adapters report typed nil values here
-// instead of letting a replayed result hide the invalid Node.
+// validate checks the leaf boundary before replay, so a completed Journal
+// record cannot hide an invalid ID, binder, or directly supplied nil function
+// adapter. A composite Node owns validation of its children when it runs.
 func (l *leafExecution[I, O]) validate(ctx context.Context) error {
 	switch {
 	case l.leaf.id == "":

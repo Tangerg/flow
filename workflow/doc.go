@@ -23,13 +23,13 @@
 //
 // A node names each value it reads: [Inputs] wires port names to references, and
 // a [NodeSchema] declares the ports a node type expects along with their types.
-// A unary node uses [DefaultPort]; it is not a second, unnamed edge shape.
-// Naming inputs is what keeps the data flow visible to the layer above — the
-// flat [Graph] derives its execution order from the wired ports, and
-// [Registry.ValidateGraph] reports both incomplete wiring and incompatible edges
-// before anything runs. A node that instead reads references out of its own
-// config is invisible to both. [Registry.NodeTypes] and [Registry.NodeSchema]
-// expose the registered vocabulary for an editor to render.
+// A unary node uses [DefaultInput] to wire [DefaultPort]; it is not a second,
+// unnamed edge shape. Naming inputs is what keeps the data flow visible to the
+// layer above — the flat [Graph] derives its execution order from the wired
+// ports, and [Registry.ValidateGraph] reports both incomplete wiring and
+// incompatible edges before anything runs. A node that instead reads references
+// out of its own config is invisible to both. [Registry.NodeTypes] and
+// [Registry.NodeSchema] expose the registered vocabulary for an editor to render.
 //
 // # Conditional graphs
 //
@@ -158,10 +158,11 @@
 // remains the only named workflow boundary: intermediate values emitted anywhere
 // inside its composed Node go to the run's [Emitter], while the final result is
 // written to the Store and Journal normally. The producer must stop when yield
-// returns false. Calls are serialized within one leaf invocation, so a slow
-// Emitter applies backpressure; an Emitter error cancels that leaf and returns
-// through its normal failure or suspension classification. Different leaf
-// invocations may emit concurrently.
+// returns false. Calls are serialized within one leaf invocation, so an Emitter
+// must not wait for another chunk from that invocation. A slow Emitter applies
+// backpressure; an Emitter error cancels that leaf and returns through its
+// normal failure or suspension classification. Different leaf invocations may
+// emit concurrently.
 //
 // A [Chunk] carries the leaf ID, scope, a zero-based invocation index, and
 // a run sequence shared with [Event]. Chunks describe execution attempts rather

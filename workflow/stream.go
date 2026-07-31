@@ -82,9 +82,11 @@ type Chunk struct {
 // Emitter receives chunks synchronously. Pass one to [Run] through [RunConfig].
 // Calls are serialized within one leaf invocation but may arrive concurrently
 // from different invocations, so implementations must be safe for concurrent
-// use. A slow Emitter applies backpressure to the producing Node. Returning an
-// error stops that leaf's stream and returns the error through its normal
-// failure or suspension classification.
+// use. An Emitter must not wait for another chunk from the same leaf invocation:
+// serialized delivery would deadlock that invocation. A slow Emitter applies
+// backpressure to the producing Node. Returning an error stops that leaf's
+// stream and returns the error through its normal failure or suspension
+// classification.
 type Emitter interface {
 	Emit(ctx context.Context, chunk Chunk) error
 }

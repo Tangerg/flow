@@ -11,9 +11,9 @@ import (
 // An input may reference an external seed Store value; every explicit DependsOn
 // entry must name a graph node.
 //
-// A single-input node uses [DefaultPort] like every other named port. When gates
-// execution on routing outputs; its zero Trigger requires every gate, while
-// [TriggerAny] requires one.
+// A single-input node uses [DefaultInput] to wire [DefaultPort] like every other
+// named port. When gates execution on routing outputs; its zero Trigger requires
+// every gate, while [TriggerAny] requires one.
 type GraphNode struct {
 	ID        string          `json:"id"`
 	Type      string          `json:"type"`

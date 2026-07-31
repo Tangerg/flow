@@ -105,7 +105,9 @@ fails with a `StepError` that preserves the emitter error for `errors.Is` and
 suspensions remains the third outcome rather than becoming a failure.
 
 Calls from one leaf invocation are serialized and receive increasing `Index`
-values in delivery order. Different leaves and iteration elements may emit
+values in delivery order. An Emitter must not wait for a later chunk from that
+same invocation: serialized delivery means the producer cannot deliver it until
+the current call returns. Different leaves and iteration elements may emit
 concurrently, so an Emitter that mutates shared state must still protect it:
 
 ```go

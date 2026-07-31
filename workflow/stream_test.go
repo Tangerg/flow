@@ -623,6 +623,41 @@ func TestStreamFunc_leafRejectsEmissionFromLeakedNodeWork(t *testing.T) {
 	}
 }
 
+func TestLeaf_panicCancelsEmissionContext(t *testing.T) {
+	const panicValue = "node panic"
+	var emissionDone <-chan struct{}
+	step := workflow.Leaf(
+		"panic",
+		workflow.From[int](workflow.Output("start")),
+		flow.NodeFunc[int, int](func(ctx context.Context, _ int) (int, error) {
+			emissionDone = ctx.Done()
+			panic(panicValue)
+		}),
+	)
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != panicValue {
+				t.Fatalf("recovered = %v; want node panic", recovered)
+			}
+		}()
+		_, _ = workflow.Run(
+			t.Context(),
+			step,
+			workflow.NewStore().WithOutput("start", 1),
+			workflow.RunConfig{Emitter: workflow.EmitterFunc(
+				func(context.Context, workflow.Chunk) error { return nil },
+			)},
+		)
+	}()
+
+	select {
+	case <-emissionDone:
+	default:
+		t.Fatal("emission context remains live after panic")
+	}
+}
+
 func TestStreamFunc_emitterErrorStopsAndFailsTheLeaf(t *testing.T) {
 	emitErr := errors.New("sink unavailable")
 	var attempted atomic.Int64

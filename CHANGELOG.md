@@ -27,6 +27,8 @@ All notable changes to this project are documented here. The format follows
   remains separate from Graph validation and execution.
 - `workflow.LeafFunc`, a concise adapter for the common case of lifting an
   ordinary typed function with one referenced input.
+- `workflow.DefaultInput`, a concise constructor for the canonical
+  single-input `Inputs` map.
 - `workflow.FirstOf`, a tolerant binder that reads the first available
   reference in declaration order, for mutually exclusive merge paths.
 - `Graph.Concurrency`, which bounds the number of nodes running concurrently
@@ -114,6 +116,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Leaf emission contexts are now cancelled even when a Node panics, so callers
+  that recover cannot retain a live streaming session from the failed
+  invocation.
+- Streaming documentation now makes the serialization contract explicit:
+  an `Emitter` must not wait for another chunk from the same leaf invocation.
+- Leaf replay validation documentation now states its actual boundary:
+  directly visible leaf configuration is checked before replay, while a
+  composite Node owns validation of its children when that composite runs.
 - Built-in combinators, workflow composites, and Registry compilation now
   recognize typed nil function-backed nodes before any sibling, resolver,
   binder, or factory-built step can perform work. Nil pointer receivers remain

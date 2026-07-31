@@ -34,18 +34,18 @@ ordinary output, so the same decision remains available after resumption.
 graph := workflow.Graph{Nodes: []workflow.GraphNode{
 	{
 		ID: "route", Type: "route",
-		Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("score")},
+		Inputs: workflow.DefaultInput(workflow.Output("score")),
 	},
 	{
 		ID: "approve", Type: "decision",
-		Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("score")},
+		Inputs: workflow.DefaultInput(workflow.Output("score")),
 		When: []workflow.Gate{
 			workflow.When("route", "approve"),
 		},
 	},
 	{
 		ID: "review", Type: "decision",
-		Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("score")},
+		Inputs: workflow.DefaultInput(workflow.Output("score")),
 		When: []workflow.Gate{
 			workflow.When("route", "review"),
 		},

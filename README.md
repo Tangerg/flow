@@ -204,8 +204,9 @@ out, err := workflow.Run(ctx, step, in, workflow.RunConfig{
 `Emitter` is a synchronous, error-returning output boundary. A slow emitter
 applies backpressure; an ordinary emitter error cancels the stream and fails its
 leaf. `yield` returns `false` after cancellation or an emitter error, and
-producers must stop promptly. Calls are serialized for one leaf, but different
-leaves may emit concurrently, so an emitter must be concurrency-safe.
+producers must stop promptly. Calls are serialized for one leaf, so an emitter
+must not wait for a later chunk from that leaf; different leaves may emit
+concurrently, so an emitter must be concurrency-safe.
 
 Chunks carry the leaf ID, repeated-scope, a zero-based per-invocation
 index, and a run-wide sequence shared with lifecycle events. They are attempt
@@ -240,7 +241,7 @@ dependency order: a node starts as soon as all of its dependencies complete,
 without waiting for unrelated branches. `Graph.Concurrency` bounds the whole
 graph; zero means unbounded. Every data edge uses `Inputs`; a unary node wires
 the conventional `DefaultPort` (`"in"` in JSON) rather than a separate input
-shape.
+shape. Go definitions can use `DefaultInput(ref)` for that common case.
 
 ```go
 if err := workflow.ValidateGraphJSON(data); err != nil {
