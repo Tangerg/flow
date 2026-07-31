@@ -29,14 +29,12 @@ Pass the resolver to an ordinary `workflow.Branch`:
 
 ```go
 decision := func(id, message string) workflow.Step {
-	return workflow.Leaf(
+	return workflow.LeafFunc(
 		id,
-		workflow.From[int](workflow.Output("score")),
-		flow.NodeFunc[int, string](
-			func(_ context.Context, _ int) (string, error) {
-				return message, nil
-			},
-		),
+		workflow.Output("score"),
+		func(_ context.Context, _ int) (string, error) {
+			return message, nil
+		},
 	)
 }
 

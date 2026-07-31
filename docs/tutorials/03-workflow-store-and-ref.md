@@ -116,7 +116,7 @@ the call site with `Get[T]`.
 ## 6. Direct `Run` or `workflow.Run`
 
 Call `step.Run` when the execution needs no run-level services. Use
-`workflow.Run` when a caller supplies an observer or journal:
+`workflow.Run` when a caller supplies an observer, emitter, or journal:
 
 ```go
 out, err := workflow.Run(

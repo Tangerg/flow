@@ -1,188 +1,118 @@
 # Roadmap
 
-This document records the remaining engine work and the boundaries that prevent
-the package from growing into an application platform. Compatibility history
+This roadmap records unresolved engine work and decisions. Current behavior
+belongs in package documentation and tutorials; released compatibility history
 belongs in the [changelog](../CHANGELOG.md).
 
-Last reviewed: 2026-07-30.
+Last reviewed: 2026-07-31.
 
-## Current ceiling
+## Direction
 
-The in-process runtime can now express:
-
-- typed sequence, selection, repetition, mapping, races, and derived
-  compositions in `flow` and `flowx`;
-- persistent named state with typed reads and RFC 6901 references;
-- nested workflow control flow through `Spec`;
-- arbitrary flat DAGs through `Graph`, including named ports,
-  dependency-triggered bounded concurrency, conditional outlets, explicit
-  bypass, and cross-arm merge;
-- sealed, reusable execution regions through `Subgraph`, including declarative
-  inputs, isolated state and identity, and one projected result;
-- strict JSON decoding, self-contained Draft 2020-12 schemas, registry
-  validation, and configuration schemas;
-- suspension as a third outcome, structured waits, persisted Store and Journal
-  state, and checkpoint-and-restart replay;
-- synchronous streaming with backpressure and consumer failure propagation;
-- run-scoped lifecycle observation and Store deltas; and
-- deterministic ASCII and Mermaid renderings in `workflow/diagram`.
-
-Every definition still compiles to the same small protocol:
+`flow` is an embeddable, in-process execution engine rather than an application
+platform. Every definition reduces to:
 
 ```go
 Run(context.Context, input) (output, error)
 ```
 
-There is no orchestrator object, hidden worker pool, or provider abstraction.
+The engine owns composition, execution identity, named state, validation,
+checkpoint replay, and run-scoped signals. The host application owns run
+records, persistence infrastructure, scheduling, authorization, deployment,
+and external-effect policy.
 
-## Landed: conditional Graph execution
+The current engine surface is described in the
+[project README](../README.md). New concepts must remove a demonstrated
+limitation without weakening the single execution model.
 
-The former largest Graph gap is complete.
+## Before v1
 
-A routing node publishes its selected outlet as its ordinary string output and
-declares the complete set in `NodeSchema.Outlets`. A target uses `GraphNode.When`;
-the zero `Trigger` requires every gate and `TriggerAny` requires one. Gate
-sources participate in topological ordering and cycle detection.
+The remaining work is stabilization:
 
-An unsatisfied target emits `EventBypassed`, runs no user code, and writes no
-output. Bypass is explicit rather than inferred from missing data. A bypassed
-routing source makes downstream gates unsatisfied, so conditional regions
-propagate correctly.
+1. Exercise conditional Graphs, dependency-driven execution, streaming,
+   resumption, and sealed Subgraphs in real downstream programs before freezing
+   the exported API.
+2. Decide and document Journal wire-format compatibility. The current decoder
+   accepts only the wire version it implements; before the first stable release,
+   choose whether later releases will read selected older versions or require an
+   application migration step.
+3. Treat workflow-definition compatibility separately from Journal wire
+   compatibility. Applications must version definitions and must not resume a
+   Journal against changed IDs, scopes, wiring, or control flow without an
+   explicit migration policy.
+4. Run compatibility analysis on every exported change and document migrations
+   between actual releases.
+5. Keep formatting, tests, race detection, vet, lint, fuzzing, and
+   vulnerability checks green.
+6. Review generic methods only after the module adopts a Go version that ships
+   them. Keep package-level generic functions unless a method is clearly
+   simpler for callers.
 
-The runtime preserves these invariants:
+## Evidence required
 
-- gates are recomputed from replayed routing outputs rather than journaled as a
-  second identity;
-- every gate source has a registered schema and non-empty outlet declaration;
-- runtime output must be a declared outlet, even if a custom factory violates
-  its schema;
-- gate wrappers preserve static duplicate-ID and nesting-depth validation;
-- a compiled Graph owns its internal node cells and clears them at each
-  invocation, so reusing a previous Store cannot revive stale branch output;
-- suspension never satisfies a dependency, so a gated target cannot run while
-  its routing source is waiting; and
-- `FirstOf` skips only absent values, never a real conversion error.
+These concepts are not approved work. Revisit one only after a real use case
+shows that composition cannot express it cleanly:
 
-`Route` adapts an existing Store-based `Resolver` into an ordinary replayable
-leaf. A typed node that returns a string remains the smallest routing primitive.
+- A replay-aware multi-output leaf, if applications repeatedly need both a
+  payload and an independent routing outlet.
+- An opt-in schema inference helper for tooling, if maintaining explicit
+  schemas becomes a measured burden. Inference must never become authoritative
+  registration because Go types and JSON representations can differ.
+- Partial collection for `Iteration`, if an application needs a durable
+  incomplete result and can define its hole and replay semantics.
 
-## Landed: dependency-triggered Graph execution
-
-A compiled Graph retains its dependency counts and reverse edges. Each run owns
-an independent ready set and starts a node as soon as its dependencies complete,
-subject to one graph-wide concurrency bound. There are no synthetic
-`Sequence(Parallel(layer), ...)` barriers.
-
-The execution contract is deterministic despite concurrent completion:
-
-- a node sees the input Store plus only its declared dependencies;
-- dependency and final Stores merge in graph declaration order;
-- success and bypass satisfy dependencies, while suspension does not;
-- unrelated ready work and writes returned by a waiting composite are preserved
-  when another branch suspends;
-- failure stops dispatch, cancels running siblings, and returns already
-  completed node writes with the error; and
-- the compiled Step is immutable and safe for concurrent reuse.
-
-## Landed: sealed subgraphs
-
-`Subgraph` gives a reusable Step an explicit engine boundary without changing
-`Ref` or adding Store namespaces. It copies declared outer references to named
-outputs in a fresh inner Store, runs the body under a scope derived from the
-subgraph ID, and projects one declared body output back to the outer Store.
-
-The boundary is visible but its implementation is not. `SubgraphFactory` uses a
-Graph node's ordinary input ports, so outer cycles, external inputs, and port
-types remain statically checkable. The inner Graph or Spec validates itself.
-Inner cells and IDs cannot leak into or collide with the outer definition.
-`Spec` and its JSON Schema include the same structured `subgraph` shape.
+Do not add an abstraction merely to mirror a larger workflow product.
 
 ## Settled engine boundaries
 
 ### Errors are terminal; domain outcomes are data
 
-Generic failure routing is not an engine primitive.
+A recoverable outcome such as `declined`, `not_found`, or `needs_review` is
+ordinary typed output and may feed a routing node. A Go `error` terminates
+execution.
 
-A Go `error` has no stable serialization or replay representation. Catching it
-at a graph edge would also need to distinguish node failures from context
-cancellation, definition errors, bind errors, Journal conflicts, emitter
-failure, and suspension. A generic classifier or codec interface would move
-application policy into the engine and still be unable to make arbitrary error
-values durable.
-
-A recoverable domain outcome such as `declined`, `not_found`, or
-`needs_review` is ordinary typed output. A following routing node maps that data
-to a declared outlet. An actual error terminates execution and remains available
-through `errors.Is` and `errors.As`.
-
-This rule keeps fresh execution and Journal replay equivalent.
+Routing arbitrary errors would require stable serialization and replay rules
+for application failures, cancellation, invalid definitions, Journal conflicts,
+emitter failures, and suspension. Keeping errors terminal preserves normal Go
+inspection and makes fresh execution and replay easier to reason about.
 
 ### Retry and timeout wrap typed work
 
-Retry, timeout, hedging, and circuit breaking are policies around the typed node
-inside a workflow leaf. They are not fields on `GraphNode` or `Spec`.
+Retry, timeout, hedging, and circuit breaking wrap the typed node before
+`workflow.Leaf`. They are not fields on `GraphNode` or `Spec`.
 
-Applying them to a named `Step` would invoke the same execution identity more
-than once, conflict with Journal replay, and risk retrying suspension. A generic
-workflow decorator also cannot define which domain errors are retryable or how
-an emitter timeout interacts with backpressure. Applications or node libraries
-own those decisions before calling `Leaf`.
+A named Step is an execution identity and may run once per scope. Retrying that
+Step would collide with Journal semantics and could mistake suspension for
+failure. Applications or focused node libraries own the domain-specific policy.
 
-`Graph.Concurrency`, `ParallelConfig.Concurrency`, and
-`IterationConfig.Concurrency` remain engine-level resource bounds because they
-describe composition itself.
+Composition-level bounds such as `Graph.Concurrency`,
+`ParallelConfig.Concurrency`, and `IterationConfig.Concurrency` remain engine
+concerns.
 
-### Graph and Spec keep distinct roles
+### Graph and Spec remain distinct
 
-`Graph` is the flat form produced by an editor: arbitrary data edges,
-conditional outlets, and cross-arm convergence.
+`Graph` is the flat editor form: arbitrary named-port edges, conditional
+outlets, and cross-arm convergence.
 
 `Spec` is the structured form: nested sequence, parallel, branch, loop,
-iteration, and sealed subgraph.
+iteration, and subgraph.
 
-Neither is a strict superset. Flattening `Spec` would lose repeated scoped
-execution; nesting every Graph branch would lose arbitrary convergence. Keep
-both and share internal execution concepts only where their semantics are
-actually identical.
+Neither is a strict superset. Keep both public forms and share internal
+execution concepts only where their semantics are identical.
 
 ### Persistence is a value boundary
 
-Store and Journal are serializable values. The engine does not define a
-`Storage`, `Queue`, `Scheduler`, `Clock`, or `Lease` interface.
+Store and Journal are serializable values. The engine does not define
+`Storage`, `Queue`, `Scheduler`, `Clock`, or `Lease` interfaces.
 
-An application chooses where to persist them, how to identify a run, when to
-wake it, and how to coordinate ownership. Those facilities consume the engine;
-the engine does not depend on hypothetical abstractions for them.
+An application chooses where to persist values, how to identify and authorize a
+run, when to wake it, and how to coordinate ownership. Those systems consume
+the engine; the engine does not depend on speculative provider abstractions.
 
-Journal size grows with recorded execution boundaries: a loop of `n`
+Journal size grows with recorded execution boundaries. A loop of `n`
 iterations whose body completes `m` journaled boundaries records `O(n*m)`
-entries. The engine deliberately does not compact that history, because full
-records keep resume equivalent to replay. Applications should bound repetition
-and retain or discard a Journal with the workflow run whose history it owns.
-
-## Before v1
-
-The remaining work is stabilization rather than another execution subsystem:
-
-1. Freeze the exported API after real downstream use of conditional,
-   dependency-driven Graphs and sealed Subgraphs.
-2. Run compatibility analysis on every exported change and document the final
-   pre-v1 migration.
-3. Keep statement coverage, race checks, vet, lint, fuzzing, and vulnerability
-   checks green.
-4. Add property or fuzz cases only where they strengthen a concrete invariant;
-   do not optimize or generalize without a measured problem.
-5. Review generic methods after Go 1.27 ships and the module adopts it. Preserve
-   package-level generic functions where a method is not clearly simpler.
-
-Potential future concepts require evidence:
-
-- A replay-aware multi-output leaf contract, if real routers need both a
-  payload and an independent outlet.
-- An opt-in schema inference helper for tooling, never automatic registration,
-  if repeated schemas prove to be a maintenance burden.
-
-None is an approved v1 requirement.
+entries. The engine deliberately retains complete records so resume remains
+equivalent to replay. Applications should bound repetition and retain or
+discard a Journal with its logical run.
 
 ## Out of scope
 
@@ -197,4 +127,4 @@ None is an approved v1 requirement.
 - Reflection-driven port binding or authoritative schema inference.
 
 These are product, platform, or integration responsibilities. Keeping them out
-is what lets the runtime remain small, embeddable, and composable.
+is what lets the runtime remain small, explicit, and composable.

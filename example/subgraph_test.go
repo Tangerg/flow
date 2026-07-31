@@ -8,6 +8,9 @@ import (
 	"github.com/Tangerg/flow/workflow"
 )
 
+// A Subgraph gives a reusable body isolated state and identity. Registering the
+// boundary as a node type lets a Graph validate its external wiring without
+// exposing the body's cells.
 func Example_subgraph() {
 	// The body uses local seed and step IDs. It can be instantiated repeatedly
 	// because Subgraph gives each instance an isolated Store and scope.
@@ -21,8 +24,14 @@ func Example_subgraph() {
 
 	sum := workflow.BindFactory(
 		func(_ struct{}, inputs workflow.Inputs) (workflow.BindFunc[[2]int], error) {
-			left, _ := inputs.Ref("left")
-			right, _ := inputs.Ref("right")
+			left, leftOK := inputs.Ref("left")
+			right, rightOK := inputs.Ref("right")
+			if !leftOK || !rightOK {
+				return nil, fmt.Errorf(
+					"%w: want left and right",
+					workflow.ErrMissingPort,
+				)
+			}
 			return func(store workflow.Store) ([2]int, error) {
 				a, err := workflow.Get[int](store, left)
 				if err != nil {
@@ -79,7 +88,8 @@ func Example_subgraph() {
 
 	step, err := registry.CompileGraph(graph)
 	if err != nil {
-		panic(err)
+		fmt.Println("error:", err)
+		return
 	}
 	output, err := step.Run(
 		context.Background(),
@@ -88,13 +98,19 @@ func Example_subgraph() {
 			WithOutput("rightInput", 5),
 	)
 	if err != nil {
-		panic(err)
+		fmt.Println("error:", err)
+		return
 	}
-	total, _ := workflow.Get[int](output, workflow.Output("total"))
+	total, err := workflow.Get[int](output, workflow.Output("total"))
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
 	_, innerLeaked := output.Lookup(workflow.Output("double"))
 
 	fmt.Println(graph.Inputs())
 	fmt.Println(total, innerLeaked)
+
 	// Output:
 	// [leftInput#/output rightInput#/output]
 	// 16 false

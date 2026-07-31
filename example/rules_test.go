@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
 	"github.com/Tangerg/flow/workflow/expr"
 )
@@ -25,12 +24,12 @@ func Example_rules() {
 	}
 
 	decision := func(id, message string) workflow.Step {
-		return workflow.Leaf(
+		return workflow.LeafFunc(
 			id,
-			workflow.From[int](workflow.Output("score")),
-			flow.NodeFunc[int, string](func(_ context.Context, _ int) (string, error) {
+			workflow.Output("score"),
+			func(_ context.Context, _ int) (string, error) {
 				return message, nil
-			}),
+			},
 		)
 	}
 	route := workflow.Branch("route", resolve, map[string]workflow.Step{

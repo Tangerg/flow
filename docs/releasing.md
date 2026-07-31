@@ -29,7 +29,15 @@ go run golang.org/x/exp/cmd/gorelease@latest
 ```
 
 Before the first tag, skip `gorelease`; review `go doc` for every package and
-record intentional breaks in [CHANGELOG.md](../CHANGELOG.md).
+record the public release shape in [CHANGELOG.md](../CHANGELOG.md). Do not turn
+intermediate pre-release refactors into migrations from a version users could
+not install.
+
+If a release changes the Journal wire format, decide before tagging whether the
+new decoder reads the previous format or applications must migrate persisted
+documents. Test the supported path with archived Journal fixtures. This is
+separate from workflow-definition compatibility, which remains an application
+responsibility.
 
 ## 3. Prepare release notes
 

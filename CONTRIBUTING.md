@@ -73,10 +73,12 @@ decisions, not routine cleanup.
 
 ## Documentation changes
 
-- Keep the root README focused on package choice and first use.
+- Keep the root README focused on package choice, first use, and capability
+  discovery.
 - Put progressive teaching in [`docs/tutorials`](./docs/tutorials/README.md).
 - Keep runnable code in [`example`](./example/README.md).
-- Keep compatibility history in the changelog.
+- Keep user-visible release notes and released compatibility history in the
+  changelog; pre-release implementation archaeology belongs in Git history.
 - Use package comments and examples for API reference.
 
 When documentation contains code, prefer a runnable example as its source of

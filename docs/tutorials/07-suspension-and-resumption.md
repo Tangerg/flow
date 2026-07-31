@@ -31,14 +31,12 @@ The first run suspends at `approval`. Once its response is recorded, the step
 restores that response under `approval#/output`, exactly like an ordinary leaf:
 
 ```go
-publish := workflow.Leaf(
+publish := workflow.LeafFunc(
 	"publish",
-	workflow.From[string](workflow.Output("approval")),
-	flow.NodeFunc[string, string](
-		func(_ context.Context, title string) (string, error) {
-			return "published: " + title, nil
-		},
-	),
+	workflow.Output("approval"),
+	func(_ context.Context, title string) (string, error) {
+		return "published: " + title, nil
+	},
 )
 ```
 
@@ -59,8 +57,14 @@ if !errors.Is(err, workflow.ErrSuspended) {
 }
 
 waits := workflow.Suspensions(err)
+if len(waits) != 1 {
+	return fmt.Errorf("unexpected waits: %d", len(waits))
+}
 wait := waits[0]
-request := wait.Value.(approvalRequest)
+request, ok := wait.Value.(approvalRequest)
+if !ok {
+	return fmt.Errorf("unexpected request type %T", wait.Value)
+}
 fmt.Println(request.Question)
 ```
 
@@ -86,6 +90,7 @@ At minimum, preserve:
 | `Suspension.Key()` | Exact callback-to-wait correlation |
 | `Suspension.Value` or equivalent request | Approval UI or external job payload |
 | Workflow definition version | A Journal is valid only for that definition |
+| flow module version | Journal wire compatibility is a separate concern |
 | Application run ID, status, and authorization | Journal intentionally does not manage business runs |
 
 Both Store and Journal support JSON round trips:
@@ -104,6 +109,12 @@ if err != nil {
 The Store and Journal do **not** include the active suspension list
 automatically. Persist each wait key and request in the application's own run
 record so an incoming callback can resolve the right wait.
+
+The Journal document includes a wire-format version, and the decoder rejects a
+version it does not support. Keep the flow module version with durable run
+records and test upgrades against representative archived Journals. This wire
+contract is separate from the workflow-definition version: compatible bytes
+cannot make renamed steps or changed control flow safe to resume.
 
 `Suspension.Value` may be a string, map, slice, array, or struct. It is owned by
 the application and must be treated as immutable. Decoding a suspension through

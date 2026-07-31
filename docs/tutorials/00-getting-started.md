@@ -31,6 +31,7 @@ documentation and tests.
 | Runtime-defined named steps or a DAG | `workflow` | `Step`, `Store` |
 | JSON input or a visual editor | `workflow` | `Registry`, `Graph`, `Spec` |
 | Routing rules that must also be data | `workflow/expr` | `Condition`, `Resolver` |
+| Graph diagrams for diagnostics or docs | `workflow/diagram` | `ASCII`, `Mermaid` |
 
 A useful rule is: **if the control flow ships with the binary, begin with
 `flow`; if the definition comes from a database, JSON document, or editor, use
@@ -99,7 +100,7 @@ rules, and resumption one capability at a time.
 
 ## Exercise
 
-Read the seven levels in the [`example`](../../example/README.md) index and
+Read the eleven levels in the [`example`](../../example/README.md) index and
 decide how far your use case needs to go. Run the examples to confirm your
 environment is ready.
 

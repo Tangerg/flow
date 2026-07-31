@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
 )
 
@@ -17,23 +16,23 @@ func Example_resume() {
 		Question string `json:"question"`
 	}
 
-	prepare := workflow.Leaf(
+	prepare := workflow.LeafFunc(
 		"prepare",
-		workflow.From[string](workflow.Output("topic")),
-		flow.NodeFunc[string, string](func(_ context.Context, topic string) (string, error) {
+		workflow.Output("topic"),
+		func(_ context.Context, topic string) (string, error) {
 			fmt.Println("preparing:", topic)
 			return topic, nil
-		}),
+		},
 	)
 	approval := workflow.Interrupt("approval", approvalRequest{
 		Question: `Publish "guide"?`,
 	})
-	publish := workflow.Leaf(
+	publish := workflow.LeafFunc(
 		"publish",
-		workflow.From[string](workflow.Output("approval")),
-		flow.NodeFunc[string, string](func(_ context.Context, title string) (string, error) {
+		workflow.Output("approval"),
+		func(_ context.Context, title string) (string, error) {
 			return "published: " + title, nil
-		}),
+		},
 	)
 	pipeline := workflow.Sequence(prepare, approval, publish)
 
@@ -48,8 +47,17 @@ func Example_resume() {
 		fmt.Println("error:", runErr)
 		return
 	}
-	wait := workflow.Suspensions(runErr)[0]
-	request := wait.Value.(approvalRequest)
+	waits := workflow.Suspensions(runErr)
+	if len(waits) != 1 {
+		fmt.Println("unexpected waits:", len(waits))
+		return
+	}
+	wait := waits[0]
+	request, ok := wait.Value.(approvalRequest)
+	if !ok {
+		fmt.Printf("unexpected request type: %T\n", wait.Value)
+		return
+	}
 	fmt.Println("waiting:", request.Question)
 
 	storeJSON, runErr := json.Marshal(paused)
