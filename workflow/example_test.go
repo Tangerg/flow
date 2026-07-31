@@ -30,11 +30,11 @@ func ExampleLeaf() {
 	// Output: 42
 }
 
-func ExampleStreamLeaf() {
-	step := workflow.StreamLeaf(
+func ExampleStreamFunc() {
+	step := workflow.Leaf(
 		"count",
 		workflow.From[int](workflow.Output("input")),
-		workflow.StreamNodeFunc[int, int, int](
+		workflow.StreamFunc[int, int, int](
 			func(ctx context.Context, input int, yield func(int) bool) (int, error) {
 				for value := range input {
 					if !yield(value) {
@@ -115,8 +115,8 @@ func ExampleRegistry_CompileGraphJSON() {
 	reg := workflow.NewRegistry().MustRegisterNode("addN", addN)
 
 	graph := `{"nodes":[
-	  {"id":"a","type":"addN","input":{"nodeID":"start","path":"/output"},"config":{"n":10}},
-	  {"id":"b","type":"addN","input":{"nodeID":"a","path":"/output"},"config":{"n":5}}
+	  {"id":"a","type":"addN","inputs":{"in":{"nodeID":"start","path":"/output"}},"config":{"n":10}},
+	  {"id":"b","type":"addN","inputs":{"in":{"nodeID":"a","path":"/output"}},"config":{"n":5}}
 	]}`
 
 	step, err := reg.CompileGraphJSON([]byte(graph))
@@ -175,7 +175,7 @@ func ExampleBindFactory() {
 		})
 
 	graph := `{"nodes":[
-	  {"id":"twice","type":"double","input":{"nodeID":"start","path":"/output"}},
+	  {"id":"twice","type":"double","inputs":{"in":{"nodeID":"start","path":"/output"}}},
 	  {"id":"total","type":"sum","inputs":{
 	    "left":{"nodeID":"twice","path":"/output"},
 	    "right":{"nodeID":"start","path":"/output"}

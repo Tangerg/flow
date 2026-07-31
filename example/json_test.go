@@ -37,10 +37,10 @@ func Example_jsonDSL() {
 	graph := []byte(`{
 		"nodes":[
 			{"id":"a","type":"add",
-			 "input":{"nodeID":"start","path":"/output"},
+			 "inputs":{"in":{"nodeID":"start","path":"/output"}},
 			 "config":{"n":10}},
 			{"id":"b","type":"add",
-			 "input":{"nodeID":"a","path":"/output"},
+			 "inputs":{"in":{"nodeID":"a","path":"/output"}},
 			 "config":{"n":5}}
 		]
 	}`)

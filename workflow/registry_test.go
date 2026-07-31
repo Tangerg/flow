@@ -28,8 +28,8 @@ func TestRegistry_compileSequenceJSON(t *testing.T) {
 	spec := `{
 	  "kind": "sequence",
 	  "steps": [
-	    {"kind":"leaf","id":"a","type":"addN","input":{"nodeID":"start","path":"/output"},"config":{"n":10}},
-	    {"kind":"leaf","id":"b","type":"addN","input":{"nodeID":"a","path":"/output"},"config":{"n":5}}
+	    {"kind":"leaf","id":"a","type":"addN","inputs":{"in":{"nodeID":"start","path":"/output"}},"config":{"n":10}},
+	    {"kind":"leaf","id":"b","type":"addN","inputs":{"in":{"nodeID":"a","path":"/output"}},"config":{"n":5}}
 	  ]
 	}`
 
@@ -63,8 +63,16 @@ func TestRegistry_compileBranch(t *testing.T) {
 		ID:       "route",
 		Resolver: "sign",
 		Cases: map[string]workflow.Spec{
-			"pos": {Kind: workflow.KindLeaf, ID: "p", Type: "addN", Input: workflow.Output("start"), Config: json.RawMessage(`{"n":100}`)},
-			"neg": {Kind: workflow.KindLeaf, ID: "n", Type: "addN", Input: workflow.Output("start"), Config: json.RawMessage(`{"n":-100}`)},
+			"pos": {
+				Kind: workflow.KindLeaf, ID: "p", Type: "addN",
+				Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
+				Config: json.RawMessage(`{"n":100}`),
+			},
+			"neg": {
+				Kind: workflow.KindLeaf, ID: "n", Type: "addN",
+				Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
+				Config: json.RawMessage(`{"n":-100}`),
+			},
 		},
 	}
 
@@ -91,7 +99,7 @@ func TestRegistry_compileIteration(t *testing.T) {
 		BodyOutput: workflow.Output("el"),
 		Body: &workflow.Spec{
 			Kind: workflow.KindLeaf, ID: "el", Type: "addN",
-			Input:  workflow.Item("iter"),
+			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Item("iter")},
 			Config: json.RawMessage(`{"n":1}`),
 		},
 	}
@@ -322,16 +330,15 @@ func TestValidateSpec_rejectsEveryStructuralBoundary(t *testing.T) {
 		"unknown leaf type": {
 			Kind: workflow.KindLeaf, ID: "leaf", Type: "missing",
 		},
-		"duplicate default input": {
+		"leaf input field": {
 			Kind: workflow.KindLeaf, ID: "leaf", Type: "addN",
 			Input: workflow.Output("a"),
-			Inputs: workflow.Inputs{
-				workflow.DefaultPort: workflow.Output("b"),
-			},
 		},
 		"invalid leaf input": {
 			Kind: workflow.KindLeaf, ID: "leaf", Type: "addN",
-			Input: workflow.Ref{NodeID: "source", Path: "/~2"},
+			Inputs: workflow.Inputs{
+				workflow.DefaultPort: {NodeID: "source", Path: "/~2"},
+			},
 		},
 		"duplicate branch ID": {
 			Kind: workflow.KindSequence,
@@ -449,7 +456,7 @@ func TestValidateSpec_iterationBodyIDsAreLocalToEachElement(t *testing.T) {
 		Steps: []workflow.Spec{
 			{
 				Kind: workflow.KindLeaf, ID: "value", Type: "addN",
-				Input: workflow.Output("seed"),
+				Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("seed")},
 			},
 			{
 				Kind:       workflow.KindIteration,
@@ -458,7 +465,7 @@ func TestValidateSpec_iterationBodyIDsAreLocalToEachElement(t *testing.T) {
 				BodyOutput: workflow.Output("value"),
 				Body: &workflow.Spec{
 					Kind: workflow.KindLeaf, ID: "value", Type: "addN",
-					Input:  workflow.Item("each"),
+					Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Item("each")},
 					Config: json.RawMessage(`{"n":1}`),
 				},
 			},
@@ -503,7 +510,12 @@ func TestRegistry_zeroValueIsUsable(t *testing.T) {
 	if err := reg.RegisterNode("addN", addN()); err != nil {
 		t.Fatalf("zero Registry: %v", err)
 	}
-	spec := workflow.Spec{Kind: workflow.KindLeaf, ID: "a", Type: "addN", Input: workflow.Output("start")}
+	spec := workflow.Spec{
+		Kind:   workflow.KindLeaf,
+		ID:     "a",
+		Type:   "addN",
+		Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
+	}
 	if _, err := reg.CompileSpec(spec); err != nil {
 		t.Fatalf("zero Registry Build: %v", err)
 	}

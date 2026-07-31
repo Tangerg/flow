@@ -61,9 +61,6 @@ func newRenderer(graph workflow.Graph) *renderer {
 
 func (r *renderer) collectEdges() {
 	for _, node := range r.graph.Nodes {
-		if node.Input != (workflow.Ref{}) {
-			r.addDataEdge(node.ID, workflow.DefaultPort, node.Input)
-		}
 		for _, port := range node.Inputs.PortNames() {
 			r.addDataEdge(node.ID, port, node.Inputs[port])
 		}

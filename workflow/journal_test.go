@@ -541,8 +541,8 @@ func TestAwaitFactory(t *testing.T) {
 		MustRegisterNode("await", workflow.AwaitFactory())
 
 	spec := []byte(`{"kind":"sequence","steps":[
-	  {"id":"approval","type":"await","kind":"leaf","input":{"nodeID":"inbox","path":"/decision"}},
-	  {"id":"act","type":"addN","kind":"leaf","input":{"nodeID":"start","path":"/output"},"config":{"n":1}}
+	  {"id":"approval","type":"await","kind":"leaf","inputs":{"in":{"nodeID":"inbox","path":"/decision"}}},
+	  {"id":"act","type":"addN","kind":"leaf","inputs":{"in":{"nodeID":"start","path":"/output"}},"config":{"n":1}}
 	]}`)
 	step, compileErr := reg.CompileSpecJSON(spec)
 	if compileErr != nil {

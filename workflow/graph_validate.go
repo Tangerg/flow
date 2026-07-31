@@ -38,7 +38,7 @@ func (r *Registry) validateGraph(graph Graph) (graphPlan, error) {
 			}
 		}
 		if err := registered.schema.validateInputs(
-			plan.inputsByNode[node.ID],
+			node.Inputs,
 			func(ref Ref) (ValueType, bool) {
 				producer, internal := plan.nodesByID[ref.NodeID]
 				if !internal {

@@ -24,11 +24,11 @@ type switchNode[K comparable, I, O any] struct {
 
 func (s switchNode[K, I, O]) Run(ctx context.Context, in I) (O, error) {
 	var zero O
-	if s.resolve == nil {
+	if isNilNode(s.resolve) {
 		return zero, ErrNilNode
 	}
 	for key, node := range s.cases {
-		if node == nil {
+		if isNilNode(node) {
 			return zero, fmt.Errorf("case %v: %w", key, ErrNilNode)
 		}
 	}

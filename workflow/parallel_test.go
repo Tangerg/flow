@@ -147,6 +147,30 @@ func TestParallel_validatesEveryBranchBeforeRunning(t *testing.T) {
 	}
 }
 
+func TestParallel_rejectsTypedNilFunctionBeforeRunning(t *testing.T) {
+	ran := false
+	first := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+			ran = true
+			return store, nil
+		},
+	)
+	var invalid flow.NodeFunc[workflow.Store, workflow.Store]
+
+	_, err := workflow.Parallel(
+		[]workflow.Step{first, invalid},
+		workflow.ParallelConfig{},
+	).Run(t.Context(), workflow.NewStore())
+	var indexErr *flow.IndexError
+	if !errors.As(err, &indexErr) || indexErr.Index != 1 ||
+		!errors.Is(err, workflow.ErrNilStep) {
+		t.Fatalf("err = %v; want IndexError(1, ErrNilStep)", err)
+	}
+	if ran {
+		t.Fatal("a branch ran before the typed nil function was rejected")
+	}
+}
+
 func TestParallel_rejectsNegativeConcurrencyEvenWhenEmpty(t *testing.T) {
 	_, err := workflow.Parallel(nil, workflow.ParallelConfig{Concurrency: -1}).
 		Run(t.Context(), workflow.NewStore())

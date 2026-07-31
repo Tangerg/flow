@@ -31,14 +31,12 @@ type Spec struct {
 	Type   string          `json:"type,omitempty"`
 	Config json.RawMessage `json:"config,omitempty"`
 
-	// Leaf [DefaultPort] input, and iteration array input. A zero Ref means the
-	// field is absent.
+	// Iteration array input. Leaf inputs are always named in Inputs. A zero Ref
+	// means the field is absent.
 	Input Ref `json:"input,omitzero"`
 
-	// Leaf inputs wired by port name. For a subgraph, keys name inner seed IDs
-	// and values reference the outer Store. For a leaf's default port this is
-	// equivalent to Input; setting it both ways is rejected as
-	// [ErrDuplicatePort].
+	// Leaf inputs wired by port name. A single-input leaf uses [DefaultPort]. For
+	// a subgraph, keys name inner seed IDs and values reference the outer Store.
 	Inputs Inputs `json:"inputs,omitempty"`
 
 	// Sequence and parallel children.

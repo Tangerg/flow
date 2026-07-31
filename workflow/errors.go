@@ -5,8 +5,8 @@ import (
 	"fmt"
 )
 
-// ErrNilStep is returned when [Run] or a composite is given a nil [Step]. Test
-// for it with [errors.Is].
+// ErrNilStep is returned when [Run] or a composite is given a nil Step or a
+// typed nil function-backed Step. Test for it with [errors.Is].
 var ErrNilStep = errors.New("workflow: nil step")
 
 // ErrInvalidStepID is returned when a named workflow step has an empty ID.
@@ -32,7 +32,6 @@ var (
 	ErrJournalConflict       = errors.New("workflow: journal record already exists")
 	ErrMissingPort           = errors.New("workflow: unwired input port")
 	ErrUnknownPort           = errors.New("workflow: unknown input port")
-	ErrDuplicatePort         = errors.New("workflow: duplicate input port")
 	ErrUnknownOutlet         = errors.New("workflow: unknown outlet")
 )
 

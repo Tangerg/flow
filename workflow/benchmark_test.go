@@ -112,9 +112,9 @@ func BenchmarkSequenceRun(b *testing.B) {
 	}
 }
 
-func BenchmarkStreamLeaf(b *testing.B) {
+func BenchmarkStreamFunc(b *testing.B) {
 	ctx := b.Context()
-	node := workflow.StreamNodeFunc[int, int, int](
+	node := workflow.StreamFunc[int, int, int](
 		func(_ context.Context, input int, yield func(int) bool) (int, error) {
 			for value := range 4 {
 				if !yield(input + value) {
@@ -124,7 +124,7 @@ func BenchmarkStreamLeaf(b *testing.B) {
 			return input + 4, nil
 		},
 	)
-	step := workflow.StreamLeaf(
+	step := workflow.Leaf(
 		"stream",
 		workflow.From[int](workflow.Output("seed")),
 		node,

@@ -8,24 +8,26 @@ import (
 	"github.com/Tangerg/flow/workflow"
 )
 
-// StreamLeaf keeps incremental output separate from the final value recorded
-// in the Store. The Emitter is run-scoped, so the same compiled Step can be
-// reused with different destinations.
+// StreamFunc is an ordinary Node with an additional typed output side channel.
+// The Emitter is run-scoped, so the same compiled Step can be reused with
+// different destinations.
 func Example_streamingOutput() {
-	generate := workflow.StreamLeafFunc(
+	generate := workflow.Leaf(
 		"generate",
-		workflow.Output("name"),
-		func(ctx context.Context, name string, yield func(string) bool) (string, error) {
-			tokens := []string{"hello", ", ", name}
-			var answer strings.Builder
-			for _, token := range tokens {
-				if !yield(token) {
-					return "", context.Cause(ctx)
+		workflow.From[string](workflow.Output("name")),
+		workflow.StreamFunc[string, string, string](
+			func(ctx context.Context, name string, yield func(string) bool) (string, error) {
+				tokens := []string{"hello", ", ", name}
+				var answer strings.Builder
+				for _, token := range tokens {
+					if !yield(token) {
+						return "", context.Cause(ctx)
+					}
+					answer.WriteString(token)
 				}
-				answer.WriteString(token)
-			}
-			return answer.String(), nil
-		},
+				return answer.String(), nil
+			},
+		),
 	)
 
 	out, err := workflow.Run(

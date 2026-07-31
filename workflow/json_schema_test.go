@@ -157,7 +157,7 @@ func TestCompileSpecJSONAcceptsEveryKind(t *testing.T) {
 	tests := map[string]string{
 		"leaf": `{
 			"kind":"leaf", "id":"leaf", "type":"addN",
-			"input":{"nodeID":"seed","path":"/output"}, "config":{"n":1}
+			"inputs":{"in":{"nodeID":"seed","path":"/output"}}, "config":{"n":1}
 		}`,
 		"sequence": `{"kind":"sequence","steps":[]}`,
 		"parallel": `{"kind":"parallel","steps":[],"concurrency":2}`,
@@ -172,13 +172,13 @@ func TestCompileSpecJSONAcceptsEveryKind(t *testing.T) {
 		"iteration": `{
 			"kind":"iteration", "id":"each",
 			"input":{"nodeID":"seed","path":"/output"},
-			"body":{"kind":"leaf","id":"item","type":"addN","input":{"nodeID":"each","path":"/item"}},
+			"body":{"kind":"leaf","id":"item","type":"addN","inputs":{"in":{"nodeID":"each","path":"/item"}}},
 			"bodyOutput":{"nodeID":"item","path":"/output"}, "concurrency":2
 		}`,
 		"subgraph": `{
 			"kind":"subgraph", "id":"sub",
 			"inputs":{"value":{"nodeID":"seed","path":"/output"}},
-			"body":{"kind":"leaf","id":"inner","type":"addN","input":{"nodeID":"value","path":"/output"}},
+			"body":{"kind":"leaf","id":"inner","type":"addN","inputs":{"in":{"nodeID":"value","path":"/output"}}},
 			"bodyOutput":{"nodeID":"inner","path":"/output"}
 		}`,
 	}
@@ -197,9 +197,10 @@ func TestValidateSpecJSONRejectsSchemaViolations(t *testing.T) {
 		"wrong steps type":     `{"kind":"sequence","steps":{}}`,
 		"irrelevant field":     `{"kind":"sequence","steps":[],"type":"x"}`,
 		"negative concurrency": `{"kind":"parallel","steps":[],"concurrency":-1}`,
-		"empty ref path":       `{"kind":"leaf","id":"x","type":"x","input":{"nodeID":"seed","path":""}}`,
-		"legacy dotted path":   `{"kind":"leaf","id":"x","type":"x","input":{"nodeID":"seed","path":"output.value"}}`,
-		"bad pointer escape":   `{"kind":"leaf","id":"x","type":"x","input":{"nodeID":"seed","path":"/output/~2"}}`,
+		"singular leaf input":  `{"kind":"leaf","id":"x","type":"x","input":{"nodeID":"seed","path":"/output"}}`,
+		"empty ref path":       `{"kind":"leaf","id":"x","type":"x","inputs":{"in":{"nodeID":"seed","path":""}}}`,
+		"legacy dotted path":   `{"kind":"leaf","id":"x","type":"x","inputs":{"in":{"nodeID":"seed","path":"output.value"}}}`,
+		"bad pointer escape":   `{"kind":"leaf","id":"x","type":"x","inputs":{"in":{"nodeID":"seed","path":"/output/~2"}}}`,
 		"duplicate member":     `{"kind":"sequence","kind":"parallel","steps":[]}`,
 		"unknown field":        `{"kind":"sequence","steps":[],"unknown":true}`,
 	}
@@ -262,10 +263,10 @@ func TestValidateGraphJSONReportsDuplicateMemberPath(t *testing.T) {
 
 func TestValidateSpecJSONReportsOnlySelectedKind(t *testing.T) {
 	err := workflow.ValidateSpecJSON([]byte(
-		`{"kind":"leaf","id":"x","type":"x","input":{"nodeID":"seed","path":""}}`,
+		`{"kind":"leaf","id":"x","type":"x","inputs":{"in":{"nodeID":"seed","path":""}}}`,
 	))
 	message := err.Error()
-	if !strings.Contains(message, "/input/path") {
+	if !strings.Contains(message, "/inputs/in/path") {
 		t.Fatalf("error lacks failing path: %v", err)
 	}
 	if strings.Contains(message, "github.com/Tangerg/flow/schema") || strings.Contains(message, "\n") {
@@ -290,6 +291,7 @@ func TestValidateGraphJSONRejectsSchemaViolations(t *testing.T) {
 		"duplicate gate":       `{"nodes":[{"id":"x","type":"x","when":[{"nodeID":"route","outlet":"yes"},{"nodeID":"route","outlet":"yes"}]}]}`,
 		"unknown trigger":      `{"nodes":[{"id":"x","type":"x","when":[{"nodeID":"route","outlet":"yes"}],"trigger":"sometimes"}]}`,
 		"trigger without gate": `{"nodes":[{"id":"x","type":"x","trigger":"any"}]}`,
+		"singular node input":  `{"nodes":[{"id":"x","type":"x","input":{"nodeID":"seed","path":"/output"}}]}`,
 		"unknown field":        `{"nodes":[],"unknown":true}`,
 	}
 	for name, data := range tests {
@@ -344,7 +346,7 @@ func TestRegisterSchemaValidatesNodeConfig(t *testing.T) {
 
 	valid := workflow.Spec{
 		Kind: workflow.KindLeaf, ID: "ok", Type: "addN",
-		Input:  workflow.Output("start"),
+		Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 		Config: json.RawMessage(`{"n":2}`),
 	}
 	if err := reg.ValidateSpec(valid); err != nil {

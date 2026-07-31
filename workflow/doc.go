@@ -12,7 +12,8 @@
 //
 // A workflow node is a [Step] — a flow.Node[Store, Store] that reads its inputs
 // from the Store and returns a Store extended with its output. Typed business
-// logic is bridged in with [Leaf], and streaming logic with [StreamLeaf];
+// logic is bridged in with [Leaf]. A [StreamFunc] remains an ordinary typed
+// flow.Node while adding a run-scoped intermediate-output side channel;
 // [Factory] adapts the common case of a typed node constructor with JSON config,
 // and [BindFactory] the case of a node reading several inputs. Composites
 // ([Sequence], [Branch], [Loop], [Parallel], [Iteration], [Subgraph]) remain
@@ -22,6 +23,7 @@
 //
 // A node names each value it reads: [Inputs] wires port names to references, and
 // a [NodeSchema] declares the ports a node type expects along with their types.
+// A unary node uses [DefaultPort]; it is not a second, unnamed edge shape.
 // Naming inputs is what keeps the data flow visible to the layer above — the
 // flat [Graph] derives its execution order from the wired ports, and
 // [Registry.ValidateGraph] reports both incomplete wiring and incompatible edges
@@ -95,8 +97,10 @@
 //
 // Configuration belongs to the call rather than to the Step definition: a
 // compiled workflow can be run many times, concurrently, and each call gets an
-// independent signal sequence, receivers, and Journal configuration. Call
-// Step.Run directly when no run configuration is needed.
+// independent signal sequence, receivers, and Journal configuration. A Step
+// built by this package may be called directly when no configuration is needed;
+// use Run at a caller-defined composite's top-level boundary even with a zero
+// RunConfig, so every child invocation shares one identity scope.
 //
 // # Suspension and resumption
 //
@@ -105,8 +109,9 @@
 // job has to finish — and the run ends with an error matching [ErrSuspended].
 // [Suspensions] returns every wait, including its structured application value
 // and its scope-aware [Suspension.Key]. Suspension is a third outcome, not a kind
-// of failure, so [Parallel], [Iteration], and [Graph] let work that is not
-// downstream of the wait finish rather than cancelling it.
+// of failure, so [Parallel], [Loop], [Iteration], and [Graph] preserve work that
+// completed before or independently of the wait rather than cancelling or
+// discarding it.
 //
 // Await is a Store gate: it passes through once its Ref exists. Interrupt is a
 // request/response Step: it exposes a value, then produces the response under
@@ -148,13 +153,15 @@
 //
 // # Streaming output
 //
-// [StreamLeaf] is the named workflow boundary for a typed [StreamNode]. Its
-// intermediate values go to the run's [Emitter], while its final result is
-// written to the Store and Journal exactly like an ordinary [Leaf]. The producer
-// calls a synchronous yield function and must stop when it returns false. A slow
-// Emitter therefore applies backpressure; an Emitter error cancels that stream
-// and returns through the leaf's normal failure or suspension classification.
-// Different leaf invocations may emit concurrently.
+// [StreamFunc] adapts a typed producer into an ordinary flow.Node, so it composes
+// directly with flow.Then, flow.Map, flow.Race, and other typed helpers. [Leaf]
+// remains the only named workflow boundary: intermediate values emitted anywhere
+// inside its composed Node go to the run's [Emitter], while the final result is
+// written to the Store and Journal normally. The producer must stop when yield
+// returns false. Calls are serialized within one leaf invocation, so a slow
+// Emitter applies backpressure; an Emitter error cancels that leaf and returns
+// through its normal failure or suspension classification. Different leaf
+// invocations may emit concurrently.
 //
 // A [Chunk] carries the leaf ID, scope, a zero-based invocation index, and
 // a run sequence shared with [Event]. Chunks describe execution attempts rather

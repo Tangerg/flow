@@ -45,6 +45,8 @@ go test ./example -run Example -v
 - Put named state and runtime definitions in `workflow`.
 - Keep the expression language optional in `workflow/expr`.
 - Keep definition rendering optional and derived in `workflow/diagram`.
+- Keep one named-port shape for workflow data edges; unary nodes use
+  `workflow.DefaultPort`.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

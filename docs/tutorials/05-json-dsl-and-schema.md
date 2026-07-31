@@ -44,7 +44,8 @@ host process.
 
 ## 2. Write a flat Graph document
 
-`input` is shorthand for the default single-input port:
+Every edge uses the same named-port shape. A single-input node wires the
+conventional `in` port:
 
 ```json
 {
@@ -52,13 +53,13 @@ host process.
     {
       "id": "a",
       "type": "add",
-      "input": {"nodeID": "start", "path": "/output"},
+      "inputs": {"in": {"nodeID": "start", "path": "/output"}},
       "config": {"n": 10}
     },
     {
       "id": "b",
       "type": "add",
-      "input": {"nodeID": "a", "path": "/output"},
+      "inputs": {"in": {"nodeID": "a", "path": "/output"}},
       "config": {"n": 5}
     }
   ]

@@ -52,7 +52,7 @@ func TestValidateSpec_branchCasesMayShareAStepID(t *testing.T) {
 	leaf := func(n string) workflow.Spec {
 		return workflow.Spec{
 			Kind: workflow.KindLeaf, ID: "out", Type: "addN",
-			Input:  workflow.Output("start"),
+			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 			Config: json.RawMessage(`{"n":` + n + `}`),
 		}
 	}
@@ -68,7 +68,7 @@ func TestValidateSpec_branchCasesMayShareAStepID(t *testing.T) {
 			// Reads the branch's output without knowing which case produced it.
 			{
 				Kind: workflow.KindLeaf, ID: "after", Type: "addN",
-				Input:  workflow.Output("out"),
+				Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("out")},
 				Config: json.RawMessage(`{"n":10}`),
 			},
 		},
@@ -93,7 +93,12 @@ func TestValidateSpec_stillRejectsIDsThatCanCollide(t *testing.T) {
 		MustRegisterResolver("pick", func(context.Context, workflow.Store) (string, error) { return "a", nil })
 
 	leaf := func(id string) workflow.Spec {
-		return workflow.Spec{Kind: workflow.KindLeaf, ID: id, Type: "addN", Input: workflow.Output("start")}
+		return workflow.Spec{
+			Kind:   workflow.KindLeaf,
+			ID:     id,
+			Type:   "addN",
+			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
+		}
 	}
 	branch := func(cases map[string]workflow.Spec) workflow.Spec {
 		return workflow.Spec{Kind: workflow.KindBranch, ID: "route", Resolver: "pick", Cases: cases}
@@ -188,6 +193,27 @@ func TestBranch_doesNotJournalANilCase(t *testing.T) {
 	}
 	if journal.Len() != 0 {
 		t.Fatalf("nil case polluted Journal: %v", journal.Keys())
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("resolver ran %d times; want 0", calls.Load())
+	}
+}
+
+func TestBranch_rejectsTypedNilFunctionCaseBeforeResolver(t *testing.T) {
+	var calls atomic.Int64
+	var invalid flow.NodeFunc[workflow.Store, workflow.Store]
+	branch := workflow.Branch(
+		"route",
+		func(context.Context, workflow.Store) (string, error) {
+			calls.Add(1)
+			return "broken", nil
+		},
+		map[string]workflow.Step{"broken": invalid},
+	)
+
+	_, err := branch.Run(t.Context(), workflow.NewStore())
+	if !errors.Is(err, workflow.ErrNilStep) {
+		t.Fatalf("err = %v; want ErrNilStep", err)
 	}
 	if calls.Load() != 0 {
 		t.Fatalf("resolver ran %d times; want 0", calls.Load())

@@ -180,6 +180,8 @@ func TestSwitchSpec_Refs(t *testing.T) {
 	}
 	if _, err := (expr.SwitchSpec{Cases: []expr.Case{{When: "counter", Then: "x"}}}).Refs(); err == nil {
 		t.Fatal("Refs on an invalid case unexpectedly succeeded")
+	} else if !strings.Contains(err.Error(), "switch case 0") {
+		t.Fatalf("Refs error = %v; want switch case index", err)
 	}
 }
 

@@ -140,18 +140,14 @@ func (s specValidator) validateLeaf(spec Spec, stepIDs map[string]struct{}) erro
 	if err := registered.validateConfig(spec.Config); err != nil {
 		return spec.fieldError("config", fmt.Errorf("%w: %w", ErrInvalidSpec, err))
 	}
-	inputs, err := spec.Inputs.withDefault(spec.Input)
-	if err != nil {
-		return spec.fieldError("inputs", err)
-	}
-	if err := inputs.validate(); err != nil {
+	if err := spec.Inputs.validate(); err != nil {
 		return spec.fieldError("inputs", fmt.Errorf("%w: %w", ErrInvalidSpec, err))
 	}
 	// A nested Spec has no cross-node index, so ports are checked for
 	// completeness only; edge types are checked when a flat Graph names both
 	// ends.
 	schema := registered.schema
-	if err := schema.validateInputs(inputs, func(Ref) (ValueType, bool) {
+	if err := schema.validateInputs(spec.Inputs, func(Ref) (ValueType, bool) {
 		return "", false
 	}); err != nil {
 		return spec.fieldError("inputs", err)
@@ -288,7 +284,7 @@ func (s Spec) unexpectedField() string {
 func (s Spec) allowedFields() []string {
 	switch s.Kind {
 	case KindLeaf:
-		return []string{"id", "type", "config", "input", "inputs"}
+		return []string{"id", "type", "config", "inputs"}
 	case KindSequence:
 		return []string{"steps"}
 	case KindParallel:

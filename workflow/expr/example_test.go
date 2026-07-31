@@ -83,16 +83,16 @@ func ExampleBindings() {
 	      "condition": "converged",
 	      "maxIterations": 20,
 	      "body": {"kind":"leaf","id":"refine","type":"double",
-	               "input":{"nodeID":"refine","path":"/output"}}
+	               "inputs":{"in":{"nodeID":"refine","path":"/output"}}}
 	    },
 	    {
 	      "kind": "branch",
 	      "id": "route",
 	      "resolver": "bySize",
 	      "cases": {
-	        "small":  {"kind":"leaf","id":"out","type":"label","input":{"nodeID":"refine","path":"/output"},"config":{"text":"small"}},
-	        "medium": {"kind":"leaf","id":"out","type":"label","input":{"nodeID":"refine","path":"/output"},"config":{"text":"medium"}},
-	        "large":  {"kind":"leaf","id":"out","type":"label","input":{"nodeID":"refine","path":"/output"},"config":{"text":"large"}}
+	        "small":  {"kind":"leaf","id":"out","type":"label","inputs":{"in":{"nodeID":"refine","path":"/output"}},"config":{"text":"small"}},
+	        "medium": {"kind":"leaf","id":"out","type":"label","inputs":{"in":{"nodeID":"refine","path":"/output"}},"config":{"text":"medium"}},
+	        "large":  {"kind":"leaf","id":"out","type":"label","inputs":{"in":{"nodeID":"refine","path":"/output"}},"config":{"text":"large"}}
 	      }
 	    }
 	  ]

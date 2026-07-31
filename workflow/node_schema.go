@@ -9,12 +9,14 @@ import (
 	"slices"
 )
 
-// ValueType describes the shape of a value flowing between nodes. It is used only
-// for edit-time connection validation (see [Registry.ValidateGraph]); it is never
-// consulted at run time.
+// ValueType describes the shape of a value flowing between nodes. It is used
+// only for edit-time connection validation (see [Registry.ValidateGraph]); it is
+// never consulted at run time. The zero value leaves the shape unspecified and
+// is compatible with every declared type.
 type ValueType string
 
-// Supported port value types. TypeAny is compatible with every other type.
+// Supported port value types. TypeAny is an explicit wildcard compatible with
+// every other type; the zero value is the implicit "unspecified" form.
 const (
 	TypeAny    ValueType = "any"
 	TypeString ValueType = "string"

@@ -89,6 +89,28 @@ func TestFanOut_validatesEveryNodeBeforeRunning(t *testing.T) {
 	}
 }
 
+func TestFanOut_rejectsTypedNilFunctionBeforeRunning(t *testing.T) {
+	ran := false
+	node := flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+		ran = true
+		return 0, nil
+	})
+	var invalid flow.NodeFunc[int, int]
+
+	_, err := flowx.FanOut(
+		[]flow.Node[int, int]{node, invalid},
+		flow.MapConfig{},
+	).Run(t.Context(), 0)
+	var indexErr *flow.IndexError
+	if !errors.As(err, &indexErr) || indexErr.Index != 1 ||
+		!errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("err = %v; want IndexError(1, ErrNilNode)", err)
+	}
+	if ran {
+		t.Fatal("a node ran before the typed nil function node was rejected")
+	}
+}
+
 func TestFanOut_clonesNodes(t *testing.T) {
 	nodes := []flow.Node[int, int]{
 		flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in + 1, nil }),
@@ -148,6 +170,27 @@ func TestCombine_validatesBothNodesBeforeRunning(t *testing.T) {
 	}
 }
 
+func TestCombine_rejectsTypedNilFunctionBeforeRunning(t *testing.T) {
+	ran := false
+	node := flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+		ran = true
+		return 0, nil
+	})
+	var invalid flow.NodeFunc[int, string]
+
+	_, err := flowx.Combine(
+		node,
+		invalid,
+		func(context.Context, int, string) (int, error) { return 0, nil },
+	).Run(t.Context(), 0)
+	if !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("err = %v; want ErrNilNode", err)
+	}
+	if ran {
+		t.Fatal("a node ran before the typed nil function node was rejected")
+	}
+}
+
 func TestCombine_propagatesNodeFailure(t *testing.T) {
 	boom := errors.New("boom")
 	failing := flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
@@ -194,5 +237,28 @@ func TestChain_singleNilReturnsError(t *testing.T) {
 	_, err := flowx.Chain[int](nil).Run(t.Context(), 0)
 	if !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("err = %v; want ErrNilNode", err)
+	}
+
+	var invalid flow.NodeFunc[int, int]
+	_, err = flowx.Chain[int](invalid).Run(t.Context(), 0)
+	if !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("typed nil err = %v; want ErrNilNode", err)
+	}
+}
+
+func TestChain_rejectsTypedNilFunctionBeforeRunning(t *testing.T) {
+	ran := false
+	node := flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+		ran = true
+		return 0, nil
+	})
+	var invalid flow.NodeFunc[int, int]
+
+	_, err := flowx.Chain(node, invalid).Run(t.Context(), 0)
+	if !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("err = %v; want ErrNilNode", err)
+	}
+	if ran {
+		t.Fatal("a node ran before the typed nil function node was rejected")
 	}
 }

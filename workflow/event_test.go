@@ -271,6 +271,15 @@ func TestRun_rejectsNilStep(t *testing.T) {
 	if got, _ := workflow.Get[int](out, workflow.Output("start")); got != 1 {
 		t.Fatalf("Run changed its input Store: %d", got)
 	}
+
+	var invalid flow.NodeFunc[workflow.Store, workflow.Store]
+	out, err = workflow.Run(t.Context(), invalid, in, workflow.RunConfig{})
+	if !errors.Is(err, workflow.ErrNilStep) {
+		t.Fatalf("typed nil err = %v; want ErrNilStep", err)
+	}
+	if got, _ := workflow.Get[int](out, workflow.Output("start")); got != 1 {
+		t.Fatalf("typed nil Run changed its input Store: %d", got)
+	}
 }
 
 // Observation and resumption are independent: either alone must work.

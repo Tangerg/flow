@@ -32,6 +32,14 @@ func TestMap_rejectsANilNodeEvenForEmptyInput(t *testing.T) {
 	}
 }
 
+func TestMap_rejectsTypedNilFunctionNodeEvenForEmptyInput(t *testing.T) {
+	var node flow.NodeFunc[int, int]
+	_, err := flow.Map[int, int](node, flow.MapConfig{}).Run(t.Context(), nil)
+	if !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("err = %v; want ErrNilNode", err)
+	}
+}
+
 func TestMap_failFastCancelsSiblings(t *testing.T) {
 	boom := errors.New("boom")
 	var cancelledSeen atomic.Bool

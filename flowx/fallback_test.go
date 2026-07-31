@@ -44,6 +44,41 @@ func TestFallback_rejectsNilNodes(t *testing.T) {
 	}
 }
 
+func TestFallback_rejectsTypedNilFunctionBeforeRunningPrimary(t *testing.T) {
+	ran := false
+	primary := flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+		ran = true
+		return value, nil
+	})
+	var alternate flow.NodeFunc[int, int]
+
+	_, err := flowx.Fallback(primary, alternate).Run(t.Context(), 1)
+	if !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("err = %v; want ErrNilNode", err)
+	}
+	if ran {
+		t.Fatal("primary ran before the typed nil alternate was rejected")
+	}
+}
+
+type nilSafeNode struct{}
+
+func (*nilSafeNode) Run(_ context.Context, value int) (int, error) {
+	return value + 1, nil
+}
+
+func TestFallback_acceptsNilSafePointerNode(t *testing.T) {
+	var primary *nilSafeNode
+	alternate := flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+		return value + 100, nil
+	})
+
+	got, err := flowx.Fallback[int, int](primary, alternate).Run(t.Context(), 1)
+	if err != nil || got != 2 {
+		t.Fatalf("Run = %d, %v; want 2, nil", got, err)
+	}
+}
+
 func TestFallback_prefersParentCancellation(t *testing.T) {
 	boom := errors.New("boom")
 	primary := flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom })

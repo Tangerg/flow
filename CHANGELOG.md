@@ -25,20 +25,20 @@ All notable changes to this project are documented here. The format follows
 - Optional `workflow/diagram` package with deterministic ASCII and Mermaid
   renderings of flat Graph definitions. Rendering escapes Mermaid labels and
   remains separate from Graph validation and execution.
-- `workflow.LeafFunc` and `workflow.StreamLeafFunc`, concise adapters for the
-  common case of lifting an ordinary typed function with one referenced input.
+- `workflow.LeafFunc`, a concise adapter for the common case of lifting an
+  ordinary typed function with one referenced input.
 - `workflow.FirstOf`, a tolerant binder that reads the first available
   reference in declaration order, for mutually exclusive merge paths.
 - `Graph.Concurrency`, which bounds the number of nodes running concurrently
   across a dependency-driven graph; zero retains unbounded execution.
-- First-class streaming output for Go-defined workflow leaves.
-  `StreamNode[I, O, C]` and `StreamNodeFunc` model a typed producer with a
-  synchronous, stoppable yield callback; `StreamLeaf` gives it the same binding,
-  replay, event, suspension, Journal, and final-output lifecycle as `Leaf`.
-  A run-scoped, error-returning `Emitter` receives immutable `Chunk` values with
-  step identity, scope, per-invocation index, and ordering shared with lifecycle
-  events. Completed Journal replay emits nothing; an incomplete rerun may repeat
-  its attempted prefix from index zero.
+- First-class streaming output for Go-defined workflow leaves. `StreamFunc`
+  adapts a typed producer with a stoppable yield callback directly into an
+  ordinary `flow.Node`, so streaming computations compose with `Then`, `Map`,
+  `Race`, and other typed helpers before one `Leaf` supplies their workflow
+  identity. A run-scoped, error-returning `Emitter` receives immutable `Chunk`
+  values with leaf identity, scope, per-invocation index, and ordering shared
+  with lifecycle events. Completed Journal replay emits nothing; an incomplete
+  rerun may repeat its attempted prefix from index zero.
 - `SuspendedOnly` and variadic `JoinSuspensions`, allowing caller-defined
   composites to preserve the package's suspension-as-a-third-outcome semantics
   without depending on internal error types.
@@ -87,7 +87,9 @@ All notable changes to this project are documented here. The format follows
   described by the graph rather than by its own config. A flat `Graph` infers
   dependency order from every wired port, and validation reports unwired declared
   ports (`ErrMissingPort`), wired undeclared ports (`ErrUnknownPort`), and
-  per-port edge type mismatches. `inputs` is accepted by both JSON DSL shapes.
+  per-port edge type mismatches. Every data edge uses this shape; a unary node
+  wires `DefaultPort` (`"in"` in JSON). `Spec.Input` is reserved for an
+  iteration's collection source.
 - `workflow.BindFactory`, the typed factory adapter for a node that reads several
   ports; `workflow.OnePort` for the single-input schema.
 - `Graph.Inputs` and `Graph.MissingInputs` report the external references a
@@ -112,6 +114,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Built-in combinators, workflow composites, and Registry compilation now
+  recognize typed nil function-backed nodes before any sibling, resolver,
+  binder, or factory-built step can perform work. Nil pointer receivers remain
+  valid so caller-defined nodes may intentionally define nil-receiver behavior.
+- An `Emitter` callback no longer inherits the producing leaf's private
+  emission session through its context. Reusing that context with a
+  `StreamFunc` therefore cannot recursively attribute chunks to the leaf or
+  deadlock on its serialized delivery boundary.
+- `workflow.Loop` now preserves Store writes completed in the current iteration
+  when its body or stop condition suspends. Ordinary failures still return the
+  Store from before the failing iteration, so suspension keeps its third-outcome
+  semantics without weakening rollback-on-error.
+- `workflow/expr.Switch` and `SwitchSpec.Refs` now identify the failing case
+  index when an individual condition cannot be parsed.
 - `Journal.UnmarshalJSON` now decodes its versioned wire format from one
   case-sensitive JSON-domain view. It accepts only the canonical `version`,
   `records`, `scope`, `id`, and `value` member names, so alternate casing can
@@ -147,9 +163,10 @@ All notable changes to this project are documented here. The format follows
   Store from leaking output from a now-bypassed branch. Callers that seeded
   values under an internal node ID must move them to an external input ID and
   wire that reference through a port.
-- `Spec.Input`, `Spec.BodyOutput`, and `GraphNode.Input` are now `Ref` values
-  rather than pointers. Callers can write `Input: workflow.Output("source")`
-  directly; a zero `Ref` remains omitted from JSON and means the field is unset.
+- `Spec.Input` and `Spec.BodyOutput` are now `Ref` values rather than pointers.
+  Callers can write `Input: workflow.Output("source")` directly for an
+  iteration; a zero `Ref` remains omitted from JSON and means the field is
+  unset.
 - `RunConfig` now includes an `Emitter`. Callers should continue to construct
   `RunConfig` with keyed fields; unkeyed composite literals must be updated.
 - `Event.Seq` now shares one run-wide ordering with streaming `Chunk` values.
@@ -346,9 +363,9 @@ All notable changes to this project are documented here. The format follows
   universal meaning of an index.
 - Graph nodes can no longer observe an unrelated node merely because a former
   layer barrier happened to run it earlier; wire every Store read through
-  `GraphNode.Input` or `GraphNode.Inputs`, or declare a pure control edge with
-  `DependsOn`. Failure may now return writes from nodes that completed before
-  the error instead of discarding the whole in-flight layer.
+  `GraphNode.Inputs`, or declare a pure control edge with `DependsOn`. Failure
+  may now return writes from nodes that completed before the error instead of
+  discarding the whole in-flight layer.
 - Invalid `expr.SwitchSpec` values and conflicting `expr.Bindings` names now
   match `workflow.ErrInvalidSpec`; registering bindings into a nil Registry
   matches `workflow.ErrInvalidRegistration`. `expr.ErrUnsupported` is reserved

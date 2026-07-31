@@ -85,17 +85,17 @@ func conditionalGraph() workflow.Graph {
 	return workflow.Graph{Nodes: []workflow.GraphNode{
 		{
 			ID: "route", Type: "route",
-			Input: workflow.Output("score"),
+			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("score")},
 		},
 		{
 			ID: "approve", Type: "decision",
-			Input:  workflow.Output("score"),
+			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("score")},
 			Config: json.RawMessage(`{"message":"approved"}`),
 			When:   []workflow.Gate{workflow.When("route", "approve")},
 		},
 		{
 			ID: "review", Type: "decision",
-			Input:  workflow.Output("score"),
+			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("score")},
 			Config: json.RawMessage(`{"message":"review"}`),
 			When:   []workflow.Gate{workflow.When("route", "review")},
 		},
@@ -144,7 +144,7 @@ func Example_conditionalGraph() {
 // execution contract.
 func Example_graphDiagram() {
 	graph := workflow.Graph{Nodes: []workflow.GraphNode{
-		{ID: "route", Type: "route", Input: workflow.Output("score")},
+		{ID: "route", Type: "route", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("score")}},
 		{
 			ID: "approve", Type: "decision",
 			When: []workflow.Gate{workflow.When("route", "approve")},

@@ -48,11 +48,11 @@ func TestDescribe_opaque(t *testing.T) {
 	}
 }
 
-func TestDescribe_streamLeafIsALeafBoundary(t *testing.T) {
-	step := workflow.StreamLeaf(
+func TestDescribe_streamFuncUsesLeafBoundary(t *testing.T) {
+	step := workflow.Leaf(
 		"stream",
 		workflow.From[int](workflow.Output("start")),
-		workflow.StreamNodeFunc[int, int, int](
+		workflow.StreamFunc[int, int, int](
 			func(_ context.Context, input int, _ func(int) bool) (int, error) {
 				return input, nil
 			},

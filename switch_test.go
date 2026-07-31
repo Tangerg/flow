@@ -87,6 +87,31 @@ func TestSwitch_validatesCasesBeforeRunningResolver(t *testing.T) {
 	}
 }
 
+func TestSwitch_rejectsTypedNilFunctionBeforeRunningResolver(t *testing.T) {
+	ran := false
+	resolve := flow.NodeFunc[int, string](func(context.Context, int) (string, error) {
+		ran = true
+		return "ok", nil
+	})
+	var invalid flow.NodeFunc[int, int]
+
+	_, err := flow.Switch(resolve, map[string]flow.Node[int, int]{
+		"ok": invalid,
+	}).Run(t.Context(), 1)
+	if !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("err = %v; want ErrNilNode", err)
+	}
+	if ran {
+		t.Fatal("resolver ran before the typed nil function node was rejected")
+	}
+
+	var nilResolve flow.NodeFunc[int, string]
+	if _, err := flow.Switch(nilResolve, map[string]flow.Node[int, int]{}).
+		Run(t.Context(), 1); !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("typed nil resolver err = %v; want ErrNilNode", err)
+	}
+}
+
 func TestSwitch_composedResolver(t *testing.T) {
 	// The router itself is a composed node: double, then bucket by size.
 	router := flow.Then(

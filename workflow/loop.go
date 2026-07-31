@@ -28,6 +28,10 @@ type LoopConfig struct {
 // that resumes, so a condition that is not a pure function of the Store cannot
 // make a resumed loop stop at a different place than the original.
 //
+// If the body or stop condition suspends, Loop returns the Store produced so far
+// by that iteration. An ordinary failure retains the Store from before the
+// failing iteration, matching [flow.Loop].
+//
 // id names the loop for those records and for [Describe]; it must be unique among
 // steps that can run in the same execution. An empty ID, nil body, or nil
 // condition is rejected before the body runs.
@@ -48,7 +52,7 @@ func (l loopStep) Run(ctx context.Context, s Store) (Store, error) {
 	switch {
 	case l.id == "":
 		return s, &StepError{ID: l.id, Op: OpValidate, Err: ErrInvalidStepID}
-	case l.body == nil:
+	case isNilNode(l.body):
 		return s, &StepError{ID: l.id, Op: OpValidate, Err: ErrNilStep}
 	case l.done == nil:
 		return s, &StepError{ID: l.id, Op: OpValidate, Err: flow.ErrNilFunc}
@@ -70,18 +74,47 @@ func (l loopStep) Run(ctx context.Context, s Store) (Store, error) {
 		return s, &StepError{ID: l.id, Op: OpValidate, Err: err}
 	}
 
-	bodyNode := func(ctx context.Context, iter int, s Store) (Store, bool, error) {
-		body := (scopedStep{step: l.body}).indexed(l.id, iter)
-		next, err := body.run(ctx, s)
-		if err != nil {
-			return s, false, err
-		}
-		stop, err := l.stop(body.childContext(ctx), iter, next)
-		return next, stop, err
+	return l.runIterations(ctx, s)
+}
+
+// runIterations owns workflow-specific loop semantics. In particular, a
+// suspension is a third outcome: writes returned by a waiting body or by the
+// body preceding a waiting condition remain visible to the caller. Ordinary
+// failures retain flow.Loop's rollback-to-the-previous-iteration behavior.
+func (l loopStep) runIterations(ctx context.Context, store Store) (Store, error) {
+	limit := l.config.MaxIterations
+	if limit == 0 {
+		limit = flow.DefaultMaxIterations
 	}
-	return flow.Loop(bodyNode, flow.LoopConfig{
-		MaxIterations: l.config.MaxIterations,
-	}).Run(ctx, s)
+
+	current := store
+	for iteration := range limit {
+		if err := ctx.Err(); err != nil {
+			return current, err
+		}
+
+		body := (scopedStep{step: l.body}).indexed(l.id, iteration)
+		next, err := body.run(ctx, current)
+		if err != nil {
+			if SuspendedOnly(err) {
+				return next, err
+			}
+			return current, err
+		}
+
+		stop, err := l.stop(body.childContext(ctx), iteration, next)
+		if err != nil {
+			if SuspendedOnly(err) {
+				return next, err
+			}
+			return current, err
+		}
+		current = next
+		if stop {
+			return current, nil
+		}
+	}
+	return current, fmt.Errorf("%w: limit %d", flow.ErrMaxIterations, limit)
 }
 
 // stop returns whether the loop ends after this iteration, reusing the recorded

@@ -37,7 +37,6 @@
         "kind": { "const": "leaf" },
         "id": { "type": "string", "minLength": 1 },
         "type": { "type": "string", "minLength": 1 },
-        "input": { "$ref": "#/$defs/ref" },
         "inputs": { "$ref": "#/$defs/inputs" },
         "config": {}
       },

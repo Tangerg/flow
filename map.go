@@ -38,7 +38,7 @@ type mapNode[I, O any] struct {
 }
 
 func (m mapNode[I, O]) Run(ctx context.Context, input []I) ([]O, error) {
-	if m.node == nil {
+	if isNilNode(m.node) {
 		return nil, ErrNilNode
 	}
 	if m.limit < 0 {

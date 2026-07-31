@@ -6,19 +6,17 @@ import (
 )
 
 // GraphNode describes one node in a flat [Graph]: a leaf built by the registry
-// plus the edges into it. Dependencies are inferred from every wired input port
-// that points at another graph node, and from DependsOn. An input may reference
-// an external seed Store value; every explicit DependsOn entry must name a graph
-// node.
+// plus the edges into it. Inputs wires every data edge by port name. Dependencies
+// are inferred from ports that point at another graph node and from DependsOn.
+// An input may reference an external seed Store value; every explicit DependsOn
+// entry must name a graph node.
 //
-// Input wires [DefaultPort] and is sugar for the common single-input node; its
-// zero value means absent. Inputs wires ports by name. Setting the default port
-// both ways is rejected as [ErrDuplicatePort]. When gates execution on routing
-// outputs; its zero Trigger requires every gate, while [TriggerAny] requires one.
+// A single-input node uses [DefaultPort] like every other named port. When gates
+// execution on routing outputs; its zero Trigger requires every gate, while
+// [TriggerAny] requires one.
 type GraphNode struct {
 	ID        string          `json:"id"`
 	Type      string          `json:"type"`
-	Input     Ref             `json:"input,omitzero"`
 	Inputs    Inputs          `json:"inputs,omitempty"`
 	Config    json.RawMessage `json:"config,omitempty"`
 	DependsOn []string        `json:"dependsOn,omitempty"`
@@ -68,11 +66,7 @@ func (g Graph) Inputs() []Ref {
 
 	externalRefs := make([]Ref, 0, len(g.Nodes))
 	for _, node := range g.Nodes {
-		inputs, err := node.Inputs.withDefault(node.Input)
-		if err != nil {
-			continue
-		}
-		for _, ref := range inputs.Refs() {
+		for _, ref := range node.Inputs.Refs() {
 			if _, internal := internalNodeIDs[ref.NodeID]; internal {
 				continue
 			}

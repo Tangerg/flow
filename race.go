@@ -50,7 +50,7 @@ func (r raceNode[I, O]) validate() error {
 		return ErrNoNodes
 	}
 	for index, node := range r.nodes {
-		if node == nil {
+		if isNilNode(node) {
 			return &IndexError{Index: index, Err: ErrNilNode}
 		}
 	}

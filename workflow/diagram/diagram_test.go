@@ -10,9 +10,9 @@ import (
 func testGraph() workflow.Graph {
 	return workflow.Graph{Nodes: []workflow.GraphNode{
 		{
-			ID:    "route",
-			Type:  "switch",
-			Input: workflow.Output("start"),
+			ID:     "route",
+			Type:   "switch",
+			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 		},
 		{
 			ID:   "approve",

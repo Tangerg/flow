@@ -59,6 +59,17 @@ func TestLoop_nilBody(t *testing.T) {
 	if !errors.Is(err, workflow.ErrNilStep) {
 		t.Fatalf("error = %v; want ErrNilStep", err)
 	}
+
+	var body flow.NodeFunc[workflow.Store, workflow.Store]
+	_, err = workflow.Loop(
+		"loop",
+		body,
+		func(context.Context, int, workflow.Store) (bool, error) { return true, nil },
+		workflow.LoopConfig{},
+	).Run(t.Context(), workflow.NewStore())
+	if !errors.Is(err, workflow.ErrNilStep) {
+		t.Fatalf("typed nil error = %v; want ErrNilStep", err)
+	}
 }
 
 func TestLoop_maxIterations(t *testing.T) {
@@ -88,6 +99,31 @@ func TestLoop_rejectsNegativeMaxIterations(t *testing.T) {
 	}
 }
 
+func TestLoop_honorsCancellationBeforeAnIteration(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	ran := false
+	body := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+			ran = true
+			return store, nil
+		},
+	)
+
+	_, err := workflow.Loop(
+		"loop",
+		body,
+		func(context.Context, int, workflow.Store) (bool, error) { return true, nil },
+		workflow.LoopConfig{},
+	).Run(ctx, workflow.NewStore())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v; want context.Canceled", err)
+	}
+	if ran {
+		t.Fatal("body ran under an already canceled context")
+	}
+}
+
 func TestLoop_conditionError(t *testing.T) {
 	boom := errors.New("condition failed")
 	body := workflow.Leaf("x",
@@ -99,6 +135,101 @@ func TestLoop_conditionError(t *testing.T) {
 	_, err := workflow.Loop("loop", body, done, workflow.LoopConfig{}).Run(t.Context(), workflow.NewStore())
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v; want condition error", err)
+	}
+}
+
+func TestLoop_suspensionPreservesCompletedIterationWrites(t *testing.T) {
+	write := workflow.Leaf(
+		"write",
+		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+		flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+			return value, nil
+		}),
+	)
+
+	t.Run("body", func(t *testing.T) {
+		body := workflow.Parallel(
+			[]workflow.Step{
+				write,
+				workflow.Await("wait", workflow.Output("missing")),
+			},
+			workflow.ParallelConfig{},
+		)
+		output, err := workflow.Loop(
+			"loop",
+			body,
+			func(context.Context, int, workflow.Store) (bool, error) {
+				t.Fatal("condition ran while the body was suspended")
+				return false, nil
+			},
+			workflow.LoopConfig{},
+		).Run(t.Context(), workflow.NewStore())
+		if !workflow.SuspendedOnly(err) {
+			t.Fatalf("err = %v; want suspension", err)
+		}
+		if value, getErr := workflow.Get[int](output, workflow.Output("write")); getErr != nil ||
+			value != 1 {
+			t.Fatalf("write = %d, %v; want 1, nil", value, getErr)
+		}
+	})
+
+	t.Run("condition", func(t *testing.T) {
+		output, err := workflow.Loop(
+			"loop",
+			write,
+			func(context.Context, int, workflow.Store) (bool, error) {
+				return false, workflow.Suspend("waiting to decide")
+			},
+			workflow.LoopConfig{},
+		).Run(t.Context(), workflow.NewStore())
+		if !workflow.SuspendedOnly(err) {
+			t.Fatalf("err = %v; want suspension", err)
+		}
+		if value, getErr := workflow.Get[int](output, workflow.Output("write")); getErr != nil ||
+			value != 1 {
+			t.Fatalf("write = %d, %v; want 1, nil", value, getErr)
+		}
+	})
+}
+
+func TestLoop_failureRollsBackTheFailingIteration(t *testing.T) {
+	boom := errors.New("boom")
+	body := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+			return store.WithOutput("partial", 1), boom
+		},
+	)
+	output, err := workflow.Loop(
+		"loop",
+		body,
+		func(context.Context, int, workflow.Store) (bool, error) { return true, nil },
+		workflow.LoopConfig{},
+	).Run(t.Context(), workflow.NewStore())
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v; want boom", err)
+	}
+	if _, ok := output.Lookup(workflow.Output("partial")); ok {
+		t.Fatal("ordinary body failure leaked the failing iteration's Store")
+	}
+
+	body = flow.NodeFunc[workflow.Store, workflow.Store](
+		func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+			return store.WithOutput("complete", 1), nil
+		},
+	)
+	output, err = workflow.Loop(
+		"loop",
+		body,
+		func(context.Context, int, workflow.Store) (bool, error) {
+			return false, boom
+		},
+		workflow.LoopConfig{},
+	).Run(t.Context(), workflow.NewStore())
+	if !errors.Is(err, boom) {
+		t.Fatalf("condition err = %v; want boom", err)
+	}
+	if _, ok := output.Lookup(workflow.Output("complete")); ok {
+		t.Fatal("ordinary condition failure leaked the failing iteration's Store")
 	}
 }
 

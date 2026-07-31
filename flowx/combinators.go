@@ -2,6 +2,7 @@ package flowx
 
 import (
 	"context"
+	"reflect"
 	"slices"
 
 	"github.com/Tangerg/flow"
@@ -15,7 +16,7 @@ func FanOut[I, O any](nodes []flow.Node[I, O], cfg flow.MapConfig) flow.Node[I, 
 	nodes = slices.Clone(nodes)
 	return flow.NodeFunc[I, []O](func(ctx context.Context, in I) ([]O, error) {
 		for i, n := range nodes {
-			if n == nil {
+			if isNilNode(n) {
 				return nil, &flow.IndexError{Index: i, Err: flow.ErrNilNode}
 			}
 		}
@@ -36,7 +37,7 @@ func Combine[I, A, B, O any](a flow.Node[I, A], b flow.Node[I, B], merge func(ct
 		if merge == nil {
 			return zero, flow.ErrNilFunc
 		}
-		if a == nil || b == nil {
+		if isNilNode(a) || isNilNode(b) {
 			return zero, flow.ErrNilNode
 		}
 		var av A
@@ -66,7 +67,7 @@ func Chain[T any](nodes ...flow.Node[T, T]) flow.Node[T, T] {
 	case 0:
 		return flow.NodeFunc[T, T](func(_ context.Context, in T) (T, error) { return in, nil })
 	case 1:
-		if nodes[0] == nil {
+		if isNilNode(nodes[0]) {
 			return flow.NodeFunc[T, T](nil)
 		}
 		return nodes[0]
@@ -84,7 +85,7 @@ func Chain[T any](nodes ...flow.Node[T, T]) flow.Node[T, T] {
 func Fallback[I, O any](primary, alternate flow.Node[I, O]) flow.Node[I, O] {
 	return flow.NodeFunc[I, O](func(ctx context.Context, in I) (O, error) {
 		var out O
-		if primary == nil || alternate == nil {
+		if isNilNode(primary) || isNilNode(alternate) {
 			return out, flow.ErrNilNode
 		}
 		out, err := primary.Run(ctx, in)
@@ -96,4 +97,15 @@ func Fallback[I, O any](primary, alternate flow.Node[I, O]) flow.Node[I, O] {
 		}
 		return alternate.Run(ctx, in)
 	})
+}
+
+// isNilNode mirrors the core's definition validation without exporting a
+// helper solely for derived combinators. Nil function adapters are invalid;
+// caller-defined nil pointers may still implement a useful nil-safe Run.
+func isNilNode[I, O any](node flow.Node[I, O]) bool {
+	if node == nil {
+		return true
+	}
+	value := reflect.ValueOf(node)
+	return value.Kind() == reflect.Func && value.IsNil()
 }

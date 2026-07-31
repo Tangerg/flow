@@ -170,13 +170,12 @@ after a Store has been serialized and restored.
 
 ## Streaming output
 
-Use `StreamLeafFunc` when a named step has a final result but also produces
-incremental values such as model tokens, progress updates, or rows:
+Use `StreamFunc` when a node has a final result but also produces incremental
+values such as model tokens, progress updates, or rows. It still implements
+`flow.Node`, so it can be composed before being lifted into one named `Leaf`:
 
 ```go
-generate := workflow.StreamLeafFunc(
-	"generate",
-	workflow.Output("prompt"),
+generate := workflow.StreamFunc[string, string, string](
 	func(ctx context.Context, prompt string, yield func(string) bool) (string, error) {
 		var answer strings.Builder
 		for _, token := range []string{"hello", ", ", prompt} {
@@ -189,7 +188,13 @@ generate := workflow.StreamLeafFunc(
 	},
 )
 
-out, err := workflow.Run(ctx, generate, in, workflow.RunConfig{
+step := workflow.Leaf(
+	"generate",
+	workflow.From[string](workflow.Output("prompt")),
+	generate,
+)
+
+out, err := workflow.Run(ctx, step, in, workflow.RunConfig{
 	Emitter: workflow.EmitterFunc(func(ctx context.Context, chunk workflow.Chunk) error {
 		return send(ctx, chunk.Value)
 	}),
@@ -199,8 +204,8 @@ out, err := workflow.Run(ctx, generate, in, workflow.RunConfig{
 `Emitter` is a synchronous, error-returning output boundary. A slow emitter
 applies backpressure; an ordinary emitter error cancels the stream and fails its
 leaf. `yield` returns `false` after cancellation or an emitter error, and
-producers must stop promptly. Different leaves may emit concurrently, so an
-emitter must be concurrency-safe.
+producers must stop promptly. Calls are serialized for one leaf, but different
+leaves may emit concurrently, so an emitter must be concurrency-safe.
 
 Chunks carry the leaf ID, repeated-scope, a zero-based per-invocation
 index, and a run-wide sequence shared with lifecycle events. They are attempt
@@ -233,7 +238,9 @@ configuration schemas, missing or unknown ports, edge types, duplicate IDs,
 cycles, and routing outlets before any node runs. Independent nodes execute in
 dependency order: a node starts as soon as all of its dependencies complete,
 without waiting for unrelated branches. `Graph.Concurrency` bounds the whole
-graph; zero means unbounded.
+graph; zero means unbounded. Every data edge uses `Inputs`; a unary node wires
+the conventional `DefaultPort` (`"in"` in JSON) rather than a separate input
+shape.
 
 ```go
 if err := workflow.ValidateGraphJSON(data); err != nil {

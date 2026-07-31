@@ -17,7 +17,7 @@ type thenNode[I, M, O any] struct {
 }
 
 func (t thenNode[I, M, O]) Run(ctx context.Context, in I) (O, error) {
-	if t.first == nil || t.second == nil {
+	if isNilNode(t.first) || isNilNode(t.second) {
 		var zero O
 		return zero, ErrNilNode
 	}

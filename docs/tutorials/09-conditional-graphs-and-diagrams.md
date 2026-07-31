@@ -34,18 +34,18 @@ ordinary output, so the same decision remains available after resumption.
 graph := workflow.Graph{Nodes: []workflow.GraphNode{
 	{
 		ID: "route", Type: "route",
-		Input: workflow.Output("score"),
+		Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("score")},
 	},
 	{
 		ID: "approve", Type: "decision",
-		Input: workflow.Output("score"),
+		Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("score")},
 		When: []workflow.Gate{
 			workflow.When("route", "approve"),
 		},
 	},
 	{
 		ID: "review", Type: "decision",
-		Input: workflow.Output("score"),
+		Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("score")},
 		When: []workflow.Gate{
 			workflow.When("route", "review"),
 		},
@@ -63,7 +63,7 @@ The same definition travels in JSON without a separate edge format:
 {
   "id": "approve",
   "type": "decision",
-  "input": {"nodeID": "score", "path": "/output"},
+  "inputs": {"in": {"nodeID": "score", "path": "/output"}},
   "when": [{"nodeID": "route", "outlet": "approve"}]
 }
 ```

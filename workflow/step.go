@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"reflect"
 	"strconv"
 
 	"github.com/Tangerg/flow"
@@ -63,11 +64,22 @@ type stepList []Step
 
 func (s stepList) validate() error {
 	for index, step := range s {
-		if step == nil {
+		if isNilNode(step) {
 			return &flow.IndexError{Index: index, Err: ErrNilStep}
 		}
 	}
 	return nil
+}
+
+// isNilNode recognizes nil function-backed Nodes hidden in an interface.
+// Function adapters cannot run without a function; nil pointers remain valid
+// because a caller-defined pointer receiver may intentionally handle nil.
+func isNilNode[I, O any](node flow.Node[I, O]) bool {
+	if node == nil {
+		return true
+	}
+	value := reflect.ValueOf(node)
+	return value.Kind() == reflect.Func && value.IsNil()
 }
 
 func (s stepList) run(ctx context.Context, store Store) (Store, error) {

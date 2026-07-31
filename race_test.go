@@ -140,3 +140,24 @@ func TestRace_rejectsNilBeforeRunningAnyNode(t *testing.T) {
 		t.Fatal("valid sibling ran before the invalid composition was rejected")
 	}
 }
+
+func TestRace_rejectsTypedNilFunctionBeforeRunningAnyNode(t *testing.T) {
+	var ran atomic.Bool
+	ok := flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+		ran.Store(true)
+		return value, nil
+	})
+	var invalid flow.NodeFunc[int, int]
+
+	_, err := flow.Race[int, int](invalid, ok).Run(t.Context(), 7)
+	if !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("err = %v; want ErrNilNode", err)
+	}
+	var indexErr *flow.IndexError
+	if !errors.As(err, &indexErr) || indexErr.Index != 0 {
+		t.Fatalf("err = %v; want IndexError at index 0", err)
+	}
+	if ran.Load() {
+		t.Fatal("valid sibling ran before the typed nil function node was rejected")
+	}
+}

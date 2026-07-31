@@ -115,7 +115,7 @@ The nested DSL exposes the same boundary:
     "kind": "leaf",
     "id": "double",
     "type": "double",
-    "input": {"nodeID": "value", "path": "/output"}
+    "inputs": {"in": {"nodeID": "value", "path": "/output"}}
   },
   "bodyOutput": {"nodeID": "double", "path": "/output"}
 }

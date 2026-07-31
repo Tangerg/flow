@@ -33,8 +33,10 @@ import (
 // append-only until Forget or Reset: every duplicate completion reports
 // [ErrJournalConflict]. Each [Run] replays only records that existed when that
 // run began, so a duplicate identity created during a run cannot masquerade as
-// historical work. The zero Journal is empty and ready to use. A Journal must
-// not be copied after first use.
+// historical work. Call Forget and Reset only between runs; although synchronized
+// against concurrent access, they intentionally remove replay history. The zero
+// Journal is empty and ready to use. A Journal must not be copied after first
+// use.
 type Journal struct {
 	mu       sync.RWMutex
 	root     journalNode
@@ -44,8 +46,8 @@ type Journal struct {
 
 // JournalKey identifies one recorded execution of a step. ID is the step ID;
 // Scope contains the enclosing repeated scopes, outermost first, and may contain
-// most [MaxNestingDepth] segments. Construct JournalKey values with keyed fields
-// so the type can grow without breaking callers.
+// at most [MaxNestingDepth] segments. Construct JournalKey values with keyed
+// fields so the type can grow without breaking callers.
 type JournalKey struct {
 	ID    string   `json:"id"`
 	Scope []string `json:"scope,omitempty"`
@@ -225,7 +227,8 @@ func (j *journalNode) appendKeys(scope []string, keys *[]JournalKey) {
 	}
 }
 
-// Reset removes every record, so the next run starts from the beginning.
+// Reset removes every record, so the next run starts from the beginning. Call it
+// between runs, not while a Run is using the Journal.
 func (j *Journal) Reset() {
 	if j == nil {
 		return
@@ -237,7 +240,8 @@ func (j *Journal) Reset() {
 	j.revision++
 }
 
-// Forget removes one recorded step, so the next run repeats it.
+// Forget removes one recorded step, so the next run repeats it. Call it between
+// runs, not while a Run is using the Journal.
 func (j *Journal) Forget(key JournalKey) {
 	if j == nil || key.validate() != nil {
 		return

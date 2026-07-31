@@ -97,25 +97,20 @@ func (l leafCompiler) compile(spec Spec) (Step, string, error) {
 	if !ok {
 		return nil, "type", fmt.Errorf("%w %q", ErrUnknownNodeType, spec.Type)
 	}
-	inputs, err := spec.Inputs.withDefault(spec.Input)
-	if err != nil {
-		return nil, "inputs", err
-	}
 	step, err := factory(NodeSpec{
 		ID:     spec.ID,
-		Inputs: inputs,
+		Inputs: maps.Clone(spec.Inputs),
 		Config: bytes.Clone(spec.Config),
 	})
 	if err != nil {
 		field := "config"
 		if errors.Is(err, ErrMissingPort) ||
-			errors.Is(err, ErrUnknownPort) ||
-			errors.Is(err, ErrDuplicatePort) {
+			errors.Is(err, ErrUnknownPort) {
 			field = "inputs"
 		}
 		return nil, field, err
 	}
-	if step == nil {
+	if isNilNode(step) {
 		return nil, "type", ErrNilStep
 	}
 	return step, "", nil

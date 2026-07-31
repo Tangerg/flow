@@ -129,15 +129,15 @@ domain type aligned; they are two views of the same boundary.
 ```go
 graph := workflow.Graph{Concurrency: 2, Nodes: []workflow.GraphNode{
 	{
-		ID:    "twice",
-		Type:  "multiply",
-		Input: workflow.Output("start"),
+		ID:     "twice",
+		Type:   "multiply",
+		Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 		Config: json.RawMessage(`{"value":2}`),
 	},
 	{
-		ID:    "plusTen",
-		Type:  "add",
-		Input: workflow.Output("start"),
+		ID:     "plusTen",
+		Type:   "add",
+		Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 		Config: json.RawMessage(`{"value":10}`),
 	},
 	{

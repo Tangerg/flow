@@ -44,7 +44,7 @@ func (b branchStep) Run(ctx context.Context, s Store) (Store, error) {
 		return s, &StepError{ID: b.id, Op: OpValidate, Err: flow.ErrNilFunc}
 	}
 	for _, name := range slices.Sorted(maps.Keys(b.cases)) {
-		if b.cases[name] == nil {
+		if isNilNode(b.cases[name]) {
 			return s, &StepError{
 				ID:  b.id,
 				Op:  OpValidate,

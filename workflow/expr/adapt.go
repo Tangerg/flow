@@ -93,7 +93,7 @@ func Switch(spec SwitchSpec) (workflow.Resolver, error) {
 		}
 		when, err := Parse(specCase.When)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("switch case %d: %w", index, err)
 		}
 		cases = append(cases, compiledCase{when: when, then: specCase.Then})
 	}
@@ -120,10 +120,10 @@ func Switch(spec SwitchSpec) (workflow.Resolver, error) {
 // sorted. It reports a parse error in any case.
 func (s SwitchSpec) Refs() ([]workflow.Ref, error) {
 	var refs []workflow.Ref
-	for _, c := range s.Cases {
+	for index, c := range s.Cases {
 		e, err := Parse(c.When)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("switch case %d: %w", index, err)
 		}
 		refs = append(refs, e.Refs()...)
 	}

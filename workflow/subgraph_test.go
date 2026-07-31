@@ -162,6 +162,7 @@ func TestSubgraph_validatesBoundaryBeforeRunningBody(t *testing.T) {
 			return 1, nil
 		}),
 	)
+	var nilBody flow.NodeFunc[workflow.Store, workflow.Store]
 	tests := map[string]struct {
 		step workflow.Step
 		want error
@@ -175,6 +176,12 @@ func TestSubgraph_validatesBoundaryBeforeRunningBody(t *testing.T) {
 		"nil body": {
 			step: workflow.Subgraph(workflow.SubgraphConfig{
 				ID: "sub", BodyOutput: workflow.Output("body"),
+			}),
+			want: workflow.ErrNilStep,
+		},
+		"typed nil body": {
+			step: workflow.Subgraph(workflow.SubgraphConfig{
+				ID: "sub", Body: nilBody, BodyOutput: workflow.Output("body"),
 			}),
 			want: workflow.ErrNilStep,
 		},
@@ -322,6 +329,12 @@ func TestSubgraphFactory_rejectsConfigAndInvalidBoundary(t *testing.T) {
 		workflow.NodeSpec{ID: "sub"},
 	); !errors.Is(err, workflow.ErrNilStep) {
 		t.Fatalf("nil body error = %v; want ErrNilStep", err)
+	}
+	var nilBody flow.NodeFunc[workflow.Store, workflow.Store]
+	if _, err := workflow.SubgraphFactory(nilBody, workflow.Output("value"))(
+		workflow.NodeSpec{ID: "sub"},
+	); !errors.Is(err, workflow.ErrNilStep) {
+		t.Fatalf("typed nil body error = %v; want ErrNilStep", err)
 	}
 }
 
@@ -471,7 +484,7 @@ func TestCompileSpecJSON_subgraph(t *testing.T) {
 			"kind": "leaf",
 			"id": "double",
 			"type": "double",
-			"input": {"nodeID": "value", "path": "/output"}
+			"inputs": {"in": {"nodeID": "value", "path": "/output"}}
 		},
 		"bodyOutput": {"nodeID": "double", "path": "/output"}
 	}`)

@@ -137,10 +137,9 @@ func TestSpecCompiler_defendsItsValidatedInputContract(t *testing.T) {
 		"unknown leaf": {
 			Kind: KindLeaf, ID: "leaf", Type: "missing",
 		},
-		"duplicate default input": {
+		"leaf input field": {
 			Kind: KindLeaf, ID: "leaf", Type: "broken",
-			Input:  Output("a"),
-			Inputs: Inputs{DefaultPort: Output("b")},
+			Input: Output("a"),
 		},
 		"unknown resolver": {
 			Kind: KindBranch, ID: "branch", Resolver: "missing",

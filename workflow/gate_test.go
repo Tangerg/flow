@@ -54,13 +54,13 @@ func TestCompileGraph_routesAndRemovesStaleBranchOutputs(t *testing.T) {
 		}))
 
 	graph := workflow.Graph{Nodes: []workflow.GraphNode{
-		{ID: "route", Type: "route", Input: workflow.Output("start")},
+		{ID: "route", Type: "route", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
 		{
-			ID: "yes", Type: "yes", Input: workflow.Output("start"),
+			ID: "yes", Type: "yes", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 			When: []workflow.Gate{workflow.When("route", "yes")},
 		},
 		{
-			ID: "no", Type: "no", Input: workflow.Output("start"),
+			ID: "no", Type: "no", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 			When: []workflow.Gate{workflow.When("route", "no")},
 		},
 	}}
@@ -131,13 +131,13 @@ func TestCompileGraph_triggerAnyAndFirstOfMerge(t *testing.T) {
 			), nil
 		})
 	graph := workflow.Graph{Nodes: []workflow.GraphNode{
-		{ID: "route", Type: "route", Input: workflow.Output("start")},
+		{ID: "route", Type: "route", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
 		{
-			ID: "left", Type: "copy", Input: workflow.Output("start"),
+			ID: "left", Type: "copy", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 			When: []workflow.Gate{workflow.When("route", "left")},
 		},
 		{
-			ID: "right", Type: "copy", Input: workflow.Output("start"),
+			ID: "right", Type: "copy", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 			When: []workflow.Gate{workflow.When("route", "right")},
 		},
 		{
@@ -182,13 +182,13 @@ func TestCompileGraph_recomputesGatesAfterJournalReplay(t *testing.T) {
 		})).
 		MustRegisterNode("reject", addN())
 	graph := workflow.Graph{Nodes: []workflow.GraphNode{
-		{ID: "route", Type: "route", Input: workflow.Output("start")},
+		{ID: "route", Type: "route", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
 		{
-			ID: "wait", Type: "wait", Input: workflow.Output("start"),
+			ID: "wait", Type: "wait", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 			When: []workflow.Gate{workflow.When("route", "approve")},
 		},
 		{
-			ID: "reject", Type: "reject", Input: workflow.Output("start"),
+			ID: "reject", Type: "reject", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 			When: []workflow.Gate{workflow.When("route", "reject")},
 		},
 	}}
@@ -255,9 +255,9 @@ func TestCompileGraph_suspendedRouterStopsBeforeGateEvaluation(t *testing.T) {
 			},
 		))
 	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
-		{ID: "route", Type: "route", Input: workflow.Output("start")},
+		{ID: "route", Type: "route", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
 		{
-			ID: "target", Type: "target", Input: workflow.Output("start"),
+			ID: "target", Type: "target", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 			When: []workflow.Gate{workflow.When("route", "yes")},
 		},
 	}})
@@ -295,14 +295,14 @@ func TestCompileGraph_doesNotInferBypassFromMissingInput(t *testing.T) {
 		MustRegisterSchema("route", routingSchema("yes", "no")).
 		MustRegisterNode("copy", addN())
 	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
-		{ID: "route", Type: "route", Input: workflow.Output("start")},
+		{ID: "route", Type: "route", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
 		{
-			ID: "selected-only", Type: "copy", Input: workflow.Output("start"),
+			ID: "selected-only", Type: "copy", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 			When: []workflow.Gate{workflow.When("route", "yes")},
 		},
 		{
 			ID: "ungated", Type: "copy",
-			Input: workflow.Output("selected-only"),
+			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("selected-only")},
 		},
 	}})
 	if err != nil {
@@ -327,13 +327,13 @@ func TestCompileGraph_propagatesBypassThroughConditionalRegions(t *testing.T) {
 		MustRegisterSchema("nested-route", routingSchema("next")).
 		MustRegisterNode("target", addN())
 	graph := workflow.Graph{Nodes: []workflow.GraphNode{
-		{ID: "route", Type: "route", Input: workflow.Output("start")},
+		{ID: "route", Type: "route", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
 		{
-			ID: "nested", Type: "nested-route", Input: workflow.Output("start"),
+			ID: "nested", Type: "nested-route", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 			When: []workflow.Gate{workflow.When("route", "yes")},
 		},
 		{
-			ID: "target", Type: "target", Input: workflow.Output("start"),
+			ID: "target", Type: "target", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 			When: []workflow.Gate{workflow.When("nested", "next")},
 		},
 	}}
@@ -384,9 +384,9 @@ func TestCompileGraph_gatedStepPreservesDuplicateIDValidation(t *testing.T) {
 			), nil
 		})
 	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
-		{ID: "route", Type: "route", Input: workflow.Output("start")},
+		{ID: "route", Type: "route", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
 		{
-			ID: "target", Type: "target", Input: workflow.Output("start"),
+			ID: "target", Type: "target", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 			When: []workflow.Gate{workflow.When("route", "yes")},
 		},
 	}})
@@ -429,9 +429,9 @@ func TestCompileGraph_rejectsRuntimeRoutingContractViolations(t *testing.T) {
 				MustRegisterSchema("route", routingSchema("yes")).
 				MustRegisterNode("target", addN())
 			graph := workflow.Graph{Nodes: []workflow.GraphNode{
-				{ID: "route", Type: "route", Input: workflow.Output("start")},
+				{ID: "route", Type: "route", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
 				{
-					ID: "target", Type: "target", Input: workflow.Output("start"),
+					ID: "target", Type: "target", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 					When: []workflow.Gate{workflow.When("route", "yes")},
 				},
 			}}
@@ -477,10 +477,10 @@ func TestCompileGraph_validatesEveryGateBeforeApplyingTrigger(t *testing.T) {
 		MustRegisterSchema("bad-route", routingSchema("no")).
 		MustRegisterNode("target", addN())
 	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
-		{ID: "good", Type: "good-route", Input: workflow.Output("start")},
-		{ID: "bad", Type: "bad-route", Input: workflow.Output("start")},
+		{ID: "good", Type: "good-route", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
+		{ID: "bad", Type: "bad-route", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
 		{
-			ID: "target", Type: "target", Input: workflow.Output("start"),
+			ID: "target", Type: "target", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 			When: []workflow.Gate{
 				workflow.When("good", "yes"),
 				workflow.When("bad", "no"),
@@ -584,7 +584,7 @@ func TestValidateGraph_rejectsInvalidGates(t *testing.T) {
 		},
 		"conditional cycle": {
 			graph: workflow.Graph{Nodes: []workflow.GraphNode{
-				{ID: "route", Type: "route", Input: workflow.Output("a")},
+				{ID: "route", Type: "route", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("a")}},
 				{
 					ID: "a", Type: "target",
 					When: []workflow.Gate{workflow.When("route", "yes")},
@@ -685,11 +685,11 @@ func TestNodeSchema_clonesOutlets(t *testing.T) {
 func TestGraphConditionalJSON(t *testing.T) {
 	data := []byte(`{
 	  "nodes": [
-	    {"id":"route","type":"route","input":{"nodeID":"start","path":"/output"}},
+	    {"id":"route","type":"route","inputs":{"in":{"nodeID":"start","path":"/output"}}},
 	    {
 	      "id":"target",
 	      "type":"target",
-	      "input":{"nodeID":"start","path":"/output"},
+	      "inputs":{"in":{"nodeID":"start","path":"/output"}},
 	      "when":[{"nodeID":"route","outlet":"yes"}],
 	      "trigger":"any"
 	    }

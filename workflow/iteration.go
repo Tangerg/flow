@@ -107,7 +107,7 @@ func (i iterationStep) validate() error {
 	switch {
 	case i.id == "":
 		return &StepError{ID: i.id, Op: OpValidate, Err: ErrInvalidStepID}
-	case i.body == nil:
+	case isNilNode(i.body):
 		return &StepError{ID: i.id, Op: OpValidate, Err: ErrNilStep}
 	case i.limit < 0:
 		return &StepError{

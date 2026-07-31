@@ -7,8 +7,8 @@ import (
 	"slices"
 )
 
-// DefaultPort is the port name of a node's single unnamed input. The [Spec] and
-// [GraphNode] "input" field is sugar for wiring this port, and [Factory] binds it.
+// DefaultPort is the conventional name of a node's single input. [Factory]
+// binds this port.
 const DefaultPort = "in"
 
 // Inputs maps a node's input port names to the [Ref] each port reads. A node
@@ -40,22 +40,6 @@ func (i Inputs) Refs() []Ref {
 		refs = append(refs, i[port])
 	}
 	return refs
-}
-
-// withDefault merges the single-input "input" sugar into the receiver. It
-// reports an error when both spell out the default port, since the intent is
-// then ambiguous. The receiver is never mutated.
-func (i Inputs) withDefault(input Ref) (Inputs, error) {
-	if input == (Ref{}) {
-		return maps.Clone(i), nil
-	}
-	if _, duplicate := i[DefaultPort]; duplicate {
-		return nil, fmt.Errorf("%w: %q is set by both input and inputs", ErrDuplicatePort, DefaultPort)
-	}
-	resolved := make(Inputs, len(i)+1)
-	maps.Copy(resolved, i)
-	resolved[DefaultPort] = input
-	return resolved, nil
 }
 
 // validate checks that every port name and wired reference is well formed.

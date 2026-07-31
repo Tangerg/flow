@@ -12,7 +12,6 @@ func (g Graph) plan() (graphPlan, error) {
 		graph: g,
 		plan: graphPlan{
 			nodesByID:             make(map[string]GraphNode, len(g.Nodes)),
-			inputsByNode:          make(map[string]Inputs, len(g.Nodes)),
 			dependencyCounts:      make([]int, len(g.Nodes)),
 			dependencyNodeIndexes: make([][]int, len(g.Nodes)),
 			dependentNodeIndexes:  make([][]int, len(g.Nodes)),
@@ -26,7 +25,6 @@ func (g Graph) plan() (graphPlan, error) {
 // remains on graphPlanner and cannot leak into validation or compilation.
 type graphPlan struct {
 	nodesByID             map[string]GraphNode
-	inputsByNode          map[string]Inputs
 	dependencyCounts      []int
 	dependencyNodeIndexes [][]int
 	dependentNodeIndexes  [][]int
@@ -83,11 +81,7 @@ func (g *graphPlanner) indexNodes() error {
 		if _, duplicate := g.plan.nodesByID[node.ID]; duplicate {
 			return &GraphError{NodeID: node.ID, Field: "id", Err: ErrDuplicateNode}
 		}
-		inputs, err := node.Inputs.withDefault(node.Input)
-		if err != nil {
-			return &GraphError{NodeID: node.ID, Field: "inputs", Err: err}
-		}
-		if err := inputs.validate(); err != nil {
+		if err := node.Inputs.validate(); err != nil {
 			return &GraphError{
 				NodeID: node.ID,
 				Field:  "inputs",
@@ -97,7 +91,6 @@ func (g *graphPlanner) indexNodes() error {
 		if err := g.validateGates(node); err != nil {
 			return err
 		}
-		g.plan.inputsByNode[node.ID] = inputs
 		g.plan.nodesByID[node.ID] = node
 		g.indexByID[node.ID] = index
 	}
@@ -185,7 +178,7 @@ func (*graphPlanner) validateGates(node GraphNode) error {
 func (g *graphPlanner) connectNodes() error {
 	for nodeIndex, node := range g.graph.Nodes {
 		connected := make(map[string]struct{})
-		for _, ref := range g.plan.inputsByNode[node.ID].Refs() {
+		for _, ref := range node.Inputs.Refs() {
 			if err := g.connectInput(nodeIndex, node.ID, ref.NodeID, connected); err != nil {
 				return err
 			}

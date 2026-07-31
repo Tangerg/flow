@@ -105,7 +105,8 @@ func (j *journalNode) appendEntries(scope []string, entries *[]journalEntry) {
 //
 // As in a [Store], numbers decode as [json.Number] so nothing is rounded, and a
 // skipped step's recorded value is read back through [Get], which converts it to
-// the type the reading step asks for.
+// the type the reading step asks for. Call UnmarshalJSON between runs, not while
+// a Run is using the Journal.
 func (j *Journal) UnmarshalJSON(data []byte) error {
 	if j == nil {
 		return errors.New("workflow: unmarshal journal: nil journal")

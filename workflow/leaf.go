@@ -57,9 +57,9 @@ func FirstOf[I any](refs ...Ref) BindFunc[I] {
 // the returned Step twice in one scope fails with [ErrDuplicateStep].
 func Leaf[I, O any](id string, bind BindFunc[I], node flow.Node[I, O]) Step {
 	return leafStep[I, O]{
-		id:     id,
-		bind:   bind,
-		runner: nodeRunner[I, O]{node: node},
+		id:   id,
+		bind: bind,
+		node: node,
 	}
 }
 
@@ -75,49 +75,16 @@ func LeafFunc[I, O any](
 
 // leafStep is the [Step] produced by [Leaf].
 type leafStep[I, O any] struct {
-	id     string
-	bind   BindFunc[I]
-	runner leafRunner[I, O]
-}
-
-// leafRunner is the typed computation inside a leaf boundary. Both ordinary
-// and streaming leaves use it, which keeps binding, replay, events, suspension,
-// journaling, and output publication in one execution path.
-type leafRunner[I, O any] interface {
-	validate() error
-	run(ctx context.Context, input I, identity leafIdentity) (O, error)
-}
-
-type nodeRunner[I, O any] struct {
+	id   string
+	bind BindFunc[I]
 	node flow.Node[I, O]
 }
 
-func (n nodeRunner[I, O]) validate() error {
-	if n.node == nil {
-		return flow.ErrNilNode
-	}
-	if function, ok := n.node.(flow.NodeFunc[I, O]); ok && function == nil {
+func validateLeafNode[I, O any](node flow.Node[I, O]) error {
+	if isNilNode(node) {
 		return flow.ErrNilNode
 	}
 	return nil
-}
-
-func (n nodeRunner[I, O]) run(
-	ctx context.Context,
-	input I,
-	_ leafIdentity,
-) (O, error) {
-	return n.node.Run(ctx, input)
-}
-
-// leafIdentity names one execution of a leaf: which step it is, which repeated
-// scope it runs in, and which run owns it. A runner receives this rather than the
-// leafExecution so that it can label a Chunk without reaching the step
-// definition, which stays immutable and safe to reuse concurrently.
-type leafIdentity struct {
-	id    string
-	scope []string
-	run   *runState
 }
 
 func (l leafStep[I, O]) Run(ctx context.Context, store Store) (Store, error) {
@@ -164,20 +131,37 @@ func (l *leafExecution[I, O]) execute(ctx context.Context) (Store, error) {
 	if err != nil {
 		return l.fail(ctx, OpBind, err)
 	}
-	output, err := l.leaf.runner.run(ctx, input, leafIdentity{
-		id:    l.leaf.id,
-		scope: scope(ctx),
-		run:   l.run,
-	})
+	output, err := l.runNode(ctx, input)
 	if err != nil {
 		return l.fail(ctx, OpRun, err)
 	}
 	return l.complete(ctx, output)
 }
 
+func (l *leafExecution[I, O]) runNode(ctx context.Context, input I) (O, error) {
+	emitter := l.run.emitter()
+	if emitter == nil {
+		return l.leaf.node.Run(ctx, input)
+	}
+
+	emissionCtx, emission := withEmission(
+		ctx,
+		l.run,
+		l.leaf.id,
+		scope(ctx),
+		emitter,
+	)
+	output, err := l.leaf.node.Run(emissionCtx, input)
+	if emissionErr := emission.close(); emissionErr != nil {
+		var zero O
+		return zero, emissionErr
+	}
+	return output, err
+}
+
 // validate runs before replay so stale Journal data cannot hide an invalid
-// workflow definition. [Leaf] and [StreamLeaf] always install a runner, so only
-// the computation it holds can be nil, which runner.validate reports.
+// workflow definition. Known function adapters report typed nil values here
+// instead of letting a replayed result hide the invalid Node.
 func (l *leafExecution[I, O]) validate(ctx context.Context) error {
 	switch {
 	case l.leaf.id == "":
@@ -185,7 +169,7 @@ func (l *leafExecution[I, O]) validate(ctx context.Context) error {
 	case l.leaf.bind == nil:
 		return &StepError{ID: l.leaf.id, Op: OpBind, Err: flow.ErrNilFunc}
 	default:
-		if err := l.leaf.runner.validate(); err != nil {
+		if err := validateLeafNode(l.leaf.node); err != nil {
 			return &StepError{ID: l.leaf.id, Op: OpRun, Err: err}
 		}
 		if err := l.run.claim(scope(ctx), l.leaf.id); err != nil {

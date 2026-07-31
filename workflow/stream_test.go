@@ -8,13 +8,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
 )
 
-func TestStreamLeaf_emitsChunksAndPublishesFinalOutput(t *testing.T) {
-	node := workflow.StreamNodeFunc[int, int, string](
+func TestStreamFunc_emitsChunksAndPublishesFinalOutput(t *testing.T) {
+	node := workflow.StreamFunc[int, int, string](
 		func(_ context.Context, input int, yield func(string) bool) (int, error) {
 			for index := range input {
 				if !yield(fmt.Sprintf("chunk-%d", index)) {
@@ -24,7 +25,7 @@ func TestStreamLeaf_emitsChunksAndPublishesFinalOutput(t *testing.T) {
 			return input * 10, nil
 		},
 	)
-	step := workflow.StreamLeaf(
+	step := workflow.Leaf(
 		"stream",
 		workflow.From[int](workflow.Output("start")),
 		node,
@@ -97,14 +98,16 @@ func TestStreamLeaf_emitsChunksAndPublishesFinalOutput(t *testing.T) {
 	}
 }
 
-func TestStreamLeafFunc(t *testing.T) {
-	step := workflow.StreamLeafFunc(
+func TestStreamFunc(t *testing.T) {
+	step := workflow.Leaf(
 		"stream",
-		workflow.Output("start"),
-		func(_ context.Context, input int, yield func(string) bool) (int, error) {
-			yield(fmt.Sprintf("value=%d", input))
-			return input * 2, nil
-		},
+		workflow.From[int](workflow.Output("start")),
+		workflow.StreamFunc[int, int, string](
+			func(_ context.Context, input int, yield func(string) bool) (int, error) {
+				yield(fmt.Sprintf("value=%d", input))
+				return input * 2, nil
+			},
+		),
 	)
 	var chunks []workflow.Chunk
 	out, err := workflow.Run(
@@ -129,10 +132,501 @@ func TestStreamLeafFunc(t *testing.T) {
 	}
 }
 
-func TestStreamLeaf_emitterErrorStopsAndFailsTheLeaf(t *testing.T) {
+func TestStreamFunc_composesAsAnOrdinaryNode(t *testing.T) {
+	stream := workflow.StreamFunc[int, int, int](
+		func(_ context.Context, input int, yield func(int) bool) (int, error) {
+			yield(input)
+			return input * 2, nil
+		},
+	)
+	var _ flow.Node[int, int] = stream
+
+	node := flow.Then(
+		stream,
+		flow.NodeFunc[int, string](
+			func(_ context.Context, input int) (string, error) {
+				return fmt.Sprintf("parsed:%d", input), nil
+			},
+		),
+	)
+	step := workflow.Leaf(
+		"answer",
+		workflow.From[int](workflow.Output("start")),
+		node,
+	)
+
+	var chunks []workflow.Chunk
+	out, err := workflow.Run(
+		t.Context(),
+		step,
+		workflow.NewStore().WithOutput("start", 21),
+		workflow.RunConfig{Emitter: workflow.EmitterFunc(
+			func(_ context.Context, chunk workflow.Chunk) error {
+				chunks = append(chunks, chunk)
+				return nil
+			},
+		)},
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(chunks) != 1 || chunks[0].ID != "answer" || chunks[0].Value != 21 {
+		t.Fatalf("chunks = %+v; want one chunk owned by answer", chunks)
+	}
+	if got, err := workflow.Get[string](out, workflow.Output("answer")); err != nil ||
+		got != "parsed:42" {
+		t.Fatalf("output = %q, %v; want parsed:42, nil", got, err)
+	}
+}
+
+func TestStreamFunc_withoutLeafHasNoEmissionIdentity(t *testing.T) {
+	node := workflow.StreamFunc[workflow.Store, workflow.Store, string](
+		func(_ context.Context, store workflow.Store, yield func(string) bool) (workflow.Store, error) {
+			if !yield("discarded") {
+				return workflow.Store{}, errors.New("yield unexpectedly stopped")
+			}
+			return store.WithOutput("done", true), nil
+		},
+	)
+
+	emits := 0
+	out, err := workflow.Run(
+		t.Context(),
+		node,
+		workflow.NewStore(),
+		workflow.RunConfig{Emitter: workflow.EmitterFunc(
+			func(context.Context, workflow.Chunk) error {
+				emits++
+				return nil
+			},
+		)},
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if emits != 0 {
+		t.Fatalf("Emitter calls = %d; a raw Node has no leaf identity", emits)
+	}
+	if got, err := workflow.Get[bool](out, workflow.Output("done")); err != nil || !got {
+		t.Fatalf("output = %t, %v; want true, nil", got, err)
+	}
+}
+
+func TestStreamFunc_serializesConcurrentYieldCalls(t *testing.T) {
+	const count = 16
+	node := workflow.StreamFunc[int, int, int](
+		func(_ context.Context, input int, yield func(int) bool) (int, error) {
+			results := make(chan bool, count)
+			var callers sync.WaitGroup
+			for value := range count {
+				callers.Go(func() {
+					results <- yield(value)
+				})
+			}
+			callers.Wait()
+			close(results)
+			for result := range results {
+				if !result {
+					return 0, errors.New("yield unexpectedly stopped")
+				}
+			}
+			return input, nil
+		},
+	)
+	step := workflow.Leaf(
+		"stream",
+		workflow.From[int](workflow.Output("start")),
+		node,
+	)
+
+	var active atomic.Int64
+	var concurrent atomic.Bool
+	var chunks []workflow.Chunk
+	_, err := workflow.Run(
+		t.Context(),
+		step,
+		workflow.NewStore().WithOutput("start", count),
+		workflow.RunConfig{Emitter: workflow.EmitterFunc(
+			func(_ context.Context, chunk workflow.Chunk) error {
+				if active.Add(1) != 1 {
+					concurrent.Store(true)
+				}
+				chunks = append(chunks, chunk)
+				active.Add(-1)
+				return nil
+			},
+		)},
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if concurrent.Load() {
+		t.Fatal("Emitter was called concurrently for one StreamFunc invocation")
+	}
+	if len(chunks) != count {
+		t.Fatalf("chunks = %d; want %d", len(chunks), count)
+	}
+	var wantIndex uint64
+	for index, chunk := range chunks {
+		if chunk.Index != wantIndex {
+			t.Fatalf("chunk %d Index = %d; want %d", index, chunk.Index, wantIndex)
+		}
+		wantIndex++
+	}
+	values := chunkValues(chunks)
+	slices.Sort(values)
+	for value := range count {
+		if values[value] != value {
+			t.Fatalf("values = %v; want 0..%d", values, count-1)
+		}
+	}
+}
+
+func TestStreamFunc_mapSharesOneLeafStreamSafely(t *testing.T) {
+	const count = 8
+	ready := make(chan struct{}, count)
+	release := make(chan struct{})
+	stream := workflow.StreamFunc[int, int, int](
+		func(_ context.Context, input int, yield func(int) bool) (int, error) {
+			ready <- struct{}{}
+			<-release
+			if !yield(input) {
+				return 0, errors.New("yield unexpectedly stopped")
+			}
+			return input * 10, nil
+		},
+	)
+	step := workflow.Leaf(
+		"batch",
+		workflow.From[[]int](workflow.Output("start")),
+		flow.Map(stream, flow.MapConfig{}),
+	)
+	input := make([]int, count)
+	for index := range input {
+		input[index] = index
+	}
+
+	type result struct {
+		store workflow.Store
+		err   error
+	}
+	var chunks []workflow.Chunk
+	done := make(chan result, 1)
+	go func() {
+		out, err := workflow.Run(
+			t.Context(),
+			step,
+			workflow.NewStore().WithOutput("start", input),
+			workflow.RunConfig{Emitter: workflow.EmitterFunc(
+				func(_ context.Context, chunk workflow.Chunk) error {
+					chunks = append(chunks, chunk)
+					return nil
+				},
+			)},
+		)
+		done <- result{store: out, err: err}
+	}()
+	for range count {
+		<-ready
+	}
+	close(release)
+	run := <-done
+	if run.err != nil {
+		t.Fatalf("Run: %v", run.err)
+	}
+	if len(chunks) != count {
+		t.Fatalf("chunks = %d; want %d", len(chunks), count)
+	}
+	var wantIndex uint64
+	for index, chunk := range chunks {
+		if chunk.ID != "batch" || chunk.Index != wantIndex {
+			t.Fatalf("chunk %d = %+v; want batch with Index %d", index, chunk, wantIndex)
+		}
+		wantIndex++
+	}
+	got, err := workflow.Get[[]int](run.store, workflow.Output("batch"))
+	if err != nil {
+		t.Fatalf("Get output: %v", err)
+	}
+	for index, value := range got {
+		if value != index*10 {
+			t.Fatalf("output = %v; index %d want %d", got, index, index*10)
+		}
+	}
+}
+
+func TestStreamFunc_rejectsYieldAfterItsInvocationReturns(t *testing.T) {
+	var saved func(string) bool
+	parserStarted := make(chan struct{})
+	releaseParser := make(chan struct{})
+	stream := workflow.StreamFunc[int, int, string](
+		func(_ context.Context, input int, yield func(string) bool) (int, error) {
+			saved = yield
+			return input, nil
+		},
+	)
+	parser := flow.NodeFunc[int, int](
+		func(_ context.Context, input int) (int, error) {
+			close(parserStarted)
+			<-releaseParser
+			return input * 2, nil
+		},
+	)
+	step := workflow.Leaf(
+		"answer",
+		workflow.From[int](workflow.Output("start")),
+		flow.Then(stream, parser),
+	)
+
+	type result struct {
+		store workflow.Store
+		err   error
+	}
+	var chunks []workflow.Chunk
+	done := make(chan result, 1)
+	go func() {
+		out, err := workflow.Run(
+			t.Context(),
+			step,
+			workflow.NewStore().WithOutput("start", 21),
+			workflow.RunConfig{Emitter: workflow.EmitterFunc(
+				func(_ context.Context, chunk workflow.Chunk) error {
+					chunks = append(chunks, chunk)
+					return nil
+				},
+			)},
+		)
+		done <- result{store: out, err: err}
+	}()
+
+	<-parserStarted
+	if saved("late") {
+		t.Fatal("retained yield returned true after StreamFunc returned")
+	}
+	close(releaseParser)
+	run := <-done
+	if run.err != nil {
+		t.Fatalf("Run: %v", run.err)
+	}
+	if len(chunks) != 0 {
+		t.Fatalf("late yield emitted chunks: %+v", chunks)
+	}
+	if got, err := workflow.Get[int](run.store, workflow.Output("answer")); err != nil || got != 42 {
+		t.Fatalf("output = %d, %v; want 42, nil", got, err)
+	}
+}
+
+func TestStreamFunc_nestedRunDoesNotInheritEmitter(t *testing.T) {
+	inner := workflow.Leaf(
+		"inner",
+		workflow.From[int](workflow.Output("start")),
+		workflow.StreamFunc[int, int, string](
+			func(_ context.Context, input int, yield func(string) bool) (int, error) {
+				if !yield("inner") {
+					return 0, errors.New("inner yield unexpectedly stopped")
+				}
+				return input, nil
+			},
+		),
+	)
+	runInner := flow.NodeFunc[int, int](
+		func(ctx context.Context, input int) (int, error) {
+			_, err := workflow.Run(
+				ctx,
+				inner,
+				workflow.NewStore().WithOutput("start", input),
+				workflow.RunConfig{},
+			)
+			return input, err
+		},
+	)
+	outerStream := workflow.StreamFunc[int, int, string](
+		func(_ context.Context, input int, yield func(string) bool) (int, error) {
+			if !yield("outer") {
+				return 0, errors.New("outer yield unexpectedly stopped")
+			}
+			return input, nil
+		},
+	)
+	outer := workflow.Leaf(
+		"outer",
+		workflow.From[int](workflow.Output("start")),
+		flow.Then(runInner, outerStream),
+	)
+
+	var chunks []workflow.Chunk
+	_, err := workflow.Run(
+		t.Context(),
+		outer,
+		workflow.NewStore().WithOutput("start", 1),
+		workflow.RunConfig{Emitter: workflow.EmitterFunc(
+			func(_ context.Context, chunk workflow.Chunk) error {
+				chunks = append(chunks, chunk)
+				return nil
+			},
+		)},
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(chunks) != 1 || chunks[0].ID != "outer" || chunks[0].Value != "outer" {
+		t.Fatalf("chunks = %+v; nested run leaked the outer Emitter", chunks)
+	}
+}
+
+func TestStreamFunc_cancelledRaceLoserDoesNotPoisonWinner(t *testing.T) {
+	started := make(chan struct{})
+	loser := workflow.StreamFunc[int, int, string](
+		func(ctx context.Context, _ int, yield func(string) bool) (int, error) {
+			close(started)
+			<-ctx.Done()
+			if yield("late") {
+				return 0, errors.New("cancelled loser emitted a chunk")
+			}
+			return 0, context.Cause(ctx)
+		},
+	)
+	winner := flow.NodeFunc[int, int](
+		func(_ context.Context, input int) (int, error) {
+			<-started
+			return input * 2, nil
+		},
+	)
+	step := workflow.Leaf(
+		"race",
+		workflow.From[int](workflow.Output("start")),
+		flow.Race[int, int](loser, winner),
+	)
+
+	var chunks []workflow.Chunk
+	out, err := workflow.Run(
+		t.Context(),
+		step,
+		workflow.NewStore().WithOutput("start", 21),
+		workflow.RunConfig{Emitter: workflow.EmitterFunc(
+			func(_ context.Context, chunk workflow.Chunk) error {
+				chunks = append(chunks, chunk)
+				return nil
+			},
+		)},
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(chunks) != 0 {
+		t.Fatalf("cancelled loser emitted chunks: %+v", chunks)
+	}
+	if got, err := workflow.Get[int](out, workflow.Output("race")); err != nil || got != 42 {
+		t.Fatalf("output = %d, %v; want 42, nil", got, err)
+	}
+}
+
+func TestStreamFunc_emitterFailureStopsEveryProducerInTheLeaf(t *testing.T) {
+	emitErr := errors.New("sink unavailable")
+	firstEmit := make(chan struct{})
+	stream := workflow.StreamFunc[int, int, int](
+		func(ctx context.Context, input int, yield func(int) bool) (int, error) {
+			if input == 1 {
+				<-firstEmit
+			}
+			if yield(input) {
+				return input, nil
+			}
+			return 0, context.Cause(ctx)
+		},
+	)
+	step := workflow.Leaf(
+		"batch",
+		workflow.From[[]int](workflow.Output("start")),
+		flow.Map(stream, flow.MapConfig{}),
+	)
+
+	var calls atomic.Int64
+	_, err := workflow.Run(
+		t.Context(),
+		step,
+		workflow.NewStore().WithOutput("start", []int{0, 1}),
+		workflow.RunConfig{Emitter: workflow.EmitterFunc(
+			func(_ context.Context, chunk workflow.Chunk) error {
+				calls.Add(1)
+				if chunk.Value == 0 {
+					close(firstEmit)
+					return emitErr
+				}
+				return nil
+			},
+		)},
+	)
+	if !errors.Is(err, emitErr) {
+		t.Fatalf("Run error = %v; want emitter error", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("Emitter calls = %d; want the first failure to stop both producers", calls.Load())
+	}
+}
+
+func TestStreamFunc_leafRejectsEmissionFromLeakedNodeWork(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	finished := make(chan error, 1)
+	stream := workflow.StreamFunc[int, int, int](
+		func(ctx context.Context, input int, yield func(int) bool) (int, error) {
+			close(started)
+			<-release
+			if yield(input) {
+				return input, nil
+			}
+			return 0, context.Cause(ctx)
+		},
+	)
+	leaky := flow.NodeFunc[int, int](
+		func(ctx context.Context, input int) (int, error) {
+			go func() {
+				_, err := stream.Run(ctx, input)
+				finished <- err
+			}()
+			<-started
+			return input, nil
+		},
+	)
+	step := workflow.Leaf(
+		"leaky",
+		workflow.From[int](workflow.Output("start")),
+		leaky,
+	)
+
+	var chunks []workflow.Chunk
+	out, err := workflow.Run(
+		t.Context(),
+		step,
+		workflow.NewStore().WithOutput("start", 1),
+		workflow.RunConfig{Emitter: workflow.EmitterFunc(
+			func(_ context.Context, chunk workflow.Chunk) error {
+				chunks = append(chunks, chunk)
+				return nil
+			},
+		)},
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, err := workflow.Get[int](out, workflow.Output("leaky")); err != nil || got != 1 {
+		t.Fatalf("output = %d, %v; want 1, nil", got, err)
+	}
+
+	close(release)
+	if err := <-finished; !errors.Is(err, context.Canceled) {
+		t.Fatalf("leaked StreamFunc error = %v; want context.Canceled", err)
+	}
+	if len(chunks) != 0 {
+		t.Fatalf("leaked work emitted chunks after Leaf completion: %+v", chunks)
+	}
+}
+
+func TestStreamFunc_emitterErrorStopsAndFailsTheLeaf(t *testing.T) {
 	emitErr := errors.New("sink unavailable")
 	var attempted atomic.Int64
-	node := workflow.StreamNodeFunc[int, int, int](
+	node := workflow.StreamFunc[int, int, int](
 		func(ctx context.Context, _ int, yield func(int) bool) (int, error) {
 			for value := range 4 {
 				attempted.Add(1)
@@ -151,7 +645,7 @@ func TestStreamLeaf_emitterErrorStopsAndFailsTheLeaf(t *testing.T) {
 			return 4, nil
 		},
 	)
-	step := workflow.StreamLeaf(
+	step := workflow.Leaf(
 		"stream",
 		workflow.From[int](workflow.Output("start")),
 		node,
@@ -194,8 +688,69 @@ func TestStreamLeaf_emitterErrorStopsAndFailsTheLeaf(t *testing.T) {
 	}
 }
 
-func TestStreamLeaf_emitterSuspensionRemainsAThirdOutcome(t *testing.T) {
-	node := workflow.StreamNodeFunc[int, int, int](
+func TestStreamFunc_emitterContextCannotReenterTheLeafEmissionSession(t *testing.T) {
+	nested := workflow.StreamFunc[int, int, int](
+		func(_ context.Context, input int, yield func(int) bool) (int, error) {
+			if !yield(input + 1) {
+				return 0, errors.New("nested yield unexpectedly stopped")
+			}
+			return input + 1, nil
+		},
+	)
+	outer := workflow.StreamFunc[int, int, int](
+		func(_ context.Context, input int, yield func(int) bool) (int, error) {
+			if !yield(input) {
+				return 0, errors.New("outer yield unexpectedly stopped")
+			}
+			return input, nil
+		},
+	)
+	step := workflow.Leaf(
+		"stream",
+		workflow.From[int](workflow.Output("start")),
+		outer,
+	)
+
+	var (
+		chunks       []workflow.Chunk
+		nestedOutput int
+		nestedErr    error
+	)
+	done := make(chan error, 1)
+	go func() {
+		_, err := workflow.Run(
+			t.Context(),
+			step,
+			workflow.NewStore().WithOutput("start", 1),
+			workflow.RunConfig{Emitter: workflow.EmitterFunc(
+				func(ctx context.Context, chunk workflow.Chunk) error {
+					chunks = append(chunks, chunk)
+					nestedOutput, nestedErr = nested.Run(ctx, 10)
+					return nestedErr
+				},
+			)},
+		)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Emitter context reentered and deadlocked the leaf emission session")
+	}
+	if nestedErr != nil || nestedOutput != 11 {
+		t.Fatalf("nested Run = %d, %v; want 11, nil", nestedOutput, nestedErr)
+	}
+	if len(chunks) != 1 || chunks[0].Value != 1 {
+		t.Fatalf("chunks = %+v; want only the outer value", chunks)
+	}
+}
+
+func TestStreamFunc_emitterSuspensionRemainsAThirdOutcome(t *testing.T) {
+	node := workflow.StreamFunc[int, int, int](
 		func(ctx context.Context, input int, yield func(int) bool) (int, error) {
 			if !yield(input) {
 				return 0, context.Cause(ctx)
@@ -203,7 +758,7 @@ func TestStreamLeaf_emitterSuspensionRemainsAThirdOutcome(t *testing.T) {
 			return input, nil
 		},
 	)
-	step := workflow.StreamLeaf(
+	step := workflow.Leaf(
 		"stream",
 		workflow.From[int](workflow.Output("start")),
 		node,
@@ -231,9 +786,9 @@ func TestStreamLeaf_emitterSuspensionRemainsAThirdOutcome(t *testing.T) {
 	}
 }
 
-func TestStreamLeaf_completedReplayDoesNotReemit(t *testing.T) {
+func TestStreamFunc_completedReplayDoesNotReemit(t *testing.T) {
 	var runs atomic.Int64
-	node := workflow.StreamNodeFunc[int, int, int](
+	node := workflow.StreamFunc[int, int, int](
 		func(_ context.Context, input int, yield func(int) bool) (int, error) {
 			runs.Add(1)
 			yield(input)
@@ -241,7 +796,7 @@ func TestStreamLeaf_completedReplayDoesNotReemit(t *testing.T) {
 			return input + 2, nil
 		},
 	)
-	step := workflow.StreamLeaf(
+	step := workflow.Leaf(
 		"stream",
 		workflow.From[int](workflow.Output("start")),
 		node,
@@ -289,9 +844,9 @@ func TestStreamLeaf_completedReplayDoesNotReemit(t *testing.T) {
 	}
 }
 
-func TestStreamLeaf_incompleteReplayRepeatsTheAttemptPrefix(t *testing.T) {
+func TestStreamFunc_incompleteReplayRepeatsTheAttemptPrefix(t *testing.T) {
 	var runs atomic.Int64
-	node := workflow.StreamNodeFunc[int, int, int](
+	node := workflow.StreamFunc[int, int, int](
 		func(_ context.Context, input int, yield func(int) bool) (int, error) {
 			run := runs.Add(1)
 			yield(input)
@@ -303,7 +858,7 @@ func TestStreamLeaf_incompleteReplayRepeatsTheAttemptPrefix(t *testing.T) {
 			return input + 3, nil
 		},
 	)
-	step := workflow.StreamLeaf(
+	step := workflow.Leaf(
 		"stream",
 		workflow.From[int](workflow.Output("start")),
 		node,
@@ -356,11 +911,11 @@ func TestStreamLeaf_incompleteReplayRepeatsTheAttemptPrefix(t *testing.T) {
 	}
 }
 
-func TestStreamLeaf_iterationEmitsConcurrentScopedStreams(t *testing.T) {
-	body := workflow.StreamLeaf(
+func TestStreamFunc_iterationEmitsConcurrentScopedStreams(t *testing.T) {
+	body := workflow.Leaf(
 		"double",
 		workflow.From[int](workflow.Item("items")),
-		workflow.StreamNodeFunc[int, int, int](
+		workflow.StreamFunc[int, int, int](
 			func(_ context.Context, input int, yield func(int) bool) (int, error) {
 				yield(input)
 				yield(input * 2)
@@ -427,12 +982,12 @@ func TestStreamLeaf_iterationEmitsConcurrentScopedStreams(t *testing.T) {
 	}
 }
 
-func TestStreamLeaf_parallelStreamsShareRunSequence(t *testing.T) {
+func TestStreamFunc_parallelStreamsShareRunSequence(t *testing.T) {
 	makeStep := func(id string) workflow.Step {
-		return workflow.StreamLeaf(
+		return workflow.Leaf(
 			id,
 			workflow.From[int](workflow.Output("start")),
-			workflow.StreamNodeFunc[int, int, int](
+			workflow.StreamFunc[int, int, int](
 				func(_ context.Context, input int, yield func(int) bool) (int, error) {
 					yield(input)
 					yield(input + 1)
@@ -473,8 +1028,8 @@ func TestStreamLeaf_parallelStreamsShareRunSequence(t *testing.T) {
 	}
 }
 
-func TestStreamLeaf_nilEmitterDiscardsWithoutChangingEventSequence(t *testing.T) {
-	node := workflow.StreamNodeFunc[int, int, int](
+func TestStreamFunc_nilEmitterDiscardsWithoutChangingEventSequence(t *testing.T) {
+	node := workflow.StreamFunc[int, int, int](
 		func(_ context.Context, input int, yield func(int) bool) (int, error) {
 			if !yield(input) || !yield(input+1) {
 				return 0, errors.New("nil emitter stopped the stream")
@@ -482,7 +1037,7 @@ func TestStreamLeaf_nilEmitterDiscardsWithoutChangingEventSequence(t *testing.T)
 			return input + 2, nil
 		},
 	)
-	step := workflow.StreamLeaf(
+	step := workflow.Leaf(
 		"stream",
 		workflow.From[int](workflow.Output("start")),
 		node,
@@ -546,10 +1101,10 @@ func TestStreamLeaf_nilEmitterDiscardsWithoutChangingEventSequence(t *testing.T)
 	}
 }
 
-func TestStreamLeaf_cancellationCannotPublishAPartialFinalOutput(t *testing.T) {
+func TestStreamFunc_cancellationCannotPublishAPartialFinalOutput(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(t.Context())
 	cancel(errors.New("caller stopped"))
-	node := workflow.StreamNodeFunc[int, int, int](
+	node := workflow.StreamFunc[int, int, int](
 		func(_ context.Context, input int, yield func(int) bool) (int, error) {
 			if yield(input) {
 				t.Fatal("yield under a cancelled context returned true")
@@ -559,7 +1114,7 @@ func TestStreamLeaf_cancellationCannotPublishAPartialFinalOutput(t *testing.T) {
 			return input, nil
 		},
 	)
-	step := workflow.StreamLeaf(
+	step := workflow.Leaf(
 		"stream",
 		workflow.From[int](workflow.Output("start")),
 		node,
@@ -573,10 +1128,10 @@ func TestStreamLeaf_cancellationCannotPublishAPartialFinalOutput(t *testing.T) {
 	}
 }
 
-func TestStreamLeaf_cancellationDuringEmissionStopsCompletion(t *testing.T) {
+func TestStreamFunc_cancellationDuringEmissionStopsCompletion(t *testing.T) {
 	stopErr := errors.New("caller stopped")
 	ctx, cancel := context.WithCancelCause(t.Context())
-	node := workflow.StreamNodeFunc[int, int, int](
+	node := workflow.StreamFunc[int, int, int](
 		func(_ context.Context, input int, yield func(int) bool) (int, error) {
 			if yield(input) {
 				t.Fatal("yield returned true after the Emitter cancelled the run")
@@ -584,7 +1139,7 @@ func TestStreamLeaf_cancellationDuringEmissionStopsCompletion(t *testing.T) {
 			return input, nil
 		},
 	)
-	step := workflow.StreamLeaf(
+	step := workflow.Leaf(
 		"stream",
 		workflow.From[int](workflow.Output("start")),
 		node,
@@ -613,33 +1168,29 @@ func TestStreamLeaf_cancellationDuringEmissionStopsCompletion(t *testing.T) {
 	}
 }
 
-func TestStreamLeaf_validatesNode(t *testing.T) {
+func TestStreamFunc_validatesNode(t *testing.T) {
 	in := workflow.NewStore().WithOutput("start", 1)
-	var nilNode workflow.StreamNode[int, int, int]
-	step := workflow.StreamLeaf(
+	var nilNode flow.Node[int, int]
+	step := workflow.Leaf(
 		"stream",
 		workflow.From[int](workflow.Output("start")),
 		nilNode,
 	)
 	if _, err := step.Run(t.Context(), in); !errors.Is(err, flow.ErrNilNode) {
-		t.Fatalf("nil StreamNode error = %v; want ErrNilNode", err)
+		t.Fatalf("nil Node error = %v; want ErrNilNode", err)
 	}
 
-	var nilFunc workflow.StreamNodeFunc[int, int, int]
-	step = workflow.StreamLeaf(
+	var nilFunc workflow.StreamFunc[int, int, int]
+	step = workflow.Leaf(
 		"stream",
 		workflow.From[int](workflow.Output("start")),
 		nilFunc,
 	)
 	if _, err := step.Run(t.Context(), in); !errors.Is(err, flow.ErrNilNode) {
-		t.Fatalf("nil StreamNodeFunc error = %v; want ErrNilNode", err)
+		t.Fatalf("nil StreamFunc error = %v; want ErrNilNode", err)
 	}
-	if _, err := nilFunc.RunStream(
-		t.Context(),
-		1,
-		func(int) bool { return true },
-	); !errors.Is(err, flow.ErrNilNode) {
-		t.Fatalf("nil StreamNodeFunc.RunStream error = %v; want ErrNilNode", err)
+	if _, err := nilFunc.Run(t.Context(), 1); !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("nil StreamFunc.Run error = %v; want ErrNilNode", err)
 	}
 
 	journal := workflow.NewJournal()
@@ -652,7 +1203,7 @@ func TestStreamLeaf_validatesNode(t *testing.T) {
 		in,
 		workflow.RunConfig{Journal: journal},
 	); !errors.Is(err, flow.ErrNilNode) {
-		t.Fatalf("replayed nil StreamNodeFunc error = %v; want ErrNilNode", err)
+		t.Fatalf("replayed nil StreamFunc error = %v; want ErrNilNode", err)
 	}
 }
 

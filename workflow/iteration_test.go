@@ -91,6 +91,7 @@ func TestIteration_validatesItsStructureBeforeReadingInput(t *testing.T) {
 	identity := flow.NodeFunc[workflow.Store, workflow.Store](func(_ context.Context, s workflow.Store) (workflow.Store, error) {
 		return s, nil
 	})
+	var nilBody flow.NodeFunc[workflow.Store, workflow.Store]
 
 	tests := map[string]struct {
 		config workflow.IterationConfig
@@ -105,6 +106,13 @@ func TestIteration_validatesItsStructureBeforeReadingInput(t *testing.T) {
 		"nil body": {
 			config: workflow.IterationConfig{
 				ID: "each", Input: workflow.Output("start"), BodyOutput: workflow.Output("value"),
+			},
+			want: workflow.ErrNilStep,
+		},
+		"typed nil body": {
+			config: workflow.IterationConfig{
+				ID: "each", Input: workflow.Output("start"), Body: nilBody,
+				BodyOutput: workflow.Output("value"),
 			},
 			want: workflow.ErrNilStep,
 		},

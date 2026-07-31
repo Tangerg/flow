@@ -81,7 +81,7 @@ func (s subgraphStep) validate() error {
 	switch {
 	case s.id == "":
 		return &StepError{ID: s.id, Op: OpValidate, Err: ErrInvalidStepID}
-	case s.body == nil:
+	case isNilNode(s.body):
 		return &StepError{ID: s.id, Op: OpValidate, Err: ErrNilStep}
 	}
 	if err := s.inputs.validate(); err != nil {

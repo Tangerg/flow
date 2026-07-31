@@ -12,23 +12,11 @@ counterpart is
 
 ## 1. Define the typed producer
 
-`StreamNode` is the streaming counterpart to `flow.Node`:
+Streaming does not introduce a second node protocol. `StreamFunc` adapts a
+function with a typed yield callback directly into `flow.Node[I, O]`:
 
 ```go
-type StreamNode[I, O, C any] interface {
-	RunStream(
-		context.Context,
-		I,
-		func(C) bool,
-	) (O, error)
-}
-```
-
-The three types are the input, final output, and chunk value. Adapt an ordinary
-function with `StreamNodeFunc`:
-
-```go
-generate := workflow.StreamNodeFunc[string, string, string](
+generate := workflow.StreamFunc[string, string, string](
 	func(ctx context.Context, prompt string, yield func(string) bool) (string, error) {
 		var answer strings.Builder
 		for _, token := range tokenize(prompt) {
@@ -42,31 +30,56 @@ generate := workflow.StreamNodeFunc[string, string, string](
 )
 ```
 
-Call `yield` synchronously, from the goroutine running `RunStream`. When it
-returns `false`, stop yielding and return promptly. This is the same cooperative
-stop shape used by Go iterators: the producer owns enumeration, and the
-consumer can end it.
+The three types are the input, final output, and chunk value. The final output
+remains the Node result; yielded values are a run-scoped side channel that does
+not feed downstream nodes or enter the Store.
+
+When yield returns `false`, stop yielding and return promptly. This is the same
+cooperative stop shape used by Go iterators: the producer owns enumeration, and
+the consumer can end it. A function may call yield from multiple goroutines;
+Emitter delivery is serialized for the enclosing leaf, and `Run` waits for
+every in-flight yield before returning. A retained yield called after the
+function returns always reports false.
+
+`StreamFunc` is also directly callable as a function, so its production logic
+can be unit-tested with a typed test callback without constructing a workflow.
 
 ## 2. Lift it into a named workflow boundary
 
-`StreamLeaf` binds the typed input and gives the node all ordinary leaf
-semantics:
+`StreamFunc` already implements `flow.Node`, so it composes normally:
 
 ```go
-step := workflow.StreamLeaf(
+parsed := flow.Then(generate, parseAnswer)
+```
+
+`Leaf` then binds the typed input and supplies the one named workflow boundary:
+
+```go
+step := workflow.Leaf(
 	"generate",
 	workflow.From[string](workflow.Output("prompt")),
-	generate,
+	parsed,
 )
 ```
 
-The final `string` is written under `workflow.Output("generate")`. Binding
-errors, node errors, lifecycle events, suspension, Journal replay, and final
-output publication follow the same path as `Leaf`; streaming is not a second
-execution engine.
+The final result of `parsed` is written under
+`workflow.Output("generate")`. Binding errors, node errors, lifecycle events,
+suspension, Journal replay, and final output publication all follow the ordinary
+Leaf path.
+
+Chunks are owned by the enclosing Leaf, not by opaque nodes inside the typed
+composition. If `generate` and `parseAnswer` need separate workflow identities,
+Journal checkpoints, or lifecycle events, lift them as two separate leaves.
+Composed StreamFunc values may also use different chunk types; their producer
+callbacks stay typed, while the shared Emitter receives each value as `any`.
+Use an application-defined tagged value or separate leaves when the sink must
+distinguish them.
+
+A StreamFunc run outside a Leaf has no workflow identity, so its yielded values
+are discarded even if an enclosing `workflow.Run` has an Emitter.
 
 Like every named step, this step may run only once in a scope during one run.
-Apply retry and hedging inside the typed node before calling `StreamLeaf`.
+Apply retry and hedging inside the typed Node before calling `Leaf`.
 
 ## 3. Attach an output destination to the run
 
@@ -91,8 +104,9 @@ fails with a `StepError` that preserves the emitter error for `errors.Is` and
 `errors.As`. As at any leaf boundary, an error consisting only of workflow
 suspensions remains the third outcome rather than becoming a failure.
 
-Different leaves and iteration elements may emit concurrently. An Emitter that
-mutates state must protect that state:
+Calls from one leaf invocation are serialized and receive increasing `Index`
+values in delivery order. Different leaves and iteration elements may emit
+concurrently, so an Emitter that mutates shared state must still protect it:
 
 ```go
 var mu sync.Mutex
@@ -116,7 +130,7 @@ the workflow simply has no output destination.
 
 Each Chunk carries:
 
-- `ID`: the `StreamLeaf` ID.
+- `ID`: the enclosing `Leaf` ID.
 - `Scope`: enclosing loop or iteration scopes.
 - `Index`: a zero-based counter for this leaf invocation.
 - `Seq`: a run-wide number shared with lifecycle `Event` values.
@@ -134,8 +148,7 @@ also record an application run ID and workflow-definition version.
 
 The Journal checkpoints final leaf results, not chunks:
 
-- A completed leaf is replayed without running its StreamNode and emits no
-  chunks.
+- A completed leaf is replayed without running its Node and emits no chunks.
 - A failed or suspended leaf is incomplete. The next run starts it again at
   index zero and may repeat the prefix emitted by the earlier attempt.
 - An emitter error leaves no final output or Journal record.

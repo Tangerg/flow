@@ -23,9 +23,9 @@ type RunConfig struct {
 	// ObserverFunc disables events.
 	Observer Observer
 
-	// Emitter receives values produced by a [StreamLeaf]. A nil Emitter or nil
-	// EmitterFunc discards them without constructing chunks or consuming
-	// sequence numbers.
+	// Emitter receives values produced by [StreamFunc] nodes inside a [Leaf]. A
+	// nil Emitter or nil EmitterFunc discards them without constructing chunks
+	// or consuming sequence numbers.
 	Emitter Emitter
 
 	// Journal records completed steps so a later run can resume instead of
@@ -52,9 +52,10 @@ type runState struct {
 
 // Run executes step once under cfg. Each call establishes a fresh run boundary:
 // signal sequence numbers start at one, while cfg.Journal may deliberately
-// carry completed work across calls. Journal replay observes a stable snapshot
-// from the start of the call; records added during the call belong to a later
-// run. A nil step returns [ErrNilStep].
+// carry completed work across calls. Journal replay is revision-bounded at the
+// start of the call: records added during the call belong to a later run.
+// Destructive Journal operations such as Forget, Reset, and UnmarshalJSON belong
+// between runs. A nil step returns [ErrNilStep].
 //
 //	journal := workflow.NewJournal()
 //	out, err := workflow.Run(ctx, pipeline, in, workflow.RunConfig{
@@ -62,9 +63,12 @@ type runState struct {
 //		Journal:  journal,
 //	})
 //
-// Call step.Run directly when no run configuration is needed.
+// A Step built by this package may be called directly when no run configuration
+// is needed; its composite establishes the zero-config bookkeeping it needs.
+// Use Run for a caller-defined top-level composite even with a zero RunConfig,
+// so every child invocation shares one identity boundary.
 func Run(ctx context.Context, step Step, in Store, cfg RunConfig) (Store, error) {
-	if step == nil {
+	if isNilNode(step) {
 		return in, ErrNilStep
 	}
 	return step.Run(withConfig(ctx, cfg), in)

@@ -160,6 +160,53 @@ func TestSequence_validatesEveryStepBeforeRunning(t *testing.T) {
 	}
 }
 
+func TestSequence_rejectsTypedNilFunctionStepBeforeRunning(t *testing.T) {
+	ran := false
+	first := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+			ran = true
+			return store, nil
+		},
+	)
+	var invalid flow.NodeFunc[workflow.Store, workflow.Store]
+
+	_, err := workflow.Sequence(first, invalid).
+		Run(t.Context(), workflow.NewStore())
+	if !errors.Is(err, workflow.ErrNilStep) {
+		t.Fatalf("err = %v; want ErrNilStep", err)
+	}
+	var indexErr *flow.IndexError
+	if !errors.As(err, &indexErr) || indexErr.Index != 1 {
+		t.Fatalf("err = %v; want IndexError at step 1", err)
+	}
+	if ran {
+		t.Fatal("first step ran before the typed nil function step was rejected")
+	}
+}
+
+type nilSafeStep struct{}
+
+func (*nilSafeStep) Run(
+	_ context.Context,
+	store workflow.Store,
+) (workflow.Store, error) {
+	return store.WithOutput("nil-safe", true), nil
+}
+
+func TestSequence_acceptsNilSafePointerStep(t *testing.T) {
+	var step *nilSafeStep
+	output, err := workflow.Sequence(step).Run(t.Context(), workflow.NewStore())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if value, getErr := workflow.Get[bool](
+		output,
+		workflow.Output("nil-safe"),
+	); getErr != nil || !value {
+		t.Fatalf("nil-safe output = %v, %v; want true, nil", value, getErr)
+	}
+}
+
 func TestLeaf_rejectsEmptyIDAndNilBind(t *testing.T) {
 	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
 	if _, err := workflow.Leaf("", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }), node).

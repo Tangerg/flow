@@ -75,8 +75,8 @@ func BindFactory[C, I, O any](bind func(cfg C, inputs Inputs) (BindFunc[I], erro
 		if err != nil {
 			return nil, fmt.Errorf("workflow: build node: %w", err)
 		}
-		if node == nil {
-			return nil, flow.ErrNilNode
+		if err := validateLeafNode(node); err != nil {
+			return nil, err
 		}
 		return Leaf(spec.ID, binder, node), nil
 	}

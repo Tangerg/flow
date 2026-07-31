@@ -67,3 +67,38 @@ func TestThen_validatesBothNodesBeforeRunningEither(t *testing.T) {
 		t.Fatal("first node ran before the invalid composition was rejected")
 	}
 }
+
+func TestThen_rejectsTypedNilFunctionNodeBeforeRunningEither(t *testing.T) {
+	ran := false
+	first := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
+		ran = true
+		return x, nil
+	})
+	var second flow.NodeFunc[int, string]
+
+	_, err := flow.Then(first, second).Run(t.Context(), 1)
+	if !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("err = %v; want ErrNilNode", err)
+	}
+	if ran {
+		t.Fatal("first node ran before the typed nil function node was rejected")
+	}
+}
+
+type nilSafeNode struct{}
+
+func (*nilSafeNode) Run(_ context.Context, value int) (int, error) {
+	return value + 1, nil
+}
+
+func TestThen_acceptsNilSafePointerNode(t *testing.T) {
+	var first *nilSafeNode
+	second := flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+		return value * 2, nil
+	})
+
+	got, err := flow.Then[int, int, int](first, second).Run(t.Context(), 2)
+	if err != nil || got != 6 {
+		t.Fatalf("Run = %d, %v; want 6, nil", got, err)
+	}
+}

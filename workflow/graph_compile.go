@@ -120,7 +120,6 @@ func (n GraphNode) nodeSpec() Spec {
 		Kind:   KindLeaf,
 		ID:     n.ID,
 		Type:   n.Type,
-		Input:  n.Input,
 		Inputs: n.Inputs,
 		Config: n.Config,
 	}

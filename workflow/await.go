@@ -71,7 +71,7 @@ func (a awaitStep) definition() stepDefinition {
 // the wait must expose a structured request.
 //
 //	reg.MustRegisterNode("await", workflow.AwaitFactory())
-//	// {"id":"approval","type":"await","input":{"nodeID":"inbox","path":"/decision"}}
+//	// {"id":"approval","type":"await","inputs":{"in":{"nodeID":"inbox","path":"/decision"}}}
 func AwaitFactory() NodeFactory {
 	return func(spec NodeSpec) (Step, error) {
 		for _, port := range spec.Inputs.PortNames() {

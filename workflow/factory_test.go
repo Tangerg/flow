@@ -124,6 +124,13 @@ func TestFactory_rejectsNilFunctionsAndNodes(t *testing.T) {
 	if _, err := nilNode(wired(nil)); !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("nil node err = %v; want ErrNilNode", err)
 	}
+
+	typedNilNode := workflow.Factory(func(addConfig) (flow.Node[int, int], error) {
+		return flow.NodeFunc[int, int](nil), nil
+	})
+	if _, err := typedNilNode(wired(nil)); !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("typed nil node err = %v; want ErrNilNode", err)
+	}
 }
 
 // sumPorts adds the two numbers wired to its "a" and "b" ports.
