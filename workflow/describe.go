@@ -6,7 +6,7 @@ package workflow
 type Description struct {
 	ID       string        `json:"id,omitempty"`
 	Label    string        `json:"label,omitempty"`
-	Kind     string        `json:"kind"`
+	Kind     Kind          `json:"kind"`
 	Children []Description `json:"children,omitempty"`
 }
 
@@ -23,5 +23,5 @@ func Describe(step Step) Description {
 	if d, ok := step.(Describer); ok {
 		return d.Describe()
 	}
-	return Description{Kind: "opaque"}
+	return Description{Kind: KindOpaque}
 }

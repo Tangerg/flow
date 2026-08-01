@@ -24,7 +24,7 @@ func (r *Registry) validateGraph(graph Graph) (graphPlan, error) {
 		if _, ok := r.lookupNode(node.Type); !ok {
 			return graphPlan{}, &GraphError{
 				NodeID: node.ID,
-				Field:  "type",
+				Field:  fieldType,
 				Err:    fmt.Errorf("%w %q", ErrUnknownNodeType, node.Type),
 			}
 		}
@@ -33,7 +33,7 @@ func (r *Registry) validateGraph(graph Graph) (graphPlan, error) {
 		if err := registered.validateConfig(node.Config); err != nil {
 			return graphPlan{}, &GraphError{
 				NodeID: node.ID,
-				Field:  "config",
+				Field:  fieldConfig,
 				Err:    fmt.Errorf("%w: %w", ErrInvalidGraph, err),
 			}
 		}
@@ -54,7 +54,7 @@ func (r *Registry) validateGraph(graph Graph) (graphPlan, error) {
 				return producerSchema.schema.Output, true
 			},
 		); err != nil {
-			return graphPlan{}, &GraphError{NodeID: node.ID, Field: "inputs", Err: err}
+			return graphPlan{}, &GraphError{NodeID: node.ID, Field: fieldInputs, Err: err}
 		}
 		if err := r.validateGates(node, plan); err != nil {
 			return graphPlan{}, err
@@ -70,7 +70,7 @@ func (r *Registry) validateGates(node GraphNode, plan graphPlan) error {
 		if !ok || len(registered.schema.Outlets) == 0 {
 			return &GraphError{
 				NodeID: node.ID,
-				Field:  "when",
+				Field:  fieldWhen,
 				Err: fmt.Errorf(
 					"%w: routing node %q type %q declares no outlets",
 					ErrInvalidGraph,
@@ -82,7 +82,7 @@ func (r *Registry) validateGates(node GraphNode, plan graphPlan) error {
 		if !slices.Contains(registered.schema.Outlets, gate.Outlet) {
 			return &GraphError{
 				NodeID: node.ID,
-				Field:  "when",
+				Field:  fieldWhen,
 				Err: fmt.Errorf(
 					"%w %q on routing node %q",
 					ErrUnknownOutlet,

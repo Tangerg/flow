@@ -41,6 +41,32 @@ var (
 // the next one.
 const MaxNestingDepth = 1024
 
+// Definition diagnostic fields are shared by strict validation, compilation,
+// and error reporting. Most name serialized members; fieldJSON names the
+// document boundary before an individual member can be identified. Keeping one
+// vocabulary prevents those paths from describing the same location
+// differently.
+const (
+	fieldBody          = "body"
+	fieldBodyOutput    = "bodyOutput"
+	fieldCases         = "cases"
+	fieldConcurrency   = "concurrency"
+	fieldCondition     = "condition"
+	fieldConfig        = "config"
+	fieldDependsOn     = "dependsOn"
+	fieldID            = "id"
+	fieldInput         = "input"
+	fieldInputs        = "inputs"
+	fieldJSON          = "json"
+	fieldKind          = "kind"
+	fieldMaxIterations = "maxIterations"
+	fieldResolver      = "resolver"
+	fieldSteps         = "steps"
+	fieldTrigger       = "trigger"
+	fieldType          = "type"
+	fieldWhen          = "when"
+)
+
 // StepOp identifies the phase of a workflow step that failed.
 type StepOp string
 
@@ -133,7 +159,7 @@ func (g *GraphError) Unwrap() error { return g.Err }
 // SpecError identifies the nested specification and field associated with a
 // validation or compilation error.
 type SpecError struct {
-	Kind  SpecKind
+	Kind  Kind
 	ID    string
 	Field string
 	Err   error

@@ -58,7 +58,7 @@ The syntax resembles Go but intentionally supports only a small subset:
 | Non-identifier node IDs | `node["load-user"].output` |
 | Literals | `42`, `3.14`, `"ok"`, `true`, `nil` |
 | Comparison | `== != < <= > >=` |
-| Logic | `&& || !`, with short-circuiting |
+| Logic | `&& \|\| !`, with short-circuiting |
 | Arithmetic | `+ - * / %` |
 | Built-ins | `len(x)` and `has(ref)` |
 

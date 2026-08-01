@@ -151,6 +151,11 @@ Runtime definitions have two complementary forms:
 | `Graph` | Flat DAGs with named-port edges, bounded concurrency, and conditional routes |
 | `Spec` | Nested sequence, parallel, branch, loop, iteration, and sealed subgraphs |
 
+A code-built or compiled Step can describe itself with `workflow.Describe`.
+Descriptions use the same typed `workflow.Kind` values as `Spec`—for example,
+`workflow.KindGraph` and `workflow.KindSubgraph`—so tooling does not compare
+undocumented string literals.
+
 A `Registry` is the capability boundary between external data and executable Go
 code. Both definition forms compile to an ordinary `Step`:
 

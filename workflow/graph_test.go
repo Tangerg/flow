@@ -46,7 +46,7 @@ func TestCompileGraph_diamond(t *testing.T) {
 	// Introspection preserves the user's graph rather than exposing an internal
 	// scheduling transform.
 	description := workflow.Describe(step)
-	if description.Kind != "graph" || len(description.Children) != 4 {
+	if description.Kind != workflow.KindGraph || len(description.Children) != 4 {
 		t.Fatalf("description = %+v; want graph with four nodes", description)
 	}
 	if last := description.Children[len(description.Children)-1]; last.ID != "d" {
@@ -162,7 +162,7 @@ func TestCompileGraph_emptyGraphIsAnIdentity(t *testing.T) {
 	if value, getErr := workflow.Get[int](output, workflow.Output("seed")); getErr != nil || value != 1 {
 		t.Fatalf("seed = %v, %v; want 1", value, getErr)
 	}
-	if description := workflow.Describe(step); description.Kind != "graph" || len(description.Children) != 0 {
+	if description := workflow.Describe(step); description.Kind != workflow.KindGraph || len(description.Children) != 0 {
 		t.Fatalf("Describe = %+v; want empty graph", description)
 	}
 }
@@ -710,7 +710,7 @@ func TestCompileGraph_descriptionPreservesDeclarationOrder(t *testing.T) {
 		t.Fatalf("CompileGraph: %v", err)
 	}
 	description := workflow.Describe(step)
-	if description.Kind != "graph" || len(description.Children) != 4 {
+	if description.Kind != workflow.KindGraph || len(description.Children) != 4 {
 		t.Fatalf("description = %+v; want graph with four nodes", description)
 	}
 	var ids []string

@@ -356,10 +356,10 @@ func (s signedNumber) compareFloat(other floatNumber) (order int, unordered bool
 	}
 	// 2^63 is exactly representable as a float64. Keeping conversion inside this
 	// interval avoids implementation-dependent out-of-range float-to-int results.
-	if floating >= float64(1<<63) {
+	if floating >= float64(math.MaxInt64) {
 		return -1, false
 	}
-	if floating < -float64(1<<63) {
+	if floating < float64(math.MinInt64) {
 		return 1, false
 	}
 
@@ -385,7 +385,7 @@ func (u unsignedNumber) compareFloat(other floatNumber) (order int, unordered bo
 	if floating < 0 {
 		return 1, false
 	}
-	if floating >= float64(1<<64) {
+	if floating >= float64(math.MaxUint64) {
 		return -1, false
 	}
 

@@ -472,6 +472,19 @@ func TestStore_UnmarshalReportsEveryJSONKind(t *testing.T) {
 	}
 }
 
+func TestStore_UnmarshalReportsFirstInvalidNodeDeterministically(t *testing.T) {
+	const document = `{"z":null,"a":false}`
+	const want = `workflow: unmarshal store node "a": expected object, got boolean`
+
+	for range 100 {
+		var store workflow.Store
+		err := json.Unmarshal([]byte(document), &store)
+		if err == nil || err.Error() != want {
+			t.Fatalf("Unmarshal error = %v; want %q", err, want)
+		}
+	}
+}
+
 func TestStore_UnmarshalRejectsNilReceiver(t *testing.T) {
 	var store *workflow.Store
 	if err := store.UnmarshalJSON([]byte(`{}`)); err == nil ||

@@ -148,7 +148,7 @@ func (b branchRunner) Run(ctx context.Context, branch Step) (branchOutcome, erro
 }
 
 func (p parallelStep) Describe() Description {
-	return Description{Kind: "parallel", Children: p.branches.describe()}
+	return Description{Kind: KindParallel, Children: p.branches.describe()}
 }
 
 func (p parallelStep) definition() stepDefinition {

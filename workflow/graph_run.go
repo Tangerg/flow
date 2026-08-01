@@ -27,6 +27,9 @@ type graphExecution struct {
 	ready  []int
 	head   int
 	active int
+
+	failure     error
+	suspensions suspensionList
 }
 
 type graphOutcome struct {
@@ -34,6 +37,23 @@ type graphOutcome struct {
 	input Store
 	store Store
 	err   error
+}
+
+// graphCall is one admitted scheduler task. It checks cancellation at the last
+// possible point before entering caller code, closing the window between
+// scheduling a ready node and its goroutine actually starting.
+type graphCall struct {
+	index int
+	input Store
+	step  Step
+}
+
+func (g graphCall) run(ctx context.Context) graphOutcome {
+	if err := ctx.Err(); err != nil {
+		return graphOutcome{index: g.index, input: g.input, store: g.input, err: err}
+	}
+	store, err := g.step.Run(ctx, g.input)
+	return graphOutcome{index: g.index, input: g.input, store: store, err: err}
 }
 
 func (g *graphExecution) run(ctx context.Context) (Store, error) {
@@ -60,10 +80,8 @@ func (g *graphExecution) run(ctx context.Context) (Store, error) {
 		limit = len(g.graph.steps)
 	}
 
-	var failure error
-	var suspensions suspensionList
 	for {
-		if failure == nil && ctx.Err() == nil {
+		if g.failure == nil && ctx.Err() == nil {
 			g.startReady(runCtx, outcomes, limit)
 		}
 		if g.active == 0 {
@@ -71,32 +89,44 @@ func (g *graphExecution) run(ctx context.Context) (Store, error) {
 		}
 
 		outcome := <-outcomes
-		g.active--
-		if failure != nil || ctx.Err() != nil {
-			continue
+		if g.accept(outcome, ctx.Err() != nil) {
+			cancel()
 		}
-		if outcome.err == nil {
-			g.complete(outcome)
-			continue
-		}
-		if waiting, only := (suspensionTree{err: outcome.err}).suspensions(); only {
-			g.states[outcome.index] = graphNodeSuspended
-			g.writes[outcome.index] = outcome.store.writesSince(outcome.input)
-			suspensions = append(suspensions, waiting...)
-			continue
-		}
-		failure = outcome.err
-		cancel()
 	}
 
+	return g.result(ctx)
+}
+
+// accept records one finished node. It reports whether this outcome introduced
+// the first failure, which tells the scheduler to cancel the remaining calls.
+func (g *graphExecution) accept(outcome graphOutcome, parentCanceled bool) bool {
+	g.active--
+	if g.failure != nil || parentCanceled {
+		return false
+	}
+	if outcome.err == nil {
+		g.complete(outcome)
+		return false
+	}
+	if waiting, only := (suspensionTree{err: outcome.err}).suspensions(); only {
+		g.states[outcome.index] = graphNodeSuspended
+		g.writes[outcome.index] = outcome.store.writesSince(outcome.input)
+		g.suspensions = append(g.suspensions, waiting...)
+		return false
+	}
+	g.failure = outcome.err
+	return true
+}
+
+func (g *graphExecution) result(ctx context.Context) (Store, error) {
 	result := g.completedStore()
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	if failure != nil {
-		return result, failure
+	if g.failure != nil {
+		return result, g.failure
 	}
-	return result, suspensions.err()
+	return result, g.suspensions.err()
 }
 
 func (g *graphExecution) startReady(
@@ -105,20 +135,20 @@ func (g *graphExecution) startReady(
 	limit int,
 ) {
 	for g.active < limit && g.head < len(g.ready) {
+		if ctx.Err() != nil {
+			return
+		}
 		index := g.ready[g.head]
 		g.head++
 		g.states[index] = graphNodeRunning
 		g.active++
-		input := g.nodeInput(index)
-		step := g.graph.steps[index]
+		call := graphCall{
+			index: index,
+			input: g.nodeInput(index),
+			step:  g.graph.steps[index],
+		}
 		go func() {
-			store, err := step.Run(ctx, input)
-			outcomes <- graphOutcome{
-				index: index,
-				input: input,
-				store: store,
-				err:   err,
-			}
+			outcomes <- call.run(ctx)
 		}()
 	}
 }

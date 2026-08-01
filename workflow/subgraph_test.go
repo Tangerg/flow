@@ -82,7 +82,7 @@ func TestSubgraph_reusesOneBodyUnderIndependentScopes(t *testing.T) {
 	description := workflow.Describe(workflow.Subgraph(workflow.SubgraphConfig{
 		ID: "described", Body: body, BodyOutput: workflow.Output("inner"),
 	}))
-	if description.Kind != "subgraph" ||
+	if description.Kind != workflow.KindSubgraph ||
 		description.ID != "described" ||
 		len(description.Children) != 1 ||
 		description.Children[0].ID != "inner" {

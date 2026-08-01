@@ -22,6 +22,7 @@ being presented as migrations from a version that was never published.
   dependencies, graph-wide concurrency limits, conditional outlets, bypass,
   and mutually exclusive merges.
 - Structured `Spec` definitions for nested control flow.
+- A typed `Kind` vocabulary shared by `Spec` and Step descriptions.
 - A Registry boundary for named Go capabilities, node schemas, configuration
   schemas, conditions, and resolvers.
 - Strict JSON Graph and Spec decoding with duplicate-member rejection,
@@ -45,6 +46,8 @@ being presented as migrations from a version that was never published.
 - The module requires Go 1.26 or newer.
 - Errors preserve their causes and expose stable sentinels or structured
   context for use with `errors.Is` and `errors.As`.
+- Validation and persistence diagnostics do not depend on Go map iteration
+  order when several entries are invalid.
 - Retry, timeout, tracing, durable scheduling, and exactly-once effects remain
   outside the engine. Typed-node decorators and application infrastructure own
   those policies.

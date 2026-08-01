@@ -117,7 +117,7 @@ func (s subgraphStep) bind(outer Store) (Store, error) {
 func (s subgraphStep) Describe() Description {
 	return Description{
 		ID:       s.id,
-		Kind:     "subgraph",
+		Kind:     KindSubgraph,
 		Children: []Description{Describe(s.body)},
 	}
 }

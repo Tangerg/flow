@@ -188,7 +188,7 @@ func (i iterationStep) collect(s Store, outcomes []elementOutcome) (Store, error
 }
 
 func (i iterationStep) Describe() Description {
-	return Description{ID: i.id, Kind: "iteration", Children: []Description{Describe(i.body)}}
+	return Description{ID: i.id, Kind: KindIteration, Children: []Description{Describe(i.body)}}
 }
 
 func (i iterationStep) definition() stepDefinition {

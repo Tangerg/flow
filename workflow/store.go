@@ -43,7 +43,7 @@ type Store struct {
 const storeOverlayLimit = 64
 
 type storeSnapshot struct {
-	data map[storeKey]cell
+	data storeCells
 }
 
 type storeDelta struct {
@@ -56,6 +56,10 @@ type storeKey struct {
 	nodeID string
 	key    string
 }
+
+type storeCells map[storeKey]cell
+
+type nodeSet map[string]struct{}
 
 // revisionCounter gives each write an identity. Parallel uses it to distinguish
 // a branch's writes from cells merely inherited from its input snapshot,
@@ -112,7 +116,7 @@ func (s Store) compact() Store {
 // Graph uses it at its execution boundary so stale outputs from an earlier run
 // cannot satisfy current dependencies or conditional merges. The Journal then
 // restores exactly the internal values that belong to the current definition.
-func (s Store) withoutNodes(nodeIDs map[string]struct{}) Store {
+func (s Store) withoutNodes(nodeIDs nodeSet) Store {
 	if len(nodeIDs) == 0 || !s.hasNode(nodeIDs) {
 		return s
 	}
@@ -128,7 +132,7 @@ func (s Store) withoutNodes(nodeIDs map[string]struct{}) Store {
 	return Store{snapshot: &storeSnapshot{data: data}}
 }
 
-func (s Store) hasNode(nodeIDs map[string]struct{}) bool {
+func (s Store) hasNode(nodeIDs nodeSet) bool {
 	for delta := s.delta; delta != nil; delta = delta.parent {
 		if _, found := nodeIDs[delta.key.nodeID]; found {
 			return true
@@ -240,7 +244,7 @@ func (s Store) writesSince(base Store) []storeWrite {
 // Store restored from an external snapshot has no original write order to
 // recover; [Store.UnmarshalJSON] assigns its revisions by sorted cell, which
 // makes the resulting order deterministic rather than chronological.
-func (s Store) changedWrites(base map[storeKey]cell) []storeWrite {
+func (s Store) changedWrites(base storeCells) []storeWrite {
 	candidate := s.materialize()
 	changed := make([]storeWrite, 0, len(candidate))
 	for identity, next := range candidate {
@@ -313,7 +317,7 @@ func (s Store) withWrites(writes []storeWrite) Store {
 type storeMerger struct {
 	base     Store
 	result   Store
-	baseData map[storeKey]cell
+	baseData storeCells
 }
 
 func (s *storeMerger) add(other Store) {
@@ -372,12 +376,12 @@ func (s Store) lookupCell(nodeID, key string) (cell, bool) {
 }
 
 // materialize returns a mutable copy of the Store's complete flat cell map.
-func (s Store) materialize() map[storeKey]cell {
+func (s Store) materialize() storeCells {
 	capacity := 0
 	if s.snapshot != nil {
 		capacity = len(s.snapshot.data)
 	}
-	data := make(map[storeKey]cell, capacity+s.depth)
+	data := make(storeCells, capacity+s.depth)
 	if s.snapshot != nil {
 		maps.Copy(data, s.snapshot.data)
 	}
@@ -393,8 +397,6 @@ func (s Store) deltasOldestFirst() []*storeDelta {
 	for delta := s.delta; delta != nil; delta = delta.parent {
 		writes = append(writes, delta)
 	}
-	for left, right := 0, len(writes)-1; left < right; left, right = left+1, right-1 {
-		writes[left], writes[right] = writes[right], writes[left]
-	}
+	slices.Reverse(writes)
 	return writes
 }

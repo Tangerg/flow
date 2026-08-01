@@ -24,13 +24,8 @@ type switchNode[K comparable, I, O any] struct {
 
 func (s switchNode[K, I, O]) Run(ctx context.Context, in I) (O, error) {
 	var zero O
-	if isNilNode(s.resolve) {
-		return zero, ErrNilNode
-	}
-	for key, node := range s.cases {
-		if isNilNode(node) {
-			return zero, fmt.Errorf("case %v: %w", key, ErrNilNode)
-		}
+	if err := s.validate(); err != nil {
+		return zero, err
 	}
 	key, err := s.resolve.Run(ctx, in)
 	if err != nil {
@@ -41,4 +36,16 @@ func (s switchNode[K, I, O]) Run(ctx context.Context, in I) (O, error) {
 		return zero, fmt.Errorf("%w: key %v", ErrNoCase, key)
 	}
 	return node.Run(ctx, in)
+}
+
+func (s switchNode[K, I, O]) validate() error {
+	if isNilNode(s.resolve) {
+		return ErrNilNode
+	}
+	for _, node := range s.cases {
+		if isNilNode(node) {
+			return ErrNilNode
+		}
+	}
+	return nil
 }

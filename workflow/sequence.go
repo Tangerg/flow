@@ -29,7 +29,7 @@ func (s sequenceStep) Run(ctx context.Context, store Store) (Store, error) {
 }
 
 func (s sequenceStep) Describe() Description {
-	return Description{Kind: "sequence", Children: s.steps.describe()}
+	return Description{Kind: KindSequence, Children: s.steps.describe()}
 }
 
 func (s sequenceStep) definition() stepDefinition {

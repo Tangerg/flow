@@ -73,14 +73,14 @@ func TestSwitch_validatesCasesBeforeRunningResolver(t *testing.T) {
 		return "ok", nil
 	})
 	_, err := flow.Switch(resolve, map[string]flow.Node[int, int]{
-		"ok":      flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) { return value, nil }),
-		"invalid": nil,
+		"invalid-a": nil,
+		"invalid-b": nil,
 	}).Run(t.Context(), 1)
 	if !errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("err = %v; want ErrNilNode", err)
 	}
-	if got, want := err.Error(), "case invalid: flow: nil node"; got != want {
-		t.Fatalf("err = %q; want %q", got, want)
+	if got, want := err.Error(), flow.ErrNilNode.Error(); got != want {
+		t.Fatalf("err = %q; want stable error %q", got, want)
 	}
 	if ran {
 		t.Fatal("resolver ran before the invalid cases were rejected")

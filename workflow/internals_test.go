@@ -25,6 +25,12 @@ func (opaqueTestStep) Run(_ context.Context, store Store) (Store, error) {
 	return store, nil
 }
 
+type opaqueTestStepFunc func(context.Context, Store) (Store, error)
+
+func (o opaqueTestStepFunc) Run(ctx context.Context, store Store) (Store, error) {
+	return o(ctx, store)
+}
+
 func TestJSONDocument_reportsMalformedStructure(t *testing.T) {
 	var target any
 	if err := jsonDocument(`{`).decode(&target); err == nil {
@@ -231,7 +237,7 @@ func TestGraphDecorators_preserveDefinitionAndStoreBoundaries(t *testing.T) {
 			t.Fatalf("definition = %+v; want named opaque", definition)
 		}
 		if description := step.Describe(); description.ID != "opaque" ||
-			description.Kind != "opaque" {
+			description.Kind != KindOpaque {
 			t.Fatalf("description = %+v; want named opaque", description)
 		}
 	})
@@ -241,7 +247,7 @@ func TestGraphDecorators_preserveDefinitionAndStoreBoundaries(t *testing.T) {
 		if got := store.withoutNodes(nil); got != store {
 			t.Fatal("empty node set changed the Store")
 		}
-		nodes := map[string]struct{}{"node": {}}
+		nodes := nodeSet{"node": {}}
 		if got := (Store{}).withoutNodes(nodes); got != (Store{}) {
 			t.Fatalf("empty Store changed to %+v", got)
 		}
@@ -275,7 +281,8 @@ func TestGraphDecorators_preserveDefinitionAndStoreBoundaries(t *testing.T) {
 			TriggerAll,
 			step,
 		)
-		if err := (definitionValidator{}).validate(step); !errors.Is(err, ErrMaxDepth) {
+		validator := definitionValidator{}
+		if err := validator.validate(step); !errors.Is(err, ErrMaxDepth) {
 			t.Fatalf("error = %v; want ErrMaxDepth", err)
 		}
 	})
@@ -299,4 +306,29 @@ func TestGraphDecorators_preserveDefinitionAndStoreBoundaries(t *testing.T) {
 			t.Fatalf("second bypass error = %v; want ErrDuplicateStep", err)
 		}
 	})
+}
+
+func TestGraphCall_doesNotEnterStepAfterCancellation(t *testing.T) {
+	calls := 0
+	call := graphCall{
+		index: 3,
+		input: NewStore().WithOutput("seed", 1),
+		step: opaqueTestStepFunc(func(context.Context, Store) (Store, error) {
+			calls++
+			return Store{}, nil
+		}),
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	outcome := call.run(ctx)
+	if calls != 0 {
+		t.Fatalf("step calls = %d; want 0", calls)
+	}
+	if outcome.index != 3 || !errors.Is(outcome.err, context.Canceled) {
+		t.Fatalf("outcome = %+v; want index 3 with context cancellation", outcome)
+	}
+	if value, err := Get[int](outcome.store, Output("seed")); err != nil || value != 1 {
+		t.Fatalf("preserved input = %d, %v; want 1, nil", value, err)
+	}
 }

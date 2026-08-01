@@ -18,6 +18,9 @@
 // and [BindFactory] the case of a node reading several inputs. Composites
 // ([Sequence], [Branch], [Loop], [Parallel], [Iteration], [Subgraph]) remain
 // ordinary Steps.
+// [Describe] returns their structural tree using the same typed [Kind]
+// vocabulary as [Spec], so introspection and serialized definitions do not
+// invent separate string protocols.
 //
 // # Named input ports
 //

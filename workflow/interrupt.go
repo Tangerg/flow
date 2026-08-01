@@ -57,7 +57,7 @@ func (i interruptStep) Run(ctx context.Context, store Store) (Store, error) {
 }
 
 func (i interruptStep) Describe() Description {
-	return Description{ID: i.id, Kind: "interrupt"}
+	return Description{ID: i.id, Kind: KindInterrupt}
 }
 
 func (i interruptStep) definition() stepDefinition {

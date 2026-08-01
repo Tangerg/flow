@@ -59,7 +59,7 @@ type Graph struct {
 // The result is deduplicated and ordered by reference. A malformed graph yields
 // the references it can still resolve; use [Registry.ValidateGraph] to reject it.
 func (g Graph) Inputs() []Ref {
-	internalNodeIDs := make(map[string]struct{}, len(g.Nodes))
+	internalNodeIDs := make(nodeSet, len(g.Nodes))
 	for _, node := range g.Nodes {
 		internalNodeIDs[node.ID] = struct{}{}
 	}

@@ -96,12 +96,15 @@ func (s *Store) UnmarshalJSON(data []byte) error {
 	}
 
 	// Validating every node before assigning any revision keeps a malformed
-	// document from consuming revisions, and holding the converted maps means the
-	// second pass needs no repeated assertion.
+	// document from consuming revisions. Map iteration order is random, so both
+	// passes walk sorted names: invalid documents report the same first node, and
+	// valid documents receive the same revision order on every decode. Holding
+	// the converted maps means the second pass needs no repeated assertion.
 	nodes := make(map[string]map[string]any, len(raw))
-	nodeIDs := make([]string, 0, len(raw))
+	nodeIDs := slices.Sorted(maps.Keys(raw))
 	size := 0
-	for nodeID, value := range raw {
+	for _, nodeID := range nodeIDs {
+		value := raw[nodeID]
 		values, ok := value.(map[string]any)
 		if !ok {
 			return fmt.Errorf(
@@ -111,14 +114,10 @@ func (s *Store) UnmarshalJSON(data []byte) error {
 			)
 		}
 		nodes[nodeID] = values
-		nodeIDs = append(nodeIDs, nodeID)
 		size += len(values)
 	}
-	// Map iteration order is random, so both loops walk sorted names: revisions
-	// then reproduce write order identically for every decode of one document.
-	slices.Sort(nodeIDs)
 
-	nextData := make(map[storeKey]cell, size)
+	nextData := make(storeCells, size)
 	for _, nodeID := range nodeIDs {
 		values := nodes[nodeID]
 		for _, key := range slices.Sorted(maps.Keys(values)) {

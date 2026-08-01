@@ -7,6 +7,13 @@ import (
 	"sync"
 )
 
+const (
+	registrationCondition = "condition"
+	registrationNode      = "node"
+	registrationResolver  = "resolver"
+	registrationSchema    = "schema"
+)
+
 // NodeSpec carries everything a [NodeFactory] needs to build one node: the ID it
 // must report in events and Store writes, its wired input ports, and its raw JSON
 // config. It is the part of a [GraphNode] or [Spec] that survives compilation;
@@ -67,17 +74,17 @@ func (r *Registry) RegisterNode(nodeType string, factory NodeFactory) error {
 	switch {
 	case nodeType == "":
 		return &RegistrationError{
-			Kind: "node",
+			Kind: registrationNode,
 			Err:  fmt.Errorf("%w: node type is empty", ErrInvalidRegistration),
 		}
 	case factory == nil:
 		return &RegistrationError{
-			Kind: "node",
+			Kind: registrationNode,
 			Name: nodeType,
 			Err:  fmt.Errorf("%w: factory is nil", ErrInvalidRegistration),
 		}
 	case r.nodes[nodeType] != nil:
-		return &RegistrationError{Kind: "node", Name: nodeType, Err: ErrDuplicateRegistration}
+		return &RegistrationError{Kind: registrationNode, Name: nodeType, Err: ErrDuplicateRegistration}
 	default:
 		r.nodes[nodeType] = factory
 	}
@@ -101,17 +108,17 @@ func (r *Registry) RegisterResolver(name string, resolver Resolver) error {
 	switch {
 	case name == "":
 		return &RegistrationError{
-			Kind: "resolver",
+			Kind: registrationResolver,
 			Err:  fmt.Errorf("%w: name is empty", ErrInvalidRegistration),
 		}
 	case resolver == nil:
 		return &RegistrationError{
-			Kind: "resolver",
+			Kind: registrationResolver,
 			Name: name,
 			Err:  fmt.Errorf("%w: resolver is nil", ErrInvalidRegistration),
 		}
 	case r.resolvers[name] != nil:
-		return &RegistrationError{Kind: "resolver", Name: name, Err: ErrDuplicateRegistration}
+		return &RegistrationError{Kind: registrationResolver, Name: name, Err: ErrDuplicateRegistration}
 	default:
 		r.resolvers[name] = resolver
 	}
@@ -134,17 +141,17 @@ func (r *Registry) RegisterCondition(name string, condition Condition) error {
 	switch {
 	case name == "":
 		return &RegistrationError{
-			Kind: "condition",
+			Kind: registrationCondition,
 			Err:  fmt.Errorf("%w: name is empty", ErrInvalidRegistration),
 		}
 	case condition == nil:
 		return &RegistrationError{
-			Kind: "condition",
+			Kind: registrationCondition,
 			Name: name,
 			Err:  fmt.Errorf("%w: condition is nil", ErrInvalidRegistration),
 		}
 	case r.conditions[name] != nil:
-		return &RegistrationError{Kind: "condition", Name: name, Err: ErrDuplicateRegistration}
+		return &RegistrationError{Kind: registrationCondition, Name: name, Err: ErrDuplicateRegistration}
 	default:
 		r.conditions[name] = condition
 	}

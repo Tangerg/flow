@@ -49,23 +49,8 @@ type loopStep struct {
 
 func (l loopStep) Run(ctx context.Context, s Store) (Store, error) {
 	ctx = ensureRun(ctx)
-	switch {
-	case l.id == "":
-		return s, &StepError{ID: l.id, Op: OpValidate, Err: ErrInvalidStepID}
-	case isNilNode(l.body):
-		return s, &StepError{ID: l.id, Op: OpValidate, Err: ErrNilStep}
-	case l.done == nil:
-		return s, &StepError{ID: l.id, Op: OpValidate, Err: flow.ErrNilFunc}
-	case l.config.MaxIterations < 0:
-		return s, &StepError{
-			ID: l.id,
-			Op: OpValidate,
-			Err: fmt.Errorf(
-				"%w: max iterations must be non-negative, got %d",
-				flow.ErrInvalidConfig,
-				l.config.MaxIterations,
-			),
-		}
+	if err := l.validate(); err != nil {
+		return s, err
 	}
 	if err := runFrom(ctx).validateDefinition(l); err != nil {
 		return s, err
@@ -75,6 +60,29 @@ func (l loopStep) Run(ctx context.Context, s Store) (Store, error) {
 	}
 
 	return l.runIterations(ctx, s)
+}
+
+func (l loopStep) validate() error {
+	switch {
+	case l.id == "":
+		return &StepError{ID: l.id, Op: OpValidate, Err: ErrInvalidStepID}
+	case isNilNode(l.body):
+		return &StepError{ID: l.id, Op: OpValidate, Err: ErrNilStep}
+	case l.done == nil:
+		return &StepError{ID: l.id, Op: OpValidate, Err: flow.ErrNilFunc}
+	case l.config.MaxIterations < 0:
+		return &StepError{
+			ID: l.id,
+			Op: OpValidate,
+			Err: fmt.Errorf(
+				"%w: max iterations must be non-negative, got %d",
+				flow.ErrInvalidConfig,
+				l.config.MaxIterations,
+			),
+		}
+	default:
+		return nil
+	}
 }
 
 // runIterations owns workflow-specific loop semantics. In particular, a
@@ -153,7 +161,7 @@ func (l loopStep) stop(ctx context.Context, iter int, s Store) (bool, error) {
 }
 
 func (l loopStep) Describe() Description {
-	return Description{ID: l.id, Kind: "loop", Children: []Description{Describe(l.body)}}
+	return Description{ID: l.id, Kind: KindLoop, Children: []Description{Describe(l.body)}}
 }
 
 func (l loopStep) definition() stepDefinition {

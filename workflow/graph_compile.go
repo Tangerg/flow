@@ -42,12 +42,12 @@ type graphStep struct {
 	dependencyCounts      []int
 	dependencyNodeIndexes [][]int
 	dependentNodeIndexes  [][]int
-	nodeIDs               map[string]struct{}
+	nodeIDs               nodeSet
 	limit                 int
 }
 
 func compiledGraph(plan graphPlan, steps stepList, limit int) Step {
-	nodeIDs := make(map[string]struct{}, len(plan.nodesByID))
+	nodeIDs := make(nodeSet, len(plan.nodesByID))
 	for nodeID := range plan.nodesByID {
 		nodeIDs[nodeID] = struct{}{}
 	}
@@ -82,7 +82,7 @@ func (g graphStep) Run(ctx context.Context, store Store) (Store, error) {
 }
 
 func (g graphStep) Describe() Description {
-	return Description{Kind: "graph", Children: g.steps.describe()}
+	return Description{Kind: KindGraph, Children: g.steps.describe()}
 }
 
 func (g graphStep) definition() stepDefinition {
@@ -108,7 +108,7 @@ func (r *Registry) CompileGraphJSON(data []byte) (Step, error) {
 	var graph Graph
 	if err := schemaLoader(loadGraphSchema).decode(jsonDocument(data), &graph); err != nil {
 		return nil, &GraphError{
-			Field: "json",
+			Field: fieldJSON,
 			Err:   fmt.Errorf("%w: %w", ErrInvalidGraph, err),
 		}
 	}

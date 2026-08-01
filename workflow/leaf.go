@@ -97,7 +97,7 @@ func (l leafStep[I, O]) Run(ctx context.Context, store Store) (Store, error) {
 }
 
 func (l leafStep[I, O]) Describe() Description {
-	return Description{ID: l.id, Kind: "leaf"}
+	return Description{ID: l.id, Kind: KindLeaf}
 }
 
 func (l leafStep[I, O]) definition() stepDefinition {

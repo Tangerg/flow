@@ -14,7 +14,15 @@ var (
 	_ json.Unmarshaler = (*Journal)(nil)
 )
 
-const journalJSONVersion = 2
+const (
+	journalJSONVersion = 2
+
+	journalFieldID      = "id"
+	journalFieldRecords = "records"
+	journalFieldScope   = "scope"
+	journalFieldValue   = "value"
+	journalFieldVersion = "version"
+)
 
 // journalDocument is the shape [Journal.MarshalJSON] writes: each value arrives
 // already encoded, so the document is assembled without re-encoding.
@@ -135,14 +143,19 @@ func (j *journalDecoder) decode(data []byte) error {
 	if !ok {
 		return errors.New("document must be an object")
 	}
-	if fieldErr := j.allowFields(document, "version", "records"); fieldErr != nil {
+	if fieldErr := j.allowFields(document, journalFieldVersion, journalFieldRecords); fieldErr != nil {
 		return fieldErr
 	}
-	if fieldErr := j.requireFields(document, "document", "version", "records"); fieldErr != nil {
+	if fieldErr := j.requireFields(
+		document,
+		"document",
+		journalFieldVersion,
+		journalFieldRecords,
+	); fieldErr != nil {
 		return fieldErr
 	}
 
-	versionNumber, ok := document["version"].(json.Number)
+	versionNumber, ok := document[journalFieldVersion].(json.Number)
 	if !ok {
 		return errors.New("version must be an integer")
 	}
@@ -158,7 +171,7 @@ func (j *journalDecoder) decode(data []byte) error {
 		)
 	}
 
-	records, ok := document["records"].([]any)
+	records, ok := document[journalFieldRecords].([]any)
 	if !ok {
 		return errors.New("records must be an array")
 	}
@@ -175,14 +188,14 @@ func (j *journalDecoder) decodeRecord(value any) error {
 	if !ok {
 		return errors.New("must be an object")
 	}
-	if err := j.allowFields(record, "scope", "id", "value"); err != nil {
+	if err := j.allowFields(record, journalFieldScope, journalFieldID, journalFieldValue); err != nil {
 		return err
 	}
-	if err := j.requireFields(record, "record", "id", "value"); err != nil {
+	if err := j.requireFields(record, "record", journalFieldID, journalFieldValue); err != nil {
 		return err
 	}
 
-	id, ok := record["id"].(string)
+	id, ok := record[journalFieldID].(string)
 	if !ok {
 		return errors.New("id must be a string")
 	}
@@ -197,7 +210,7 @@ func (j *journalDecoder) decodeRecord(value any) error {
 	if inserted := j.root.record(
 		scope,
 		id,
-		journalValue{value: record["value"]},
+		journalValue{value: record[journalFieldValue]},
 	); !inserted {
 		return fmt.Errorf("duplicate step %q in scope %q", id, scope)
 	}
@@ -206,7 +219,7 @@ func (j *journalDecoder) decodeRecord(value any) error {
 }
 
 func (j *journalDecoder) decodeScope(record map[string]any) ([]string, error) {
-	value, present := record["scope"]
+	value, present := record[journalFieldScope]
 	if !present {
 		return nil, nil
 	}

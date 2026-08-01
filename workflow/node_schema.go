@@ -63,14 +63,14 @@ type registeredNodeSchema struct {
 func (r *Registry) RegisterSchema(nodeType string, schema NodeSchema) error {
 	if nodeType == "" {
 		return &RegistrationError{
-			Kind: "schema",
+			Kind: registrationSchema,
 			Err:  fmt.Errorf("%w: node type is empty", ErrInvalidRegistration),
 		}
 	}
 	registered, err := schema.compile()
 	if err != nil {
 		return &RegistrationError{
-			Kind: "schema",
+			Kind: registrationSchema,
 			Name: nodeType,
 			Err:  fmt.Errorf("%w: %w", ErrInvalidRegistration, err),
 		}
@@ -81,7 +81,7 @@ func (r *Registry) RegisterSchema(nodeType string, schema NodeSchema) error {
 	r.initLocked()
 	_, exists := r.schemas[nodeType]
 	if exists {
-		return &RegistrationError{Kind: "schema", Name: nodeType, Err: ErrDuplicateRegistration}
+		return &RegistrationError{Kind: registrationSchema, Name: nodeType, Err: ErrDuplicateRegistration}
 	}
 	r.schemas[nodeType] = registered
 	return nil

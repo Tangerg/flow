@@ -34,19 +34,17 @@ type definedStep interface {
 	definition() stepDefinition
 }
 
-type definitionValidator struct{}
-
-func (d definitionValidator) validate(step Step) error {
-	return d.validateStep(
-		step,
-		make(map[string]struct{}),
-		0,
-	)
+type definitionValidator struct {
+	ids map[string]struct{}
 }
 
-func (d definitionValidator) validateStep(
+func (d *definitionValidator) validate(step Step) error {
+	d.ids = make(map[string]struct{})
+	return d.validateStep(step, 0)
+}
+
+func (d *definitionValidator) validateStep(
 	step Step,
-	ids map[string]struct{},
 	depth int,
 ) error {
 	if depth >= MaxNestingDepth {
@@ -64,63 +62,57 @@ func (d definitionValidator) validateStep(
 
 	switch definition.kind {
 	case definitionSteps:
-		return d.validateSteps(definition.steps, ids, depth+1)
+		return d.validateSteps(definition.steps, depth+1)
 	case definitionBranch:
-		if err := d.claim(definition.id, ids); err != nil {
+		if err := d.claim(definition.id); err != nil {
 			return err
 		}
-		return d.validateCases(definition.cases, ids, depth+1)
+		return d.validateCases(definition.cases, depth+1)
 	case definitionLoop:
-		if err := d.claim(definition.id, ids); err != nil {
+		if err := d.claim(definition.id); err != nil {
 			return err
 		}
 		// A loop body is scoped by loop ID and iteration index. Its IDs do not
 		// collide with the surrounding workflow or another loop body. The loop
 		// ID remains reserved because its stop decision uses the same scope.
-		bodyIDs := map[string]struct{}{definition.id: {}}
-		return d.validateStep(definition.body, bodyIDs, depth+1)
+		bodyValidator := definitionValidator{
+			ids: map[string]struct{}{definition.id: {}},
+		}
+		return bodyValidator.validateStep(definition.body, depth+1)
 	case definitionIteration:
-		if err := d.claim(definition.id, ids); err != nil {
+		if err := d.claim(definition.id); err != nil {
 			return err
 		}
 		// An iteration body has its own Store and Journal scope.
-		return d.validateStep(
-			definition.body,
-			make(map[string]struct{}),
-			depth+1,
-		)
+		bodyValidator := definitionValidator{ids: make(map[string]struct{})}
+		return bodyValidator.validateStep(definition.body, depth+1)
 	case definitionSubgraph:
-		if err := d.claim(definition.id, ids); err != nil {
+		if err := d.claim(definition.id); err != nil {
 			return err
 		}
 		// A subgraph body has an isolated Store and a scope derived from the
 		// subgraph ID, so its execution identities are local to that instance.
-		return d.validateStep(
-			definition.body,
-			make(map[string]struct{}),
-			depth+1,
-		)
+		bodyValidator := definitionValidator{ids: make(map[string]struct{})}
+		return bodyValidator.validateStep(definition.body, depth+1)
 	default:
-		return d.claim(definition.id, ids)
+		return d.claim(definition.id)
 	}
 }
 
-func (d definitionValidator) validateSteps(
+func (d *definitionValidator) validateSteps(
 	steps stepList,
-	ids map[string]struct{},
 	depth int,
 ) error {
 	for _, step := range steps {
-		if err := d.validateStep(step, ids, depth); err != nil {
+		if err := d.validateStep(step, depth); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (d definitionValidator) validateCases(
+func (d *definitionValidator) validateCases(
 	cases map[string]Step,
-	ids map[string]struct{},
 	depth int,
 ) error {
 	// Only one case runs. Cases may reuse IDs with one another, but every case
@@ -128,27 +120,27 @@ func (d definitionValidator) validateCases(
 	// that follow it.
 	introduced := make(map[string]struct{})
 	for _, name := range slices.Sorted(maps.Keys(cases)) {
-		caseIDs := maps.Clone(ids)
-		if err := d.validateStep(cases[name], caseIDs, depth); err != nil {
+		caseValidator := definitionValidator{ids: maps.Clone(d.ids)}
+		if err := caseValidator.validateStep(cases[name], depth); err != nil {
 			return err
 		}
-		for id := range caseIDs {
-			if _, existed := ids[id]; !existed {
+		for id := range caseValidator.ids {
+			if _, existed := d.ids[id]; !existed {
 				introduced[id] = struct{}{}
 			}
 		}
 	}
-	maps.Copy(ids, introduced)
+	maps.Copy(d.ids, introduced)
 	return nil
 }
 
-func (definitionValidator) claim(id string, ids map[string]struct{}) error {
+func (d *definitionValidator) claim(id string) error {
 	if id == "" {
 		return &StepError{ID: id, Op: OpValidate, Err: ErrInvalidStepID}
 	}
-	if _, duplicate := ids[id]; duplicate {
+	if _, duplicate := d.ids[id]; duplicate {
 		return &StepError{ID: id, Op: OpValidate, Err: ErrDuplicateStep}
 	}
-	ids[id] = struct{}{}
+	d.ids[id] = struct{}{}
 	return nil
 }

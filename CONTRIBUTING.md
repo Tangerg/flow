@@ -7,6 +7,9 @@ exported API, read the package boundaries in the
 ## Requirements
 
 - Go 1.26 or newer.
+- `golangci-lint` v2 (CI currently pins v2.12.2).
+- `govulncheck` (CI currently pins v1.6.0).
+- Node.js 22 or newer when changing Markdown documentation.
 - A clean module graph with no committed `replace` directives.
 - Tests written with the standard `testing` package.
 
@@ -29,6 +32,7 @@ go test -race -cover ./...
 go vet ./...
 golangci-lint run ./...
 govulncheck ./...
+npx --yes markdownlint-cli2@0.23.2
 ```
 
 Changes to the learning path should also run:

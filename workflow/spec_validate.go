@@ -14,8 +14,11 @@ func (r *Registry) ValidateSpec(spec Spec) error {
 }
 
 func (r *Registry) validateSpec(root Spec) error {
-	validator := specValidator{registry: r}
-	return validator.validate(root, make(map[string]struct{}))
+	validator := specValidator{
+		registry: r,
+		stepIDs:  make(map[string]struct{}),
+	}
+	return validator.validate(root)
 }
 
 // specValidator owns the recursive state and invariants of nested Spec
@@ -24,9 +27,10 @@ func (r *Registry) validateSpec(root Spec) error {
 // output ID.
 type specValidator struct {
 	registry *Registry
+	stepIDs  map[string]struct{}
 }
 
-func (s specValidator) validate(spec Spec, stepIDs map[string]struct{}) error {
+func (s *specValidator) validate(spec Spec) error {
 	if err := spec.validateFields(); err != nil {
 		return err
 	}
@@ -36,20 +40,20 @@ func (s specValidator) validate(spec Spec, stepIDs map[string]struct{}) error {
 
 	switch spec.Kind {
 	case KindLeaf:
-		return s.validateLeaf(spec, stepIDs)
+		return s.validateLeaf(spec)
 	case KindSequence, KindParallel:
-		return s.validateSteps(spec.Steps, stepIDs)
+		return s.validateSteps(spec.Steps)
 	case KindBranch:
-		return s.validateBranch(spec, stepIDs)
+		return s.validateBranch(spec)
 	case KindLoop:
-		return s.validateLoop(spec, stepIDs)
+		return s.validateLoop(spec)
 	case KindIteration:
-		return s.validateIteration(spec, stepIDs)
+		return s.validateIteration(spec)
 	case KindSubgraph:
-		return s.validateSubgraph(spec, stepIDs)
+		return s.validateSubgraph(spec)
 	default:
 		return spec.fieldError(
-			"kind",
+			fieldKind,
 			fmt.Errorf("%w: unknown kind %q", ErrInvalidSpec, spec.Kind),
 		)
 	}
@@ -70,7 +74,7 @@ func (s Spec) validateFields() error {
 func (s Spec) validateConstraints() error {
 	if s.Concurrency < 0 {
 		return s.fieldError(
-			"concurrency",
+			fieldConcurrency,
 			fmt.Errorf(
 				"%w: concurrency must be non-negative, got %d",
 				ErrInvalidSpec,
@@ -80,7 +84,7 @@ func (s Spec) validateConstraints() error {
 	}
 	if s.MaxIterations < 0 {
 		return s.fieldError(
-			"maxIterations",
+			fieldMaxIterations,
 			fmt.Errorf(
 				"%w: max iterations must be non-negative, got %d",
 				ErrInvalidSpec,
@@ -91,28 +95,28 @@ func (s Spec) validateConstraints() error {
 	return nil
 }
 
-func (s specValidator) validateSteps(specs []Spec, stepIDs map[string]struct{}) error {
+func (s *specValidator) validateSteps(specs []Spec) error {
 	for _, spec := range specs {
-		if err := s.validate(spec, stepIDs); err != nil {
+		if err := s.validate(spec); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s specValidator) validateLoop(spec Spec, stepIDs map[string]struct{}) error {
-	if err := spec.claimID(stepIDs); err != nil {
+func (s *specValidator) validateLoop(spec Spec) error {
+	if err := s.claimID(spec); err != nil {
 		return err
 	}
 	if spec.Body == nil {
 		return spec.fieldError(
-			"body",
+			fieldBody,
 			fmt.Errorf("%w: loop body is required", ErrInvalidSpec),
 		)
 	}
 	if _, ok := s.registry.lookupCondition(spec.Condition); !ok {
 		return spec.fieldError(
-			"condition",
+			fieldCondition,
 			fmt.Errorf("%w: unknown condition %q", ErrInvalidSpec, spec.Condition),
 		)
 	}
@@ -120,28 +124,32 @@ func (s specValidator) validateLoop(spec Spec, stepIDs map[string]struct{}) erro
 	// index, so its IDs are local and may be reused outside this loop. Reserve
 	// the loop ID itself because each iteration records the stop decision under
 	// that ID in the same scope.
-	return s.validate(*spec.Body, map[string]struct{}{spec.ID: {}})
+	bodyValidator := specValidator{
+		registry: s.registry,
+		stepIDs:  map[string]struct{}{spec.ID: {}},
+	}
+	return bodyValidator.validate(*spec.Body)
 }
 
-func (s specValidator) validateLeaf(spec Spec, stepIDs map[string]struct{}) error {
-	if err := spec.claimID(stepIDs); err != nil {
+func (s *specValidator) validateLeaf(spec Spec) error {
+	if err := s.claimID(spec); err != nil {
 		return err
 	}
 	if spec.Type == "" {
 		return spec.fieldError(
-			"type",
+			fieldType,
 			fmt.Errorf("%w: node type is empty", ErrInvalidSpec),
 		)
 	}
 	if _, ok := s.registry.lookupNode(spec.Type); !ok {
-		return spec.fieldError("type", fmt.Errorf("%w %q", ErrUnknownNodeType, spec.Type))
+		return spec.fieldError(fieldType, fmt.Errorf("%w %q", ErrUnknownNodeType, spec.Type))
 	}
 	registered, _ := s.registry.lookupNodeSchema(spec.Type)
 	if err := registered.validateConfig(spec.Config); err != nil {
-		return spec.fieldError("config", fmt.Errorf("%w: %w", ErrInvalidSpec, err))
+		return spec.fieldError(fieldConfig, fmt.Errorf("%w: %w", ErrInvalidSpec, err))
 	}
 	if err := spec.Inputs.validate(); err != nil {
-		return spec.fieldError("inputs", fmt.Errorf("%w: %w", ErrInvalidSpec, err))
+		return spec.fieldError(fieldInputs, fmt.Errorf("%w: %w", ErrInvalidSpec, err))
 	}
 	// A nested Spec has no cross-node index, so ports are checked for
 	// completeness only; edge types are checked when a flat Graph names both
@@ -150,24 +158,24 @@ func (s specValidator) validateLeaf(spec Spec, stepIDs map[string]struct{}) erro
 	if err := schema.validateInputs(spec.Inputs, func(Ref) (ValueType, bool) {
 		return "", false
 	}); err != nil {
-		return spec.fieldError("inputs", err)
+		return spec.fieldError(fieldInputs, err)
 	}
 	return nil
 }
 
-func (s specValidator) validateBranch(spec Spec, stepIDs map[string]struct{}) error {
-	if err := spec.claimID(stepIDs); err != nil {
+func (s *specValidator) validateBranch(spec Spec) error {
+	if err := s.claimID(spec); err != nil {
 		return err
 	}
 	if len(spec.Cases) == 0 {
 		return spec.fieldError(
-			"cases",
+			fieldCases,
 			fmt.Errorf("%w: at least one branch case is required", ErrInvalidSpec),
 		)
 	}
 	if _, ok := s.registry.lookupResolver(spec.Resolver); !ok {
 		return spec.fieldError(
-			"resolver",
+			fieldResolver,
 			fmt.Errorf("%w: unknown resolver %q", ErrInvalidSpec, spec.Resolver),
 		)
 	}
@@ -179,89 +187,100 @@ func (s specValidator) validateBranch(spec Spec, stepIDs map[string]struct{}) er
 	for _, name := range slices.Sorted(maps.Keys(spec.Cases)) {
 		if name == "" {
 			return spec.fieldError(
-				"cases",
+				fieldCases,
 				fmt.Errorf("%w: branch case name is empty", ErrInvalidSpec),
 			)
 		}
-		caseIDs := maps.Clone(stepIDs)
-		if err := s.validate(spec.Cases[name], caseIDs); err != nil {
+		caseValidator := specValidator{
+			registry: s.registry,
+			stepIDs:  maps.Clone(s.stepIDs),
+		}
+		if err := caseValidator.validate(spec.Cases[name]); err != nil {
 			return err
 		}
-		for id := range caseIDs {
-			if _, existed := stepIDs[id]; !existed {
+		for id := range caseValidator.stepIDs {
+			if _, existed := s.stepIDs[id]; !existed {
 				introduced[id] = struct{}{}
 			}
 		}
 	}
-	maps.Copy(stepIDs, introduced)
+	maps.Copy(s.stepIDs, introduced)
 	return nil
 }
 
-func (s specValidator) validateIteration(spec Spec, stepIDs map[string]struct{}) error {
-	if err := spec.claimID(stepIDs); err != nil {
+func (s *specValidator) validateIteration(spec Spec) error {
+	if err := s.claimID(spec); err != nil {
 		return err
 	}
 	if spec.Input == (Ref{}) {
 		return spec.fieldError(
-			"input",
+			fieldInput,
 			fmt.Errorf("%w: iteration input is required", ErrInvalidSpec),
 		)
 	}
 	if spec.Body == nil {
 		return spec.fieldError(
-			"body",
+			fieldBody,
 			fmt.Errorf("%w: iteration body is required", ErrInvalidSpec),
 		)
 	}
 	if spec.BodyOutput == (Ref{}) {
 		return spec.fieldError(
-			"bodyOutput",
+			fieldBodyOutput,
 			fmt.Errorf("%w: iteration body output is required", ErrInvalidSpec),
 		)
 	}
 	if err := spec.Input.validate(); err != nil {
-		return spec.fieldError("input", fmt.Errorf("%w: %w", ErrInvalidSpec, err))
+		return spec.fieldError(fieldInput, fmt.Errorf("%w: %w", ErrInvalidSpec, err))
 	}
 	if err := spec.BodyOutput.validate(); err != nil {
-		return spec.fieldError("bodyOutput", fmt.Errorf("%w: %w", ErrInvalidSpec, err))
+		return spec.fieldError(fieldBodyOutput, fmt.Errorf("%w: %w", ErrInvalidSpec, err))
 	}
 	// An iteration body's Store and Journal scope are local to one element.
-	return s.validate(*spec.Body, make(map[string]struct{}))
+	bodyValidator := specValidator{
+		registry: s.registry,
+		stepIDs:  make(map[string]struct{}),
+	}
+	return bodyValidator.validate(*spec.Body)
 }
 
-func (s specValidator) validateSubgraph(spec Spec, stepIDs map[string]struct{}) error {
-	if err := spec.claimID(stepIDs); err != nil {
+func (s *specValidator) validateSubgraph(spec Spec) error {
+	if err := s.claimID(spec); err != nil {
 		return err
 	}
 	if spec.Body == nil {
 		return spec.fieldError(
-			"body",
+			fieldBody,
 			fmt.Errorf("%w: subgraph body is required", ErrInvalidSpec),
 		)
 	}
 	if spec.BodyOutput == (Ref{}) {
 		return spec.fieldError(
-			"bodyOutput",
+			fieldBodyOutput,
 			fmt.Errorf("%w: subgraph body output is required", ErrInvalidSpec),
 		)
 	}
 	if err := spec.Inputs.validate(); err != nil {
-		return spec.fieldError("inputs", fmt.Errorf("%w: %w", ErrInvalidSpec, err))
+		return spec.fieldError(fieldInputs, fmt.Errorf("%w: %w", ErrInvalidSpec, err))
 	}
 	if err := spec.BodyOutput.validate(); err != nil {
-		return spec.fieldError("bodyOutput", fmt.Errorf("%w: %w", ErrInvalidSpec, err))
+		return spec.fieldError(fieldBodyOutput, fmt.Errorf("%w: %w", ErrInvalidSpec, err))
 	}
-	return s.validate(*spec.Body, make(map[string]struct{}))
+	bodyValidator := specValidator{
+		registry: s.registry,
+		stepIDs:  make(map[string]struct{}),
+	}
+	return bodyValidator.validate(*spec.Body)
 }
 
-func (s Spec) claimID(stepIDs map[string]struct{}) error {
-	if s.ID == "" {
-		return s.fieldError("id", ErrInvalidStepID)
+func (s *specValidator) claimID(spec Spec) error {
+	if spec.ID == "" {
+		return spec.fieldError(fieldID, ErrInvalidStepID)
 	}
-	if _, exists := stepIDs[s.ID]; exists {
-		return s.fieldError("id", ErrDuplicateStep)
+	if _, exists := s.stepIDs[spec.ID]; exists {
+		return spec.fieldError(fieldID, ErrDuplicateStep)
 	}
-	stepIDs[s.ID] = struct{}{}
+	s.stepIDs[spec.ID] = struct{}{}
 	return nil
 }
 
@@ -284,44 +303,45 @@ func (s Spec) unexpectedField() string {
 func (s Spec) allowedFields() []string {
 	switch s.Kind {
 	case KindLeaf:
-		return []string{"id", "type", "config", "inputs"}
+		return []string{fieldID, fieldType, fieldConfig, fieldInputs}
 	case KindSequence:
-		return []string{"steps"}
+		return []string{fieldSteps}
 	case KindParallel:
-		return []string{"steps", "concurrency"}
+		return []string{fieldSteps, fieldConcurrency}
 	case KindBranch:
-		return []string{"id", "resolver", "cases"}
+		return []string{fieldID, fieldResolver, fieldCases}
 	case KindLoop:
-		return []string{"id", "body", "condition", "maxIterations"}
+		return []string{fieldID, fieldBody, fieldCondition, fieldMaxIterations}
 	case KindIteration:
-		return []string{"id", "input", "body", "bodyOutput", "concurrency"}
+		return []string{fieldID, fieldInput, fieldBody, fieldBodyOutput, fieldConcurrency}
 	case KindSubgraph:
-		return []string{"id", "inputs", "body", "bodyOutput"}
+		return []string{fieldID, fieldInputs, fieldBody, fieldBodyOutput}
 	default:
 		return nil
 	}
 }
 
 func (s Spec) populatedFields() []string {
-	fields := make([]string, 0, 13)
-	for _, field := range []struct {
+	candidates := [...]struct {
 		name      string
 		populated bool
 	}{
-		{name: "id", populated: s.ID != ""},
-		{name: "type", populated: s.Type != ""},
-		{name: "config", populated: len(s.Config) > 0},
-		{name: "input", populated: s.Input != (Ref{})},
-		{name: "inputs", populated: len(s.Inputs) > 0},
-		{name: "steps", populated: len(s.Steps) > 0},
-		{name: "resolver", populated: s.Resolver != ""},
-		{name: "cases", populated: len(s.Cases) > 0},
-		{name: "body", populated: s.Body != nil},
-		{name: "condition", populated: s.Condition != ""},
-		{name: "maxIterations", populated: s.MaxIterations != 0},
-		{name: "bodyOutput", populated: s.BodyOutput != (Ref{})},
-		{name: "concurrency", populated: s.Concurrency != 0},
-	} {
+		{name: fieldID, populated: s.ID != ""},
+		{name: fieldType, populated: s.Type != ""},
+		{name: fieldConfig, populated: len(s.Config) > 0},
+		{name: fieldInput, populated: s.Input != (Ref{})},
+		{name: fieldInputs, populated: len(s.Inputs) > 0},
+		{name: fieldSteps, populated: len(s.Steps) > 0},
+		{name: fieldResolver, populated: s.Resolver != ""},
+		{name: fieldCases, populated: len(s.Cases) > 0},
+		{name: fieldBody, populated: s.Body != nil},
+		{name: fieldCondition, populated: s.Condition != ""},
+		{name: fieldMaxIterations, populated: s.MaxIterations != 0},
+		{name: fieldBodyOutput, populated: s.BodyOutput != (Ref{})},
+		{name: fieldConcurrency, populated: s.Concurrency != 0},
+	}
+	fields := make([]string, 0, len(candidates))
+	for _, field := range candidates {
 		if field.populated {
 			fields = append(fields, field.name)
 		}

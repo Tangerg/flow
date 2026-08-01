@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -62,7 +63,7 @@ func GraphJSONSchema() json.RawMessage {
 // and config schemas are performed by [Registry.ValidateSpec] and compilation.
 func ValidateSpecJSON(data []byte) error {
 	if err := schemaLoader(loadSpecSchema).validate(jsonDocument(data)); err != nil {
-		return &SpecError{Field: "json", Err: fmt.Errorf("%w: %w", ErrInvalidSpec, err)}
+		return &SpecError{Field: fieldJSON, Err: fmt.Errorf("%w: %w", ErrInvalidSpec, err)}
 	}
 	return nil
 }
@@ -74,7 +75,7 @@ func ValidateSpecJSON(data []byte) error {
 // compilation.
 func ValidateGraphJSON(data []byte) error {
 	if err := schemaLoader(loadGraphSchema).validate(jsonDocument(data)); err != nil {
-		return &GraphError{Field: "json", Err: fmt.Errorf("%w: %w", ErrInvalidGraph, err)}
+		return &GraphError{Field: fieldJSON, Err: fmt.Errorf("%w: %w", ErrInvalidGraph, err)}
 	}
 	return nil
 }
@@ -215,8 +216,8 @@ func (j *jsonSchemaError) leaves() []*jschema.ValidationError {
 		}
 		// Push in reverse so the iterative depth-first walk preserves the
 		// validator's diagnostic order.
-		for index := len(err.Causes) - 1; index >= 0; index-- {
-			pending = append(pending, err.Causes[index])
+		for _, cause := range slices.Backward(err.Causes) {
+			pending = append(pending, cause)
 		}
 	}
 	return leaves

@@ -2,25 +2,37 @@ package workflow
 
 import "encoding/json"
 
-// SpecKind identifies the shape of a [Spec].
-type SpecKind string
+// Kind identifies the structural shape of a workflow step. [Spec] accepts the
+// configurable kinds below, while [Description] may also report code-built
+// boundary kinds. As a string type, Kind still permits application-defined
+// [Describer] implementations to name their own shapes.
+type Kind string
 
-// Spec kinds.
+// Kinds shared by Spec and Description.
 const (
-	KindLeaf      SpecKind = "leaf"
-	KindSequence  SpecKind = "sequence"
-	KindParallel  SpecKind = "parallel"
-	KindBranch    SpecKind = "branch"
-	KindLoop      SpecKind = "loop"
-	KindIteration SpecKind = "iteration"
-	KindSubgraph  SpecKind = "subgraph"
+	KindLeaf      Kind = "leaf"
+	KindSequence  Kind = "sequence"
+	KindParallel  Kind = "parallel"
+	KindBranch    Kind = "branch"
+	KindLoop      Kind = "loop"
+	KindIteration Kind = "iteration"
+	KindSubgraph  Kind = "subgraph"
+)
+
+// Additional kinds produced by Describe for code-built boundaries that are not
+// standalone Spec shapes.
+const (
+	KindAwait     Kind = "await"
+	KindGraph     Kind = "graph"
+	KindInterrupt Kind = "interrupt"
+	KindOpaque    Kind = "opaque"
 )
 
 // Spec is a serializable description of a workflow graph. Its Kind selects
 // which fields apply; [Registry.CompileSpec] compiles it into a [Step].
 // Behavior is referenced by name and resolved through the Registry.
 type Spec struct {
-	Kind SpecKind `json:"kind"`
+	Kind Kind `json:"kind"`
 
 	// Node ID, required by every kind that records something under its own name:
 	// leaf, branch, loop, iteration, and subgraph. Sequence and parallel are

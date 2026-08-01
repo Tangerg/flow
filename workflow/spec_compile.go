@@ -49,7 +49,7 @@ func (s specCompiler) compile(spec Spec) (Step, error) {
 		return s.compileSubgraph(spec)
 	default:
 		return nil, spec.fieldError(
-			"kind",
+			fieldKind,
 			fmt.Errorf("%w: unknown kind %q", ErrInvalidSpec, spec.Kind),
 		)
 	}
@@ -60,7 +60,7 @@ func (s specCompiler) compile(spec Spec) (Step, error) {
 func (r *Registry) CompileSpecJSON(data []byte) (Step, error) {
 	var spec Spec
 	if err := schemaLoader(loadSpecSchema).decode(jsonDocument(data), &spec); err != nil {
-		return nil, &SpecError{Field: "json", Err: fmt.Errorf("%w: %w", ErrInvalidSpec, err)}
+		return nil, &SpecError{Field: fieldJSON, Err: fmt.Errorf("%w: %w", ErrInvalidSpec, err)}
 	}
 	return r.CompileSpec(spec)
 }
@@ -95,7 +95,7 @@ type leafCompiler struct {
 func (l leafCompiler) compile(spec Spec) (Step, string, error) {
 	factory, ok := l.registry.lookupNode(spec.Type)
 	if !ok {
-		return nil, "type", fmt.Errorf("%w %q", ErrUnknownNodeType, spec.Type)
+		return nil, fieldType, fmt.Errorf("%w %q", ErrUnknownNodeType, spec.Type)
 	}
 	step, err := factory(NodeSpec{
 		ID:     spec.ID,
@@ -103,15 +103,15 @@ func (l leafCompiler) compile(spec Spec) (Step, string, error) {
 		Config: bytes.Clone(spec.Config),
 	})
 	if err != nil {
-		field := "config"
+		field := fieldConfig
 		if errors.Is(err, ErrMissingPort) ||
 			errors.Is(err, ErrUnknownPort) {
-			field = "inputs"
+			field = fieldInputs
 		}
 		return nil, field, err
 	}
 	if isNilNode(step) {
-		return nil, "type", ErrNilStep
+		return nil, fieldType, ErrNilStep
 	}
 	return step, "", nil
 }
@@ -120,7 +120,7 @@ func (s specCompiler) compileBranch(spec Spec) (Step, error) {
 	resolver, ok := s.registry.lookupResolver(spec.Resolver)
 	if !ok {
 		return nil, spec.fieldError(
-			"resolver",
+			fieldResolver,
 			fmt.Errorf("%w: unknown resolver %q", ErrInvalidSpec, spec.Resolver),
 		)
 	}
@@ -138,14 +138,14 @@ func (s specCompiler) compileBranch(spec Spec) (Step, error) {
 func (s specCompiler) compileLoop(spec Spec) (Step, error) {
 	if spec.Body == nil {
 		return nil, spec.fieldError(
-			"body",
+			fieldBody,
 			fmt.Errorf("%w: loop body is required", ErrInvalidSpec),
 		)
 	}
 	condition, ok := s.registry.lookupCondition(spec.Condition)
 	if !ok {
 		return nil, spec.fieldError(
-			"condition",
+			fieldCondition,
 			fmt.Errorf("%w: unknown condition %q", ErrInvalidSpec, spec.Condition),
 		)
 	}
@@ -165,17 +165,17 @@ func (s specCompiler) compileIteration(spec Spec) (Step, error) {
 	switch {
 	case spec.Input == (Ref{}):
 		return nil, spec.fieldError(
-			"input",
+			fieldInput,
 			fmt.Errorf("%w: iteration input is required", ErrInvalidSpec),
 		)
 	case spec.Body == nil:
 		return nil, spec.fieldError(
-			"body",
+			fieldBody,
 			fmt.Errorf("%w: iteration body is required", ErrInvalidSpec),
 		)
 	case spec.BodyOutput == (Ref{}):
 		return nil, spec.fieldError(
-			"bodyOutput",
+			fieldBodyOutput,
 			fmt.Errorf("%w: iteration body output is required", ErrInvalidSpec),
 		)
 	}
@@ -195,13 +195,13 @@ func (s specCompiler) compileIteration(spec Spec) (Step, error) {
 func (s specCompiler) compileSubgraph(spec Spec) (Step, error) {
 	if spec.Body == nil {
 		return nil, spec.fieldError(
-			"body",
+			fieldBody,
 			fmt.Errorf("%w: subgraph body is required", ErrInvalidSpec),
 		)
 	}
 	if spec.BodyOutput == (Ref{}) {
 		return nil, spec.fieldError(
-			"bodyOutput",
+			fieldBodyOutput,
 			fmt.Errorf("%w: subgraph body output is required", ErrInvalidSpec),
 		)
 	}

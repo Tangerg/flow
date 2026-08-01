@@ -745,7 +745,7 @@ func TestSuspend_awaitPassesThroughOnceSatisfied(t *testing.T) {
 	if got, err := workflow.Get[string](out, workflow.At("inbox", "decision")); err != nil || got != "approve" {
 		t.Fatalf("Await altered the Store: %v, %v", got, err)
 	}
-	if description := workflow.Describe(gate); description.Kind != "await" || description.ID != "gate" {
+	if description := workflow.Describe(gate); description.Kind != workflow.KindAwait || description.ID != "gate" {
 		t.Fatalf("Describe = %+v", description)
 	}
 }

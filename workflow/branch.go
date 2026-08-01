@@ -37,20 +37,8 @@ type branchStep struct {
 
 func (b branchStep) Run(ctx context.Context, s Store) (Store, error) {
 	ctx = ensureRun(ctx)
-	if b.id == "" {
-		return s, &StepError{ID: b.id, Op: OpValidate, Err: ErrInvalidStepID}
-	}
-	if b.resolve == nil {
-		return s, &StepError{ID: b.id, Op: OpValidate, Err: flow.ErrNilFunc}
-	}
-	for _, name := range slices.Sorted(maps.Keys(b.cases)) {
-		if isNilNode(b.cases[name]) {
-			return s, &StepError{
-				ID:  b.id,
-				Op:  OpValidate,
-				Err: fmt.Errorf("case %q: %w", name, ErrNilStep),
-			}
-		}
+	if err := b.validate(); err != nil {
+		return s, err
 	}
 	if err := runFrom(ctx).validateDefinition(b); err != nil {
 		return s, err
@@ -80,6 +68,25 @@ func (b branchStep) Run(ctx context.Context, s Store) (Store, error) {
 		}
 	}
 	return step.Run(ctx, s)
+}
+
+func (b branchStep) validate() error {
+	if b.id == "" {
+		return &StepError{ID: b.id, Op: OpValidate, Err: ErrInvalidStepID}
+	}
+	if b.resolve == nil {
+		return &StepError{ID: b.id, Op: OpValidate, Err: flow.ErrNilFunc}
+	}
+	for _, name := range slices.Sorted(maps.Keys(b.cases)) {
+		if isNilNode(b.cases[name]) {
+			return &StepError{
+				ID:  b.id,
+				Op:  OpValidate,
+				Err: fmt.Errorf("case %q: %w", name, ErrNilStep),
+			}
+		}
+	}
+	return nil
 }
 
 // decide returns the branch to take, reusing the recorded decision when the run
@@ -117,7 +124,7 @@ func (b branchStep) Describe() Description {
 		d.Label = name
 		children = append(children, d)
 	}
-	return Description{ID: b.id, Kind: "branch", Children: children}
+	return Description{ID: b.id, Kind: KindBranch, Children: children}
 }
 
 func (b branchStep) definition() stepDefinition {

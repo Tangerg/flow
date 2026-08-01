@@ -1,0 +1,16 @@
+config:
+  # Go code uses tabs by design. Prose still rejects hard tabs.
+  MD010:
+    code_blocks: false
+
+  # Keep prose readable without forcing code or tables into invalid wrapping.
+  MD013:
+    line_length: 100
+    code_blocks: false
+    tables: false
+    headings: false
+
+globs:
+  - "**/*.md"
+  - "#.git/**"
+  - "#.idea/**"

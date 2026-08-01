@@ -194,7 +194,8 @@ func (r *runState) wasBypassed(scope []string, id string) bool {
 // installed. A composite added later must do the same.
 func (r *runState) validateDefinition(step Step) error {
 	r.definitionOnce.Do(func() {
-		r.definitionErr = (definitionValidator{}).validate(step)
+		validator := definitionValidator{}
+		r.definitionErr = validator.validate(step)
 	})
 	return r.definitionErr
 }

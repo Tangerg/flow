@@ -58,7 +58,7 @@ func (a awaitStep) Run(ctx context.Context, store Store) (Store, error) {
 }
 
 func (a awaitStep) Describe() Description {
-	return Description{ID: a.id, Kind: "await", Label: a.ref.String()}
+	return Description{ID: a.id, Kind: KindAwait, Label: a.ref.String()}
 }
 
 func (a awaitStep) definition() stepDefinition {

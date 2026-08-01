@@ -4,7 +4,7 @@ This roadmap records unresolved engine work and decisions. Current behavior
 belongs in package documentation and tutorials; released compatibility history
 belongs in the [changelog](../CHANGELOG.md).
 
-Last reviewed: 2026-07-31.
+Last reviewed: 2026-08-01.
 
 ## Direction
 

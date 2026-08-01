@@ -23,14 +23,14 @@ func TestDescribe_tree(t *testing.T) {
 	)
 
 	d := workflow.Describe(step)
-	if d.Kind != "sequence" || len(d.Children) != 2 {
+	if d.Kind != workflow.KindSequence || len(d.Children) != 2 {
 		t.Fatalf("root = %+v; want sequence with 2 children", d)
 	}
-	if d.Children[0].Kind != "leaf" || d.Children[0].ID != "a" {
+	if d.Children[0].Kind != workflow.KindLeaf || d.Children[0].ID != "a" {
 		t.Fatalf("child 0 = %+v; want leaf:a", d.Children[0])
 	}
 	par := d.Children[1]
-	if par.Kind != "parallel" || len(par.Children) != 2 {
+	if par.Kind != workflow.KindParallel || len(par.Children) != 2 {
 		t.Fatalf("child 1 = %+v; want parallel with 2 children", par)
 	}
 	if par.Children[0].ID != "b" || par.Children[1].ID != "c" {
@@ -43,7 +43,7 @@ func TestDescribe_opaque(t *testing.T) {
 	bare := flow.NodeFunc[workflow.Store, workflow.Store](func(_ context.Context, s workflow.Store) (workflow.Store, error) {
 		return s, nil
 	})
-	if d := workflow.Describe(bare); d.Kind != "opaque" {
+	if d := workflow.Describe(bare); d.Kind != workflow.KindOpaque {
 		t.Fatalf("Describe(bare) = %+v; want opaque", d)
 	}
 }
@@ -58,7 +58,7 @@ func TestDescribe_streamFuncUsesLeafBoundary(t *testing.T) {
 			},
 		),
 	)
-	if description := workflow.Describe(step); description.Kind != "leaf" ||
+	if description := workflow.Describe(step); description.Kind != workflow.KindLeaf ||
 		description.ID != "stream" || len(description.Children) != 0 {
 		t.Fatalf("Describe = %+v; want leaf:stream", description)
 	}
@@ -79,37 +79,37 @@ func TestDescribe_everyCompositeReportsItsID(t *testing.T) {
 	yes := func(context.Context, workflow.Store) (string, error) { return "yes", nil }
 	stop := func(context.Context, int, workflow.Store) (bool, error) { return true, nil }
 
-	steps := map[string]workflow.Step{
-		"leaf":      leafStep("leaf"),
-		"branch":    workflow.Branch("branch", yes, map[string]workflow.Step{"yes": leafStep("y")}),
-		"loop":      workflow.Loop("loop", leafStep("body"), stop, workflow.LoopConfig{}),
-		"await":     workflow.Await("await", workflow.Output("x")),
-		"interrupt": workflow.Interrupt("interrupt", "continue?"),
-		"iteration": workflow.Iteration(workflow.IterationConfig{
+	steps := map[workflow.Kind]workflow.Step{
+		workflow.KindLeaf:      leafStep("leaf"),
+		workflow.KindBranch:    workflow.Branch("branch", yes, map[string]workflow.Step{"yes": leafStep("y")}),
+		workflow.KindLoop:      workflow.Loop("loop", leafStep("body"), stop, workflow.LoopConfig{}),
+		workflow.KindAwait:     workflow.Await("await", workflow.Output("x")),
+		workflow.KindInterrupt: workflow.Interrupt("interrupt", "continue?"),
+		workflow.KindIteration: workflow.Iteration(workflow.IterationConfig{
 			ID: "iteration", Input: workflow.Output("in"),
 			Body: leafStep("body"), BodyOutput: workflow.Output("body"),
 		}),
 	}
 	for kind, step := range steps {
-		t.Run(kind, func(t *testing.T) {
+		t.Run(string(kind), func(t *testing.T) {
 			d := workflow.Describe(step)
 			if d.Kind != kind {
 				t.Fatalf("Kind = %q; want %q", d.Kind, kind)
 			}
 			// Every kind that records something under its own name must report it,
 			// since that ID is also its Journal key.
-			if d.ID != kind {
+			if d.ID != string(kind) {
 				t.Fatalf("ID = %q; want %q", d.ID, kind)
 			}
 		})
 	}
 
 	// Sequence and parallel are structural and carry no ID.
-	for kind, step := range map[string]workflow.Step{
-		"sequence": workflow.Sequence(leafStep("a")),
-		"parallel": workflow.Parallel([]workflow.Step{leafStep("a")}, workflow.ParallelConfig{}),
+	for kind, step := range map[workflow.Kind]workflow.Step{
+		workflow.KindSequence: workflow.Sequence(leafStep("a")),
+		workflow.KindParallel: workflow.Parallel([]workflow.Step{leafStep("a")}, workflow.ParallelConfig{}),
 	} {
-		t.Run(kind, func(t *testing.T) {
+		t.Run(string(kind), func(t *testing.T) {
 			if d := workflow.Describe(step); d.Kind != kind || d.ID != "" {
 				t.Fatalf("Describe = %+v; want %s with no ID", d, kind)
 			}
