@@ -15,7 +15,8 @@ import (
 //
 // Records are keyed by scope and step ID, not by step ID alone. That is what
 // makes resumption correct inside [Loop] and [Iteration], where the same step
-// runs many times: element 2 is not mistaken for element 1. It is also why a
+// runs many times: element 2 is not mistaken for element 1. [Subgraph] uses the
+// same structured scope to isolate its inner identities. It is also why a
 // resumed [Parallel] recovers every branch that finished, whatever the branch
 // that suspended returned.
 //
@@ -25,16 +26,27 @@ import (
 // that produced it and discard it when that definition changes — the same
 // discipline a schema migration needs. [Journal.Record] supplies an external
 // [Interrupt] result, [Journal.Reset] starts a run over, and [Journal.Forget]
-// retries one step.
+// removes one exact checkpoint.
 //
 // A Journal is safe for concurrent use within one logical workflow execution;
-// concurrent branches record into the same one. Do not share one Journal between
-// unrelated executions, because records intentionally have no run ID. Records are
-// append-only until Forget or Reset: every duplicate completion reports
-// [ErrJournalConflict]. Each [Run] replays only records that existed when that
-// run began, so a duplicate identity created during a run cannot masquerade as
-// historical work. Call Forget and Reset only between runs; although synchronized
-// against concurrent access, they intentionally remove replay history. The zero
+// concurrent branches record into the same one. It does not serialize separate
+// [Run] calls. The host must admit at most one Run for a logical execution at a
+// time, or two calls may both perform work before one encounters a record
+// conflict. Do not share one Journal between unrelated executions, because
+// records intentionally have no run ID.
+//
+// Records are append-only until Forget or Reset: every duplicate completion
+// reports [ErrJournalConflict]. Each Run replays only records that existed when
+// that run began, so a duplicate identity created during a run cannot masquerade
+// as historical work. Call Forget and Reset only between runs; although
+// synchronized against concurrent access, they intentionally remove replay
+// history.
+//
+// A checkpoint may be newer than the Store returned with an error. For example,
+// a leaf can commit just before parent cancellation is observed, or a parallel
+// sibling can complete before another sibling fails. This is intentional:
+// replay restores that completed boundary on the next run. Persist the returned
+// Store and Journal together rather than deriving one from the other. The zero
 // Journal is empty and ready to use. A Journal must not be copied after first
 // use.
 type Journal struct {
@@ -45,27 +57,32 @@ type Journal struct {
 }
 
 // JournalKey identifies one recorded execution of a step. ID is the step ID;
-// Scope contains the enclosing repeated scopes, outermost first, and may contain
-// at most [MaxNestingDepth] segments. Construct JournalKey values with keyed
-// fields so the type can grow without breaking callers.
-type JournalKey struct {
-	ID    string   `json:"id"`
-	Scope []string `json:"scope,omitempty"`
+// Scope contains the enclosing execution scopes, outermost first, and may
+// contain at most [MaxNestingDepth] frames. Frame structure is identity: an
+// indexed frame is distinct from an ordinary frame whose ID merely looks like
+// its display form. Construct JournalKey values with keyed fields so the type
+// can grow without breaking callers.
+// JournalKey's standalone JSON representation is strict, lossless, and
+// failure-atomic so a persisted callback correlation key cannot be renamed by
+// Unicode replacement or ambiguous object members.
+type JournalKey struct { //nolint:recvcheck // UnmarshalJSON requires a pointer receiver.
+	ID    string       `json:"id"`
+	Scope []ScopeFrame `json:"scope,omitempty"`
 }
 
 func (j JournalKey) compare(other JournalKey) int {
 	return cmp.Or(
-		slices.Compare(j.Scope, other.Scope),
+		compareScope(j.Scope, other.Scope),
 		cmp.Compare(j.ID, other.ID),
 	)
 }
 
-// journalNode is a trie over scope segments. Keeping the scope structured avoids
-// delimiter escaping entirely: every possible segment and step ID has one
-// unambiguous place in the tree.
+// journalNode is a trie over scope frames. Keeping the scope structured avoids
+// rendering-based identity: an indexed invocation and an ordinary scope whose
+// text happens to resemble it always occupy different nodes.
 type journalNode struct {
 	records  map[string]journalValue
-	children map[string]*journalNode
+	children map[ScopeFrame]*journalNode
 }
 
 type journalValue struct {
@@ -81,10 +98,10 @@ func NewJournal() *Journal { return &Journal{} }
 // [Suspend] represents an externally supplied result: record the response under
 // the suspension's [Suspension.Key], then run the same workflow again.
 //
-// Record rejects an empty step ID, a scope deeper than [MaxNestingDepth], and an
-// identity already present in the Journal. A recorded value is held as-is;
-// mutable values must not be modified afterward. The method is safe for
-// concurrent use.
+// Record rejects an empty or non-UTF-8 step ID, an invalid or excessively deep
+// scope, and an identity already present in the Journal. A recorded value is
+// held as-is; mutable values must not be modified afterward. The method is safe
+// for concurrent use.
 func (j *Journal) Record(key JournalKey, value any) error {
 	if j == nil {
 		return errors.New("workflow: record journal: nil journal")
@@ -94,7 +111,7 @@ func (j *Journal) Record(key JournalKey, value any) error {
 
 // record stores a step's output. A nil Journal discards it, so callers need not
 // check whether resumption is enabled.
-func (j *Journal) record(scope []string, id string, value any) error {
+func (j *Journal) record(scope []ScopeFrame, id string, value any) error {
 	if j == nil {
 		return nil
 	}
@@ -107,44 +124,35 @@ func (j *Journal) insert(key JournalKey, value any) error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if _, exists := j.root.lookup(key.Scope, key.ID); exists {
-		return fmt.Errorf("workflow: record journal step %q at %q: %w",
-			key.ID, key.Scope, ErrJournalConflict)
-	}
-	j.revision++
-	j.root.record(key.Scope, key.ID, journalValue{
+	nextRevision := j.revision + 1
+	if inserted := j.root.record(key.Scope, key.ID, journalValue{
 		value:    value,
-		revision: j.revision,
-	})
+		revision: nextRevision,
+	}); !inserted {
+		return fmt.Errorf("workflow: record journal step %q at %q: %w",
+			key.ID, formatScope(key.Scope), ErrJournalConflict)
+	}
+	j.revision = nextRevision
 	j.count++
 	return nil
 }
 
 func (j JournalKey) validate() error {
-	switch {
-	case j.ID == "":
-		return ErrInvalidStepID
-	case len(j.Scope) > MaxNestingDepth:
-		return fmt.Errorf(
-			"%w: scope depth %d exceeds limit %d",
-			ErrMaxDepth,
-			len(j.Scope),
-			MaxNestingDepth,
-		)
-	default:
-		return nil
+	if err := validateStepID(j.ID); err != nil {
+		return err
 	}
+	return validateScope(j.Scope)
 }
 
-func (j *journalNode) record(scope []string, id string, value journalValue) bool {
-	for _, segment := range scope {
+func (j *journalNode) record(scope []ScopeFrame, id string, value journalValue) bool {
+	for _, frame := range scope {
 		if j.children == nil {
-			j.children = make(map[string]*journalNode)
+			j.children = make(map[ScopeFrame]*journalNode)
 		}
-		child := j.children[segment]
+		child := j.children[frame]
 		if child == nil {
 			child = new(journalNode)
-			j.children[segment] = child
+			j.children[frame] = child
 		}
 		j = child
 	}
@@ -161,7 +169,7 @@ func (j *journalNode) record(scope []string, id string, value journalValue) bool
 // lookupAt returns a record no newer than revision, which is how a run replays
 // only work that predates it. The receiver is never nil: [runState.replay]
 // resolves a nil Journal to "no record" before calling.
-func (j *Journal) lookupAt(scope []string, id string, revision uint64) (any, bool) {
+func (j *Journal) lookupAt(scope []ScopeFrame, id string, revision uint64) (any, bool) {
 	j.mu.RLock()
 	defer j.mu.RUnlock()
 	value, ok := j.root.lookup(scope, id)
@@ -180,9 +188,9 @@ func (j *Journal) snapshotRevision() uint64 {
 	return j.revision
 }
 
-func (j *journalNode) lookup(scope []string, id string) (journalValue, bool) {
-	for _, segment := range scope {
-		j = j.children[segment]
+func (j *journalNode) lookup(scope []ScopeFrame, id string) (journalValue, bool) {
+	for _, frame := range scope {
+		j = j.children[frame]
 		if j == nil {
 			return journalValue{}, false
 		}
@@ -216,12 +224,12 @@ func (j *Journal) Keys() []JournalKey {
 	return keys
 }
 
-func (j *journalNode) appendKeys(scope []string, keys *[]JournalKey) {
+func (j *journalNode) appendKeys(scope []ScopeFrame, keys *[]JournalKey) {
 	for id := range j.records {
 		*keys = append(*keys, JournalKey{Scope: slices.Clone(scope), ID: id})
 	}
-	for segment, child := range j.children {
-		scope = append(scope, segment)
+	for frame, child := range j.children {
+		scope = append(scope, frame)
 		child.appendKeys(scope, keys)
 		scope = scope[:len(scope)-1]
 	}
@@ -240,11 +248,21 @@ func (j *Journal) Reset() {
 	j.revision++
 }
 
-// Forget removes one recorded step, so the next run repeats it. Call it between
+// Forget removes exactly one recorded step, so the next run repeats that
+// boundary. It does not invalidate later records that may depend on the removed
+// result: Journal deliberately has no workflow-definition or dependency
+// knowledge. Forget the complete dependent closure yourself, or use [Journal.Reset],
+// when recomputation may change a value consumed downstream.
+//
+// A missing record is already forgotten and succeeds. Invalid keys and a nil
+// Journal are reported rather than silently doing nothing. Call Forget between
 // runs, not while a Run is using the Journal.
-func (j *Journal) Forget(key JournalKey) {
-	if j == nil || key.validate() != nil {
-		return
+func (j *Journal) Forget(key JournalKey) error {
+	if j == nil {
+		return errors.New("workflow: forget journal: nil journal")
+	}
+	if err := key.validate(); err != nil {
+		return fmt.Errorf("workflow: forget journal: %w", err)
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -252,11 +270,12 @@ func (j *Journal) Forget(key JournalKey) {
 		j.count--
 		j.revision++
 	}
+	return nil
 }
 
 // forget reports whether it removed a record and prunes empty scope nodes on
 // the way back up.
-func (j *journalNode) forget(scope []string, id string) bool {
+func (j *journalNode) forget(scope []ScopeFrame, id string) bool {
 	if len(scope) == 0 {
 		if _, ok := j.records[id]; !ok {
 			return false

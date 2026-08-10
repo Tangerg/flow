@@ -14,8 +14,9 @@ import (
 	"github.com/Tangerg/flow/workflow"
 )
 
-// Expr is a compiled expression over a [workflow.Store]. An Expr is immutable
-// and safe for concurrent use.
+// Expr is a compiled expression over a [workflow.Store]. Values are produced by
+// [Parse] or [MustParse]; the zero value and a nil *Expr are not compiled
+// expressions. A compiled Expr is immutable and safe for concurrent use.
 type Expr struct {
 	source string
 	eval   evalFunc
@@ -75,7 +76,9 @@ func (e *Expr) Source() string { return e.source }
 // depends on them. The returned slice is a copy.
 func (e *Expr) Refs() []workflow.Ref { return slices.Clone(e.refs) }
 
-// Eval evaluates the expression against s.
+// Eval evaluates the expression against s. A mutable result read directly from
+// the Store is borrowed and must not be modified; expression evaluation does
+// not turn Store values into owned copies.
 func (e *Expr) Eval(s workflow.Store) (any, error) {
 	v, err := e.eval(s)
 	if err != nil {
@@ -126,6 +129,7 @@ func (e *Expr) wrap(err error) error {
 type compiler struct {
 	source string
 	refs   []workflow.Ref
+	depth  int
 }
 
 func (c *compiler) errorAt(node ast.Node, err error) error {
@@ -137,6 +141,12 @@ func (c *compiler) unsupported(node ast.Node, what string) error {
 }
 
 func (c *compiler) compile(node ast.Expr) (evalFunc, error) {
+	if c.depth >= workflow.MaxNestingDepth {
+		return nil, c.depthError(node)
+	}
+	c.depth++
+	defer func() { c.depth-- }()
+
 	switch n := node.(type) {
 	case *ast.ParenExpr:
 		return c.compile(n.X)
@@ -155,6 +165,15 @@ func (c *compiler) compile(node ast.Expr) (evalFunc, error) {
 	default:
 		return nil, c.unsupported(node, fmt.Sprintf("%T", node))
 	}
+}
+
+func (c *compiler) depthError(node ast.Node) error {
+	return c.errorAt(node, fmt.Errorf(
+		"%w: %w: expression depth exceeds limit %d",
+		ErrUnsupported,
+		workflow.ErrMaxDepth,
+		workflow.MaxNestingDepth,
+	))
 }
 
 func (c *compiler) compileLiteral(lit *ast.BasicLit) (evalFunc, error) {
@@ -186,24 +205,31 @@ func (c *compiler) compileLiteral(lit *ast.BasicLit) (evalFunc, error) {
 	}
 }
 
-// predeclaredIdents are the only bare identifiers an expression may use, and the
-// value each one evaluates to. Keeping the set in one place means a new
-// predeclared name cannot be accepted by one walk and rejected by the other.
-var predeclaredIdents = map[string]any{
-	"true":  true,
-	"false": false,
-	"nil":   nil,
-}
-
 // compileIdent accepts only the predeclared constants. Every other bare
 // identifier is a reference missing its path, which is worth saying plainly.
 func (c *compiler) compileIdent(id *ast.Ident) (evalFunc, error) {
-	if value, predeclared := predeclaredIdents[id.Name]; predeclared {
+	if value, predeclared := predeclaredIdent(id.Name); predeclared {
 		return c.constant(value), nil
 	}
 	return nil, c.errorAt(id, fmt.Errorf(
 		"%w: %q is not a reference; a reference needs a node ID and a path, as in %s.output",
 		ErrUnsupported, id.Name, id.Name))
+}
+
+// predeclaredIdent is the single vocabulary shared by bare-expression and
+// reference-root validation. A switch keeps this immutable grammar rule out of
+// mutable package state.
+func predeclaredIdent(name string) (any, bool) {
+	switch name {
+	case "true":
+		return true, true
+	case "false":
+		return false, true
+	case "nil":
+		return nil, true
+	default:
+		return nil, false
+	}
 }
 
 func (c *compiler) compileRef(node ast.Expr) (evalFunc, error) {
@@ -212,12 +238,22 @@ func (c *compiler) compileRef(node ast.Expr) (evalFunc, error) {
 		return nil, err
 	}
 	return func(s workflow.Store) (any, error) {
-		v, ok := s.Lookup(ref)
-		if !ok {
-			return nil, fmt.Errorf("%w %s", ErrUndefined, ref)
-		}
-		return (operand{raw: v}).normalized(), nil
+		return resolveReference(s, ref)
 	}, nil
+}
+
+// resolveReference is the one expression-side Store read boundary. Missing
+// values become ErrUndefined; malformed JSON views and conversion failures
+// remain type errors, including when the caller is has().
+func resolveReference(store workflow.Store, ref workflow.Ref) (any, error) {
+	value, err := workflow.Get[any](store, ref)
+	if errors.Is(err, workflow.ErrNotFound) {
+		return nil, fmt.Errorf("%w %s", ErrUndefined, ref)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: read %s: %w", ErrType, ref, err)
+	}
+	return (operand{raw: value}).normalized(), nil
 }
 
 // reference flattens a selector and index chain into a [workflow.Ref] and
@@ -232,6 +268,13 @@ func (c *compiler) reference(node ast.Expr) (workflow.Ref, error) {
 			"%w: %q is not a reference; a reference needs a node ID and a path", ErrUnsupported, root))
 	}
 	ref := workflow.At(root, segments[0], segments[1:]...)
+	if err := ref.Validate(); err != nil {
+		return workflow.Ref{}, c.errorAt(node, fmt.Errorf(
+			"%w: invalid reference: %w",
+			ErrUnsupported,
+			err,
+		))
+	}
 	c.refs = append(c.refs, ref)
 	return ref, nil
 }
@@ -240,20 +283,27 @@ func (c *compiler) reference(node ast.Expr) (workflow.Ref, error) {
 // path segments below it. node["any ID"] is the quoted root form for IDs that
 // are not Go identifiers.
 func (c *compiler) flatten(node ast.Expr) (string, []string, error) {
+	return c.flattenAt(node, 0)
+}
+
+func (c *compiler) flattenAt(node ast.Expr, depth int) (string, []string, error) {
+	if depth >= workflow.MaxNestingDepth {
+		return "", nil, c.depthError(node)
+	}
 	switch n := node.(type) {
 	case *ast.Ident:
 		return c.flattenIdent(n)
 	case *ast.SelectorExpr:
-		return c.flattenSelector(n)
+		return c.flattenSelector(n, depth)
 	case *ast.IndexExpr:
-		return c.flattenIndex(n)
+		return c.flattenIndex(n, depth)
 	default:
 		return "", nil, c.unsupported(node, "reference may only use names and constant indexes")
 	}
 }
 
 func (c *compiler) flattenIdent(node *ast.Ident) (string, []string, error) {
-	if _, predeclared := predeclaredIdents[node.Name]; predeclared {
+	if _, predeclared := predeclaredIdent(node.Name); predeclared {
 		return "", nil, c.errorAt(
 			node,
 			fmt.Errorf("%w: cannot select into %s", ErrUnsupported, node.Name),
@@ -262,20 +312,26 @@ func (c *compiler) flattenIdent(node *ast.Ident) (string, []string, error) {
 	return node.Name, nil, nil
 }
 
-func (c *compiler) flattenSelector(node *ast.SelectorExpr) (string, []string, error) {
-	root, segments, err := c.flatten(node.X)
+func (c *compiler) flattenSelector(
+	node *ast.SelectorExpr,
+	depth int,
+) (string, []string, error) {
+	root, segments, err := c.flattenAt(node.X, depth+1)
 	if err != nil {
 		return "", nil, err
 	}
 	return root, append(segments, node.Sel.Name), nil
 }
 
-func (c *compiler) flattenIndex(node *ast.IndexExpr) (string, []string, error) {
+func (c *compiler) flattenIndex(
+	node *ast.IndexExpr,
+	depth int,
+) (string, []string, error) {
 	if namespace, ok := node.X.(*ast.Ident); ok && namespace.Name == "node" {
 		root, err := c.nodeID(node.Index)
 		return root, nil, err
 	}
-	root, segments, err := c.flatten(node.X)
+	root, segments, err := c.flattenAt(node.X, depth+1)
 	if err != nil {
 		return "", nil, err
 	}
@@ -414,14 +470,22 @@ func (c *compiler) compileCall(n *ast.CallExpr) (evalFunc, error) {
 	switch name.Name {
 	case "has":
 		// has reports whether a reference resolves, so it needs the reference
-		// itself rather than the value it would fail to read.
+		// itself rather than making absence an evaluation error. Other read
+		// failures still propagate: malformed data is not the same as no data.
 		ref, err := c.reference(n.Args[0])
 		if err != nil {
 			return nil, err
 		}
 		return func(s workflow.Store) (any, error) {
-			_, ok := s.Lookup(ref)
-			return ok, nil
+			_, err := resolveReference(s, ref)
+			switch {
+			case err == nil:
+				return true, nil
+			case errors.Is(err, ErrUndefined):
+				return false, nil
+			default:
+				return nil, err
+			}
 		}, nil
 	case "len":
 		arg, err := c.compile(n.Args[0])

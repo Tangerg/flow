@@ -93,3 +93,52 @@ func TestFallback_prefersParentCancellation(t *testing.T) {
 		t.Fatalf("err = %v, altRan = %v; want context.Canceled, false", err, altRan)
 	}
 }
+
+func TestFallback_cancellationDuringSuccessfulNodeWins(t *testing.T) {
+	for name, primary := range map[string]bool{
+		"primary":   true,
+		"alternate": false,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			boom := errors.New("boom")
+			first := flow.NodeFunc[int, int](func(_ context.Context, input int) (int, error) {
+				if primary {
+					cancel()
+					return input + 1, nil
+				}
+				return 0, boom
+			})
+			second := flow.NodeFunc[int, int](func(_ context.Context, input int) (int, error) {
+				cancel()
+				return input + 2, nil
+			})
+
+			output, err := flowx.Fallback(first, second).Run(ctx, 1)
+			if !errors.Is(err, context.Canceled) || output != 0 {
+				t.Fatalf("Run = %d, %v; want 0, context.Canceled", output, err)
+			}
+		})
+	}
+}
+
+func TestFallback_preCancelledContextDoesNotRunPrimary(t *testing.T) {
+	cause := errors.New("stop fallback")
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(cause)
+	called := false
+	node := flowx.Fallback(
+		flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+			called = true
+			return 1, nil
+		}),
+		flow.NodeFunc[int, int](func(context.Context, int) (int, error) { return 2, nil }),
+	)
+
+	if _, err := node.Run(ctx, 0); !errors.Is(err, cause) {
+		t.Fatalf("Run error = %v; want cancellation cause", err)
+	}
+	if called {
+		t.Fatal("primary ran with an already-cancelled context")
+	}
+}

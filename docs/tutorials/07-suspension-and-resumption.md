@@ -74,7 +74,13 @@ Suspension is a third outcome, not an ordinary failure:
 - `err` matches `ErrSuspended`.
 - `Suspensions(err)` returns one or more structured waits.
 - `wait.Key()` combines the scope and step ID, distinguishing repeated
-  instances inside loops and concurrent collections.
+  instances inside loops and concurrent collections as well as inner steps in
+  sealed subgraphs.
+
+Each scope entry is a `workflow.ScopeFrame`. `ID` names the enclosing
+composite; `Indexed` and `Index` identify one invocation of a repeated body.
+Treat those fields as identity rather than parsing `ScopeFrame.String()`: an
+ordinary composite ID is allowed to contain bracket-like text.
 
 Do not persist only `wait.ID`; one step can have several active scoped
 instances.
@@ -93,7 +99,7 @@ At minimum, preserve:
 | flow module version | Journal wire compatibility is a separate concern |
 | Application run ID, status, and authorization | Journal intentionally does not manage business runs |
 
-Both Store and Journal support JSON round trips:
+Store, Journal, and each active Suspension support JSON round trips:
 
 ```go
 storeJSON, err := json.Marshal(paused)
@@ -104,17 +110,45 @@ journalJSON, err := json.Marshal(journal)
 if err != nil {
 	return err
 }
+waitJSON, err := json.Marshal(wait)
+if err != nil {
+	return err
+}
 ```
+
+Encoding rejects values that `encoding/json` cannot represent, malformed or
+ambiguous JSON returned by custom marshalers, invalid engine-owned identity
+text, and documents whose nesting exceeds `workflow.MaxNestingDepth`. Ordinary
+application strings retain `encoding/json` semantics: invalid UTF-8 bytes are
+replaced with U+FFFD. Decoding is stricter and rejects invalid input bytes and
+unpaired UTF-16 surrogate escapes, so bytes produced successfully by these
+types are structurally readable by the corresponding type.
 
 The Store and Journal do **not** include the active suspension list
 automatically. Persist each wait key and request in the application's own run
 record so an incoming callback can resolve the right wait.
 
-The Journal document includes a wire-format version, and the decoder rejects a
-version it does not support. Keep the flow module version with durable run
-records and test upgrades against representative archived Journals. This wire
-contract is separate from the workflow-definition version: compatible bytes
-cannot make renamed steps or changed control flow safe to resume.
+`Suspension` and `JournalKey` also support direct JSON round trips. Their
+decoders reject unknown or duplicate members, invalid Unicode, malformed
+identity, and excessive nesting without changing an existing destination.
+An anonymous suspension has neither a step ID nor a scope; after a boundary
+identifies it, an empty scope means the workflow root. A scope without a step ID
+is rejected because it cannot identify a resumable invocation.
+Suspension application values decode into JSON-domain values, with numbers kept
+as `json.Number`; use a typed application envelope when the original concrete
+Go type matters.
+
+The Journal v3 document encodes scope as structured frame objects and the
+decoder rejects any other wire version. Keep the flow module version with
+durable run records and test upgrades against representative archived Journals.
+Version and scope-index numbers are read by mathematical value, so integral
+decimal and exponent spellings are equivalent; a scope index must fit `uint64`.
+This wire contract is separate from the workflow-definition version: compatible
+bytes cannot make renamed steps or changed control flow safe to resume.
+
+A nil `*Journal` means resumption is disabled and encodes as JSON `null`. An
+allocated zero-value Journal encodes as an empty versioned checkpoint. Persist
+the latter when the run has no records yet but will resume later.
 
 `Suspension.Value` may be a string, map, slice, array, or struct. It is owned by
 the application and must be treated as immutable. Decoding a suspension through
@@ -127,7 +161,11 @@ type matters, persist an application envelope such as
 After restoring the Store and Journal, record the result under the exact key:
 
 ```go
-if err := restoredJournal.Record(wait.Key(), "guide"); err != nil {
+var restoredWait workflow.Suspension
+if err := json.Unmarshal(waitJSON, &restoredWait); err != nil {
+	return err
+}
+if err := restoredJournal.Record(restoredWait.Key(), "guide"); err != nil {
 	return err
 }
 
@@ -151,6 +189,19 @@ The run re-enters at the root; it does not continue a serialized call stack.
 Journal replay skips completed Leaf boundaries and restores their outputs, so
 the earlier `prepare` step does not execute twice.
 
+Replay applies only at explicit Journal boundaries. `Leaf` records its output,
+`Interrupt` consumes a recorded response, and `Branch` and `Loop` record their
+decisions. An opaque caller-defined `Step` is not checkpointed merely because
+it runs inside `Parallel`, `Iteration`, `Graph`, or `Subgraph`; if it owns work
+that must not repeat, expose that work through `Leaf` or another explicit
+journaled boundary.
+
+Treat the returned Store and Journal as two parts of one checkpoint. The
+Journal may contain a completion absent from a Store returned with cancellation
+or failure, for example when a parallel sibling finished first. The next run
+replays that record and reconstructs the output; do not try to regenerate the
+Journal from Store contents.
+
 `Journal.Record` detects conflicts. Treat `ErrJournalConflict` from duplicate or
 inconsistent callbacks as an application idempotency and audit concern rather
 than silently overwriting the first result.
@@ -160,7 +211,7 @@ than silently overwriting the first result.
 | Composite | Suspension behavior |
 | --- | --- |
 | `Sequence` | Stops and returns the current Store |
-| `Parallel` | Lets siblings finish, merges writes, and reports every wait |
+| `Parallel` | Lets siblings finish, merges Store changes, and reports every wait |
 | `Iteration` | Lets other elements finish but does not write an incomplete collected output |
 | `Loop` | Stops; the Journal replays completed iterations |
 | `Graph` | Blocks descendants of a waiting node but lets unrelated ready work finish |
@@ -204,14 +255,21 @@ external world.
 
 One Journal belongs to one logical run and one workflow definition version. Do
 not share it across unrelated runs or replay it after changing step IDs or
-graph structure.
+graph structure. Use application-level ownership or a lease to admit only one
+active `Run` for that logical execution; Journal synchronization coordinates
+branches within a run, not competing runs.
 
 ## Common mistakes
 
 - Expecting `Interrupt` to resume without a Journal.
 - Persisting Store but not Journal and active application waits.
+- Calling `Journal.Forget` on one producer but retaining checkpoints of steps
+  that consumed its old result. Forget the dependent closure or reset the
+  Journal; Journal itself intentionally does not know the definition graph.
 - Replacing the complete `JournalKey` with a step ID.
 - Resuming against a modified workflow definition.
+- Starting competing `Run` calls for one logical execution without an
+  application-level ownership guard.
 - Assuming replay gives exactly-once side effects.
 - Mutating a map, slice, or pointer passed to `Interrupt` or `Suspend`.
 

@@ -1,7 +1,9 @@
 package workflow_test
 
 import (
+	"bytes"
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/Tangerg/flow/workflow"
@@ -24,21 +26,90 @@ func FuzzStoreLookupPath(f *testing.F) {
 
 func FuzzCompileGraphJSON(f *testing.F) {
 	f.Add([]byte(`{"nodes":[]}`))
+	f.Add([]byte(`{"nodes":[],"concurrency":1e0}`))
 	f.Add([]byte(`{"nodes":[{"id":"a","type":"addN"}]}`))
 	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
 
-	f.Fuzz(func(_ *testing.T, data []byte) {
-		_, _ = reg.CompileGraphJSON(data)
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_, documentErr := reg.CompileGraphJSON(data)
+		graph := workflow.Graph{
+			Nodes:       []workflow.GraphNode{{ID: "sentinel", Type: "sentinel"}},
+			Concurrency: 7,
+		}
+		before := graph
+		decodeErr := json.Unmarshal(data, &graph)
+		if decodeErr != nil {
+			if documentErr == nil {
+				t.Fatal("direct Graph decode failed but CompileGraphJSON succeeded")
+			}
+			if !reflect.DeepEqual(graph, before) {
+				t.Fatal("failed direct Graph decode changed its destination")
+			}
+			return
+		}
+		encoded, marshalErr := json.Marshal(graph)
+		if marshalErr != nil {
+			t.Fatalf("a strictly decoded Graph failed to marshal: %v", marshalErr)
+		}
+		var roundTripped workflow.Graph
+		if err := json.Unmarshal(encoded, &roundTripped); err != nil {
+			t.Fatalf("a marshalled Graph failed to decode: %v", err)
+		}
+		again, marshalErr := json.Marshal(roundTripped)
+		if marshalErr != nil || string(encoded) != string(again) {
+			t.Fatalf("Graph encoding is not idempotent: %s, %s, %v", encoded, again, marshalErr)
+		}
+		_, typedErr := reg.CompileGraph(graph)
+		if (documentErr == nil) != (typedErr == nil) {
+			t.Fatalf(
+				"Graph compile success differs after direct decode: bytes=%v, typed=%v",
+				documentErr,
+				typedErr,
+			)
+		}
 	})
 }
 
 func FuzzCompileSpecJSON(f *testing.F) {
 	f.Add([]byte(`{"kind":"sequence","steps":[]}`))
+	f.Add([]byte(`{"kind":"parallel","steps":[],"concurrency":1.0}`))
 	f.Add([]byte(`{"kind":"leaf","id":"a","type":"addN"}`))
 	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
 
-	f.Fuzz(func(_ *testing.T, data []byte) {
-		_, _ = reg.CompileSpecJSON(data)
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_, documentErr := reg.CompileSpecJSON(data)
+		spec := workflow.Spec{Kind: workflow.KindSequence, Steps: []workflow.Spec{{Kind: workflow.KindSequence}}}
+		before := spec
+		decodeErr := json.Unmarshal(data, &spec)
+		if decodeErr != nil {
+			if documentErr == nil {
+				t.Fatal("direct Spec decode failed but CompileSpecJSON succeeded")
+			}
+			if !reflect.DeepEqual(spec, before) {
+				t.Fatal("failed direct Spec decode changed its destination")
+			}
+			return
+		}
+		encoded, marshalErr := json.Marshal(spec)
+		if marshalErr != nil {
+			t.Fatalf("a strictly decoded Spec failed to marshal: %v", marshalErr)
+		}
+		var roundTripped workflow.Spec
+		if err := json.Unmarshal(encoded, &roundTripped); err != nil {
+			t.Fatalf("a marshalled Spec failed to decode: %v", err)
+		}
+		again, marshalErr := json.Marshal(roundTripped)
+		if marshalErr != nil || string(encoded) != string(again) {
+			t.Fatalf("Spec encoding is not idempotent: %s, %s, %v", encoded, again, marshalErr)
+		}
+		_, typedErr := reg.CompileSpec(spec)
+		if (documentErr == nil) != (typedErr == nil) {
+			t.Fatalf(
+				"Spec compile success differs after direct decode: bytes=%v, typed=%v",
+				documentErr,
+				typedErr,
+			)
+		}
 	})
 }
 
@@ -97,27 +168,93 @@ func FuzzStoreJSON(f *testing.F) {
 // FuzzJournalJSON checks the same properties for a Journal, which carries a run's
 // recorded results across a restart.
 func FuzzJournalJSON(f *testing.F) {
-	f.Add([]byte(`{"version":2,"records":[]}`))
-	f.Add([]byte(`{"version":2,"records":[{"id":"a","value":1}]}`))
-	f.Add([]byte(`{"version":2,"records":[{"scope":["iter[0]"],"id":"el","value":{"n":1}}]}`))
-	f.Add([]byte(`{"version":2,"records":[{"scope":["[0]"],"id":"loop","value":true},{"id":"route","value":"case"}]}`))
-	f.Add([]byte(`{"version":2,"records":[{"scope":["a/b"],"id":"c","value":1},{"scope":["a"],"id":"b/c","value":2}]}`))
+	f.Add([]byte(`{"version":3,"records":[]}`))
+	f.Add([]byte(`{"version":3,"records":[{"id":"a","value":1}]}`))
+	f.Add([]byte(`{"version":3,"records":[{"scope":[{"id":"iter","indexed":true}],"id":"el","value":{"n":1}}]}`))
+	f.Add([]byte(`{"version":3,"records":[{"scope":[{"id":"loop","indexed":true}],"id":"loop","value":true},{"id":"route","value":"case"}]}`))
+	f.Add([]byte(`{"version":3,"records":[{"scope":[{"id":"a/b"}],"id":"c","value":1},{"scope":[{"id":"a"}],"id":"b/c","value":2}]}`))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		journal := workflow.NewJournal()
 		if err := json.Unmarshal(data, journal); err != nil {
 			return
 		}
-		again, err := json.Marshal(journal)
-		if err != nil {
-			t.Fatalf("a decoded Journal failed to marshal: %v", err)
+		again, marshalErr := json.Marshal(journal)
+		if marshalErr != nil {
+			t.Fatalf("a decoded Journal failed to marshal: %v", marshalErr)
 		}
 		second := workflow.NewJournal()
-		if err := json.Unmarshal(again, second); err != nil {
-			t.Fatalf("re-decoding a marshalled Journal failed: %v", err)
+		if unmarshalErr := json.Unmarshal(again, second); unmarshalErr != nil {
+			t.Fatalf("re-decoding a marshalled Journal failed: %v", unmarshalErr)
 		}
 		if second.Len() != journal.Len() {
 			t.Fatalf("round trip changed the record count: %d then %d", journal.Len(), second.Len())
+		}
+		third, stableErr := json.Marshal(second)
+		if stableErr != nil {
+			t.Fatalf("marshal is not stable: %v", stableErr)
+		}
+		if string(again) != string(third) {
+			t.Fatalf("round trip is not idempotent:\n%s\n%s", again, third)
+		}
+	})
+}
+
+// FuzzResumeIdentityJSON keeps externally persisted waits and callback keys on
+// the same strict, atomic, idempotent identity boundary as Journal replay.
+func FuzzResumeIdentityJSON(f *testing.F) {
+	for _, seed := range [][]byte{
+		[]byte(`{"id":"wait"}`),
+		[]byte(`{"id":"wait","scope":[{"id":"items","indexed":true,"index":2}],"value":{"n":9007199254740993}}`),
+		[]byte(`{"id":"wait","await":{"nodeID":"approval","path":"/output"}}`),
+		[]byte(`{"id":"first","id":"second"}`),
+		[]byte(`{"unknown":true}`),
+		{'{', '"', 'i', 'd', '"', ':', '"', 0xff, '"', '}'},
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		suspension := workflow.Suspension{ID: "sentinel", Value: "kept"}
+		beforeSuspension := suspension
+		if err := json.Unmarshal(data, &suspension); err != nil {
+			if !reflect.DeepEqual(suspension, beforeSuspension) {
+				t.Fatalf("failed Suspension decode changed destination: %#v", suspension)
+			}
+		} else {
+			encoded, err := json.Marshal(suspension)
+			if err != nil {
+				t.Fatalf("accepted Suspension cannot be marshaled: %v", err)
+			}
+			var restored workflow.Suspension
+			if decodeErr := json.Unmarshal(encoded, &restored); decodeErr != nil {
+				t.Fatalf("encoded Suspension cannot be decoded: %v", decodeErr)
+			}
+			reencoded, err := json.Marshal(restored)
+			if err != nil || !bytes.Equal(reencoded, encoded) {
+				t.Fatalf("Suspension encoding is not idempotent: %s, %s, %v", encoded, reencoded, err)
+			}
+		}
+
+		key := workflow.JournalKey{ID: "sentinel", Scope: []workflow.ScopeFrame{{ID: "outer"}}}
+		beforeKey := key
+		if err := json.Unmarshal(data, &key); err != nil {
+			if !reflect.DeepEqual(key, beforeKey) {
+				t.Fatalf("failed JournalKey decode changed destination: %#v", key)
+			}
+			return
+		}
+		encoded, err := json.Marshal(key)
+		if err != nil {
+			t.Fatalf("accepted JournalKey cannot be marshaled: %v", err)
+		}
+		var restored workflow.JournalKey
+		if decodeErr := json.Unmarshal(encoded, &restored); decodeErr != nil {
+			t.Fatalf("encoded JournalKey cannot be decoded: %v", decodeErr)
+		}
+		reencoded, err := json.Marshal(restored)
+		if err != nil || !bytes.Equal(reencoded, encoded) {
+			t.Fatalf("JournalKey encoding is not idempotent: %s, %s, %v", encoded, reencoded, err)
 		}
 	})
 }

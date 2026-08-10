@@ -40,7 +40,9 @@ linters:
     - gochecksumtype
     - goconst
     - gocritic
+    - godoclint
     - godot
+    - gomoddirectives
     - goprintffuncname
     - gosec
     - govet

@@ -1,6 +1,9 @@
 package workflow
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"errors"
+)
 
 // Kind identifies the structural shape of a workflow step. [Spec] accepts the
 // configurable kinds below, while [Description] may also report code-built
@@ -28,9 +31,16 @@ const (
 	KindOpaque    Kind = "opaque"
 )
 
-// Spec is a serializable description of a workflow graph. Its Kind selects
-// which fields apply; [Registry.CompileSpec] compiles it into a [Step].
-// Behavior is referenced by name and resolved through the Registry.
+// Spec is a serializable structured workflow definition. Its Kind selects which
+// fields apply; [Registry.CompileSpec] compiles it into a [Step]. Behavior is
+// referenced by name and resolved through the Registry. The zero Spec is
+// invalid because every Spec requires an explicit Kind.
+//
+// Treat nested Specs and their maps, slices, pointers, and raw config as
+// immutable while validating or compiling. A compiled Step does not retain the
+// Spec or any of those mutable values.
+//
+//nolint:recvcheck // UnmarshalJSON must be a pointer method to satisfy json.Unmarshaler.
 type Spec struct {
 	Kind Kind `json:"kind"`
 
@@ -39,7 +49,8 @@ type Spec struct {
 	// purely structural and take none.
 	ID string `json:"id,omitempty"`
 
-	// Leaf: registered type and its raw config.
+	// Leaf: registered type and its raw config. Config is absent only when it has
+	// zero length; non-empty bytes must contain one complete JSON value.
 	Type   string          `json:"type,omitempty"`
 	Config json.RawMessage `json:"config,omitempty"`
 
@@ -71,4 +82,31 @@ type Spec struct {
 
 	// Parallel and iteration concurrency limit (0 = unbounded).
 	Concurrency int `json:"concurrency,omitempty"`
+}
+
+// MarshalJSON encodes s only when the complete document can cross the strict
+// JSON boundary unchanged and within [MaxNestingDepth]. Registry-dependent
+// definition checks remain the responsibility of [Registry.ValidateSpec] or
+// compilation.
+func (s Spec) MarshalJSON() ([]byte, error) {
+	encoder := specJSONEncoder{
+		root:   s,
+		active: make(map[*Spec]struct{}),
+	}
+	return encoder.marshal()
+}
+
+// UnmarshalJSON atomically replaces s with one strictly decoded Spec. It uses
+// the same JSON Schema, duplicate-member, Unicode, integer, unknown-field, and
+// nesting rules as [ValidateSpecJSON] and [Registry.CompileSpecJSON].
+func (s *Spec) UnmarshalJSON(data []byte) error {
+	if s == nil {
+		return &SpecError{Field: fieldJSON, Err: errors.New("nil spec receiver")}
+	}
+	next, err := decodeSpecDocument(jsonDocument(data))
+	if err != nil {
+		return &SpecError{Field: fieldJSON, Err: err}
+	}
+	*s = next
+	return nil
 }

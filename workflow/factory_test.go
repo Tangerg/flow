@@ -40,7 +40,6 @@ func TestFactory(t *testing.T) {
 	}{
 		{name: "typed config", config: json.RawMessage(`{"n": 2}`), want: 3},
 		{name: "empty config", want: 1},
-		{name: "whitespace config", config: json.RawMessage(" \n\t"), want: 1},
 	}
 
 	for _, tt := range tests {
@@ -56,6 +55,42 @@ func TestFactory(t *testing.T) {
 			got, err := workflow.Get[int](out, workflow.Output("add"))
 			if err != nil || got != tt.want {
 				t.Fatalf("Get = %d, %v; want %d, nil", got, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestFactories_rejectWhitespaceOnlyConfig(t *testing.T) {
+	config := json.RawMessage(" \n\t")
+	body := workflow.Interrupt("result", nil)
+	tests := map[string]func() error{
+		"typed": func() error {
+			_, err := addFactory()(wired(config))
+			return err
+		},
+		"await": func() error {
+			_, err := workflow.AwaitFactory()(workflow.NodeSpec{
+				ID:     "wait",
+				Inputs: workflow.DefaultInput(workflow.Output("input")),
+				Config: config,
+			})
+			return err
+		},
+		"interrupt": func() error {
+			_, err := workflow.InterruptFactory()(workflow.NodeSpec{ID: "wait", Config: config})
+			return err
+		},
+		"subgraph": func() error {
+			_, err := workflow.SubgraphFactory(body, workflow.Output("result"))(
+				workflow.NodeSpec{ID: "sub", Config: config},
+			)
+			return err
+		},
+	}
+	for name, run := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := run(); !errors.Is(err, flow.ErrInvalidConfig) {
+				t.Fatalf("factory error = %v; want ErrInvalidConfig", err)
 			}
 		})
 	}
@@ -85,15 +120,15 @@ func TestFactory_preservesNumbersInAnyConfig(t *testing.T) {
 
 func TestFactory_rejectsUnknownConfigField(t *testing.T) {
 	_, err := addFactory()(wired(json.RawMessage(`{"unknown": true}`)))
-	if !errors.Is(err, workflow.ErrInvalidSpec) {
-		t.Fatalf("err = %v; want ErrInvalidSpec", err)
+	if !errors.Is(err, flow.ErrInvalidConfig) || errors.Is(err, workflow.ErrInvalidSpec) {
+		t.Fatalf("err = %v; want ErrInvalidConfig only", err)
 	}
 }
 
 func TestFactory_rejectsDuplicateConfigMembers(t *testing.T) {
 	_, err := addFactory()(wired(json.RawMessage(`{"n":1,"n":2}`)))
-	if !errors.Is(err, workflow.ErrInvalidSpec) {
-		t.Fatalf("err = %v; want ErrInvalidSpec", err)
+	if !errors.Is(err, flow.ErrInvalidConfig) {
+		t.Fatalf("err = %v; want ErrInvalidConfig", err)
 	}
 }
 
@@ -136,13 +171,13 @@ func TestFactory_rejectsNilFunctionsAndNodes(t *testing.T) {
 // sumPorts adds the two numbers wired to its "a" and "b" ports.
 func sumPorts() workflow.NodeFactory {
 	return workflow.BindFactory(
-		func(_ struct{}, inputs workflow.Inputs) (workflow.BindFunc[[2]int], error) {
+		func(_ struct{}, inputs workflow.Inputs) (workflow.Binder[[2]int], error) {
 			a, aOK := inputs.Ref("a")
 			b, bOK := inputs.Ref("b")
 			if !aOK || !bOK {
 				return nil, fmt.Errorf("%w: want a and b, have %v", workflow.ErrMissingPort, inputs.PortNames())
 			}
-			return func(s workflow.Store) ([2]int, error) {
+			return workflow.BinderFunc[[2]int](func(s workflow.Store) ([2]int, error) {
 				av, err := workflow.Get[int](s, a)
 				if err != nil {
 					return [2]int{}, err
@@ -152,7 +187,7 @@ func sumPorts() workflow.NodeFactory {
 					return [2]int{}, err
 				}
 				return [2]int{av, bv}, nil
-			}, nil
+			}), nil
 		},
 		func(struct{}) (flow.Node[[2]int, int], error) {
 			return flow.NodeFunc[[2]int, int](func(_ context.Context, p [2]int) (int, error) {
@@ -181,6 +216,31 @@ func TestBindFactory_bindsNamedPorts(t *testing.T) {
 	}
 }
 
+func TestBindFactory_acceptsNilSafeFunctionBinder(t *testing.T) {
+	factory := workflow.BindFactory(
+		func(struct{}, workflow.Inputs) (workflow.Binder[int], error) {
+			var bind nilSafeBinderFunc
+			return bind, nil
+		},
+		func(struct{}) (flow.Node[int, int], error) {
+			return flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+				return value * 2, nil
+			}), nil
+		},
+	)
+	step, err := factory(workflow.NodeSpec{ID: "double"})
+	if err != nil {
+		t.Fatalf("BindFactory: %v", err)
+	}
+	output, err := step.Run(t.Context(), workflow.NewStore())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if value, getErr := workflow.Get[int](output, workflow.Output("double")); getErr != nil || value != 42 {
+		t.Fatalf("output = %d, %v; want 42, nil", value, getErr)
+	}
+}
+
 func TestBindFactory_reportsMissingPort(t *testing.T) {
 	_, err := sumPorts()(workflow.NodeSpec{
 		ID:     "sum",
@@ -193,24 +253,24 @@ func TestBindFactory_reportsMissingPort(t *testing.T) {
 
 func TestBindFactory_rejectsUnknownConfigField(t *testing.T) {
 	factory := workflow.BindFactory(
-		func(_ addConfig, _ workflow.Inputs) (workflow.BindFunc[int], error) {
-			return func(workflow.Store) (int, error) { return 0, nil }, nil
+		func(_ addConfig, _ workflow.Inputs) (workflow.Binder[int], error) {
+			return workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 0, nil }), nil
 		},
 		func(addConfig) (flow.Node[int, int], error) {
 			return flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }), nil
 		},
 	)
 	_, err := factory(workflow.NodeSpec{ID: "a", Config: json.RawMessage(`{"unknown": true}`)})
-	if !errors.Is(err, workflow.ErrInvalidSpec) {
-		t.Fatalf("err = %v; want ErrInvalidSpec", err)
+	if !errors.Is(err, flow.ErrInvalidConfig) {
+		t.Fatalf("err = %v; want ErrInvalidConfig", err)
 	}
 }
 
 func TestBindFactory_reportsBuildError(t *testing.T) {
 	boom := errors.New("boom")
 	factory := workflow.BindFactory(
-		func(_ struct{}, _ workflow.Inputs) (workflow.BindFunc[int], error) {
-			return func(workflow.Store) (int, error) { return 0, nil }, nil
+		func(_ struct{}, _ workflow.Inputs) (workflow.Binder[int], error) {
+			return workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 0, nil }), nil
 		},
 		func(struct{}) (flow.Node[int, int], error) { return nil, boom },
 	)
@@ -221,7 +281,7 @@ func TestBindFactory_reportsBuildError(t *testing.T) {
 
 func TestBindFactory_rejectsNilFunctions(t *testing.T) {
 	build := func(struct{}) (flow.Node[int, int], error) { return flow.NodeFunc[int, int](nil), nil }
-	bind := func(struct{}, workflow.Inputs) (workflow.BindFunc[int], error) { return nil, nil }
+	bind := func(struct{}, workflow.Inputs) (workflow.Binder[int], error) { return nil, nil }
 
 	for name, factory := range map[string]workflow.NodeFactory{
 		"nil bind":   workflow.BindFactory(nil, build),

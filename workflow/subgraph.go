@@ -1,10 +1,11 @@
 package workflow
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"maps"
+
+	"github.com/Tangerg/flow"
 )
 
 // SubgraphConfig configures [Subgraph].
@@ -28,13 +29,22 @@ type SubgraphConfig struct {
 // A subgraph is a replay boundary only by composition: its inner journaled
 // steps replay normally, and the projected output is derived again. Subgraph
 // itself writes no Journal record and publishes no partial output when its body
-// fails or suspends.
+// fails or suspends. When Body is a completely visible built-in definition,
+// construction validation also proves that BodyOutput names a conventional
+// output or declared input available on every successful path. An opaque
+// caller-defined Body retains responsibility for that contract at run time.
+// Ordinary body failures are wrapped in a StepError naming the sealed subgraph;
+// suspensions keep their inner step identity and scope.
 func Subgraph(cfg SubgraphConfig) Step {
+	return cfg.step()
+}
+
+func (c SubgraphConfig) step() subgraphStep {
 	return subgraphStep{
-		id:         cfg.ID,
-		inputs:     maps.Clone(cfg.Inputs),
-		body:       cfg.Body,
-		bodyOutput: cfg.BodyOutput,
+		id:         c.ID,
+		inputs:     maps.Clone(c.Inputs),
+		body:       c.Body,
+		bodyOutput: c.BodyOutput,
 	}
 }
 
@@ -47,65 +57,89 @@ type subgraphStep struct {
 
 func (s subgraphStep) Run(ctx context.Context, outer Store) (Store, error) {
 	ctx = ensureRun(ctx)
-	if err := s.validate(); err != nil {
+	run := runFrom(ctx)
+	if err := s.Validate(); err != nil {
 		return outer, err
 	}
-	run := runFrom(ctx)
-	if err := run.validateDefinition(s); err != nil {
-		return outer, err
+	if err := validateChildScope(scope(ctx)); err != nil {
+		return outer, newStepError(ctx, s.id, OpValidate, err)
 	}
 	if err := run.claim(scope(ctx), s.id); err != nil {
-		return outer, &StepError{ID: s.id, Op: OpValidate, Err: err}
+		return outer, newStepError(ctx, s.id, OpValidate, err)
+	}
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return outer, contextErr
 	}
 
-	inner, err := s.bind(outer)
+	inner, err := s.bind(ctx, outer)
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return outer, contextErr
+	}
 	if err != nil {
-		return outer, &StepError{ID: s.id, Op: OpBind, Err: err}
+		return outer, newStepError(ctx, s.id, OpBind, err)
 	}
 	result, err := s.body.Run(WithScope(ctx, s.id), inner)
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return outer, contextErr
+	}
 	if err != nil {
-		return outer, err
+		if SuspendedOnly(err) {
+			return outer, err
+		}
+		return outer, newStepError(ctx, s.id, OpRun, err)
 	}
 	output, err := Get[any](result, s.bodyOutput)
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return outer, contextErr
+	}
 	if err != nil {
-		return outer, &StepError{
-			ID:  s.id,
-			Op:  OpRun,
-			Err: fmt.Errorf("read body output %s: %w", s.bodyOutput, err),
-		}
+		return outer, newStepError(
+			ctx,
+			s.id,
+			OpRun,
+			fmt.Errorf("read body output %s: %w", s.bodyOutput, err),
+		)
 	}
 	return outer.WithOutput(s.id, output), nil
 }
 
 func (s subgraphStep) validate() error {
-	switch {
-	case s.id == "":
-		return &StepError{ID: s.id, Op: OpValidate, Err: ErrInvalidStepID}
-	case isNilNode(s.body):
+	if err := validateStepID(s.id); err != nil {
+		return &StepError{ID: s.id, Op: OpValidate, Err: err}
+	}
+	if isNilNode(s.body) {
 		return &StepError{ID: s.id, Op: OpValidate, Err: ErrNilStep}
 	}
 	if err := s.inputs.validate(); err != nil {
 		return &StepError{
 			ID:  s.id,
 			Op:  OpValidate,
-			Err: fmt.Errorf("%w: subgraph inputs: %w", ErrInvalidSpec, err),
+			Err: fmt.Errorf("%w: subgraph inputs: %w", flow.ErrInvalidConfig, err),
 		}
 	}
-	if err := s.bodyOutput.validate(); err != nil {
+	if err := s.bodyOutput.Validate(); err != nil {
 		return &StepError{
 			ID:  s.id,
 			Op:  OpValidate,
-			Err: fmt.Errorf("%w: subgraph body output: %w", ErrInvalidSpec, err),
+			Err: fmt.Errorf("%w: subgraph body output: %w", flow.ErrInvalidConfig, err),
 		}
 	}
 	return nil
 }
 
-func (s subgraphStep) bind(outer Store) (Store, error) {
+func (s subgraphStep) Validate() error { return validateDefinition(s) }
+
+func (s subgraphStep) bind(ctx context.Context, outer Store) (Store, error) {
 	inner := NewStore()
 	for _, seedID := range s.inputs.PortNames() {
+		if err := context.Cause(ctx); err != nil {
+			return Store{}, err
+		}
 		ref := s.inputs[seedID]
 		value, err := Get[any](outer, ref)
+		if contextErr := context.Cause(ctx); contextErr != nil {
+			return Store{}, contextErr
+		}
 		if err != nil {
 			return Store{}, fmt.Errorf("input %q from %s: %w", seedID, ref, err)
 		}
@@ -118,31 +152,43 @@ func (s subgraphStep) Describe() Description {
 	return Description{
 		ID:       s.id,
 		Kind:     KindSubgraph,
-		Children: []Description{Describe(s.body)},
+		Children: []Description{describe(s.body)},
 	}
 }
 
 func (s subgraphStep) definition() stepDefinition {
-	return stepDefinition{kind: definitionSubgraph, id: s.id, body: s.body}
+	return stepDefinition{
+		kind:       definitionSubgraph,
+		id:         s.id,
+		output:     true,
+		body:       s.body,
+		inputs:     s.inputs,
+		bodyOutput: s.bodyOutput,
+	}
 }
 
 // SubgraphFactory returns a [NodeFactory] that instantiates body as a sealed
 // subgraph. A Graph node's wired ports become the subgraph's inner seed IDs.
 // The factory accepts no config because body and bodyOutput are fixed by the
-// registration.
+// registration. Each construction validates the complete visible body
+// definition; a defect in that captured definition is therefore reported as an
+// invalid node registration rather than as per-node config.
 func SubgraphFactory(body Step, bodyOutput Ref) NodeFactory {
 	return func(spec NodeSpec) (Step, error) {
-		if len(bytes.TrimSpace(spec.Config)) > 0 {
-			return nil, fmt.Errorf("%w: subgraph config must be omitted", ErrInvalidSpec)
+		if len(spec.Config) > 0 {
+			return nil, fmt.Errorf("%w: subgraph config must be omitted", flow.ErrInvalidConfig)
 		}
-		step := subgraphStep{
-			id:         spec.ID,
-			inputs:     maps.Clone(spec.Inputs),
-			body:       body,
-			bodyOutput: bodyOutput,
-		}
-		if err := step.validate(); err != nil {
-			return nil, err
+		step := (SubgraphConfig{
+			ID:         spec.ID,
+			Inputs:     spec.Inputs,
+			Body:       body,
+			BodyOutput: bodyOutput,
+		}).step()
+		if err := step.Validate(); err != nil {
+			return nil, &RegistrationError{
+				Kind: registrationNode,
+				Err:  fmt.Errorf("subgraph factory definition: %w", err),
+			}
 		}
 		return step, nil
 	}

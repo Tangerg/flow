@@ -8,18 +8,16 @@ import (
 )
 
 const (
-	itemKey   = "item"
-	indexKey  = "index"
-	itemPath  = "/" + itemKey
-	indexPath = "/" + indexKey
+	itemKey  = "item"
+	indexKey = "index"
 )
 
 // Item returns the reference under which [Iteration] stores the current item.
-func Item(id string) Ref { return Ref{NodeID: id, Path: itemPath} }
+func Item(id string) Ref { return At(id, itemKey) }
 
 // ItemIndex returns the reference under which [Iteration] stores the current
 // item's zero-based index.
-func ItemIndex(id string) Ref { return Ref{NodeID: id, Path: indexPath} }
+func ItemIndex(id string) Ref { return At(id, indexKey) }
 
 // IterationConfig configures [Iteration].
 type IterationConfig struct {
@@ -27,9 +25,14 @@ type IterationConfig struct {
 	ID string
 	// Input references the JSON-compatible array to iterate over.
 	Input Ref
-	// Body runs once per element on a scoped Store (see [Item] and [ItemIndex]).
+	// Body runs once per element on a Store derived from the outer input, under
+	// an indexed execution scope (see [Item] and [ItemIndex]).
 	Body Step
-	// BodyOutput references the value in each post-run Store to collect.
+	// BodyOutput references the value in each post-run Store to collect. For a
+	// visible built-in Body it must select a body output, [Item], a value nested
+	// under Item, or [ItemIndex] itself. ItemIndex is a scalar and therefore has
+	// no child path. An opaque caller-defined Body owns its output contract at
+	// run time.
 	BodyOutput Ref
 	// Concurrency caps concurrent element runs. Zero is unbounded; negative
 	// values are invalid.
@@ -40,28 +43,43 @@ type IterationConfig struct {
 // concurrently, and collects each run's cfg.BodyOutput into a []any written at
 // Output(cfg.ID). Typed slices are accepted through [Get]'s JSON conversion.
 //
-// For element i, Body runs on a scoped Store that adds the element under
-// [Item](cfg.ID) and its index via [ItemIndex](cfg.ID). The value at cfg.Input must
-// be a []any. The first element to fail cancels the rest.
+// For element i, Body inherits the outer Store and adds the element under
+// [Item](cfg.ID) and its index via [ItemIndex](cfg.ID). Scope isolates execution
+// identity, not Store names; wrap Body in [Subgraph] when it needs a sealed
+// state namespace. The value at cfg.Input must be JSON-convertible to an array.
+// The first observed element failure cancels the rest; when elements fail
+// concurrently, completion timing decides which failure is observed first.
+// Iteration waits for every admitted element, so bodies already running must
+// cooperate with context cancellation.
 //
-// Because Body runs once per element, each element adds an [Event.Scope] segment
-// naming the iteration node and the element index, so an observer can tell the
-// elements' steps apart. That segment is also what lets a [Journal] resume an
-// iteration element by element.
+// Because Body runs once per element, each element adds an indexed
+// [ScopeFrame] naming the iteration node and element index, so an observer can
+// tell the elements' steps apart. That frame is also what lets a [Journal]
+// resume an iteration element by element.
 //
-// A suspended element does not cancel the others: they run to completion and are
-// recorded, and the suspensions are returned together. The collected output is
-// written only once every element has produced one, since a slice with holes
-// would read as a finished result. Iteration validates its ID, references, and
+// A suspended element does not cancel the others: they run to completion, their
+// journaled inner boundaries are recorded, and the suspensions are returned
+// together. The collected output is written only once every element has
+// produced one, since a slice with holes would read as a finished result. Every
+// incomplete outcome — suspension, ordinary failure, or parent cancellation —
+// returns the input Store without a collected output. Completed journaled
+// boundaries inside elements replay on the next run; an opaque Body that owns
+// no Journal boundary runs again. Iteration validates its ID, references, and
 // body before reading the input, so an empty collection cannot hide an invalid
-// definition.
+// definition. Input failures are reported at OpBind; element execution and
+// collection failures are reported at OpRun, while their [flow.IndexError]
+// still identifies the element.
 func Iteration(cfg IterationConfig) Step {
+	return cfg.step()
+}
+
+func (c IterationConfig) step() iterationStep {
 	return iterationStep{
-		id:         cfg.ID,
-		input:      cfg.Input,
-		body:       cfg.Body,
-		bodyOutput: cfg.BodyOutput,
-		limit:      cfg.Concurrency,
+		id:         c.ID,
+		input:      c.Input,
+		body:       c.Body,
+		bodyOutput: c.BodyOutput,
+		limit:      c.Concurrency,
 	}
 }
 
@@ -83,59 +101,67 @@ type iterationStep struct {
 
 func (i iterationStep) Run(ctx context.Context, s Store) (Store, error) {
 	ctx = ensureRun(ctx)
-	if err := i.validate(); err != nil {
+	if err := i.Validate(); err != nil {
 		return s, err
 	}
-	if err := runFrom(ctx).validateDefinition(i); err != nil {
-		return s, err
+	if err := validateChildScope(scope(ctx)); err != nil {
+		return s, newStepError(ctx, i.id, OpValidate, err)
 	}
 	if err := runFrom(ctx).claim(scope(ctx), i.id); err != nil {
-		return s, &StepError{ID: i.id, Op: OpValidate, Err: err}
+		return s, newStepError(ctx, i.id, OpValidate, err)
+	}
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return s, contextErr
 	}
 	items, err := Get[[]any](s, i.input)
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return s, contextErr
+	}
 	if err != nil {
-		return s, fmt.Errorf("workflow: iteration %q input: %w", i.id, err)
+		return s, newStepError(ctx, i.id, OpBind, err)
 	}
 	outcomes, err := i.runElements(ctx, s, items)
-	if err != nil {
-		return s, fmt.Errorf("workflow: iteration %q: %w", i.id, err)
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return s, contextErr
 	}
-	return i.collect(s, outcomes)
+	if err != nil {
+		return s, newStepError(ctx, i.id, OpRun, err)
+	}
+	return i.collect(ctx, s, outcomes)
 }
 
 func (i iterationStep) validate() error {
-	switch {
-	case i.id == "":
-		return &StepError{ID: i.id, Op: OpValidate, Err: ErrInvalidStepID}
-	case isNilNode(i.body):
+	if err := validateStepID(i.id); err != nil {
+		return &StepError{ID: i.id, Op: OpValidate, Err: err}
+	}
+	if isNilNode(i.body) {
 		return &StepError{ID: i.id, Op: OpValidate, Err: ErrNilStep}
-	case i.limit < 0:
-		return &StepError{
-			ID: i.id,
-			Op: OpValidate,
-			Err: fmt.Errorf(
-				"%w: concurrency must be non-negative, got %d",
-				flow.ErrInvalidConfig,
-				i.limit,
-			),
-		}
 	}
-	if err := i.input.validate(); err != nil {
+	if err := (flow.MapConfig{Concurrency: i.limit}).Validate(); err != nil {
 		return &StepError{
 			ID:  i.id,
 			Op:  OpValidate,
-			Err: fmt.Errorf("%w: iteration input: %w", ErrInvalidSpec, err),
+			Err: err,
 		}
 	}
-	if err := i.bodyOutput.validate(); err != nil {
+	if err := i.input.Validate(); err != nil {
 		return &StepError{
 			ID:  i.id,
 			Op:  OpValidate,
-			Err: fmt.Errorf("%w: iteration body output: %w", ErrInvalidSpec, err),
+			Err: fmt.Errorf("%w: iteration input: %w", flow.ErrInvalidConfig, err),
+		}
+	}
+	if err := i.bodyOutput.Validate(); err != nil {
+		return &StepError{
+			ID:  i.id,
+			Op:  OpValidate,
+			Err: fmt.Errorf("%w: iteration body output: %w", flow.ErrInvalidConfig, err),
 		}
 	}
 	return nil
 }
+
+func (i iterationStep) Validate() error { return validateDefinition(i) }
 
 func (i iterationStep) runElements(
 	ctx context.Context,
@@ -151,9 +177,13 @@ func (i iterationStep) runElements(
 		scoped := s.WithCell(i.id, itemKey, items[index]).WithCell(i.id, indexKey, index)
 		body := (scopedStep{step: i.body}).indexed(i.id, index)
 		result, err := body.run(ctx, scoped)
+		if contextErr := context.Cause(ctx); contextErr != nil {
+			return elementOutcome{}, contextErr
+		}
 		if err != nil {
 			// As in Parallel, a suspension travels as a value so the other
-			// elements finish and get recorded rather than being cancelled.
+			// elements finish and their journaled boundaries are retained rather
+			// than being cancelled.
 			if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
 				return elementOutcome{suspensions: suspensions}, nil
 			}
@@ -168,29 +198,49 @@ func (i iterationStep) runElements(
 	return flow.Map(apply, flow.MapConfig{Concurrency: i.limit}).Run(ctx, elementIndexes)
 }
 
-func (i iterationStep) collect(s Store, outcomes []elementOutcome) (Store, error) {
+func (i iterationStep) collect(
+	ctx context.Context,
+	s Store,
+	outcomes []elementOutcome,
+) (Store, error) {
 	outputs := make([]any, len(outcomes))
 	var suspensions suspensionList
 	for index, outcome := range outcomes {
+		if contextErr := context.Cause(ctx); contextErr != nil {
+			return s, contextErr
+		}
 		if len(outcome.suspensions) > 0 {
 			suspensions = append(suspensions, outcome.suspensions...)
 			continue
 		}
 		outputs[index] = outcome.value
 	}
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return s, contextErr
+	}
 	if len(suspensions) > 0 {
 		// The collection is incomplete, so it is not written: a partial slice
-		// with holes would read as a finished result. The Journal holds what
-		// each element did finish, so resuming repeats only the waiting ones.
+		// with holes would read as a finished result. Journaled inner boundaries
+		// that did finish can replay; opaque work without one runs again.
 		return s, suspensions.err()
 	}
-	return s.WithOutput(i.id, outputs), nil
+	result := s.WithOutput(i.id, outputs)
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return s, contextErr
+	}
+	return result, nil
 }
 
 func (i iterationStep) Describe() Description {
-	return Description{ID: i.id, Kind: KindIteration, Children: []Description{Describe(i.body)}}
+	return Description{ID: i.id, Kind: KindIteration, Children: []Description{describe(i.body)}}
 }
 
 func (i iterationStep) definition() stepDefinition {
-	return stepDefinition{kind: definitionIteration, id: i.id, body: i.body}
+	return stepDefinition{
+		kind:       definitionIteration,
+		id:         i.id,
+		output:     true,
+		body:       i.body,
+		bodyOutput: i.bodyOutput,
+	}
 }

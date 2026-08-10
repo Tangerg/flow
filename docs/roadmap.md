@@ -4,7 +4,7 @@ This roadmap records unresolved engine work and decisions. Current behavior
 belongs in package documentation and tutorials; released compatibility history
 belongs in the [changelog](../CHANGELOG.md).
 
-Last reviewed: 2026-08-01.
+Last reviewed: 2026-08-09.
 
 ## Direction
 
@@ -31,10 +31,10 @@ The remaining work is stabilization:
 1. Exercise conditional Graphs, dependency-driven execution, streaming,
    resumption, and sealed Subgraphs in real downstream programs before freezing
    the exported API.
-2. Decide and document Journal wire-format compatibility. The current decoder
-   accepts only the wire version it implements; before the first stable release,
-   choose whether later releases will read selected older versions or require an
-   application migration step.
+2. Decide and document Journal wire-format compatibility. The current v3
+   decoder accepts only v3; before the first stable release, choose whether
+   later releases will read selected older versions or require an application
+   migration step.
 3. Treat workflow-definition compatibility separately from Journal wire
    compatibility. Applications must version definitions and must not resume a
    Journal against changed IDs, scopes, wiring, or control flow without an
@@ -103,6 +103,12 @@ execution concepts only where their semantics are identical.
 
 Store and Journal are serializable values. The engine does not define
 `Storage`, `Queue`, `Scheduler`, `Clock`, or `Lease` interfaces.
+
+Store is a value pool, not a hidden run namespace. `Run` preserves the Store it
+is given; applications assemble a new seed Store for a new logical run. A
+compiled Graph alone clears its declared node cells because only that shape has
+a complete, explicit ownership set. Structured and caller-defined Steps may be
+opaque, so guessing which of their input cells to erase would be unsound.
 
 An application chooses where to persist values, how to identify and authorize a
 run, when to wake it, and how to coordinate ownership. Those systems consume

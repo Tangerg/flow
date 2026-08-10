@@ -7,27 +7,36 @@ import (
 	"sync/atomic"
 )
 
-// Store is a persistent variable pool: a two-level map of nodeID -> key ->
-// value. Every write returns a new Store that shares its base snapshot with the
-// original and records the change in a bounded overlay. The Store structure is
+// Store is an immutable-snapshot variable pool: a two-level map of nodeID ->
+// key -> value. Every write returns a new Store that shares its base snapshot
+// with the original and records the change in a bounded overlay. The Store is
 // immutable; overlays are periodically compacted to keep lookups bounded.
 //
 // Values are held and returned as-is (any). Callers must treat mutable values
 // such as maps, slices, and pointers as immutable after insertion; mutating one
 // would mutate every Store snapshot that shares it and may introduce a data
-// race. Lookup walks through a value's JSON representation, so maps, slices,
-// arrays, structs, pointers, and custom JSON marshalers have the same path
-// semantics before and after Store serialization. Ref paths are JSON Pointers,
-// so every possible object key is representable without ambiguity.
+// race. When a Ref descends below a cell, Lookup walks through the value's JSON
+// representation, so maps, slices, arrays, structs, pointers, and custom JSON
+// marshalers have the same path semantics before and after Store serialization.
+// A whole-cell lookup still returns the stored Go value as-is. Ref paths are
+// JSON Pointers, so every possible object key is representable without
+// ambiguity.
 //
-// A Store holds arbitrary Go values, but a Store that has been serialized holds
-// JSON-domain values: json.Number, string, bool, nil, []any, and
-// map[string]any. Reading with [Get] hides that difference — it converts to the
-// type asked for — so a typed step works the same on a fresh Store and on one
-// restored from JSON. Reading with Lookup does not: it returns whatever is
-// stored, which after a round trip is the JSON-domain value.
+// A Store can hold arbitrary Go values in memory, but only values with a
+// faithful JSON representation can be persisted and restored. A deserialized
+// Store holds JSON-domain values: json.Number, string, bool, nil, []any, and
+// map[string]any. [Get] converts those values to the requested type, so a typed
+// step sees the same value before and after persistence when that type has a
+// faithful JSON round trip. A type with only a custom json.Marshaler, for
+// example, must also define the corresponding decoding contract. [Store.Lookup]
+// does not convert: it returns whatever is stored, which after a round trip is
+// the JSON-domain value.
 //
 // The zero Store is empty and ready to use; prefer [NewStore] for clarity.
+// Store does not distinguish seed values from workflow outputs. Start a new
+// logical run from a freshly assembled seed Store unless retaining prior cells
+// is intentional. A compiled [Graph] is the exception with explicit ownership:
+// it removes cells named by its GraphNode IDs before rebuilding them.
 //
 // Every method takes a value receiver so a Store cannot be mutated through a
 // copy. UnmarshalJSON is the one exception: json.Unmarshaler requires a pointer,
@@ -61,17 +70,25 @@ type storeCells map[storeKey]cell
 
 type nodeSet map[string]struct{}
 
-// revisionCounter gives each write an identity. Parallel uses it to distinguish
-// a branch's writes from cells merely inherited from its input snapshot,
-// without comparing arbitrary values.
+// revisionCounter gives each internal mutation an identity. Parallel uses it to
+// distinguish a branch's changes from cells merely inherited from its input
+// snapshot, without comparing arbitrary values.
 var revisionCounter atomic.Uint64
 
 type cell struct {
 	value    any
 	revision uint64
+	// lineage identifies the first version of this cell in one Store ancestry.
+	// It lets a compacted removal target its own input without affecting an
+	// unrelated Store that happens to use the same node ID and key.
+	lineage uint64
+	removed bool
 }
 
-type storeWrite struct {
+// storeChange is one identity-preserving internal mutation. A removed cell is
+// an engine-owned namespace change, not a public Store operation; carrying it
+// through composition lets a Graph's cleanup survive Parallel merging.
+type storeChange struct {
 	key  storeKey
 	cell cell
 }
@@ -86,8 +103,13 @@ func NewStore() Store {
 // periodically compacted. Value is not cloned and must not be mutated after
 // insertion.
 func (s Store) WithCell(nodeID, key string, value any) Store {
-	next := cell{value: value, revision: revisionCounter.Add(1)}
 	identity := storeKey{nodeID: nodeID, key: key}
+	revision := revisionCounter.Add(1)
+	lineage := revision
+	if current, ok := s.lookupRecord(identity); ok {
+		lineage = current.lineage
+	}
+	next := cell{value: value, revision: revision, lineage: lineage}
 	if s.depth < storeOverlayLimit {
 		return s.withDelta(identity, next)
 	}
@@ -112,41 +134,39 @@ func (s Store) compact() Store {
 	return Store{snapshot: &storeSnapshot{data: s.materialize()}}
 }
 
-// withoutNodes returns a snapshot without cells owned by nodeIDs. A compiled
-// Graph uses it at its execution boundary so stale outputs from an earlier run
-// cannot satisfy current dependencies or conditional merges. The Journal then
-// restores exactly the internal values that belong to the current definition.
+// withoutNodes returns a Store without cells owned by nodeIDs. A compiled Graph
+// uses it at its execution boundary so stale outputs from an earlier run cannot
+// satisfy current dependencies or conditional merges. Removals retain their
+// private change identity, allowing an enclosing Parallel to preserve the
+// Graph's namespace ownership when it merges branches. Execution then rebuilds
+// those cells, replaying whatever boundaries the Journal recorded.
 func (s Store) withoutNodes(nodeIDs nodeSet) Store {
-	if len(nodeIDs) == 0 || !s.hasNode(nodeIDs) {
+	if len(nodeIDs) == 0 {
 		return s
 	}
 	data := s.materialize()
-	for key := range data {
-		if _, owned := nodeIDs[key.nodeID]; owned {
-			delete(data, key)
+	owned := make([]storeKey, 0)
+	for key, current := range data {
+		if _, claimed := nodeIDs[key.nodeID]; claimed && !current.removed {
+			owned = append(owned, key)
 		}
 	}
-	if len(data) == 0 {
-		return Store{}
+	if len(owned) == 0 {
+		return s
 	}
-	return Store{snapshot: &storeSnapshot{data: data}}
-}
-
-func (s Store) hasNode(nodeIDs nodeSet) bool {
-	for delta := s.delta; delta != nil; delta = delta.parent {
-		if _, found := nodeIDs[delta.key.nodeID]; found {
-			return true
-		}
+	slices.SortFunc(owned, storeKey.compare)
+	for _, key := range owned {
+		current := data[key]
+		s = s.withDelta(key, cell{
+			revision: revisionCounter.Add(1),
+			lineage:  current.lineage,
+			removed:  true,
+		})
 	}
-	if s.snapshot == nil {
-		return false
+	if s.depth > storeOverlayLimit*2 {
+		return s.compact()
 	}
-	for key := range s.snapshot.data {
-		if _, found := nodeIDs[key.nodeID]; found {
-			return true
-		}
-	}
-	return false
+	return s
 }
 
 // WithOutput returns a copy of the Store with value written to the conventional
@@ -159,39 +179,35 @@ func (s Store) WithOutput(nodeID string, value any) Store {
 // node; remaining segments walk through the value's JSON representation. The
 // bool reports whether the reference resolved. A whole-cell lookup returns the
 // stored Go value as-is; a nested lookup into a typed Go value returns the
-// corresponding JSON-domain value. Returned mutable values are borrowed views
-// and must not be mutated.
+// corresponding JSON-domain value. If that conversion fails, Lookup reports an
+// unresolved reference; use [Get] when the error matters. Returned mutable
+// values are borrowed views and must not be mutated.
 func (s Store) Lookup(ref Ref) (any, bool) {
-	var conventionalKey string
-	switch ref.Path {
-	case outputPath:
-		conventionalKey = outputKey
-	case itemPath:
-		conventionalKey = itemKey
-	case indexPath:
-		conventionalKey = indexKey
-	}
-	if conventionalKey != "" {
-		c, ok := s.lookupCell(ref.NodeID, conventionalKey)
-		if !ok {
-			return nil, false
-		}
-		return c.value, true
-	}
+	value, found, _ := s.resolve(ref)
+	return value, found
+}
 
+// resolve is the error-preserving form of Lookup used by Get. On a nested-value
+// conversion error it returns the containing cell as value, so Get can report
+// its concrete type without traversing or encoding application data twice.
+func (s Store) resolve(ref Ref) (value any, found bool, err error) {
 	pointer, ok := encodedPointer(ref.Path).scan()
 	if !ok {
-		return nil, false
+		return nil, false, nil
 	}
 	key, present, valid := pointer.next()
 	if !present || !valid {
-		return nil, false
+		return nil, false, nil
 	}
 	c, ok := s.lookupCell(ref.NodeID, key)
 	if !ok {
-		return nil, false
+		return nil, false, nil
 	}
-	return pointer.lookup(c.value)
+	value, found, err = pointer.lookup(c.value)
+	if err != nil {
+		return c.value, false, err
+	}
+	return value, found, nil
 }
 
 // Write records one Store write: the cell it landed in and the value it wrote.
@@ -205,61 +221,76 @@ type Write struct {
 func (w Write) Ref() Ref { return At(w.NodeID, w.Key) }
 
 // Changes returns the writes that distinguish s from base, oldest first, keeping
-// only the final write to each cell. It is the delta an audit log or an external
-// persister records instead of a whole snapshot; pair it with the [Store] on an
-// [EventCompleted] event.
+// only the final write to each cell. It is the write set an audit log records;
+// pair it with the [Store] on an [EventCompleted] event.
 //
-// Cells that base holds and s does not are not reported: a Store has no delete.
-// Values are borrowed views and must not be mutated.
+// Cells that base holds and s does not are not reported: Changes describes
+// writes, not engine-owned namespace cleanup. It is therefore not a general
+// snapshot-synchronization protocol; persist s itself when the exact resulting
+// state matters.
+// Change identity comes from Store lineage rather than value equality. If s is
+// unrelated to base — including a separately decoded snapshot — every cell in s
+// has a distinct write identity and is reported. Values are borrowed views and
+// must not be mutated.
 func (s Store) Changes(base Store) []Write {
-	changed := s.writesSince(base)
+	changed := s.changesSince(base)
 	changes := make([]Write, 0, len(changed))
-	for _, write := range changed {
+	for _, change := range changed {
+		if change.cell.removed {
+			continue
+		}
 		changes = append(changes, Write{
-			NodeID: write.key.nodeID,
-			Key:    write.key.key,
-			Value:  write.cell.value,
+			NodeID: change.key.nodeID,
+			Key:    change.key.key,
+			Value:  change.cell.value,
 		})
 	}
 	return changes
 }
 
-// writesSince is the identity-preserving form of Changes used by Store
-// composition. It takes the overlay fast path when possible and falls back to
-// revision comparison for an unrelated or compacted Store.
-func (s Store) writesSince(base Store) []storeWrite {
+// changesSince is the identity-preserving form used by Store composition. It
+// includes private namespace removals that the public Changes method omits. It
+// takes the overlay fast path when possible and falls back to revision
+// comparison for an unrelated or compacted Store.
+func (s Store) changesSince(base Store) []storeChange {
 	if deltas, ok := s.deltaSince(base); ok {
-		writes := make([]storeWrite, 0, len(deltas))
+		changes := make([]storeChange, 0, len(deltas))
 		for _, delta := range deltas {
-			writes = append(writes, storeWrite{key: delta.key, cell: delta.cell})
+			changes = append(changes, storeChange{key: delta.key, cell: delta.cell})
 		}
-		return writes
+		return changes
 	}
-	return s.changedWrites(base.materialize())
+	return s.changedCells(base.materialize())
 }
 
-// changedWrites returns the receiver's cells that do not share the
-// corresponding identity in base. Every write takes a globally unique revision,
-// so ordering by revision reproduces write order and needs no tie-breaker. A
-// Store restored from an external snapshot has no original write order to
-// recover; [Store.UnmarshalJSON] assigns its revisions by sorted cell, which
-// makes the resulting order deterministic rather than chronological.
-func (s Store) changedWrites(base storeCells) []storeWrite {
+// changedCells returns the receiver's cell records that do not share the
+// corresponding identity in base. Every mutation takes a globally unique
+// revision, so ordering by revision reproduces change order and needs no
+// tie-breaker. A Store restored from an external snapshot has no original write
+// order to recover; [Store.UnmarshalJSON] assigns its revisions by sorted cell,
+// which makes the resulting order deterministic rather than chronological.
+func (s Store) changedCells(base storeCells) []storeChange {
 	candidate := s.materialize()
-	changed := make([]storeWrite, 0, len(candidate))
+	changed := make([]storeChange, 0, len(candidate))
 	for identity, next := range candidate {
 		if current, ok := base[identity]; ok && next.revision == current.revision {
 			continue
 		}
-		changed = append(changed, storeWrite{key: identity, cell: next})
+		if next.removed {
+			current, ok := base[identity]
+			if !ok || current.removed || current.lineage != next.lineage {
+				continue
+			}
+		}
+		changed = append(changed, storeChange{key: identity, cell: next})
 	}
-	slices.SortFunc(changed, func(a, b storeWrite) int {
+	slices.SortFunc(changed, func(a, b storeChange) int {
 		return cmp.Compare(a.cell.revision, b.cell.revision)
 	})
 	return changed
 }
 
-// deltaSince returns the final write to each cell changed in s after base. It
+// deltaSince returns the final change to each cell changed in s after base. It
 // succeeds when both Stores share a snapshot and s's overlay descends from
 // base's overlay.
 func (s Store) deltaSince(base Store) ([]*storeDelta, bool) {
@@ -283,12 +314,14 @@ func (s Store) deltaSince(base Store) ([]*storeDelta, bool) {
 			writes = append(writes, delta)
 		}
 	}
-	slices.Reverse(writes)
+	slices.SortFunc(writes, func(left, right *storeDelta) int {
+		return cmp.Compare(left.cell.revision, right.cell.revision)
+	})
 	return writes, true
 }
 
-// merge returns a Store containing base plus each supplied Store's writes. On a
-// same-cell conflict a later Store wins.
+// merge returns a Store containing base plus each supplied Store's changes. On
+// a same-cell conflict a later Store wins.
 func (s Store) merge(others ...Store) Store {
 	merger := storeMerger{base: s, result: s}
 	for _, other := range others {
@@ -300,11 +333,11 @@ func (s Store) merge(others ...Store) Store {
 	return merger.result
 }
 
-// withWrites applies identity-preserving writes in order. It is the low-level
+// withChanges applies identity-preserving changes in order. It is the low-level
 // counterpart of merge for a caller that already isolated each branch's delta.
-func (s Store) withWrites(writes []storeWrite) Store {
-	for _, write := range writes {
-		s = s.withDelta(write.key, write.cell)
+func (s Store) withChanges(changes []storeChange) Store {
+	for _, change := range changes {
+		s = s.withDelta(change.key, change.cell)
 	}
 	if s.depth > storeOverlayLimit*2 {
 		return s.compact()
@@ -324,8 +357,8 @@ func (s *storeMerger) add(other Store) {
 	if s.addDirectChild(other) {
 		return
 	}
-	if writes, ok := other.deltaSince(s.base); ok {
-		s.addWrites(writes)
+	if changes, ok := other.deltaSince(s.base); ok {
+		s.addChanges(changes)
 		return
 	}
 
@@ -334,8 +367,8 @@ func (s *storeMerger) add(other Store) {
 	if s.baseData == nil {
 		s.baseData = s.base.materialize()
 	}
-	for _, write := range other.changedWrites(s.baseData) {
-		s.result = s.result.withDelta(write.key, write.cell)
+	for _, change := range other.changedCells(s.baseData) {
+		s.result = s.result.withDelta(change.key, change.cell)
 	}
 }
 
@@ -355,14 +388,22 @@ func (s *storeMerger) addDirectChild(other Store) bool {
 	return true
 }
 
-func (s *storeMerger) addWrites(writes []*storeDelta) {
-	for _, write := range writes {
-		s.result = s.result.withDelta(write.key, write.cell)
+func (s *storeMerger) addChanges(changes []*storeDelta) {
+	for _, change := range changes {
+		s.result = s.result.withDelta(change.key, change.cell)
 	}
 }
 
 func (s Store) lookupCell(nodeID, key string) (cell, bool) {
 	identity := storeKey{nodeID: nodeID, key: key}
+	c, ok := s.lookupRecord(identity)
+	if !ok || c.removed {
+		return cell{}, false
+	}
+	return c, true
+}
+
+func (s Store) lookupRecord(identity storeKey) (cell, bool) {
 	for delta := s.delta; delta != nil; delta = delta.parent {
 		if delta.key == identity {
 			return delta.cell, true
@@ -375,7 +416,8 @@ func (s Store) lookupCell(nodeID, key string) (cell, bool) {
 	return c, ok
 }
 
-// materialize returns a mutable copy of the Store's complete flat cell map.
+// materialize returns a mutable copy of the Store's complete flat cell-record
+// map, including private removal markers needed by enclosing composites.
 func (s Store) materialize() storeCells {
 	capacity := 0
 	if s.snapshot != nil {
@@ -392,11 +434,18 @@ func (s Store) materialize() storeCells {
 	return data
 }
 
-func (s Store) deltasOldestFirst() []*storeDelta {
-	writes := make([]*storeDelta, 0, s.depth)
-	for delta := s.delta; delta != nil; delta = delta.parent {
-		writes = append(writes, delta)
+func (s storeKey) compare(other storeKey) int {
+	if order := cmp.Compare(s.nodeID, other.nodeID); order != 0 {
+		return order
 	}
-	slices.Reverse(writes)
-	return writes
+	return cmp.Compare(s.key, other.key)
+}
+
+func (s Store) deltasOldestFirst() []*storeDelta {
+	changes := make([]*storeDelta, 0, s.depth)
+	for delta := s.delta; delta != nil; delta = delta.parent {
+		changes = append(changes, delta)
+	}
+	slices.Reverse(changes)
+	return changes
 }

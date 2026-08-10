@@ -32,7 +32,7 @@
     },
     "leaf": {
       "type": "object",
-      "description": "A registered leaf node.",
+      "description": "A registered, Store-sealed node boundary.",
       "properties": {
         "kind": { "const": "leaf" },
         "id": { "type": "string", "minLength": 1 },
@@ -67,7 +67,7 @@
         "concurrency": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum concurrent steps. Zero or omission means unbounded."
+          "description": "Maximum concurrent steps. Zero or omission means unbounded. The value must fit the engine platform's Go int."
         }
       },
       "additionalProperties": false
@@ -100,7 +100,7 @@
         "maxIterations": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum iterations. Zero or omission uses the library's default safety cap."
+          "description": "Maximum iterations. Zero or omission uses the library's default safety cap. The value must fit the engine platform's Go int."
         }
       },
       "required": ["id", "body", "condition"],
@@ -118,7 +118,7 @@
         "concurrency": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum concurrent items. Zero or omission means unbounded."
+          "description": "Maximum concurrent items. Zero or omission means unbounded. The value must fit the engine platform's Go int."
         }
       },
       "required": ["id", "input", "body", "bodyOutput"],

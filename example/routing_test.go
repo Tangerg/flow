@@ -35,7 +35,7 @@ func conditionalRegistry() *workflow.Registry {
 		},
 	)
 	merge := workflow.BindFactory(
-		func(_ struct{}, inputs workflow.Inputs) (workflow.BindFunc[string], error) {
+		func(_ struct{}, inputs workflow.Inputs) (workflow.Binder[string], error) {
 			approve, approveOK := inputs.Ref("approve")
 			review, reviewOK := inputs.Ref("review")
 			if !approveOK || !reviewOK {

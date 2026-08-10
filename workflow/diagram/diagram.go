@@ -1,12 +1,14 @@
 package diagram
 
 import (
+	"cmp"
 	"fmt"
 	"html"
 	"maps"
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/Tangerg/flow/workflow"
 )
@@ -30,18 +32,58 @@ const (
 )
 
 type edge struct {
-	source string
-	ref    workflow.Ref
-	target string
-	label  string
-	kind   edgeKind
+	source      string
+	ref         workflow.Ref
+	targetIndex int
+	label       string
+	kind        edgeKind
+}
+
+// externalNode keeps renderer identity structured. Ref.String is deliberately
+// only a display form: a node ID containing "#/" can make two different Refs
+// render alike, and using that text as a map key would merge their edges.
+type externalNode struct {
+	source   string
+	ref      workflow.Ref
+	valueRef bool
+}
+
+func (e externalNode) label() string {
+	if e.valueRef {
+		return e.ref.String()
+	}
+	return e.source
+}
+
+func (e externalNode) compare(other externalNode) int {
+	return cmp.Or(
+		strings.Compare(e.label(), other.label()),
+		cmp.Compare(e.kindOrder(), other.kindOrder()),
+		cmp.Compare(e.source, other.source),
+		cmp.Compare(e.ref.NodeID, other.ref.NodeID),
+		cmp.Compare(e.ref.Path, other.ref.Path),
+	)
+}
+
+func (e externalNode) kindOrder() int {
+	if e.valueRef {
+		return 1
+	}
+	return 0
+}
+
+func (e edge) external() externalNode {
+	if e.kind == dataEdge {
+		return externalNode{ref: e.ref, valueRef: true}
+	}
+	return externalNode{source: e.source}
 }
 
 type renderer struct {
 	graph       workflow.Graph
 	nodeIndexes map[string]int
 	edges       []edge
-	externals   []string
+	externals   []externalNode
 }
 
 func newRenderer(graph workflow.Graph) *renderer {
@@ -60,16 +102,16 @@ func newRenderer(graph workflow.Graph) *renderer {
 }
 
 func (r *renderer) collectEdges() {
-	for _, node := range r.graph.Nodes {
+	for targetIndex, node := range r.graph.Nodes {
 		for _, port := range node.Inputs.PortNames() {
-			r.addDataEdge(node.ID, port, node.Inputs[port])
+			r.addDataEdge(targetIndex, port, node.Inputs[port])
 		}
 		for _, dependency := range node.DependsOn {
 			r.edges = append(r.edges, edge{
-				source: dependency,
-				target: node.ID,
-				label:  "depends",
-				kind:   dependencyEdge,
+				source:      dependency,
+				targetIndex: targetIndex,
+				label:       "depends",
+				kind:        dependencyEdge,
 			})
 		}
 		for _, gate := range node.When {
@@ -78,42 +120,38 @@ func (r *renderer) collectEdges() {
 				label = "when:any=" + gate.Outlet
 			}
 			r.edges = append(r.edges, edge{
-				source: gate.NodeID,
-				target: node.ID,
-				label:  label,
-				kind:   gateEdge,
+				source:      gate.NodeID,
+				targetIndex: targetIndex,
+				label:       label,
+				kind:        gateEdge,
 			})
 		}
 	}
 }
 
-func (r *renderer) addDataEdge(target, port string, ref workflow.Ref) {
+func (r *renderer) addDataEdge(targetIndex int, port string, ref workflow.Ref) {
 	label := port
 	if ref != workflow.Output(ref.NodeID) {
 		label += ": " + ref.Path
 	}
 	r.edges = append(r.edges, edge{
-		source: ref.NodeID,
-		ref:    ref,
-		target: target,
-		label:  label,
-		kind:   dataEdge,
+		source:      ref.NodeID,
+		ref:         ref,
+		targetIndex: targetIndex,
+		label:       label,
+		kind:        dataEdge,
 	})
 }
 
 func (r *renderer) collectExternals() {
-	external := make(map[string]struct{})
+	external := make(map[externalNode]struct{})
 	for _, edge := range r.edges {
 		if _, internal := r.nodeIndexes[edge.source]; internal {
 			continue
 		}
-		label := edge.source
-		if edge.kind == dataEdge {
-			label = edge.ref.String()
-		}
-		external[label] = struct{}{}
+		external[edge.external()] = struct{}{}
 	}
-	r.externals = slices.Sorted(maps.Keys(external))
+	r.externals = slices.SortedFunc(maps.Keys(external), externalNode.compare)
 }
 
 func (r *renderer) ascii() string {
@@ -147,7 +185,7 @@ func (r *renderer) ascii() string {
 			"  %s --%s--> %s\n",
 			strconv.Quote(source),
 			strconv.Quote(edge.label),
-			strconv.Quote(edge.target),
+			strconv.Quote(r.graph.Nodes[edge.targetIndex].ID),
 		)
 	}
 	return output.String()
@@ -166,20 +204,20 @@ func (r *renderer) mermaid() string {
 		)
 	}
 
-	externalIndexes := make(map[string]int, len(r.externals))
-	for index, label := range r.externals {
-		externalIndexes[label] = index
+	externalIndexes := make(map[externalNode]int, len(r.externals))
+	for index, external := range r.externals {
+		externalIndexes[external] = index
 		fmt.Fprintf(
 			&output,
 			"  x%d[\"%s\"]\n",
 			index,
-			mermaidLabel(label),
+			mermaidLabel(external.label()),
 		)
 	}
 
 	for _, edge := range r.edges {
 		source := r.mermaidSource(edge, externalIndexes)
-		target := fmt.Sprintf("n%d", r.nodeIndexes[edge.target])
+		target := fmt.Sprintf("n%d", edge.targetIndex)
 		arrow := "-->"
 		if edge.kind != dataEdge {
 			arrow = "-.->"
@@ -198,19 +236,29 @@ func (r *renderer) mermaid() string {
 
 func (r *renderer) mermaidSource(
 	edge edge,
-	externalIndexes map[string]int,
+	externalIndexes map[externalNode]int,
 ) string {
 	if index, internal := r.nodeIndexes[edge.source]; internal {
 		return fmt.Sprintf("n%d", index)
 	}
-	label := edge.source
-	if edge.kind == dataEdge {
-		label = edge.ref.String()
-	}
-	return fmt.Sprintf("x%d", externalIndexes[label])
+	return fmt.Sprintf("x%d", externalIndexes[edge.external()])
 }
 
 func mermaidLabel(label string) string {
+	// Mermaid is a UTF-8 text format. Replacement is appropriate at this
+	// presentation boundary: external identity remains structured, while the
+	// rendered document must not carry malformed text.
+	label = strings.ToValidUTF8(label, "\uFFFD")
+	label = strings.ReplaceAll(label, "\r\n", "\n")
+	label = strings.ReplaceAll(label, "\r", "\n")
+	label = strings.ReplaceAll(label, "\u2028", "\n")
+	label = strings.ReplaceAll(label, "\u2029", "\n")
+	label = strings.Map(func(character rune) rune {
+		if character != '\n' && unicode.IsControl(character) {
+			return '\uFFFD'
+		}
+		return character
+	}, label)
 	label = html.EscapeString(label)
 	label = strings.ReplaceAll(label, "|", "&#124;")
 	return strings.ReplaceAll(label, "\n", "<br/>")

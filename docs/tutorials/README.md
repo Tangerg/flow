@@ -36,7 +36,7 @@ output. These are independent capabilities; use either or both.
 
 | Level | Tutorial | Executable example | Outcome |
 | --- | --- | --- | --- |
-| 0 | [Getting started](./00-getting-started.md) | — | Choose the smallest package |
+| 0 | [Getting started](./00-getting-started.md) | None | Choose the smallest package |
 | 1 | [Nodes and `Then`](./01-node-and-then.md) | [`Example_node`](../../example/node_test.go) | Build a typed pipeline |
 | 2 | [Composition and concurrency](./02-composition-and-concurrency.md) | [`Example_composition`](../../example/composition_test.go) | Compose bounded concurrent work |
 | 3 | [Stores, references, and steps](./03-workflow-store-and-ref.md) | [`Example_workflow`](../../example/workflow_test.go) | Connect named steps through a Store |
@@ -46,7 +46,7 @@ output. These are independent capabilities; use either or both.
 | 7 | [Suspension and resumption](./07-suspension-and-resumption.md) | [`Example_resume`](../../example/resume_test.go) | Resume across process boundaries |
 | 8 | [Streaming output](./08-streaming-output.md) | [`Example_streamingOutput`](../../example/stream_test.go) | Deliver incremental output with backpressure |
 | 9 | [Conditional graphs and diagrams](./09-conditional-graphs-and-diagrams.md) | [`Example_conditionalGraph`](../../example/routing_test.go) | Route and merge a flat DAG |
-| 10 | [Dependency-driven graphs and sealed subgraphs](./10-dependency-graphs-and-subgraphs.md) | [`Example_subgraph`](../../example/subgraph_test.go) | Reuse an isolated workflow region |
+| 10 | [Dependency-driven graphs and sealed subgraphs](./10-dependency-graphs-and-subgraphs.md) | [`Example_subgraph`](../../example/subgraph_test.go), [`Example_customRepeatedComposite`](../../example/custom_composite_test.go) | Reuse an isolated region and preserve custom composite identity |
 
 The tutorials explain contracts and trade-offs. The examples are the runnable
 source of truth.

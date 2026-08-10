@@ -9,8 +9,8 @@ import (
 	"github.com/Tangerg/flow/workflow"
 )
 
-// Interrupt and Journal form an explicit request/response boundary. Store and
-// Journal can be persisted independently and restored in another process.
+// Interrupt and Journal form an explicit request/response boundary. Store,
+// Journal, and the active Suspension can be restored in another process.
 func Example_resume() {
 	type approvalRequest struct {
 		Question string `json:"question"`
@@ -70,6 +70,11 @@ func Example_resume() {
 		fmt.Println("error:", runErr)
 		return
 	}
+	waitJSON, runErr := json.Marshal(wait)
+	if runErr != nil {
+		fmt.Println("error:", runErr)
+		return
+	}
 
 	var restoredStore workflow.Store
 	if err := json.Unmarshal(storeJSON, &restoredStore); err != nil {
@@ -81,7 +86,12 @@ func Example_resume() {
 		fmt.Println("error:", err)
 		return
 	}
-	if err := restoredJournal.Record(wait.Key(), "guide"); err != nil {
+	var restoredWait workflow.Suspension
+	if err := json.Unmarshal(waitJSON, &restoredWait); err != nil {
+		fmt.Println("error:", err)
+		return
+	}
+	if err := restoredJournal.Record(restoredWait.Key(), "guide"); err != nil {
 		fmt.Println("error:", err)
 		return
 	}

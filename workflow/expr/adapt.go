@@ -3,7 +3,9 @@ package expr
 import (
 	"context"
 	"fmt"
+	"unicode/utf8"
 
+	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
 )
 
@@ -22,10 +24,18 @@ func Condition(src string) (workflow.Condition, error) {
 	return e.LoopCondition(), nil
 }
 
-// LoopCondition adapts the Expr into a [workflow.Condition].
+// LoopCondition adapts the Expr into a [workflow.Condition]. Parent
+// cancellation observed before or during evaluation takes precedence.
 func (e *Expr) LoopCondition() workflow.Condition {
-	return func(_ context.Context, _ int, s workflow.Store) (bool, error) {
-		return e.Bool(s)
+	return func(ctx context.Context, _ int, s workflow.Store) (bool, error) {
+		if err := context.Cause(ctx); err != nil {
+			return false, err
+		}
+		value, err := e.Bool(s)
+		if contextErr := context.Cause(ctx); contextErr != nil {
+			return false, contextErr
+		}
+		return value, err
 	}
 }
 
@@ -41,11 +51,20 @@ func Resolver(src string) (workflow.Resolver, error) {
 	return e.BranchResolver(), nil
 }
 
-// BranchResolver adapts the Expr into a [workflow.Resolver].
+// BranchResolver adapts the Expr into an ordinary Store-to-string Node under
+// the semantic [workflow.Resolver] name. Parent cancellation observed before
+// or during evaluation takes precedence.
 func (e *Expr) BranchResolver() workflow.Resolver {
-	return func(_ context.Context, s workflow.Store) (string, error) {
-		return e.String(s)
-	}
+	return flow.NodeFunc[workflow.Store, string](func(ctx context.Context, s workflow.Store) (string, error) {
+		if err := context.Cause(ctx); err != nil {
+			return "", err
+		}
+		value, err := e.String(s)
+		if contextErr := context.Cause(ctx); contextErr != nil {
+			return "", contextErr
+		}
+		return value, err
+	})
 }
 
 // Case pairs a boolean expression with the branch name to select when it holds.
@@ -55,8 +74,9 @@ type Case struct {
 }
 
 // SwitchSpec is the serializable form of a [Switch]: ordered cases plus the
-// branch to take when none match.
-type SwitchSpec struct {
+// branch to take when none match. Its JSON boundary requires an object and is
+// strict, lossless, and failure-atomic, matching [Bindings].
+type SwitchSpec struct { //nolint:recvcheck // UnmarshalJSON must use a pointer receiver.
 	Cases []Case `json:"cases"`
 	// Fallback is the case name used when no When holds. An empty Fallback makes
 	// "no match" an error instead.
@@ -66,54 +86,102 @@ type SwitchSpec struct {
 // Switch compiles an ordered list of boolean cases into a [workflow.Branch]
 // resolver. Cases are evaluated in order and the first one that holds selects its
 // Then; if none hold, fallback is selected, or the resolver fails when fallback
-// is empty.
+// is empty. Parent cancellation takes precedence and stops later cases from
+// being evaluated.
 //
 // This is how a rule set carried in config — "route to escalate when the score is
 // low" — becomes a branch without a Go redeploy.
 func Switch(spec SwitchSpec) (workflow.Resolver, error) {
-	if len(spec.Cases) == 0 {
+	return (switchCompiler{spec: spec}).compile()
+}
+
+// switchCompiler owns definition validation and expression compilation. The
+// resulting switchResolver contains only immutable executable state and can be
+// reused concurrently without retaining the caller's SwitchSpec slices.
+type switchCompiler struct {
+	spec SwitchSpec
+}
+
+type switchResolver struct {
+	cases    []compiledCase
+	fallback string
+}
+
+type compiledCase struct {
+	when *Expr
+	then string
+}
+
+func (s switchCompiler) compile() (workflow.Resolver, error) {
+	if len(s.spec.Cases) == 0 {
 		return nil, fmt.Errorf(
 			"%w: switch requires at least one case",
-			workflow.ErrInvalidSpec,
+			flow.ErrInvalidConfig,
 		)
 	}
 
-	type compiledCase struct {
-		when *Expr
-		then string
+	compiled := switchResolver{
+		cases:    make([]compiledCase, 0, len(s.spec.Cases)),
+		fallback: s.spec.Fallback,
 	}
-	cases := make([]compiledCase, 0, len(spec.Cases))
-	for index, specCase := range spec.Cases {
-		if specCase.Then == "" {
-			return nil, fmt.Errorf(
-				"%w: switch case %d has an empty branch name",
-				workflow.ErrInvalidSpec,
-				index,
-			)
-		}
-		when, err := Parse(specCase.When)
+	for index, specCase := range s.spec.Cases {
+		entry, err := s.compileCase(index, specCase)
 		if err != nil {
-			return nil, fmt.Errorf("switch case %d: %w", index, err)
+			return nil, err
 		}
-		cases = append(cases, compiledCase{when: when, then: specCase.Then})
+		compiled.cases = append(compiled.cases, entry)
 	}
+	if !utf8.ValidString(compiled.fallback) {
+		return nil, fmt.Errorf(
+			"%w: switch fallback branch name is not valid UTF-8",
+			flow.ErrInvalidConfig,
+		)
+	}
+	return compiled, nil
+}
 
-	fallback := spec.Fallback
-	return func(_ context.Context, s workflow.Store) (string, error) {
-		for _, c := range cases {
-			hold, err := c.when.Bool(s)
-			if err != nil {
-				return "", err
-			}
-			if hold {
-				return c.then, nil
-			}
+func (switchCompiler) compileCase(index int, spec Case) (compiledCase, error) {
+	if spec.Then == "" {
+		return compiledCase{}, fmt.Errorf(
+			"%w: switch case %d has an empty branch name",
+			flow.ErrInvalidConfig,
+			index,
+		)
+	}
+	if !utf8.ValidString(spec.Then) {
+		return compiledCase{}, fmt.Errorf(
+			"%w: switch case %d branch name is not valid UTF-8",
+			flow.ErrInvalidConfig,
+			index,
+		)
+	}
+	when, err := Parse(spec.When)
+	if err != nil {
+		return compiledCase{}, fmt.Errorf("switch case %d: %w", index, err)
+	}
+	return compiledCase{when: when, then: spec.Then}, nil
+}
+
+func (s switchResolver) Run(ctx context.Context, store workflow.Store) (string, error) {
+	for _, entry := range s.cases {
+		if err := context.Cause(ctx); err != nil {
+			return "", err
 		}
-		if fallback == "" {
-			return "", fmt.Errorf("%w: no case matched and no fallback is set", ErrUndefined)
+		hold, err := entry.when.Bool(store)
+		if contextErr := context.Cause(ctx); contextErr != nil {
+			return "", contextErr
 		}
-		return fallback, nil
-	}, nil
+		if err != nil {
+			return "", err
+		}
+		if hold {
+			return entry.then, nil
+		}
+	}
+	if s.fallback == "" {
+		return "", fmt.Errorf("%w: no expression matched and no fallback is set", flow.ErrNoCase)
+	}
+	return s.fallback, nil
 }
 
 // Refs returns every reference a SwitchSpec's cases read, deduplicated and

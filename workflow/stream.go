@@ -33,9 +33,10 @@ import (
 //
 // The function may call yield from multiple goroutines; Emitter delivery is
 // serialized for the enclosing leaf invocation. StreamFunc does not return
-// until every in-flight yield returns, and a retained yield called after the
-// function returns reports false without reaching the Emitter. Implementations
-// must otherwise be safe for concurrent use and keep invocation state local.
+// until every in-flight yield returns. A retained yield called after Run exits
+// reports false without reaching the Emitter, including when the producer
+// panics and an outer boundary recovers. Implementations must otherwise be safe
+// for concurrent use and keep invocation state local.
 type StreamFunc[I, O, C any] func(
 	context.Context,
 	I,
@@ -45,35 +46,52 @@ type StreamFunc[I, O, C any] func(
 // StreamFunc satisfies flow.Node.
 var _ flow.Node[any, any] = StreamFunc[any, any, any](nil)
 
+// Validate rejects a nil StreamFunc before a composite performs work. The
+// adapter owns this check rather than asking flow to classify every
+// caller-defined function type as an invalid nil function.
+func (s StreamFunc[I, O, C]) Validate() error {
+	if s == nil {
+		return flow.ErrNilNode
+	}
+	return nil
+}
+
 // Run calls f with the current leaf invocation's typed yield function. A nil
-// StreamFunc returns [flow.ErrNilNode]. If the function ignores a false yield
-// and returns success, Run returns the reason the stream stopped instead.
-func (s StreamFunc[I, O, C]) Run(ctx context.Context, input I) (O, error) {
+// StreamFunc returns [flow.ErrNilNode]. Once yield reports false, the reason the
+// stream stopped takes precedence over the function's return: a producer cannot
+// hide a failed consumer by returning success or an unrelated error afterward.
+func (s StreamFunc[I, O, C]) Run(ctx context.Context, input I) (output O, err error) {
 	if s == nil {
 		var zero O
 		return zero, flow.ErrNilNode
 	}
 
 	emission := emissionLease{session: emissionFrom(ctx)}
-	output, err := s(ctx, input, func(value C) bool {
+	// Close from a defer so the lexical yield capability cannot outlive this
+	// invocation even when the producer panics and an outer boundary recovers.
+	// The defer also waits for every admitted concurrent yield before Run exits.
+	defer func() {
+		if emissionErr := emission.close(); emissionErr != nil {
+			var zero O
+			output = zero
+			err = emissionErr
+		}
+	}()
+	return s(ctx, input, func(value C) bool {
 		return emission.yield(ctx, value)
 	})
-	if emissionErr := emission.close(); emissionErr != nil && err == nil {
-		var zero O
-		return zero, emissionErr
-	}
-	return output, err
 }
 
 // Chunk is one intermediate value from a streaming [flow.Node].
 //
 // ID and Scope identify the enclosing leaf invocation; each Chunk owns its
-// Scope slice. Index starts at zero for each invocation. Seq shares a run-wide
-// ordering with [Event]; callbacks from concurrent leaf invocations may arrive
-// out of order. Value is application-owned and must be treated as immutable.
+// Scope slice. Inspect [ScopeFrame.Indexed] rather than parsing display text.
+// Index starts at zero for each invocation. Seq shares a run-wide ordering with
+// [Event]; callbacks from concurrent leaf invocations may arrive out of order.
+// Value is application-owned and must be treated as immutable.
 type Chunk struct {
 	ID    string
-	Scope []string
+	Scope []ScopeFrame
 	Seq   uint64
 	Index uint64
 	Value any
@@ -86,7 +104,10 @@ type Chunk struct {
 // serialized delivery would deadlock that invocation. A slow Emitter applies
 // backpressure to the producing Node. Returning an error stops that leaf's
 // stream and returns the error through its normal failure or suspension
-// classification.
+// classification. The context preserves the run's cancellation, deadline, and
+// application values, but is detached from its workflow identity: calling a
+// Step directly from Emit does not join the producing run. Call [Run] to start
+// an independent execution.
 type Emitter interface {
 	Emit(ctx context.Context, chunk Chunk) error
 }
@@ -117,7 +138,7 @@ type emissionSession struct {
 	cancel  context.CancelCauseFunc
 	emitter Emitter
 	id      string
-	scope   []string
+	scope   []ScopeFrame
 	index   uint64
 	closed  bool
 	err     error
@@ -127,7 +148,7 @@ func withEmission(
 	ctx context.Context,
 	run *runState,
 	id string,
-	scope []string,
+	scope []ScopeFrame,
 	emitter Emitter,
 ) (context.Context, *emissionSession) {
 	ctx, cancel := context.WithCancelCause(ctx)
@@ -173,11 +194,7 @@ func (e *emissionSession) emit(ctx context.Context, value any) error {
 		Index: index,
 		Value: value,
 	}
-	// An Emitter consumes output; it is not part of the producing node. Mask
-	// the session so reusing the callback context cannot emit recursively under
-	// this leaf's identity (and deadlock on the serialization lock).
-	emitterCtx := context.WithValue(ctx, emissionKey{}, (*emissionSession)(nil))
-	if err := e.emitter.Emit(emitterCtx, chunk); err != nil {
+	if err := e.emitter.Emit(callbackContext(ctx), chunk); err != nil {
 		e.err = fmt.Errorf("emit chunk %d: %w", index, err)
 		e.cancel(e.err)
 		return e.err

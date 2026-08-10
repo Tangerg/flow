@@ -2,38 +2,43 @@ package workflow
 
 import (
 	"context"
-	"fmt"
 	"slices"
 
 	"github.com/Tangerg/flow"
 )
 
-// ParallelConfig configures [Parallel]. Its zero value runs every branch
-// concurrently.
-type ParallelConfig struct {
-	// Concurrency caps the number of branches running at once. Zero is
-	// unbounded; negative values are invalid.
-	Concurrency int
-}
+// ParallelConfig is [flow.MapConfig] under the workflow package's semantic
+// name. Both concurrent fan-out forms therefore share one limit contract.
+type ParallelConfig = flow.MapConfig
 
 // Parallel runs every branch concurrently on the same input Store and merges
 // their resulting Stores into one. Because the Store structure is persistent,
 // branches can safely share it when stored values obey Store's immutability
 // contract.
 //
-// The first branch to fail cancels the rest and its error is returned;
-// already-running branches must cooperate with context cancellation. A
-// suspension is not a failure: the remaining branches run to completion, every
-// branch that finished has its writes merged, and the suspensions are returned
-// together (see [Suspensions]). Cancelling work because another branch is waiting
-// would discard it and, worse, repeat its side effects on the run that resumes.
+// The first observed branch failure cancels the rest and is returned; when
+// branches fail concurrently, completion timing decides which failure is
+// observed first. Parallel waits for every admitted branch, so already-running
+// branches must cooperate with context cancellation. An ordinary failure or
+// parent cancellation returns the input Store; a successful sibling may
+// nevertheless have committed a Journal record, which the next run will replay.
+// A suspension is not a failure:
+// the remaining branches run to completion, every branch that finished has its
+// writes merged, and the suspensions are returned together (see [Suspensions]).
+// Cancelling work because another branch is waiting would discard it and,
+// worse, repeat its side effects on the run that resumes.
 //
-// Parallel merges only cells actually written by each branch; cells merely
-// inherited from the input snapshot cannot overwrite another branch's work. On
-// a same-cell conflict a later branch's value wins. A zero [ParallelConfig] runs
-// every branch concurrently. Before running, it rejects nil branches and
-// duplicate IDs in steps built by this package. Runtime identity checks cover
-// IDs hidden inside caller-defined steps.
+// Parallel merges only changes descended from the shared input: ordinary
+// writes, plus namespace cleanup owned by an engine boundary such as [Graph].
+// Cells merely inherited from the input cannot overwrite another branch's
+// work, and a merge cannot resurrect a stale cell that a Graph removed. A
+// caller-defined branch that returns an unrelated or separately decoded Store
+// intentionally presents all of its cells as new writes; cells absent from that
+// unrelated Store do not delete the input. On a same-cell conflict a later
+// branch's change wins. A zero [ParallelConfig] runs every branch concurrently.
+// Before running, it rejects nil branches and duplicate IDs in steps built by
+// this package. Built-in steps hidden inside caller-defined steps validate and
+// claim their identities when invoked.
 func Parallel(branches []Step, cfg ParallelConfig) Step {
 	return parallelStep{branches: stepList(slices.Clone(branches)), limit: cfg.Concurrency}
 }
@@ -46,13 +51,10 @@ type parallelStep struct {
 
 func (p parallelStep) Run(ctx context.Context, s Store) (Store, error) {
 	ctx = ensureRun(ctx)
-	if err := p.validate(); err != nil {
+	if err := p.Validate(); err != nil {
 		return s, err
 	}
-	if err := runFrom(ctx).validateDefinition(p); err != nil {
-		return s, err
-	}
-	if err := ctx.Err(); err != nil {
+	if err := context.Cause(ctx); err != nil {
 		return s, err
 	}
 	switch len(p.branches) {
@@ -69,31 +71,31 @@ func (p parallelStep) validate() error {
 	if err := p.branches.validate(); err != nil {
 		return err
 	}
-	if p.limit < 0 {
-		return fmt.Errorf(
-			"%w: concurrency must be non-negative, got %d",
-			flow.ErrInvalidConfig,
-			p.limit,
-		)
-	}
-	return nil
+	return (flow.MapConfig{Concurrency: p.limit}).Validate()
 }
+
+func (p parallelStep) Validate() error { return validateDefinition(p) }
 
 func (p parallelStep) runOne(ctx context.Context, s Store) (Store, error) {
 	result, err := p.branches[0].Run(ctx, s)
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return s, contextErr
+	}
+
+	var resultErr error
 	if err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return s, contextErr
-		}
 		if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
-			return s.merge(result), suspensions.err()
+			resultErr = suspensions.err()
+		} else {
+			return s, &flow.IndexError{Index: 0, Err: err}
 		}
-		return s, &flow.IndexError{Index: 0, Err: err}
 	}
-	if err := ctx.Err(); err != nil {
-		return s, err
+
+	merged := s.merge(result)
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return s, contextErr
 	}
-	return s.merge(result), nil
+	return merged, resultErr
 }
 
 func (p parallelStep) runMany(ctx context.Context, s Store) (Store, error) {
@@ -117,12 +119,19 @@ func (p parallelStep) runMany(ctx context.Context, s Store) (Store, error) {
 	completed := make([]Store, 0, len(outcomes))
 	var suspensions suspensionList
 	for _, outcome := range outcomes {
+		if contextErr := context.Cause(ctx); contextErr != nil {
+			return s, contextErr
+		}
 		completed = append(completed, outcome.store)
 		suspensions = append(suspensions, outcome.suspensions...)
 	}
 	// Merge what finished even when something is still waiting, so the run that
 	// resumes sees the completed work instead of repeating it.
-	return branchInput.merge(completed...), suspensions.err()
+	result := branchInput.merge(completed...)
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return s, contextErr
+	}
+	return result, suspensions.err()
 }
 
 // branchOutcome is one branch's result. A suspension travels as a value because

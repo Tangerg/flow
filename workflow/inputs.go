@@ -1,7 +1,6 @@
 package workflow
 
 import (
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -50,10 +49,24 @@ func (i Inputs) Refs() []Ref {
 // validate checks that every port name and wired reference is well formed.
 func (i Inputs) validate() error {
 	for _, port := range i.PortNames() {
-		if port == "" {
-			return errors.New("input port name is empty")
+		if err := validateName("input port name", port); err != nil {
+			return err
 		}
-		if err := i[port].validate(); err != nil {
+		if err := i[port].Validate(); err != nil {
+			return fmt.Errorf("input port %q: %w", port, err)
+		}
+	}
+	return nil
+}
+
+// validateJSONText checks whether every port and reference can cross JSON
+// unchanged without imposing the stronger wiring rules of validate.
+func (i Inputs) validateJSONText() error {
+	for _, port := range i.PortNames() {
+		if err := validateText("input port name", port); err != nil {
+			return err
+		}
+		if err := i[port].validateJSONText(); err != nil {
 			return fmt.Errorf("input port %q: %w", port, err)
 		}
 	}

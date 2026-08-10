@@ -1,9 +1,10 @@
 package workflow
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+
+	"github.com/Tangerg/flow"
 )
 
 // Interrupt returns a value-producing [Step] that exposes value in a
@@ -31,19 +32,27 @@ type interruptStep struct {
 
 func (i interruptStep) Run(ctx context.Context, store Store) (Store, error) {
 	run := runFrom(ctx)
-	if i.id == "" {
-		err := &StepError{ID: i.id, Op: OpValidate, Err: ErrInvalidStepID}
+	if err := i.Validate(); err != nil {
 		run.emit(ctx, Event{Kind: EventFailed, ID: i.id, Err: err})
 		return store, err
 	}
 	if err := run.claim(scope(ctx), i.id); err != nil {
-		err := &StepError{ID: i.id, Op: OpValidate, Err: err}
+		err := newStepError(ctx, i.id, OpValidate, err)
 		run.emit(ctx, Event{Kind: EventFailed, ID: i.id, Err: err})
 		return store, err
 	}
-	if response, ok := run.replay(scope(ctx), i.id); ok {
+	if err := context.Cause(ctx); err != nil {
+		return store, err
+	}
+	response, replayed, err := run.replay(ctx, scope(ctx), i.id)
+	if err != nil {
+		return store, err
+	}
+	if replayed {
 		next := store.WithOutput(i.id, response)
-		run.emit(ctx, Event{Kind: EventSkipped, ID: i.id, Store: next})
+		if err := run.emitAndCheck(ctx, Event{Kind: EventSkipped, ID: i.id, Store: next}); err != nil {
+			return store, err
+		}
 		return next, nil
 	}
 
@@ -52,16 +61,27 @@ func (i interruptStep) Run(ctx context.Context, store Store) (Store, error) {
 		Scope: Scope(ctx),
 		Value: i.value,
 	}
-	run.emit(ctx, Event{Kind: EventSuspended, ID: i.id, Err: suspension})
+	if err := run.emitAndCheck(ctx, Event{Kind: EventSuspended, ID: i.id, Err: suspension}); err != nil {
+		return store, err
+	}
 	return store, suspension
 }
+
+func (i interruptStep) validate() error {
+	if err := validateStepID(i.id); err != nil {
+		return &StepError{ID: i.id, Op: OpValidate, Err: err}
+	}
+	return nil
+}
+
+func (i interruptStep) Validate() error { return validateDefinition(i) }
 
 func (i interruptStep) Describe() Description {
 	return Description{ID: i.id, Kind: KindInterrupt}
 }
 
 func (i interruptStep) definition() stepDefinition {
-	return stepDefinition{kind: definitionNamed, id: i.id}
+	return stepDefinition{kind: definitionNamed, id: i.id, output: true}
 }
 
 // InterruptFactory is the [NodeFactory] form of [Interrupt]. The leaf's JSON
@@ -77,10 +97,10 @@ func InterruptFactory() NodeFactory {
 		}
 
 		var value any
-		if config := bytes.TrimSpace(spec.Config); len(config) > 0 {
-			decoded, err := jsonDocument(config).value()
+		if len(spec.Config) > 0 {
+			decoded, err := jsonDocument(spec.Config).value()
 			if err != nil {
-				return nil, fmt.Errorf("%w: decode interrupt config: %w", ErrInvalidSpec, err)
+				return nil, fmt.Errorf("%w: decode interrupt config: %w", flow.ErrInvalidConfig, err)
 			}
 			value = decoded
 		}

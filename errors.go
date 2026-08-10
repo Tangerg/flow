@@ -8,8 +8,9 @@ import (
 // Sentinel errors returned by the root combinators. Test for them with
 // [errors.Is].
 var (
-	// ErrNilNode is returned when a nil Node or typed nil function-backed Node
-	// is Run through a built-in adapter or composite.
+	// ErrNilNode is returned when a nil Node or nil NodeFunc is Run through a
+	// built-in adapter or composite. Other adapters may use the same sentinel
+	// for their own invalid nil value.
 	ErrNilNode = errors.New("flow: nil node")
 	// ErrNilFunc is returned when a required function argument is nil.
 	ErrNilFunc = errors.New("flow: nil function")

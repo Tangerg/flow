@@ -2,6 +2,7 @@ package workflow_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -29,6 +30,23 @@ func TestParallel_mergesBranches(t *testing.T) {
 	}
 }
 
+func TestParallel_ownsBranchSliceStructure(t *testing.T) {
+	branches := []workflow.Step{leafStep("original")}
+	parallel := workflow.Parallel(branches, workflow.ParallelConfig{})
+	branches[0] = leafStep("changed")
+
+	out, err := parallel.Run(t.Context(), workflow.NewStore().WithOutput("start", 1))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, getErr := workflow.Get[int](out, workflow.Output("original")); getErr != nil || got != 1 {
+		t.Fatalf("original output = %d, %v; want 1, nil", got, getErr)
+	}
+	if _, ok := out.Lookup(workflow.Output("changed")); ok {
+		t.Fatal("source-slice mutation reconfigured Parallel")
+	}
+}
+
 func TestParallel_failFast(t *testing.T) {
 	boom := errors.New("boom")
 	from := workflow.From[int](workflow.Ref{NodeID: "start", Path: "/output"})
@@ -38,6 +56,39 @@ func TestParallel_failFast(t *testing.T) {
 	_, err := workflow.Parallel([]workflow.Step{ok, bad}, workflow.ParallelConfig{}).Run(t.Context(), workflow.NewStore().WithOutput("start", 1))
 	if !errors.Is(err, boom) {
 		t.Fatalf("error = %v, want boom", err)
+	}
+}
+
+func TestParallel_failureReturnsTheInputStore(t *testing.T) {
+	boom := errors.New("boom")
+	completed := make(chan struct{})
+	success := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+			next := store.WithOutput("finished", 1)
+			close(completed)
+			return next, nil
+		},
+	)
+	failure := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+			<-completed
+			return store, boom
+		},
+	)
+	input := workflow.NewStore().WithOutput("seed", 1)
+
+	output, err := workflow.Parallel(
+		[]workflow.Step{success, failure},
+		workflow.ParallelConfig{},
+	).Run(t.Context(), input)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Run error = %v; want boom", err)
+	}
+	if _, present := output.Lookup(workflow.Output("finished")); present {
+		t.Fatal("ordinary failure returned a successful sibling's write")
+	}
+	if value, getErr := workflow.Get[int](output, workflow.Output("seed")); getErr != nil || value != 1 {
+		t.Fatalf("seed = %d, %v; want 1, nil", value, getErr)
 	}
 }
 
@@ -197,6 +248,144 @@ func TestParallel_mergesOnlyBranchWrites(t *testing.T) {
 	}
 	if got, _ := out.Lookup(workflow.At("other", "value")); got != 2 {
 		t.Fatalf("other value = %v; want 2", got)
+	}
+}
+
+func TestParallel_preservesACompiledGraphsCellOwnership(t *testing.T) {
+	registry := workflow.NewRegistry().
+		MustRegisterNode("route", routingFactory(func(input int) string {
+			if input > 0 {
+				return "selected"
+			}
+			return "bypassed"
+		})).
+		MustRegisterSchema("route", routingSchema("selected", "bypassed")).
+		MustRegisterNode("target", addN())
+	graph, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
+		{
+			ID: "route", Type: "route",
+			Inputs: workflow.DefaultInput(workflow.Output("start")),
+		},
+		{
+			ID: "target", Type: "target",
+			Inputs: workflow.DefaultInput(workflow.Output("start")),
+			When:   []workflow.Gate{workflow.When("route", "selected")},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+
+	stale, err := graph.Run(t.Context(), workflow.NewStore().WithOutput("start", 1))
+	if err != nil {
+		t.Fatalf("first Graph Run: %v", err)
+	}
+	if _, present := stale.Lookup(workflow.Output("target")); !present {
+		t.Fatal("first Graph Run did not create the selected target output")
+	}
+
+	identity := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+			return store, nil
+		},
+	)
+	output, err := workflow.Parallel(
+		[]workflow.Step{graph, identity},
+		workflow.ParallelConfig{},
+	).Run(t.Context(), stale.WithOutput("start", 0))
+	if err != nil {
+		t.Fatalf("Parallel Run: %v", err)
+	}
+	if value, present := output.Lookup(workflow.Output("target")); present {
+		t.Fatalf("bypassed target output = %v; want the Graph-owned stale cell removed", value)
+	}
+}
+
+func TestParallel_graphOwnershipSurvivesPersistedSuspension(t *testing.T) {
+	registry := workflow.NewRegistry().
+		MustRegisterNode("route", workflow.InterruptFactory()).
+		MustRegisterSchema("route", workflow.NodeSchema{
+			Output:  workflow.TypeString,
+			Outlets: []string{"selected", "bypassed"},
+		}).
+		MustRegisterNode("target", addN())
+	graph, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
+		{ID: "route", Type: "route"},
+		{
+			ID: "target", Type: "target",
+			Inputs: workflow.DefaultInput(workflow.Output("start")),
+			When:   []workflow.Gate{workflow.When("route", "selected")},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+	identity := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+			return store, nil
+		},
+	)
+	parallel := workflow.Parallel(
+		[]workflow.Step{graph, identity},
+		workflow.ParallelConfig{},
+	)
+	journal := workflow.NewJournal()
+	input := workflow.NewStore().
+		WithOutput("start", 1).
+		WithOutput("route", "selected").
+		WithOutput("target", 99)
+
+	paused, err := workflow.Run(
+		t.Context(),
+		parallel,
+		input,
+		workflow.RunConfig{Journal: journal},
+	)
+	waits := workflow.Suspensions(err)
+	if len(waits) != 1 || waits[0].ID != "route" {
+		t.Fatalf("first Run error = %v; want route suspension", err)
+	}
+	if _, present := paused.Lookup(workflow.Output("route")); present {
+		t.Fatal("paused Store retained the stale routing output")
+	}
+	if _, present := paused.Lookup(workflow.Output("target")); present {
+		t.Fatal("paused Store retained the stale target output")
+	}
+
+	storeCheckpoint, err := json.Marshal(paused)
+	if err != nil {
+		t.Fatalf("Marshal Store: %v", err)
+	}
+	journalCheckpoint, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatalf("Marshal Journal: %v", err)
+	}
+	var restoredStore workflow.Store
+	if decodeErr := json.Unmarshal(storeCheckpoint, &restoredStore); decodeErr != nil {
+		t.Fatalf("Unmarshal Store: %v", decodeErr)
+	}
+	restoredJournal := workflow.NewJournal()
+	if decodeErr := json.Unmarshal(journalCheckpoint, restoredJournal); decodeErr != nil {
+		t.Fatalf("Unmarshal Journal: %v", decodeErr)
+	}
+	if recordErr := restoredJournal.Record(waits[0].Key(), "bypassed"); recordErr != nil {
+		t.Fatalf("Record response: %v", recordErr)
+	}
+
+	resumed, err := workflow.Run(
+		t.Context(),
+		parallel,
+		restoredStore,
+		workflow.RunConfig{Journal: restoredJournal},
+	)
+	if err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+	if value, getErr := workflow.Get[string](resumed, workflow.Output("route")); getErr != nil || value != "bypassed" {
+		t.Fatalf("route output = %q, %v; want bypassed, nil", value, getErr)
+	}
+	if value, present := resumed.Lookup(workflow.Output("target")); present {
+		t.Fatalf("resumed Store resurrected stale target output %v", value)
 	}
 }
 

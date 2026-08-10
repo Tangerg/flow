@@ -12,6 +12,12 @@ import (
 	"github.com/Tangerg/flow/workflow/expr"
 )
 
+type ambiguousJSON struct{}
+
+func (ambiguousJSON) MarshalJSON() ([]byte, error) {
+	return []byte(`{"same":1,"same":2}`), nil
+}
+
 // store builds a Store from nodeID.key pairs.
 func store(pairs ...any) workflow.Store {
 	s := workflow.NewStore()
@@ -222,6 +228,21 @@ func TestParse_indexBounds(t *testing.T) {
 	}
 }
 
+func TestParse_rejectsReferencesThatWorkflowPersistenceCannotRepresent(t *testing.T) {
+	for _, src := range []string{
+		`node["\xff"].output`,
+		`value.output["\xff"]`,
+	} {
+		t.Run(src, func(t *testing.T) {
+			_, err := expr.Parse(src)
+			if !errors.Is(err, expr.ErrUnsupported) ||
+				!strings.Contains(err.Error(), "not valid UTF-8") {
+				t.Fatalf("Parse error = %v; want an unsupported persistent reference", err)
+			}
+		})
+	}
+}
+
 func TestParse_reportsNestedCompilationErrors(t *testing.T) {
 	for _, src := range []string{
 		`(a + b)[0]`,
@@ -237,9 +258,56 @@ func TestParse_reportsNestedCompilationErrors(t *testing.T) {
 	}
 }
 
+func TestParse_enforcesTheWorkflowNestingLimit(t *testing.T) {
+	tests := map[string]struct {
+		atLimit string
+		tooDeep string
+	}{
+		"expression tree": {
+			atLimit: strings.Repeat("!", workflow.MaxNestingDepth-1) + "true",
+			tooDeep: strings.Repeat("!", workflow.MaxNestingDepth) + "true",
+		},
+		"reference chain": {
+			atLimit: "root" + strings.Repeat(".field", workflow.MaxNestingDepth-1),
+			tooDeep: "root" + strings.Repeat(".field", workflow.MaxNestingDepth),
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := expr.Parse(test.atLimit); err != nil {
+				t.Fatalf("Parse at limit: %v", err)
+			}
+			_, err := expr.Parse(test.tooDeep)
+			if !errors.Is(err, expr.ErrUnsupported) ||
+				!errors.Is(err, workflow.ErrMaxDepth) {
+				t.Fatalf("Parse above limit error = %v; want ErrUnsupported and ErrMaxDepth", err)
+			}
+		})
+	}
+}
+
 func TestEval_reportsRightOperandFailure(t *testing.T) {
 	if _, err := expr.MustParse(`1 + missing.output`).Eval(workflow.NewStore()); !errors.Is(err, expr.ErrUndefined) {
 		t.Fatalf("error = %v; want ErrUndefined", err)
+	}
+}
+
+func TestEval_preservesNestedStoreResolutionFailure(t *testing.T) {
+	s := workflow.NewStore().WithOutput("bad", ambiguousJSON{})
+	_, err := expr.MustParse(`bad.output.field`).Eval(s)
+	if !errors.Is(err, expr.ErrType) ||
+		!errors.Is(err, workflow.ErrTypeMismatch) ||
+		errors.Is(err, expr.ErrUndefined) ||
+		!strings.Contains(err.Error(), `duplicate object member "same"`) {
+		t.Fatalf("Eval error = %v; want expression and Store type errors", err)
+	}
+
+	_, err = expr.MustParse(`has(bad.output.field)`).Bool(s)
+	if !errors.Is(err, expr.ErrType) ||
+		!errors.Is(err, workflow.ErrTypeMismatch) ||
+		errors.Is(err, expr.ErrUndefined) ||
+		!strings.Contains(err.Error(), `duplicate object member "same"`) {
+		t.Fatalf("has error = %v; want expression and Store type errors", err)
 	}
 }
 
@@ -317,8 +385,8 @@ func TestEval_normalizesEveryNumericKind(t *testing.T) {
 	}
 }
 
-// An expression must behave the same on a fresh Store and on one restored from
-// JSON, where every number is a json.Number.
+// Ordinary JSON-compatible values must behave the same on a fresh Store and on
+// one restored from JSON, where every number is a json.Number.
 func TestEval_afterJSONRoundTrip(t *testing.T) {
 	original := store(
 		"n.output", 7,
@@ -351,12 +419,14 @@ func TestEval_afterJSONRoundTrip(t *testing.T) {
 	}
 	for src, want := range tests {
 		t.Run(src, func(t *testing.T) {
-			got, err := expr.MustParse(src).Eval(restored)
-			if err != nil {
-				t.Fatalf("Eval: %v", err)
-			}
-			if got != want {
-				t.Fatalf("Eval = %#v (%T); want %#v (%T)", got, got, want, want)
+			for _, current := range []workflow.Store{original, restored} {
+				got, evalErr := expr.MustParse(src).Eval(current)
+				if evalErr != nil {
+					t.Fatalf("Eval: %v", evalErr)
+				}
+				if got != want {
+					t.Fatalf("Eval = %#v (%T); want %#v (%T)", got, got, want, want)
+				}
 			}
 		})
 	}
@@ -377,6 +447,38 @@ func TestEval_mixedNumberComparisonIsExact(t *testing.T) {
 			got, err := expr.MustParse(src).Bool(s)
 			if err != nil || got != want {
 				t.Fatalf("Bool = %v, %v; want %v", got, err, want)
+			}
+		})
+	}
+}
+
+func TestEval_integralJSONNumbersRemainExact(t *testing.T) {
+	var restored workflow.Store
+	if err := json.Unmarshal([]byte(`{
+		"decimal":{"output":9007199254740993.0},
+		"exponent":{"output":9.007199254740993e15},
+		"negative":{"output":-9007199254740993.0},
+		"minimum":{"output":-9223372036854775808.0},
+		"unsigned":{"output":18446744073709551615.0}
+	}`), &restored); err != nil {
+		t.Fatalf("Unmarshal Store: %v", err)
+	}
+
+	tests := map[string]any{
+		"decimal.output":                          int64(9_007_199_254_740_993),
+		"exponent.output":                         int64(9_007_199_254_740_993),
+		"negative.output":                         int64(-9_007_199_254_740_993),
+		"minimum.output":                          int64(math.MinInt64),
+		"unsigned.output":                         uint64(math.MaxUint64),
+		"decimal.output == 9007199254740993":      true,
+		"exponent.output == 9007199254740993":     true,
+		"unsigned.output == 18446744073709551615": true,
+	}
+	for src, want := range tests {
+		t.Run(src, func(t *testing.T) {
+			got, err := expr.MustParse(src).Eval(restored)
+			if err != nil || got != want {
+				t.Fatalf("Eval = %#v, %v; want %#v", got, err, want)
 			}
 		})
 	}

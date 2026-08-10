@@ -1,29 +1,38 @@
 // Package flow provides the minimal, type-safe building blocks for composing
 // in-process control flow.
 //
-// It is deliberately reduced to the irreducible set of primitives — those that
-// cannot be expressed in terms of the others:
+// The package keeps one small set of general composition operations:
 //
 //   - [Node] and [NodeFunc]: the abstraction and its function adapter.
 //   - [Then]: sequential composition.
 //   - [Switch]: data-dependent selection.
 //   - [Loop]: bounded iteration configured by [LoopConfig].
-//   - [Map]: concurrent execution over a collection — AND, wait for all.
-//   - [Race]: concurrent execution over one input — OR, first success wins.
+//   - [Map]: concurrent execution over a collection, waiting for all items.
+//   - [Race]: concurrent execution over one input, returning the first success.
 //
-// Together these are control-complete — sequence, selection, and iteration — plus
-// the two concurrency atoms [Map] (AND) and [Race] (OR), neither expressible in
-// terms of the other. Every other convenience (fan-out, heterogeneous fan-in,
-// variadic sequencing, fallback) is derivable from these and therefore belongs in
-// higher-level packages, not here. For example fan-out over nodes is [Map] applied
-// to the nodes as data, and a try/else fallback is a node that runs an alternate
-// when the primary fails.
+// These cover sequence, selection, bounded iteration, collection concurrency,
+// and first-success concurrency. Package flowx builds conveniences such as
+// fan-out, heterogeneous fan-in, variadic sequencing, and fallback from this
+// core. Keeping derived shapes there leaves this package's protocol and error
+// contracts small.
+//
+// Constructors snapshot the structure of map and slice arguments that become
+// part of a definition. Changing the source collection after construction does
+// not reconfigure the resulting Node. The Node, function, and other behavior
+// values stored in those collections are retained as-is; they must obey the
+// concurrency contract of the composite that invokes them.
 //
 // Errors preserve their causes. Concurrent collection operations report item
 // positions with [IndexError], allowing callers to use errors.Is and errors.As
-// instead of matching strings. Composites validate required child nodes before
-// invoking any of them, so an invalid composition cannot perform partial work.
+// instead of matching strings. Built-in composites validate their complete
+// visible definition before invoking any child, so nesting one cannot hide an
+// invalid descendant. [Validate] exposes the same read-only check to boundaries
+// that may replay a result without calling the Node. Caller-defined composites
+// can participate with a side-effect-free Validate() error method; other Nodes
+// are opaque and remain responsible for execution-time validation.
 //
-// Durability, distribution, and deterministic replay are out of scope; for
-// those use a workflow engine such as Temporal.
+// The core owns no durable execution state. Package workflow adds named state,
+// streaming identity, and checkpoint-and-restart at explicit step boundaries;
+// distributed scheduling, leases, and deterministic replay remain the domain
+// of a durable workflow service.
 package flow

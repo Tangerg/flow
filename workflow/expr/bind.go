@@ -5,17 +5,21 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
 )
 
 // Bindings is a set of named expressions — the shape a config file carries so
 // that branch and loop logic can change without rebuilding the program. Register
 // it on a [workflow.Registry] and the names become usable from a [workflow.Spec].
+// JSON decoding requires an object, rejects unknown or duplicate members,
+// invalid Unicode, and excessive nesting, and replaces the destination only
+// after complete success.
 //
 //	var b expr.Bindings
 //	if err := json.Unmarshal(data, &b); err != nil { ... }
 //	if err := b.Register(reg); err != nil { ... }
-type Bindings struct {
+type Bindings struct { //nolint:recvcheck // UnmarshalJSON must use a pointer receiver.
 	// Conditions are loop stop conditions, each a boolean expression.
 	Conditions map[string]string `json:"conditions,omitempty"`
 	// Resolvers are branch resolvers, each a string-valued expression.
@@ -28,8 +32,10 @@ type Bindings struct {
 // compiles all of them before registering any, so a Bindings with a bad
 // expression leaves the Registry untouched.
 //
-// Names are registered in sorted order, and a name already present in reg is
-// reported as a duplicate registration.
+// Names are registered in sorted order. Registry validation still occurs at
+// that mutation boundary, so registration is not a transaction: if a name is
+// invalid, already present, or otherwise rejected, names before it in that
+// order remain registered.
 func (b Bindings) Register(registry *workflow.Registry) error {
 	if registry == nil {
 		return fmt.Errorf("%w: registry is nil", workflow.ErrInvalidRegistration)
@@ -43,9 +49,10 @@ func (b Bindings) Register(registry *workflow.Registry) error {
 	return registrar.register()
 }
 
-// bindingRegistrar owns the compile-before-mutate transaction for one set of
+// bindingRegistrar owns the compile-before-mutate phase for one set of
 // bindings. It keeps partially compiled functions private until all expressions
-// have succeeded.
+// have succeeded; individual Registry registrations retain their documented
+// non-transactional behavior.
 type bindingRegistrar struct {
 	bindings   Bindings
 	registry   *workflow.Registry
@@ -103,7 +110,7 @@ func (b *bindingRegistrar) compileSwitches() error {
 		if _, duplicate := b.resolvers[name]; duplicate {
 			return fmt.Errorf(
 				"%w: name %q is used by both a resolver and a switch",
-				workflow.ErrInvalidSpec,
+				flow.ErrInvalidConfig,
 				name,
 			)
 		}

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,18 +27,26 @@ var ErrSuspended = errors.New("workflow: suspended")
 // [Interrupt] or for a node that called [Suspend]. Value is the information
 // exposed to the caller: commonly a string, but it may be any application value
 // such as an approval request, form, or external-job descriptor.
+// Suspension's JSON representation is strict, failure-atomic, and validates
+// its engine-owned identity. An anonymous suspension has neither ID nor Scope;
+// once a step identifies it, an empty Scope means the workflow root. Value uses
+// encoding/json's application-value semantics when encoding and decodes into
+// the lossless JSON domain, including json.Number for numbers.
 //
 // The name deliberately omits an Error suffix. A suspension travels as an error
 // so that it propagates without a parallel return path, but it reports a third
 // outcome rather than a failure; calling it SuspensionError would contradict the
 // semantics every composite in this package is built around.
 //
-//nolint:errname // A suspension is a third outcome, not a failure.
+//nolint:errname,recvcheck // A third outcome; UnmarshalJSON requires a pointer receiver.
 type Suspension struct {
-	// ID is the step that suspended.
+	// ID is the step that suspended. A non-empty ID marks the identity as
+	// complete; a nil Scope then means the workflow root rather than an
+	// unidentified scope.
 	ID string `json:"id,omitempty"`
-	// Scope is the step's enclosing repeated scopes, as on [Event.Scope].
-	Scope []string `json:"scope,omitempty"`
+	// Scope is the step's enclosing structured execution scopes, as on
+	// [Event.Scope].
+	Scope []ScopeFrame `json:"scope,omitempty"`
 	// Await is the reference whose absence caused the suspension, if any.
 	Await Ref `json:"await,omitzero"`
 	// Value is application-owned and must be treated as immutable. A caller that
@@ -58,10 +67,10 @@ func (s *Suspension) Error() string {
 	}
 	if len(s.Scope) > 0 {
 		message.WriteString(" in ")
-		message.WriteString(strings.Join(s.Scope, "/"))
+		message.WriteString(formatScope(s.Scope))
 	}
 	message.WriteString(" suspended")
-	reason, _ := s.Value.(string)
+	reason := suspensionReason(s.Value)
 	switch {
 	case reason != "":
 		message.WriteString(": ")
@@ -71,6 +80,17 @@ func (s *Suspension) Error() string {
 		message.WriteString(s.Await.String())
 	}
 	return message.String()
+}
+
+func suspensionReason(value any) string {
+	if value == nil {
+		return ""
+	}
+	reflected := reflect.ValueOf(value)
+	if reflected.Kind() != reflect.String {
+		return ""
+	}
+	return reflected.String()
 }
 
 // Unwrap returns [ErrSuspended].
@@ -120,43 +140,72 @@ func (s suspensionTree) suspensions() (suspensionList, bool) {
 // Unwrap() error and Unwrap() []error. It returns copies so identifying a wait
 // at a workflow boundary never mutates an error owned by its caller.
 func (s suspensionTree) collect() (suspensionList, bool) {
-	err := s.err
-	if err == nil {
-		return nil, false
-	}
-	// This intentionally inspects the current node rather than using errors.As:
-	// As would skip wrappers and could misclassify a mixed joined tree as a pure
-	// suspension tree.
-	//
-	//nolint:errorlint // Unwrapping here would defeat the per-node classification.
-	if suspension, ok := err.(*Suspension); ok {
-		if suspension == nil {
-			// A typed nil still satisfies error and matches ErrSuspended through
-			// Suspension.Unwrap. Preserve that meaning as an anonymous wait
-			// instead of normalizing it away into a nil error.
+	for s.err != nil {
+		err := s.err
+		// This intentionally inspects the current node rather than using errors.As:
+		// As would skip wrappers and could misclassify a mixed joined tree as a pure
+		// suspension tree.
+		//
+		//nolint:errorlint // Unwrapping here would defeat the per-node classification.
+		if suspension, ok := err.(*Suspension); ok {
+			if suspension == nil {
+				// A typed nil still satisfies error and matches ErrSuspended through
+				// Suspension.Unwrap. Preserve that meaning as an anonymous wait
+				// instead of normalizing it away into a nil error.
+				return suspensionList{{}}, true
+			}
+			return suspensionList{suspension.clone()}, true
+		}
+		// Exact identity preserves a direct wrapper's message below.
+		//
+		//nolint:errorlint,err113 // errors.Is would match wrappers this must not consume.
+		if err == ErrSuspended {
 			return suspensionList{{}}, true
 		}
-		return suspensionList{suspension.clone()}, true
-	}
-	// Exact identity preserves a wrapper's own message in collectOne below.
-	//
-	//nolint:errorlint,err113 // errors.Is would match wrappers this must not consume.
-	if err == ErrSuspended {
-		return suspensionList{{}}, true
-	}
 
-	if many, ok := err.(interface{ Unwrap() []error }); ok {
-		return s.collectMany(many.Unwrap())
-	}
-	if one, ok := err.(interface{ Unwrap() error }); ok {
-		return s.collectOne(one.Unwrap())
-	}
-
-	// A custom error may participate in errors.Is without exposing an unwrap.
-	if errors.Is(err, ErrSuspended) {
-		return suspensionList{{Value: err.Error()}}, true
+		if many, ok := err.(interface{ Unwrap() []error }); ok {
+			children := many.Unwrap()
+			if hasNonNilError(children) {
+				return s.collectMany(children)
+			}
+			return s.collectIdentity()
+		}
+		if one, ok := err.(interface{ Unwrap() error }); ok {
+			child := one.Unwrap()
+			if child == nil {
+				return s.collectIdentity()
+			}
+			// Exact identity distinguishes a wrapper directly around ErrSuspended
+			// from a wrapper whose deeper tree merely contains one.
+			//
+			//nolint:errorlint,err113 // errors.Is cannot tell those shapes apart.
+			if child == ErrSuspended {
+				return suspensionList{{Value: err.Error()}}, true
+			}
+			// Match the standard errors traversal: a linear chain is a loop, while
+			// recursion is reserved for the branches of Unwrap() []error. Besides
+			// using less stack, this keeps ordinary wrapping the simpler case.
+			s.err = child
+			continue
+		}
+		return s.collectIdentity()
 	}
 	return nil, false
+}
+
+// collectIdentity handles a leaf that participates in errors.Is without being
+// a Suspension value. An error exposing only nil children is still a leaf:
+// errors.Is checks its Is method before consulting Unwrap, so classification
+// must preserve the same meaning.
+func (s suspensionTree) collectIdentity() (suspensionList, bool) {
+	if errors.Is(s.err, ErrSuspended) {
+		return suspensionList{{Value: s.err.Error()}}, true
+	}
+	return nil, false
+}
+
+func hasNonNilError(errs []error) bool {
+	return slices.ContainsFunc(errs, func(err error) bool { return err != nil })
 }
 
 func (s suspensionTree) collectMany(children []error) (suspensionList, bool) {
@@ -175,27 +224,17 @@ func (s suspensionTree) collectMany(children []error) (suspensionList, bool) {
 	return suspensions, childCount > 0 && onlySuspensions
 }
 
-func (s suspensionTree) collectOne(child error) (suspensionList, bool) {
-	// Exact identity distinguishes a wrapper directly around ErrSuspended from
-	// a wrapper whose deeper tree merely contains one.
-	//
-	//nolint:errorlint,err113 // errors.Is cannot tell those two shapes apart.
-	if child == ErrSuspended {
-		return suspensionList{{Value: s.err.Error()}}, true
-	}
-	return (suspensionTree{err: child}).collect()
-}
-
 type suspensionList []*Suspension
 
 // identify fills in the workflow boundary that owns an otherwise anonymous
-// suspension. Already-identified nested waits keep their identity.
-func (s suspensionList) identify(id string, scope []string) suspensionList {
+// suspension. ID and Scope are one identity: an existing ID means the wait was
+// already identified, including when its nil Scope deliberately names the root
+// of an independent nested Run. An anonymous wait is owned wholly by the
+// current boundary rather than retaining a caller-supplied partial identity.
+func (s suspensionList) identify(id string, scope []ScopeFrame) suspensionList {
 	for _, suspension := range s {
 		if suspension.ID == "" {
 			suspension.ID = id
-		}
-		if suspension.Scope == nil {
 			suspension.Scope = slices.Clone(scope)
 		}
 	}
@@ -243,7 +282,7 @@ func (s suspensionList) normalized() suspensionList {
 func (s *Suspension) compare(other *Suspension) int {
 	return cmp.Or(
 		strings.Compare(s.ID, other.ID),
-		slices.Compare(s.Scope, other.Scope),
+		compareScope(s.Scope, other.Scope),
 		s.Await.compare(other.Await),
 	)
 }

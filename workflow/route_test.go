@@ -14,7 +14,7 @@ func TestRoute_publishesAndReplaysResolverDecision(t *testing.T) {
 	var calls atomic.Int64
 	route := workflow.Route(
 		"route",
-		func(_ context.Context, store workflow.Store) (string, error) {
+		flow.NodeFunc[workflow.Store, string](func(_ context.Context, store workflow.Store) (string, error) {
 			calls.Add(1)
 			value, err := workflow.Get[int](store, workflow.Output("input"))
 			if err != nil {
@@ -24,7 +24,7 @@ func TestRoute_publishesAndReplaysResolverDecision(t *testing.T) {
 				return "yes", nil
 			}
 			return "no", nil
-		},
+		}),
 	)
 	journal := workflow.NewJournal()
 	input := workflow.NewStore().WithOutput("input", 1)

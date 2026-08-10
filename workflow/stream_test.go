@@ -83,7 +83,7 @@ func TestStreamFunc_emitsChunksAndPublishesFinalOutput(t *testing.T) {
 			t.Fatalf("signal %d is not a chunk", index+1)
 		}
 		if chunk.ID != "stream" ||
-			!slices.Equal(chunk.Scope, []string{"outer"}) ||
+			!slices.Equal(chunk.Scope, ordinaryScope("outer")) ||
 			chunk.Index != wantIndex ||
 			chunk.Value != fmt.Sprintf("chunk-%d", index) {
 			t.Fatalf("chunk %d = %+v; want identified, scoped chunk", index, chunk)
@@ -92,8 +92,8 @@ func TestStreamFunc_emitsChunksAndPublishesFinalOutput(t *testing.T) {
 	}
 
 	// Each Chunk owns its Scope.
-	signals[1].chunk.Scope[0] = "changed"
-	if signals[2].chunk.Scope[0] != "outer" {
+	signals[1].chunk.Scope[0].ID = "changed"
+	if signals[2].chunk.Scope[0].ID != "outer" {
 		t.Fatalf("mutating one Scope changed another: %+v", signals[2].chunk.Scope)
 	}
 }
@@ -416,6 +416,30 @@ func TestStreamFunc_rejectsYieldAfterItsInvocationReturns(t *testing.T) {
 	}
 }
 
+func TestStreamFunc_rejectsYieldAfterItsInvocationPanics(t *testing.T) {
+	const panicValue = "producer panic"
+	var saved func(string) bool
+	stream := workflow.StreamFunc[int, int, string](
+		func(_ context.Context, _ int, yield func(string) bool) (int, error) {
+			saved = yield
+			panic(panicValue)
+		},
+	)
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != panicValue {
+				t.Fatalf("recovered = %v; want producer panic", recovered)
+			}
+		}()
+		_, _ = stream.Run(t.Context(), 1)
+	}()
+
+	if saved("late") {
+		t.Fatal("retained yield returned true after StreamFunc panicked")
+	}
+}
+
 func TestStreamFunc_nestedRunDoesNotInheritEmitter(t *testing.T) {
 	inner := workflow.Leaf(
 		"inner",
@@ -723,6 +747,39 @@ func TestStreamFunc_emitterErrorStopsAndFailsTheLeaf(t *testing.T) {
 	}
 }
 
+func TestStreamFunc_emitterErrorPrecedesProducerError(t *testing.T) {
+	emitErr := errors.New("sink unavailable")
+	producerErr := errors.New("producer ignored stopped stream")
+	node := workflow.StreamFunc[int, int, int](
+		func(_ context.Context, input int, yield func(int) bool) (int, error) {
+			if yield(input) {
+				t.Fatal("yield returned true after the Emitter failed")
+			}
+			return input, producerErr
+		},
+	)
+	step := workflow.Leaf(
+		"stream",
+		workflow.From[int](workflow.Output("start")),
+		node,
+	)
+
+	out, err := workflow.Run(
+		t.Context(),
+		step,
+		workflow.NewStore().WithOutput("start", 1),
+		workflow.RunConfig{Emitter: workflow.EmitterFunc(
+			func(context.Context, workflow.Chunk) error { return emitErr },
+		)},
+	)
+	if !errors.Is(err, emitErr) || errors.Is(err, producerErr) {
+		t.Fatalf("Run error = %v; want only the Emitter error", err)
+	}
+	if _, ok := out.Lookup(workflow.Output("stream")); ok {
+		t.Fatal("failed stream published a final output")
+	}
+}
+
 func TestStreamFunc_emitterContextCannotReenterTheLeafEmissionSession(t *testing.T) {
 	nested := workflow.StreamFunc[int, int, int](
 		func(_ context.Context, input int, yield func(int) bool) (int, error) {
@@ -781,6 +838,70 @@ func TestStreamFunc_emitterContextCannotReenterTheLeafEmissionSession(t *testing
 	}
 	if len(chunks) != 1 || chunks[0].Value != 1 {
 		t.Fatalf("chunks = %+v; want only the outer value", chunks)
+	}
+}
+
+func TestEmitterContextCannotJoinProducingRun(t *testing.T) {
+	type contextKey struct{}
+
+	callback := workflow.Leaf(
+		"callback",
+		workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+		flow.NodeFunc[int, int](func(ctx context.Context, input int) (int, error) {
+			if got := ctx.Value(contextKey{}); got != "kept" {
+				return 0, fmt.Errorf("callback context value = %v; want kept", got)
+			}
+			if scope := workflow.Scope(ctx); scope != nil {
+				return 0, fmt.Errorf("callback workflow scope = %v; want nil", scope)
+			}
+			return input, nil
+		}),
+	)
+	stream := workflow.StreamFunc[int, int, int](
+		func(_ context.Context, input int, yield func(int) bool) (int, error) {
+			if !yield(input) {
+				return 0, errors.New("yield unexpectedly stopped")
+			}
+			return input, nil
+		},
+	)
+	outer := workflow.Leaf(
+		"outer",
+		workflow.From[int](workflow.Output("seed")),
+		stream,
+	)
+
+	journal := workflow.NewJournal()
+	var (
+		events      []workflow.Event
+		callbackErr error
+	)
+	ctx := context.WithValue(t.Context(), contextKey{}, "kept")
+	ctx = workflow.WithScope(ctx, "root")
+	_, err := workflow.Run(
+		ctx,
+		outer,
+		workflow.NewStore().WithOutput("seed", 1),
+		workflow.RunConfig{
+			Journal: journal,
+			Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
+				events = append(events, event)
+			}),
+			Emitter: workflow.EmitterFunc(func(ctx context.Context, _ workflow.Chunk) error {
+				_, callbackErr = callback.Run(ctx, workflow.NewStore())
+				return callbackErr
+			}),
+		},
+	)
+	if err != nil || callbackErr != nil {
+		t.Fatalf("Run, callback = %v, %v; want nil, nil", err, callbackErr)
+	}
+	if len(events) != 2 || events[0].ID != "outer" || events[1].ID != "outer" {
+		t.Fatalf("events = %+v; callback joined the producing run", events)
+	}
+	wantKey := workflow.JournalKey{ID: "outer", Scope: []workflow.ScopeFrame{{ID: "root"}}}
+	if keys := journal.Keys(); !equalJournalKeys(keys, []workflow.JournalKey{wantKey}) {
+		t.Fatalf("Journal keys = %+v; callback wrote into the producing run", keys)
 	}
 }
 
@@ -999,7 +1120,7 @@ func TestStreamFunc_iterationEmitsConcurrentScopedStreams(t *testing.T) {
 		if chunk.ID != "double" || len(chunk.Scope) != 1 {
 			t.Fatalf("chunk identity = %+v; want scoped double", chunk)
 		}
-		byScope[chunk.Scope[0]] = append(byScope[chunk.Scope[0]], chunk)
+		byScope[chunk.Scope[0].String()] = append(byScope[chunk.Scope[0].String()], chunk)
 		if chunk.Seq == 0 {
 			t.Fatal("chunk has zero Seq")
 		}
@@ -1205,41 +1326,63 @@ func TestStreamFunc_cancellationDuringEmissionStopsCompletion(t *testing.T) {
 
 func TestStreamFunc_validatesNode(t *testing.T) {
 	in := workflow.NewStore().WithOutput("start", 1)
+	assertLeafValidation := func(name string, err error) {
+		t.Helper()
+		var stepErr *workflow.StepError
+		if !errors.Is(err, flow.ErrNilNode) ||
+			!errors.As(err, &stepErr) || stepErr.Op != workflow.OpValidate {
+			t.Fatalf("%s error = %v; want OpValidate ErrNilNode", name, err)
+		}
+	}
 	var nilNode flow.Node[int, int]
 	step := workflow.Leaf(
 		"stream",
 		workflow.From[int](workflow.Output("start")),
 		nilNode,
 	)
-	if _, err := step.Run(t.Context(), in); !errors.Is(err, flow.ErrNilNode) {
-		t.Fatalf("nil Node error = %v; want ErrNilNode", err)
-	}
+	_, err := step.Run(t.Context(), in)
+	assertLeafValidation("nil Node", err)
 
 	var nilFunc workflow.StreamFunc[int, int, int]
+	if validateErr := flow.Validate[int, int](nilFunc); !errors.Is(validateErr, flow.ErrNilNode) {
+		t.Fatalf("Validate nil StreamFunc error = %v; want ErrNilNode", validateErr)
+	}
+	var nextCalls int
+	composed := flow.Then(
+		nilFunc,
+		flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+			nextCalls++
+			return 0, nil
+		}),
+	)
+	if _, composedErr := composed.Run(t.Context(), 1); !errors.Is(composedErr, flow.ErrNilNode) {
+		t.Fatalf("composed nil StreamFunc error = %v; want ErrNilNode", composedErr)
+	}
+	if nextCalls != 0 {
+		t.Fatalf("next node calls = %d; want 0", nextCalls)
+	}
 	step = workflow.Leaf(
 		"stream",
 		workflow.From[int](workflow.Output("start")),
 		nilFunc,
 	)
-	if _, err := step.Run(t.Context(), in); !errors.Is(err, flow.ErrNilNode) {
-		t.Fatalf("nil StreamFunc error = %v; want ErrNilNode", err)
-	}
-	if _, err := nilFunc.Run(t.Context(), 1); !errors.Is(err, flow.ErrNilNode) {
-		t.Fatalf("nil StreamFunc.Run error = %v; want ErrNilNode", err)
+	_, err = step.Run(t.Context(), in)
+	assertLeafValidation("nil StreamFunc", err)
+	if _, directErr := nilFunc.Run(t.Context(), 1); !errors.Is(directErr, flow.ErrNilNode) {
+		t.Fatalf("nil StreamFunc.Run error = %v; want ErrNilNode", directErr)
 	}
 
 	journal := workflow.NewJournal()
-	if err := journal.Record(workflow.JournalKey{ID: "stream"}, 42); err != nil {
-		t.Fatalf("Record: %v", err)
+	if recordErr := journal.Record(workflow.JournalKey{ID: "stream"}, 42); recordErr != nil {
+		t.Fatalf("Record: %v", recordErr)
 	}
-	if _, err := workflow.Run(
+	_, err = workflow.Run(
 		t.Context(),
 		step,
 		in,
 		workflow.RunConfig{Journal: journal},
-	); !errors.Is(err, flow.ErrNilNode) {
-		t.Fatalf("replayed nil StreamFunc error = %v; want ErrNilNode", err)
-	}
+	)
+	assertLeafValidation("replayed nil StreamFunc", err)
 }
 
 func TestEmitterFunc_nilDiscards(t *testing.T) {

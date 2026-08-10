@@ -29,20 +29,20 @@ func Example_dag() {
 		Right int
 	}
 	sum := workflow.BindFactory(
-		func(_ struct{}, inputs workflow.Inputs) (workflow.BindFunc[pair], error) {
+		func(_ struct{}, inputs workflow.Inputs) (workflow.Binder[pair], error) {
 			left, leftOK := inputs.Ref("left")
 			right, rightOK := inputs.Ref("right")
 			if !leftOK || !rightOK {
 				return nil, fmt.Errorf("%w: want left and right", workflow.ErrMissingPort)
 			}
-			return func(store workflow.Store) (pair, error) {
+			return workflow.BinderFunc[pair](func(store workflow.Store) (pair, error) {
 				a, err := workflow.Get[int](store, left)
 				if err != nil {
 					return pair{}, err
 				}
 				b, err := workflow.Get[int](store, right)
 				return pair{Left: a, Right: b}, err
-			}, nil
+			}), nil
 		},
 		func(struct{}) (flow.Node[pair, int], error) {
 			return flow.NodeFunc[pair, int](func(_ context.Context, in pair) (int, error) {

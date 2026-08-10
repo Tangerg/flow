@@ -47,6 +47,32 @@ func TestSubgraph_sealsItsStoreAndProjectsOneOutput(t *testing.T) {
 	}
 }
 
+func TestSubgraph_ownsInputMapStructure(t *testing.T) {
+	inputs := workflow.Inputs{"value": workflow.Output("seed")}
+	step := workflow.Subgraph(workflow.SubgraphConfig{
+		ID:     "calculation",
+		Inputs: inputs,
+		Body: workflow.LeafFunc(
+			"inner",
+			workflow.Output("value"),
+			func(_ context.Context, input int) (int, error) { return input + 1, nil },
+		),
+		BodyOutput: workflow.Output("inner"),
+	})
+	inputs["value"] = workflow.Output("changed")
+
+	output, err := step.Run(
+		t.Context(),
+		workflow.NewStore().WithOutput("seed", 1).WithOutput("changed", 100),
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if value, getErr := workflow.Get[int](output, workflow.Output("calculation")); getErr != nil || value != 2 {
+		t.Fatalf("calculation output = %v, %v; want 2, nil", value, getErr)
+	}
+}
+
 func TestSubgraph_reusesOneBodyUnderIndependentScopes(t *testing.T) {
 	body := workflow.LeafFunc(
 		"inner",
@@ -106,7 +132,7 @@ func TestSubgraph_resumeReplaysInnerBodyAcrossJSONRoundTrip(t *testing.T) {
 	suspensions := workflow.Suspensions(err)
 	if len(suspensions) != 1 ||
 		suspensions[0].ID != "answer" ||
-		!slices.Equal(suspensions[0].Scope, []string{"approval"}) {
+		!slices.Equal(suspensions[0].Scope, ordinaryScope("approval")) {
 		t.Fatalf("Run error = %v; want answer suspension in approval scope", err)
 	}
 	if _, ok := paused.Lookup(workflow.Output("approval")); ok {
@@ -154,7 +180,7 @@ func TestSubgraph_validatesBoundaryBeforeRunningBody(t *testing.T) {
 	bodyCalls := 0
 	body := workflow.Leaf(
 		"body",
-		workflow.BindFunc[int](func(workflow.Store) (int, error) {
+		workflow.BinderFunc[int](func(workflow.Store) (int, error) {
 			bodyCalls++
 			return 1, nil
 		}),
@@ -190,13 +216,13 @@ func TestSubgraph_validatesBoundaryBeforeRunningBody(t *testing.T) {
 				ID: "sub", Inputs: workflow.Inputs{"in": {}},
 				Body: body, BodyOutput: workflow.Output("body"),
 			}),
-			want: workflow.ErrInvalidSpec,
+			want: flow.ErrInvalidConfig,
 		},
 		"invalid body output": {
 			step: workflow.Subgraph(workflow.SubgraphConfig{
 				ID: "sub", Body: body,
 			}),
-			want: workflow.ErrInvalidSpec,
+			want: flow.ErrInvalidConfig,
 		},
 		"missing outer input": {
 			step: workflow.Subgraph(workflow.SubgraphConfig{
@@ -239,12 +265,175 @@ func TestSubgraph_reportsAMissingBodyOutput(t *testing.T) {
 	}
 }
 
+func TestSubgraph_locatesOrdinaryBodyFailuresAtItsSealedBoundary(t *testing.T) {
+	boom := errors.New("boom")
+	body := workflow.Leaf(
+		"work",
+		workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
+			return struct{}{}, nil
+		}),
+		flow.NodeFunc[struct{}, struct{}](func(context.Context, struct{}) (struct{}, error) {
+			return struct{}{}, boom
+		}),
+	)
+	step := workflow.Subgraph(workflow.SubgraphConfig{
+		ID:         "instance",
+		Body:       body,
+		BodyOutput: workflow.Output("work"),
+	})
+
+	_, err := step.Run(t.Context(), workflow.NewStore())
+	var boundaryErr *workflow.StepError
+	if !errors.As(err, &boundaryErr) ||
+		boundaryErr.ID != "instance" ||
+		boundaryErr.Op != workflow.OpRun ||
+		!errors.Is(err, boom) {
+		t.Fatalf("Run error = %v; want instance/run StepError wrapping boom", err)
+	}
+	var bodyErr *workflow.StepError
+	if !errors.As(boundaryErr.Err, &bodyErr) ||
+		bodyErr.ID != "work" ||
+		!slices.Equal(bodyErr.Scope, ordinaryScope("instance")) {
+		t.Fatalf("inner error = %v; want work StepError in instance scope", boundaryErr.Err)
+	}
+}
+
+func TestSubgraph_preservesSuspensionIdentity(t *testing.T) {
+	step := workflow.Subgraph(workflow.SubgraphConfig{
+		ID:         "instance",
+		Body:       workflow.Interrupt("approval", "approve?"),
+		BodyOutput: workflow.Output("approval"),
+	})
+
+	_, err := step.Run(t.Context(), workflow.NewStore())
+	suspensions := workflow.Suspensions(err)
+	var stepErr *workflow.StepError
+	if len(suspensions) != 1 ||
+		suspensions[0].ID != "approval" ||
+		!slices.Equal(suspensions[0].Scope, ordinaryScope("instance")) ||
+		errors.As(err, &stepErr) {
+		t.Fatalf("Run error = %v; want unwrapped approval suspension in instance scope", err)
+	}
+}
+
+func TestSubgraph_rejectsImpossibleOutputFromVisibleBody(t *testing.T) {
+	bodyRan := false
+	visible := workflow.Leaf(
+		"produced",
+		workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
+			bodyRan = true
+			return struct{}{}, nil
+		}),
+		flow.NodeFunc[struct{}, int](func(context.Context, struct{}) (int, error) {
+			return 1, nil
+		}),
+	)
+
+	tests := map[string]workflow.Ref{
+		"missing node":        workflow.Output("missing"),
+		"outside output cell": workflow.At("produced", "private"),
+	}
+	for name, bodyOutput := range tests {
+		t.Run(name, func(t *testing.T) {
+			step := workflow.Subgraph(workflow.SubgraphConfig{
+				ID:         "sub",
+				Body:       visible,
+				BodyOutput: bodyOutput,
+			})
+			_, err := step.Run(t.Context(), workflow.NewStore())
+			if !errors.Is(err, flow.ErrInvalidConfig) {
+				t.Fatalf("Run error = %v; want ErrInvalidConfig", err)
+			}
+		})
+	}
+	if bodyRan {
+		t.Fatal("visible body ran before its impossible projection was rejected")
+	}
+}
+
+func TestSubgraph_visibleOutputMustExistOnEveryBranch(t *testing.T) {
+	resolverRan := false
+	output := workflow.Leaf(
+		"result",
+		workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) { return struct{}{}, nil }),
+		flow.NodeFunc[struct{}, int](func(context.Context, struct{}) (int, error) {
+			return 1, nil
+		}),
+	)
+	body := workflow.Branch(
+		"route",
+		resolverNode(func(context.Context, workflow.Store) (string, error) {
+			resolverRan = true
+			return "a", nil
+		}),
+		map[string]workflow.Step{
+			"a": output,
+			"z": workflow.Sequence(),
+		},
+	)
+	step := workflow.Subgraph(workflow.SubgraphConfig{
+		ID:         "sub",
+		Body:       body,
+		BodyOutput: workflow.Output("result"),
+	})
+
+	_, err := step.Run(t.Context(), workflow.NewStore())
+	if !errors.Is(err, flow.ErrInvalidConfig) {
+		t.Fatalf("Run error = %v; want ErrInvalidConfig", err)
+	}
+	if resolverRan {
+		t.Fatal("branch resolver ran before the conditional projection was rejected")
+	}
+}
+
+func TestSubgraph_acceptsGuaranteedVisibleOutputs(t *testing.T) {
+	t.Run("declared seed", func(t *testing.T) {
+		step := workflow.Subgraph(workflow.SubgraphConfig{
+			ID:         "sub",
+			Inputs:     workflow.Inputs{"seed": workflow.Output("outer")},
+			Body:       workflow.Sequence(),
+			BodyOutput: workflow.Output("seed"),
+		})
+		output, err := step.Run(
+			t.Context(),
+			workflow.NewStore().WithOutput("outer", 7),
+		)
+		if value, getErr := workflow.Get[int](output, workflow.Output("sub")); err != nil || getErr != nil || value != 7 {
+			t.Fatalf("Run = %d, %v, Get = %v; want 7, nil, nil", value, err, getErr)
+		}
+	})
+
+	t.Run("every branch", func(t *testing.T) {
+		leaf := func(value int) workflow.Step {
+			return workflow.Leaf(
+				"result",
+				workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) { return struct{}{}, nil }),
+				flow.NodeFunc[struct{}, int](func(context.Context, struct{}) (int, error) {
+					return value, nil
+				}),
+			)
+		}
+		body := workflow.Branch(
+			"route",
+			resolverNode(func(context.Context, workflow.Store) (string, error) { return "yes", nil }),
+			map[string]workflow.Step{"yes": leaf(1), "no": leaf(2)},
+		)
+		step := workflow.Subgraph(workflow.SubgraphConfig{
+			ID: "sub", Body: body, BodyOutput: workflow.Output("result"),
+		})
+		output, err := step.Run(t.Context(), workflow.NewStore())
+		if value, getErr := workflow.Get[int](output, workflow.Output("sub")); err != nil || getErr != nil || value != 1 {
+			t.Fatalf("Run = %d, %v, Get = %v; want 1, nil, nil", value, err, getErr)
+		}
+	})
+}
+
 func TestSubgraph_rejectsAnInvalidInnerDefinitionBeforeBinding(t *testing.T) {
 	bindCalls := 0
 	duplicate := func() workflow.Step {
 		return workflow.Leaf(
 			"duplicate",
-			workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+			workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
 				bindCalls++
 				return struct{}{}, nil
 			}),
@@ -269,7 +458,7 @@ func TestSubgraph_rejectsAnInvalidInnerDefinitionBeforeBinding(t *testing.T) {
 func TestSubgraph_staticDefinitionRejectsAnOuterIDCollision(t *testing.T) {
 	outer := workflow.Leaf(
 		"same",
-		workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+		workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
 			return struct{}{}, nil
 		}),
 		flow.NodeFunc[struct{}, struct{}](func(context.Context, struct{}) (struct{}, error) {
@@ -322,8 +511,8 @@ func TestSubgraphFactory_rejectsConfigAndInvalidBoundary(t *testing.T) {
 	)
 	if _, err := workflow.SubgraphFactory(body, workflow.Output("value"))(
 		workflow.NodeSpec{ID: "sub", Config: json.RawMessage(`{}`)},
-	); !errors.Is(err, workflow.ErrInvalidSpec) {
-		t.Fatalf("config error = %v; want ErrInvalidSpec", err)
+	); !errors.Is(err, flow.ErrInvalidConfig) {
+		t.Fatalf("config error = %v; want ErrInvalidConfig", err)
 	}
 	if _, err := workflow.SubgraphFactory(nil, workflow.Output("value"))(
 		workflow.NodeSpec{ID: "sub"},
@@ -335,6 +524,33 @@ func TestSubgraphFactory_rejectsConfigAndInvalidBoundary(t *testing.T) {
 		workflow.NodeSpec{ID: "sub"},
 	); !errors.Is(err, workflow.ErrNilStep) {
 		t.Fatalf("typed nil body error = %v; want ErrNilStep", err)
+	}
+}
+
+func TestSubgraphFactory_reportsFixedDefinitionFailuresAtNodeType(t *testing.T) {
+	duplicate := workflow.Sequence(
+		workflow.Interrupt("same", nil),
+		workflow.Interrupt("same", nil),
+	)
+	tests := map[string]workflow.NodeFactory{
+		"nil body":              workflow.SubgraphFactory(nil, workflow.Output("result")),
+		"invalid body output":   workflow.SubgraphFactory(workflow.Sequence(), workflow.Ref{}),
+		"invalid nested body":   workflow.SubgraphFactory(duplicate, workflow.Output("same")),
+		"impossible projection": workflow.SubgraphFactory(workflow.Sequence(), workflow.Output("missing")),
+	}
+	for name, factory := range tests {
+		t.Run(name, func(t *testing.T) {
+			registry := workflow.NewRegistry().MustRegisterNode("subgraph", factory)
+			_, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
+				ID: "node", Type: "subgraph",
+			}}})
+			var graphErr *workflow.GraphError
+			if !errors.Is(err, workflow.ErrInvalidRegistration) ||
+				!errors.As(err, &graphErr) ||
+				graphErr.Field != "type" {
+				t.Fatalf("CompileGraph error = %v; want type-scoped invalid registration", err)
+			}
+		})
 	}
 }
 
@@ -350,7 +566,7 @@ func TestSubgraphFactory_makesBoundaryVisibleToGraphValidation(t *testing.T) {
 		MustRegisterNode("number", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
-				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+				workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
 					return struct{}{}, nil
 				}),
 				flow.NodeFunc[struct{}, int](func(context.Context, struct{}) (int, error) {
@@ -362,7 +578,7 @@ func TestSubgraphFactory_makesBoundaryVisibleToGraphValidation(t *testing.T) {
 		MustRegisterNode("text", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
-				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+				workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
 					return struct{}{}, nil
 				}),
 				flow.NodeFunc[struct{}, string](func(context.Context, struct{}) (string, error) {

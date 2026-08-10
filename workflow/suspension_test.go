@@ -42,6 +42,31 @@ type errorChildren []error
 func (e errorChildren) Error() string   { return "joined children" }
 func (e errorChildren) Unwrap() []error { return e }
 
+type markedSuspensionWrapper struct{ child error }
+
+func (m markedSuspensionWrapper) Error() string { return "custom suspension wrapper" }
+
+func (m markedSuspensionWrapper) Is(target error) bool {
+	return target == workflow.ErrSuspended
+}
+
+func (m markedSuspensionWrapper) Unwrap() error { return m.child }
+
+type emptySuspensionChildren struct{}
+
+func (emptySuspensionChildren) Error() string { return "empty custom suspension children" }
+
+func (emptySuspensionChildren) Is(target error) bool {
+	return target == workflow.ErrSuspended
+}
+
+func (emptySuspensionChildren) Unwrap() []error { return []error{nil} }
+
+type linearError struct{ child error }
+
+func (linearError) Error() string   { return "linear wrapper" }
+func (e linearError) Unwrap() error { return e.child }
+
 func TestSuspend_sequenceResumesWithoutRepeatingWork(t *testing.T) {
 	var aRuns, bRuns atomic.Int64
 	pipeline := workflow.Sequence(
@@ -122,7 +147,7 @@ func TestSuspend_structuredLeafValueCanBeResolved(t *testing.T) {
 func TestSuspend_leafObserverReceivesSuspension(t *testing.T) {
 	step := workflow.Leaf(
 		"wait",
-		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+		workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
 			return 0, workflow.Suspend("not ready")
 		}),
@@ -234,9 +259,9 @@ func TestInterrupt_resolvesRepeatedScopesIndependently(t *testing.T) {
 	if len(waits) != 3 {
 		t.Fatalf("first Suspensions = %+v; want three", waits)
 	}
-	if !slices.Equal(waits[0].Scope, []string{"items[0]"}) ||
-		!slices.Equal(waits[1].Scope, []string{"items[1]"}) ||
-		!slices.Equal(waits[2].Scope, []string{"items[2]"}) {
+	if !slices.Equal(waits[0].Scope, indexedScope("items", 0)) ||
+		!slices.Equal(waits[1].Scope, indexedScope("items", 1)) ||
+		!slices.Equal(waits[2].Scope, indexedScope("items", 2)) {
 		t.Fatalf("scopes = %v, %v, %v; want one per item", waits[0].Scope, waits[1].Scope, waits[2].Scope)
 	}
 
@@ -246,8 +271,8 @@ func TestInterrupt_resolvesRepeatedScopesIndependently(t *testing.T) {
 	_, runErr = runJournal(step, in, journal)
 	remaining := workflow.Suspensions(runErr)
 	if len(remaining) != 2 ||
-		!slices.Equal(remaining[0].Scope, []string{"items[0]"}) ||
-		!slices.Equal(remaining[1].Scope, []string{"items[2]"}) {
+		!slices.Equal(remaining[0].Scope, indexedScope("items", 0)) ||
+		!slices.Equal(remaining[1].Scope, indexedScope("items", 2)) {
 		t.Fatalf("remaining = %+v; want only items 0 and 2", remaining)
 	}
 
@@ -474,7 +499,7 @@ func TestSuspend_parallelReportsEverySuspension(t *testing.T) {
 
 func TestSuspend_nestedParallelPreservesSuspensionsAndCompletedWork(t *testing.T) {
 	completed := workflow.Leaf("done",
-		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+		workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) { return value, nil }),
 	)
 	inner := workflow.Parallel([]workflow.Step{
@@ -513,7 +538,7 @@ func TestSuspend_iterationPreservesNestedSuspensions(t *testing.T) {
 		ID:         "iter",
 		Input:      workflow.Output("items"),
 		Body:       body,
-		BodyOutput: workflow.Output("unused"),
+		BodyOutput: workflow.Item("iter"),
 	})
 
 	_, err := iteration.Run(t.Context(),
@@ -521,8 +546,8 @@ func TestSuspend_iterationPreservesNestedSuspensions(t *testing.T) {
 	suspensions := workflow.Suspensions(err)
 	if len(suspensions) != 2 ||
 		suspensions[0].ID != "a" || suspensions[1].ID != "b" ||
-		!slices.Equal(suspensions[0].Scope, []string{"iter[0]"}) ||
-		!slices.Equal(suspensions[1].Scope, []string{"iter[0]"}) {
+		!slices.Equal(suspensions[0].Scope, indexedScope("iter", 0)) ||
+		!slices.Equal(suspensions[1].Scope, indexedScope("iter", 0)) {
 		t.Fatalf("suspensions = %+v; want a and b in iter[0]", suspensions)
 	}
 }
@@ -531,7 +556,7 @@ func TestSuspend_iterationPreservesNestedSuspensions(t *testing.T) {
 // the error path.
 func TestSuspend_parallelStillFailsFastOnRealErrors(t *testing.T) {
 	boom := errors.New("boom")
-	bad := workflow.Leaf("bad", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
+	bad := workflow.Leaf("bad", workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
 		flow.NodeFunc[int, int](func(context.Context, int) (int, error) { return 0, boom }))
 
 	_, err := workflow.Parallel([]workflow.Step{
@@ -572,7 +597,7 @@ func TestSuspend_typedNilRemainsASuspension(t *testing.T) {
 	})
 	step := workflow.Leaf(
 		"approval",
-		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
+		workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
 		node,
 	)
 
@@ -593,7 +618,7 @@ func TestSuspend_iterationResumesElementByElement(t *testing.T) {
 				runs.Add(1)
 				return x * 2, nil
 			})),
-		workflow.Leaf("check", workflow.BindFunc[int](func(s workflow.Store) (int, error) {
+		workflow.Leaf("check", workflow.BinderFunc[int](func(s workflow.Store) (int, error) {
 			index, err := workflow.Get[int](s, workflow.ItemIndex("iter"))
 			if err != nil {
 				return 0, err
@@ -624,11 +649,11 @@ func TestSuspend_iterationResumesElementByElement(t *testing.T) {
 	}
 	// Each element's record is scoped, so they are distinct.
 	if keys := journal.Keys(); !equalJournalKeys(keys, []workflow.JournalKey{
-		{Scope: []string{"iter[0]"}, ID: "check"},
-		{Scope: []string{"iter[0]"}, ID: "double"},
-		{Scope: []string{"iter[1]"}, ID: "double"},
-		{Scope: []string{"iter[2]"}, ID: "check"},
-		{Scope: []string{"iter[2]"}, ID: "double"},
+		{Scope: indexedScope("iter", 0), ID: "check"},
+		{Scope: indexedScope("iter", 0), ID: "double"},
+		{Scope: indexedScope("iter", 1), ID: "double"},
+		{Scope: indexedScope("iter", 2), ID: "check"},
+		{Scope: indexedScope("iter", 2), ID: "double"},
 	}) {
 		t.Fatalf("journal keys = %v", keys)
 	}
@@ -654,7 +679,7 @@ func TestSuspend_iterationResumesElementByElement(t *testing.T) {
 }
 
 func TestSuspend_iterationWritesNoPartialCollection(t *testing.T) {
-	body := workflow.Leaf("el", workflow.BindFunc[int](func(s workflow.Store) (int, error) {
+	body := workflow.Leaf("el", workflow.BinderFunc[int](func(s workflow.Store) (int, error) {
 		index, err := workflow.Get[int](s, workflow.ItemIndex("iter"))
 		if err != nil {
 			return 0, err
@@ -682,7 +707,7 @@ func TestSuspend_iterationWritesNoPartialCollection(t *testing.T) {
 
 func TestSuspend_loopResumesAtTheWaitingIteration(t *testing.T) {
 	var runs atomic.Int64
-	body := workflow.Leaf("tick", workflow.BindFunc[int](func(s workflow.Store) (int, error) {
+	body := workflow.Leaf("tick", workflow.BinderFunc[int](func(s workflow.Store) (int, error) {
 		current, err := workflow.Get[int](s, workflow.Output("tick"))
 		if err != nil {
 			current = 0
@@ -712,10 +737,10 @@ func TestSuspend_loopResumesAtTheWaitingIteration(t *testing.T) {
 	// Each completed iteration records both the body's output and the loop's own
 	// stop decision, so a resumed loop cannot stop somewhere else.
 	if keys := journal.Keys(); !equalJournalKeys(keys, []workflow.JournalKey{
-		{Scope: []string{"loop[0]"}, ID: "loop"},
-		{Scope: []string{"loop[0]"}, ID: "tick"},
-		{Scope: []string{"loop[1]"}, ID: "loop"},
-		{Scope: []string{"loop[1]"}, ID: "tick"},
+		{Scope: indexedScope("loop", 0), ID: "loop"},
+		{Scope: indexedScope("loop", 0), ID: "tick"},
+		{Scope: indexedScope("loop", 1), ID: "loop"},
+		{Scope: indexedScope("loop", 1), ID: "tick"},
 	}) {
 		t.Fatalf("journal keys = %v; want a body and a decision record per iteration", keys)
 	}
@@ -778,8 +803,8 @@ func TestSuspend_emptyStepIDIsAnError(t *testing.T) {
 
 func TestAwait_rejectsAnInvalidReference(t *testing.T) {
 	_, err := workflow.Await("approval", workflow.Ref{}).Run(t.Context(), workflow.NewStore())
-	if !errors.Is(err, workflow.ErrInvalidSpec) || errors.Is(err, workflow.ErrSuspended) {
-		t.Fatalf("err = %v; want ErrInvalidSpec only", err)
+	if !errors.Is(err, flow.ErrInvalidConfig) || errors.Is(err, workflow.ErrSuspended) {
+		t.Fatalf("err = %v; want ErrInvalidConfig only", err)
 	}
 	var stepErr *workflow.StepError
 	if !errors.As(err, &stepErr) || stepErr.ID != "approval" || stepErr.Op != workflow.OpValidate {
@@ -787,11 +812,39 @@ func TestAwait_rejectsAnInvalidReference(t *testing.T) {
 	}
 }
 
+func TestAwait_reportsAnUnresolvableNestedValueAsFailure(t *testing.T) {
+	var events []workflow.Event
+	ref := workflow.Output("input").Child("ready")
+	_, err := workflow.Run(
+		t.Context(),
+		workflow.Await("approval", ref),
+		workflow.NewStore().WithOutput("input", brokenJSON{}),
+		workflow.RunConfig{Observer: workflow.ObserverFunc(
+			func(_ context.Context, event workflow.Event) {
+				events = append(events, event)
+			},
+		)},
+	)
+	var stepErr *workflow.StepError
+	if !errors.As(err, &stepErr) || stepErr.Op != workflow.OpBind ||
+		!errors.Is(err, workflow.ErrTypeMismatch) ||
+		!errors.Is(err, errBrokenJSON) ||
+		errors.Is(err, workflow.ErrSuspended) {
+		t.Fatalf("Run error = %v; want bind-time JSON resolution failure", err)
+	}
+	if len(events) != 1 || events[0].Kind != workflow.EventFailed ||
+		!errors.Is(events[0].Err, errBrokenJSON) {
+		t.Fatalf("events = %+v; want one failed event with the resolution cause", events)
+	}
+}
+
 func TestSuspension_errorMessage(t *testing.T) {
+	type reason string
 	tests := map[string]*workflow.Suspension{
 		`workflow: step "a" suspended: waiting on a person`: {ID: "a", Value: "waiting on a person"},
+		`workflow: step "a" suspended: typed reason`:        {ID: "a", Value: reason("typed reason")},
 		`workflow: step "a" suspended: awaiting x#/output`:  {ID: "a", Await: workflow.Output("x")},
-		`workflow: step "a" in iter[2] suspended`:           {ID: "a", Scope: []string{"iter[2]"}},
+		`workflow: step "a" in iter[2] suspended`:           {ID: "a", Scope: indexedScope("iter", 2)},
 		`workflow: step "a" suspended`:                      {ID: "a", Value: map[string]any{"private": "payload"}},
 		`workflow: suspended`:                               nil,
 	}
@@ -808,12 +861,12 @@ func TestSuspension_errorMessage(t *testing.T) {
 func TestSuspension_keyAndJSONOwnTheirStructure(t *testing.T) {
 	suspension := &workflow.Suspension{
 		ID:    `approve"item`,
-		Scope: []string{"items/0"},
+		Scope: ordinaryScope("items/0"),
 		Value: map[string]any{"question": "approve?", "actions": []string{"yes", "no"}},
 	}
 	key := suspension.Key()
-	key.Scope[0] = "changed"
-	if suspension.Scope[0] != "items/0" {
+	key.Scope[0].ID = "changed"
+	if suspension.Scope[0].ID != "items/0" {
 		t.Fatalf("Key leaked Suspension.Scope: %+v", suspension)
 	}
 	if got := suspension.Error(); got != `workflow: step "approve\"item" in items/0 suspended` {
@@ -837,6 +890,102 @@ func TestSuspension_keyAndJSONOwnTheirStructure(t *testing.T) {
 	}
 }
 
+func TestSuspension_JSONBoundaryIsStrictAndAtomic(t *testing.T) {
+	invalid := map[string][]byte{
+		"unknown field":       []byte(`{"id":"wait","unknown":true}`),
+		"duplicate identity":  []byte(`{"id":"first","id":"second"}`),
+		"invalid UTF-8":       {'{', '"', 'i', 'd', '"', ':', '"', 0xff, '"', '}'},
+		"unpaired surrogate":  []byte(`{"id":"\ud800"}`),
+		"scope without ID":    []byte(`{"scope":[{"id":"loop"}]}`),
+		"invalid scope":       []byte(`{"id":"wait","scope":[{"id":"loop","index":1}]}`),
+		"invalid await":       []byte(`{"id":"wait","await":{"nodeID":"source","path":"output"}}`),
+		"unknown scope field": []byte(`{"id":"wait","scope":[{"id":"loop","extra":1}]}`),
+	}
+	for name, data := range invalid {
+		t.Run(name, func(t *testing.T) {
+			target := workflow.Suspension{
+				ID:    "kept",
+				Scope: ordinaryScope("outer"),
+				Value: "kept value",
+			}
+			if err := json.Unmarshal(data, &target); err == nil {
+				t.Fatal("Unmarshal unexpectedly succeeded")
+			}
+			if target.ID != "kept" || !slices.Equal(target.Scope, ordinaryScope("outer")) ||
+				target.Value != "kept value" {
+				t.Fatalf("failed Unmarshal changed receiver: %#v", target)
+			}
+		})
+	}
+	for name, data := range map[string][]byte{
+		"null":  []byte(`null`),
+		"array": []byte(`[]`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := json.Unmarshal(data, new(workflow.Suspension)); err == nil {
+				t.Fatal("Unmarshal accepted a non-object suspension")
+			}
+		})
+	}
+	var nilSuspension *workflow.Suspension
+	if err := nilSuspension.UnmarshalJSON([]byte(`{}`)); err == nil {
+		t.Fatal("nil receiver UnmarshalJSON unexpectedly succeeded")
+	}
+
+	tooDeep := []byte(`{"id":"wait","value":` +
+		strings.Repeat(`[`, workflow.MaxNestingDepth) + `0` +
+		strings.Repeat(`]`, workflow.MaxNestingDepth) + `}`)
+	if err := json.Unmarshal(tooDeep, new(workflow.Suspension)); !errors.Is(err, workflow.ErrMaxDepth) {
+		t.Fatalf("depth error = %v; want ErrMaxDepth", err)
+	}
+}
+
+func TestSuspension_JSONEncodingPreservesIdentityAndReadableStructure(t *testing.T) {
+	bad := string([]byte{0xff})
+	for name, suspension := range map[string]workflow.Suspension{
+		"ID":               {ID: bad},
+		"scope without ID": {Scope: ordinaryScope("outer")},
+		"scope":            {ID: "wait", Scope: ordinaryScope(bad)},
+		"await":            {ID: "wait", Await: workflow.Ref{NodeID: bad, Path: "/output"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := json.Marshal(suspension); err == nil {
+				t.Fatal("Marshal accepted invalid identity text")
+			}
+		})
+	}
+	for name, value := range map[string]any{
+		"duplicate member":   duplicateObjectJSON{},
+		"unpaired surrogate": unpairedSurrogateJSON{},
+		"excessive depth":    nestedArrays(workflow.MaxNestingDepth),
+		"encoding failure":   brokenJSON{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := json.Marshal(workflow.Suspension{ID: "wait", Value: value}); err == nil {
+				t.Fatal("Marshal produced a document the strict decoder cannot read")
+			}
+		})
+	}
+
+	data, err := json.Marshal(workflow.Suspension{
+		ID:    "wait",
+		Scope: indexedScope("items", 2),
+		Await: workflow.Output("source"),
+		Value: map[string]any{"large": json.Number("9007199254740993")},
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var restored workflow.Suspension
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	value, ok := restored.Value.(map[string]any)
+	if !ok || value["large"] != json.Number("9007199254740993") {
+		t.Fatalf("Value = %#v; want exact json.Number", restored.Value)
+	}
+}
+
 func TestSuspensions_ofOtherErrors(t *testing.T) {
 	if got := workflow.Suspensions(nil); got != nil {
 		t.Fatalf("Suspensions(nil) = %v; want nil", got)
@@ -851,16 +1000,16 @@ func TestSuspensions_ofOtherErrors(t *testing.T) {
 	}
 
 	joined := errors.Join(
-		&workflow.Suspension{ID: "b", Scope: []string{"outer"}},
-		fmt.Errorf("wrapped: %w", &workflow.Suspension{ID: "a", Scope: []string{"inner"}}),
+		&workflow.Suspension{ID: "b", Scope: ordinaryScope("outer")},
+		fmt.Errorf("wrapped: %w", &workflow.Suspension{ID: "a", Scope: ordinaryScope("inner")}),
 		errors.New("ordinary failure"),
 	)
 	got := workflow.Suspensions(joined)
 	if len(got) != 2 || got[0].ID != "a" || got[1].ID != "b" {
 		t.Fatalf("Suspensions(joined error tree) = %+v; want a and b", got)
 	}
-	got[0].Scope[0] = "changed"
-	if again := workflow.Suspensions(joined); again[0].Scope[0] != "inner" {
+	got[0].Scope[0].ID = "changed"
+	if again := workflow.Suspensions(joined); again[0].Scope[0].ID != "inner" {
 		t.Fatalf("Suspensions leaked its internal scope: %+v", again)
 	}
 }
@@ -873,6 +1022,16 @@ func TestSuspensions_supportsSentinelCustomIdentityAndNilChildren(t *testing.T) 
 	}{
 		{name: "sentinel", err: workflow.ErrSuspended},
 		{name: "custom identity", err: suspendedByIdentity{}, value: "custom suspension"},
+		{
+			name:  "custom identity with nil child",
+			err:   markedSuspensionWrapper{},
+			value: "custom suspension wrapper",
+		},
+		{
+			name:  "custom identity with nil children",
+			err:   emptySuspensionChildren{},
+			value: "empty custom suspension children",
+		},
 		{
 			name: "nil joined child",
 			err: errorChildren{
@@ -895,6 +1054,23 @@ func TestSuspensions_supportsSentinelCustomIdentityAndNilChildren(t *testing.T) 
 	}
 }
 
+func TestSuspensions_walksDeepLinearWrappingWithoutRecursiveStackGrowth(t *testing.T) {
+	const depth = 100_000
+
+	var err error = &workflow.Suspension{ID: "wait", Value: "ready"}
+	for range depth {
+		err = linearError{child: err}
+	}
+
+	waits := workflow.Suspensions(err)
+	if len(waits) != 1 || waits[0].ID != "wait" || waits[0].Value != "ready" {
+		t.Fatalf("Suspensions = %+v; want the suspension below %d wrappers", waits, depth)
+	}
+	if !workflow.SuspendedOnly(err) {
+		t.Fatalf("SuspendedOnly returned false below %d wrappers", depth)
+	}
+}
+
 func TestSuspendedOnly_classifiesTheWholeErrorTree(t *testing.T) {
 	first := &workflow.Suspension{ID: "a", Value: "first"}
 	second := &workflow.Suspension{ID: "b", Value: "second"}
@@ -914,6 +1090,10 @@ func TestSuspendedOnly_classifiesTheWholeErrorTree(t *testing.T) {
 			err:  errors.Join(first, errors.New("boom")),
 			want: false,
 		},
+		"custom marker with failure child": {
+			err:  markedSuspensionWrapper{child: errors.New("boom")},
+			want: false,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := workflow.SuspendedOnly(test.err); got != test.want {
@@ -923,8 +1103,96 @@ func TestSuspendedOnly_classifiesTheWholeErrorTree(t *testing.T) {
 	}
 }
 
+func TestValidationErrorsCannotBecomeSuspensions(t *testing.T) {
+	assertInvalid := func(t *testing.T, err error, calls int) {
+		t.Helper()
+		if !errors.Is(err, flow.ErrInvalidConfig) ||
+			errors.Is(err, workflow.ErrSuspended) ||
+			workflow.SuspendedOnly(err) ||
+			len(workflow.Suspensions(err)) != 0 {
+			t.Fatalf("error = %v; want a non-suspending invalid-config error", err)
+		}
+		if calls != 0 {
+			t.Fatalf("invalid node ran %d times; want 0", calls)
+		}
+	}
+
+	for name, run := range map[string]func(workflow.Step) error{
+		"top-level caller-defined step": func(step workflow.Step) error {
+			_, err := workflow.Run(t.Context(), step, workflow.NewStore(), workflow.RunConfig{})
+			return err
+		},
+		"nested caller-defined step": func(step workflow.Step) error {
+			_, err := workflow.Parallel(
+				[]workflow.Step{step},
+				workflow.ParallelConfig{},
+			).Run(t.Context(), workflow.NewStore())
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			err := run(invalidValidatingStep{
+				err:   workflow.Suspend("validation cannot wait"),
+				calls: &calls,
+			})
+			assertInvalid(t, err, calls)
+		})
+	}
+
+	t.Run("leaf binder", func(t *testing.T) {
+		calls := 0
+		step := workflow.Leaf(
+			"leaf",
+			invalidBinder{
+				err:   workflow.Suspend("binder validation cannot wait"),
+				calls: &calls,
+			},
+			flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+				calls++
+				return 0, nil
+			}),
+		)
+		_, err := step.Run(t.Context(), workflow.NewStore())
+		assertInvalid(t, err, calls)
+	})
+
+	t.Run("registered resolver", func(t *testing.T) {
+		calls := 0
+		invalid := invalidValidatingStep{
+			err:   workflow.Suspend("resolver validation cannot wait"),
+			calls: &calls,
+		}
+		resolver := flow.Then(
+			invalid,
+			flow.NodeFunc[workflow.Store, string](
+				func(context.Context, workflow.Store) (string, error) {
+					return "ready", nil
+				},
+			),
+		)
+		err := workflow.NewRegistry().RegisterResolver("resolver", resolver)
+		assertInvalid(t, err, calls)
+	})
+
+	t.Run("factory-built node", func(t *testing.T) {
+		calls := 0
+		factory := workflow.Factory(func(struct{}) (flow.Node[workflow.Store, workflow.Store], error) {
+			return invalidValidatingStep{
+				err:   workflow.Suspend("node validation cannot wait"),
+				calls: &calls,
+			}, nil
+		})
+		_, err := factory(workflow.NodeSpec{
+			ID:     "node",
+			Inputs: workflow.DefaultInput(workflow.Output("seed")),
+		})
+		assertInvalid(t, err, calls)
+	})
+}
+
 func TestJoinSuspensions_normalizesAndCopies(t *testing.T) {
-	scope := []string{"items[1]"}
+	scope := indexedScope("items", 1)
 	second := &workflow.Suspension{ID: "b", Scope: scope, Value: "second"}
 	err := workflow.JoinSuspensions(
 		second,
@@ -939,10 +1207,10 @@ func TestJoinSuspensions_normalizesAndCopies(t *testing.T) {
 		t.Fatalf("Suspensions = %+v; want a, b", got)
 	}
 
-	scope[0] = "changed"
+	scope[0].ID = "changed"
 	second.ID = "changed"
 	if got = workflow.Suspensions(err); got[1].ID != "b" ||
-		!slices.Equal(got[1].Scope, []string{"items[1]"}) {
+		!slices.Equal(got[1].Scope, indexedScope("items", 1)) {
 		t.Fatalf("joined suspension changed with its input: %+v", got[1])
 	}
 	if err := workflow.JoinSuspensions(nil, nil); err != nil {
@@ -1043,14 +1311,14 @@ func TestInterrupt_eventsReportSuspensionThenReplay(t *testing.T) {
 func TestSuspend_branchDecisionIsJournaled(t *testing.T) {
 	var calls atomic.Int64
 	// Answers "first" once, then "second" forever.
-	flaky := func(context.Context, workflow.Store) (string, error) {
+	flaky := resolverNode(func(context.Context, workflow.Store) (string, error) {
 		if calls.Add(1) == 1 {
 			return "first", nil
 		}
 		return "second", nil
-	}
+	})
 	label := func(text string) workflow.Step {
-		return workflow.Leaf("out", workflow.BindFunc[string](func(workflow.Store) (string, error) { return text, nil }),
+		return workflow.Leaf("out", workflow.BinderFunc[string](func(workflow.Store) (string, error) { return text, nil }),
 			flow.NodeFunc[string, string](func(_ context.Context, x string) (string, error) { return x, nil }))
 	}
 	pipeline := workflow.Sequence(
@@ -1087,7 +1355,7 @@ func TestSuspend_branchDecisionIsJournaled(t *testing.T) {
 // The same guarantee for a loop's stop condition.
 func TestSuspend_loopDecisionIsJournaled(t *testing.T) {
 	var checks atomic.Int64
-	body := workflow.Leaf("tick", workflow.BindFunc[int](func(s workflow.Store) (int, error) {
+	body := workflow.Leaf("tick", workflow.BinderFunc[int](func(s workflow.Store) (int, error) {
 		v, err := workflow.Get[int](s, workflow.Output("tick"))
 		if err != nil {
 			return 0, nil
@@ -1127,15 +1395,15 @@ func TestSuspend_journaledDecisionOfTheWrongTypeIsReported(t *testing.T) {
 	journal := workflow.NewJournal()
 	// A journal from a different definition could hold anything under these keys.
 	// A loop records one decision per iteration, so its key carries the scope.
-	if err := json.Unmarshal([]byte(`{"version":2,"records":[
+	if err := json.Unmarshal([]byte(`{"version":3,"records":[
 		{"id":"route","value":"not-a-case"},
-		{"scope":["repeat[0]"],"id":"repeat","value":"not-a-bool"}
+		{"scope":[{"id":"repeat","indexed":true}],"id":"repeat","value":"not-a-bool"}
 	]}`), journal); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	// A recorded string that names no case is a plain no-case error.
 	branch := workflow.Branch("route",
-		func(context.Context, workflow.Store) (string, error) { return "a", nil },
+		resolverNode(func(context.Context, workflow.Store) (string, error) { return "a", nil }),
 		map[string]workflow.Step{"a": leafStep("a")})
 	_, err := runJournal(branch, workflow.NewStore(), journal)
 	if !errors.Is(err, flow.ErrNoCase) {
@@ -1143,7 +1411,7 @@ func TestSuspend_journaledDecisionOfTheWrongTypeIsReported(t *testing.T) {
 	}
 
 	// A recorded value of the wrong type is reported rather than ignored.
-	body := workflow.Leaf("b", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+	body := workflow.Leaf("b", workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
 	loop := workflow.Loop("repeat", body,
 		func(context.Context, int, workflow.Store) (bool, error) { return true, nil },

@@ -15,7 +15,7 @@ matches the capability you need.
 | 7 | [`Example_resume`](./resume_test.go) | [Suspension and resumption](../docs/tutorials/07-suspension-and-resumption.md) | Interrupts, persistence, and Journal replay |
 | 8 | [`Example_streamingOutput`](./stream_test.go) | [Streaming output](../docs/tutorials/08-streaming-output.md) | Backpressure, chunk identity, and final results |
 | 9 | [`Example_conditionalGraph`, `Example_graphDiagram`](./routing_test.go) | [Conditional graphs and diagrams](../docs/tutorials/09-conditional-graphs-and-diagrams.md) | Outlets, bypass, merge gates, and rendering |
-| 10 | [`Example_subgraph`](./subgraph_test.go) | [Dependency-driven graphs and sealed subgraphs](../docs/tutorials/10-dependency-graphs-and-subgraphs.md) | Ready-node execution, isolation, scoped reuse, and projection |
+| 10 | [`Example_subgraph`](./subgraph_test.go), [`Example_customRepeatedComposite`](./custom_composite_test.go) | [Dependency-driven graphs and sealed subgraphs](../docs/tutorials/10-dependency-graphs-and-subgraphs.md) | Ready-node execution, sealed state, and custom execution identity |
 
 Run the complete path:
 

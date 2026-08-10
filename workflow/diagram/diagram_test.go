@@ -1,6 +1,7 @@
 package diagram_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Tangerg/flow/workflow"
@@ -93,5 +94,63 @@ func TestEmptyAndEscapedGraphs(t *testing.T) {
 		"  n0 -.->|when:all=a&#124;b| n1\n"
 	if got := diagram.Mermaid(graph); got != want {
 		t.Fatalf("escaped Mermaid = %q; want %q", got, want)
+	}
+}
+
+func TestMermaid_keepsExternalIdentitySeparateFromItsDisplayLabel(t *testing.T) {
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
+		{
+			ID:     "first",
+			Type:   "sink",
+			Inputs: workflow.DefaultInput(workflow.At("a", "b#", "c")),
+		},
+		{
+			ID:     "second",
+			Type:   "sink",
+			Inputs: workflow.DefaultInput(workflow.At("a#/b", "c")),
+		},
+	}}
+
+	got := diagram.Mermaid(graph)
+	const sharedLabel = `a#/b#/c`
+	if strings.Count(got, `["`+sharedLabel+`"]`) != 2 ||
+		!strings.Contains(got, "  x0 -->|in: /b#/c| n0\n") ||
+		!strings.Contains(got, "  x1 -->|in: /c| n1\n") {
+		t.Fatalf("Mermaid merged structured external identities:\n%s", got)
+	}
+}
+
+func TestMermaid_keepsDeclarationTargetsSeparateFromDuplicateIDs(t *testing.T) {
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
+		{ID: "duplicate", Type: "first"},
+		{
+			ID:     "duplicate",
+			Type:   "second",
+			Inputs: workflow.DefaultInput(workflow.Output("external")),
+		},
+	}}
+
+	got := diagram.Mermaid(graph)
+	if !strings.Contains(got, "  x0 -->|in| n1\n") {
+		t.Fatalf("Mermaid redirected the second declaration's edge:\n%s", got)
+	}
+}
+
+func TestMermaid_replacesInvalidUTF8OnlyInPresentation(t *testing.T) {
+	invalid := string([]byte{0xff})
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{{ID: invalid, Type: "source"}}}
+	if got, want := diagram.Mermaid(graph), "flowchart LR\n  n0[\"�<br/>source\"]\n"; got != want {
+		t.Fatalf("Mermaid = %q; want %q", got, want)
+	}
+}
+
+func TestMermaid_normalizesLineAndControlCharacters(t *testing.T) {
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{{
+		ID:   "a\r\nb\rc\u2028d\u2029e\x00f",
+		Type: "source",
+	}}}
+	want := "flowchart LR\n  n0[\"a<br/>b<br/>c<br/>d<br/>e�f<br/>source\"]\n"
+	if got := diagram.Mermaid(graph); got != want {
+		t.Fatalf("Mermaid = %q; want %q", got, want)
 	}
 }

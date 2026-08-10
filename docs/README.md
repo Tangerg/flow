@@ -17,12 +17,12 @@ from a single node to runtime-defined, resumable workflows.
 
 Package comments and Go examples are the canonical API reference:
 
-- [`flow`](../doc.go) — typed control-flow primitives.
-- [`flowx`](../flowx/doc.go) — derived composition helpers.
-- [`workflow`](../workflow/doc.go) — named state, graphs, JSON, streaming,
+- [`flow`](../doc.go): typed control-flow primitives.
+- [`flowx`](../flowx/doc.go): derived composition helpers.
+- [`workflow`](../workflow/doc.go): named state, graphs, JSON, streaming,
   observation, and resumption.
-- [`workflow/expr`](../workflow/expr/doc.go) — optional data-driven rules.
-- [`workflow/diagram`](../workflow/diagram/doc.go) — deterministic ASCII and
+- [`workflow/expr`](../workflow/expr/doc.go): optional data-driven rules.
+- [`workflow/diagram`](../workflow/diagram/doc.go): deterministic ASCII and
   Mermaid Graph renderings.
 
 Read them locally with:

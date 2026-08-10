@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Tangerg/flow/schema/workflow-graph.json",
   "title": "Flow workflow graph",
-  "description": "A flat directed acyclic graph of registered leaf nodes.",
+  "description": "A flat directed acyclic graph of registered, Store-sealed nodes.",
   "type": "object",
   "properties": {
     "nodes": {
@@ -13,7 +13,7 @@
     "concurrency": {
       "type": "integer",
       "minimum": 0,
-      "description": "Maximum nodes running concurrently across the graph; zero is unbounded."
+      "description": "Maximum nodes running concurrently across the graph; zero is unbounded. The value must fit the engine platform's Go int."
     }
   },
   "required": ["nodes"],
@@ -42,7 +42,7 @@
     },
     "gate": {
       "type": "object",
-      "description": "A routing output that must select this node.",
+      "description": "One routing decision considered when selecting this node.",
       "properties": {
         "nodeID": { "type": "string", "minLength": 1 },
         "outlet": { "type": "string", "minLength": 1 }
@@ -64,19 +64,32 @@
         },
         "when": {
           "type": "array",
-          "minItems": 1,
+          "description": "Routing conditions. An empty array is equivalent to omission unless trigger is any.",
           "items": { "$ref": "#/$defs/gate" },
           "uniqueItems": true
         },
         "trigger": {
           "const": "any",
-          "description": "Run when any gate matches; omission requires every gate."
+          "description": "After every gate source completes, run when any gate matches; omission requires every gate."
         }
       },
       "required": ["id", "type"],
       "dependentRequired": {
         "trigger": ["when"]
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "trigger": { "const": "any" } },
+            "required": ["trigger"]
+          },
+          "then": {
+            "properties": {
+              "when": { "minItems": 1 }
+            }
+          }
+        }
+      ],
       "additionalProperties": false
     }
   }

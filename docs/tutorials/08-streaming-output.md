@@ -1,8 +1,8 @@
 # Level 8: Streaming output
 
 Most nodes have one result: they return it from `Run`. Some work also produces
-useful intermediate values — model tokens, progress updates, decoded rows, or
-search matches — before the final result is ready. A workflow should expose
+useful intermediate values such as model tokens, progress updates, decoded rows,
+or search matches before the final result is ready. A workflow should expose
 those values without storing an iterator in the `Store` or turning lifecycle
 events into a high-volume data channel.
 
@@ -101,7 +101,9 @@ out, err := workflow.Run(ctx, step, in, cfg)
 backpressure, not an unbounded internal queue. If `Emit` returns an ordinary
 error, the stream context is cancelled, `yield` returns `false`, and the leaf
 fails with a `StepError` that preserves the emitter error for `errors.Is` and
-`errors.As`. As at any leaf boundary, an error consisting only of workflow
+`errors.As`. That emitter error remains the cause even if a faulty producer
+ignores the stopped stream and returns another error afterward. As at any leaf
+boundary, an error consisting only of workflow
 suspensions remains the third outcome rather than becoming a failure.
 
 Calls from one leaf invocation are serialized and receive increasing `Index`
@@ -126,14 +128,15 @@ emitter := workflow.EmitterFunc(
 
 A nil `RunConfig.Emitter` discards intermediate values before constructing a
 `Chunk` or consuming a run sequence number. The producer still computes them;
-the workflow simply has no output destination.
+the workflow has no output destination in that call.
 
 ## 4. Use chunk identity correctly
 
 Each Chunk carries:
 
 - `ID`: the enclosing `Leaf` ID.
-- `Scope`: enclosing loop or iteration scopes.
+- `Scope`: enclosing `ScopeFrame` values. `Indexed` and `Index` distinguish a
+  repeated invocation from an ordinary namespace.
 - `Index`: a zero-based counter for this leaf invocation.
 - `Seq`: a run-wide number shared with lifecycle `Event` values.
 - `Value`: the typed chunk stored as `any`.
@@ -141,7 +144,8 @@ Each Chunk carries:
 `ID`, `Scope`, and `Index` distinguish concurrent streams inside one run.
 `Seq` lets a caller combine event and chunk logs after concurrent callbacks;
 either receiver can see gaps occupied by the other signal type. Treat `Value`
-and `Scope` as immutable.
+and `Scope` as immutable. Do not parse `ScopeFrame.String()` for identity; use
+the structured fields.
 
 These fields do not identify a business run globally. A durable sink should
 also record an application run ID and workflow-definition version.
@@ -161,11 +165,13 @@ sink idempotent using application identity plus `ID`, `Scope`, and `Index`.
 
 ## 6. Keep streaming separate from observation
 
-`Observer` reports a small number of lifecycle transitions: started, completed,
-failed, suspended, or skipped. `Emitter` carries potentially high-volume
-application data and can fail the step when its destination fails. Combining
-them would either make observation unexpectedly affect correctness or make
-streaming failures invisible.
+`Observer` reports a small number of observable boundary transitions: started,
+completed, failed, suspended, skipped, or bypassed. Leaves and wait boundaries
+are observable; structural composites such as sequences and parallels remain
+transparent. `Emitter` carries potentially high-volume application data and can
+fail the step when its destination fails. Combining them would either make
+observation unexpectedly affect correctness or make streaming failures
+invisible.
 
 Use the final Store output for downstream workflow steps, the Emitter for live
 incremental delivery, and the Observer for tracing and audit metadata.

@@ -141,20 +141,20 @@ func ExampleRegistry_CompileGraphJSON() {
 // graph layer infers that "sum" depends on both producers and schedules it last.
 func ExampleBindFactory() {
 	sum := workflow.BindFactory(
-		func(_ struct{}, inputs workflow.Inputs) (workflow.BindFunc[[2]int], error) {
+		func(_ struct{}, inputs workflow.Inputs) (workflow.Binder[[2]int], error) {
 			left, leftOK := inputs.Ref("left")
 			right, rightOK := inputs.Ref("right")
 			if !leftOK || !rightOK {
 				return nil, fmt.Errorf("%w: want left and right", workflow.ErrMissingPort)
 			}
-			return func(s workflow.Store) ([2]int, error) {
+			return workflow.BinderFunc[[2]int](func(s workflow.Store) ([2]int, error) {
 				a, err := workflow.Get[int](s, left)
 				if err != nil {
 					return [2]int{}, err
 				}
 				b, err := workflow.Get[int](s, right)
 				return [2]int{a, b}, err
-			}, nil
+			}), nil
 		},
 		func(struct{}) (flow.Node[[2]int, int], error) {
 			return flow.NodeFunc[[2]int, int](func(_ context.Context, p [2]int) (int, error) {
@@ -197,8 +197,9 @@ func ExampleBindFactory() {
 	// Output: 21
 }
 
-// This example reports a graph's external inputs before running it, which is how
-// an editor renders a workflow's parameters and how a caller pre-flights a run.
+// This example reports a graph's potential external inputs before running it,
+// which is how an editor can render a workflow's parameters. Inputs of
+// conditional nodes are included even when one run may bypass them.
 func ExampleGraph_Inputs() {
 	graph := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "greet", Type: "template", Inputs: workflow.Inputs{
@@ -220,9 +221,10 @@ func ExampleGraph_Inputs() {
 	// missing: [params#/greeting]
 }
 
-// This example records a run's steps from outside the package. Because an
-// Observer receives the Store a step produced, durability and tracing can be
-// built on top without workflow taking on either concern.
+// This example records a run's step writes from outside the package. Because an
+// Observer also receives the complete Store a step produced, snapshot
+// persistence can be built alongside this audit log without workflow taking on
+// either concern.
 func ExampleRun() {
 	step := workflow.Sequence(
 		workflow.Leaf("load", workflow.From[int](workflow.Output("start")),
@@ -424,7 +426,7 @@ func ExampleStore_json() {
 func ExampleStepError() {
 	boom := errors.New("boom")
 	step := workflow.Leaf("charge",
-		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+		workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(context.Context, int) (int, error) { return 0, boom }),
 	)
 

@@ -25,8 +25,12 @@ and a gate that names an undeclared outlet. A gate source must have a registered
 schema with at least one outlet; routing is intentionally stricter than ordinary
 untyped ports.
 
-There is no second hidden routing cell. A completed leaf replay restores its
-ordinary output, so the same decision remains available after resumption.
+There is no second hidden routing cell. Gates compare the output's JSON string
+representation, and a completed leaf replay restores that ordinary output, so
+the same decision remains available after persistence and resumption. This
+also means ordinary `encoding/json` string normalization, including replacement
+of malformed UTF-8, happens before a fresh routing comparison instead of first
+appearing after restart.
 
 ## 2. Gate mutually exclusive arms
 
@@ -69,7 +73,9 @@ The same definition travels in JSON without a separate edge format:
 ```
 
 `GraphJSONSchema` includes gates and trigger rules, while
-`Registry.ValidateGraph` adds registered-outlet semantics.
+`Registry.ValidateGraph` adds registered-outlet semantics. With the zero
+`Trigger`, an omitted, nil, or empty `When` is ungated; `TriggerAny` requires at
+least one gate.
 
 Bypass is never inferred from a missing input. An ungated node that reads an
 absent value still receives `ErrNotFound`; this keeps data errors distinct from
@@ -106,10 +112,17 @@ return workflow.FirstOf[string](approveRef, reviewRef), nil
 `FirstOf` skips only `ErrNotFound`. If an existing value has the wrong type, it
 returns that error instead of silently falling through to another arm.
 
+Every gate source is still a dependency. When gates refer to different routing
+nodes, the target waits until all of them complete and then applies `TriggerAny`
+to their decisions. It never races ahead after the first match. This keeps
+execution deterministic and ensures that a suspended routing source blocks its
+descendants.
+
 ## 4. Adapt Store-based rules with `Route`
 
-A typed node that already returns a string is a routing node without extra
-machinery. When the rule is a `workflow.Resolver`, adapt it directly:
+A `workflow.Resolver` is an alias for `flow.Node[workflow.Store, string]`, not a
+second execution protocol. A typed or composed resolver can therefore become a
+journaled routing node directly:
 
 ```go
 resolve, err := expr.Switch(expr.SwitchSpec{
@@ -154,7 +167,9 @@ A compiled Graph owns the Store cells named by its internal node IDs. At the
 start of every invocation it removes those cells and reconstructs them from the
 current execution or Journal replay. Reusing a previous output Store with new
 external inputs therefore cannot make an old, now-bypassed branch appear
-selected.
+selected. The cleanup is part of the Store's private composition state, so the
+same guarantee holds when the compiled Graph is a branch of `Parallel`; merging
+siblings cannot restore a stale Graph-owned cell.
 
 This rule is local to the compiled Graph. External seed values keep their cells,
 and a Graph's internal node IDs must not be used as external parameter

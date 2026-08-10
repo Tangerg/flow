@@ -55,9 +55,11 @@ the replacement.
 test -z "$(gofmt -l .)"
 go mod tidy -diff
 go build ./...
-go test -race -cover ./...
+go test -race -coverprofile=coverage.out ./...
+test "$(go tool cover -func=coverage.out | awk '/^total:/ { print $3 }')" = "100.0%"
 go vet ./...
 golangci-lint run ./...
+actionlint
 govulncheck ./...
 npx --yes markdownlint-cli2@0.23.2
 ```
@@ -81,8 +83,9 @@ git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
-The release workflow repeats the race, vet, and vulnerability checks and creates
-the GitHub release. Verify that:
+On a version tag, the CI workflow creates the GitHub release only after its
+formatting, module, build, race, exact-coverage, vet, Go and workflow lint,
+vulnerability, documentation, and fuzz jobs all pass. Verify that:
 
 - the GitHub release points to the intended commit;
 - release notes contain the required migrations;

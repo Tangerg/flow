@@ -70,8 +70,13 @@ There is no implicit truthiness or conversion:
 
 - A condition must produce `bool`.
 - A resolver must produce `string`.
+- References and Switch branch names must be valid UTF-8 so the same definition
+  survives persistence unchanged.
 - A missing reference returns `ErrUndefined`; guard an optional value with
   `has(ref)`.
+- A nested reference whose existing Go value cannot produce a valid JSON view
+  returns `ErrType` and preserves `workflow.ErrTypeMismatch`. It is not reported
+  as missing data, including when read through `has(ref)`.
 - An incompatible operand returns `ErrType` rather than becoming `false`.
 - Division or remainder by zero returns `ErrDivideByZero`.
 
@@ -126,6 +131,14 @@ if err := bindings.Register(registry); err != nil {
 	return err
 }
 ```
+
+`Bindings` and standalone `SwitchSpec` values implement a strict JSON object
+boundary: non-object documents, unknown or duplicate members, invalid Unicode
+text, multiple values, and excessive nesting are rejected. A failed
+`json.Unmarshal` leaves the existing value unchanged, while `json.Marshal`
+rejects invalid in-memory UTF-8 instead of silently replacing it. Expression
+syntax and branch semantics are compiled by `Register` or `Switch`; decoding
+only establishes a faithful document.
 
 The names then become available to a `workflow.Spec`. Call `bindings.Refs()` to
 collect all data dependencies in the rule set.

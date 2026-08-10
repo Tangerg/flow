@@ -1,0 +1,202 @@
+// Package jsonnum contains bounded helpers for the JSON number domain shared
+// by workflow definition, persistence, and expression boundaries.
+package jsonnum
+
+import (
+	"errors"
+	"math"
+	"strconv"
+	"strings"
+)
+
+// Integer is the sign and magnitude of a mathematical JSON integer. Zero is
+// always non-negative.
+type Integer struct {
+	Magnitude uint64
+	Negative  bool
+}
+
+// ParseInteger errors. Callers normally translate them into the vocabulary of
+// their public boundary.
+var (
+	ErrSyntax     = errors.New("invalid JSON number")
+	ErrFractional = errors.New("JSON number is not an integer")
+	ErrRange      = errors.New("JSON integer exceeds uint64 magnitude")
+)
+
+const (
+	decimalRadix           = 10
+	maxUint64DecimalDigits = 20
+)
+
+// ParseInteger parses JSON's mathematical integer domain without converting
+// through float64 or allocating in proportion to the exponent. Decimal and
+// exponent spellings are accepted when their value is integral. Magnitudes
+// larger than uint64 report ErrRange.
+func ParseInteger(text string) (Integer, error) {
+	parsed, err := (numberParser{text: text}).parse()
+	if err != nil {
+		return Integer{}, err
+	}
+	return parsed.integer()
+}
+
+type numberParser struct {
+	text             string
+	offset           int
+	negative         bool
+	integerStart     int
+	integerEnd       int
+	fractionStart    int
+	fractionEnd      int
+	exponentNegative bool
+	exponent         int
+}
+
+func (n numberParser) parse() (numberParser, error) {
+	if n.text == "" {
+		return numberParser{}, ErrSyntax
+	}
+	if n.text[n.offset] == '-' {
+		n.negative = true
+		n.offset++
+		if n.offset == len(n.text) {
+			return numberParser{}, ErrSyntax
+		}
+	}
+
+	n.integerStart = n.offset
+	switch {
+	case n.text[n.offset] == '0':
+		n.offset++
+		if n.offset < len(n.text) && isDigit(n.text[n.offset]) {
+			return numberParser{}, ErrSyntax
+		}
+	case n.text[n.offset] >= '1' && n.text[n.offset] <= '9':
+		n.offset = scanDigits(n.text, n.offset+1)
+	default:
+		return numberParser{}, ErrSyntax
+	}
+	n.integerEnd = n.offset
+
+	if n.offset < len(n.text) && n.text[n.offset] == '.' {
+		n.offset++
+		n.fractionStart = n.offset
+		n.offset = scanDigits(n.text, n.offset)
+		if n.offset == n.fractionStart {
+			return numberParser{}, ErrSyntax
+		}
+		n.fractionEnd = n.offset
+	}
+	if n.offset < len(n.text) && (n.text[n.offset] == 'e' || n.text[n.offset] == 'E') {
+		var err error
+		n, err = n.parseExponent()
+		if err != nil {
+			return numberParser{}, err
+		}
+	}
+	if n.offset != len(n.text) {
+		return numberParser{}, ErrSyntax
+	}
+	return n, nil
+}
+
+func (n numberParser) parseExponent() (numberParser, error) {
+	n.offset++
+	if n.offset < len(n.text) && (n.text[n.offset] == '+' || n.text[n.offset] == '-') {
+		n.exponentNegative = n.text[n.offset] == '-'
+		n.offset++
+	}
+	start := n.offset
+	limit := exponentLimit(len(n.text))
+	for n.offset < len(n.text) && isDigit(n.text[n.offset]) {
+		digit := int(n.text[n.offset] - '0')
+		if n.exponent < limit {
+			if n.exponent > (limit-digit)/decimalRadix {
+				n.exponent = limit
+			} else {
+				n.exponent = n.exponent*decimalRadix + digit
+			}
+		}
+		n.offset++
+	}
+	if n.offset == start {
+		return numberParser{}, ErrSyntax
+	}
+	return n, nil
+}
+
+func exponentLimit(length int) int {
+	if length > math.MaxInt-maxUint64DecimalDigits-1 {
+		return math.MaxInt
+	}
+	return length + maxUint64DecimalDigits + 1
+}
+
+func (n numberParser) integer() (Integer, error) {
+	digits := n.text[n.integerStart:n.integerEnd] + n.text[n.fractionStart:n.fractionEnd]
+	firstNonZero := strings.IndexAny(digits, "123456789")
+	if firstNonZero < 0 {
+		return Integer{}, nil
+	}
+
+	fractionDigits := n.fractionEnd - n.fractionStart
+	var (
+		integerDigits string
+		trailingZeros int
+	)
+	switch {
+	case n.exponentNegative:
+		integerDigitCount := len(digits) - fractionDigits
+		if n.exponent > integerDigitCount {
+			return Integer{}, ErrFractional
+		}
+		fractionalDigits := fractionDigits + n.exponent
+		var err error
+		integerDigits, err = integralPrefix(digits, fractionalDigits)
+		if err != nil {
+			return Integer{}, err
+		}
+	case n.exponent < fractionDigits:
+		fractionalDigits := fractionDigits - n.exponent
+		var err error
+		integerDigits, err = integralPrefix(digits, fractionalDigits)
+		if err != nil {
+			return Integer{}, err
+		}
+	default:
+		integerDigits = digits[firstNonZero:]
+		trailingZeros = n.exponent - fractionDigits
+	}
+
+	integerDigits = strings.TrimLeft(integerDigits, "0")
+	if trailingZeros > maxUint64DecimalDigits ||
+		len(integerDigits)+trailingZeros > maxUint64DecimalDigits {
+		return Integer{}, ErrRange
+	}
+	if trailingZeros > 0 {
+		integerDigits += strings.Repeat("0", trailingZeros)
+	}
+	magnitude, err := strconv.ParseUint(integerDigits, 10, 64)
+	if err != nil {
+		return Integer{}, ErrRange
+	}
+	return Integer{Magnitude: magnitude, Negative: n.negative}, nil
+}
+
+func integralPrefix(digits string, fractionalDigits int) (string, error) {
+	if fractionalDigits > len(digits) ||
+		strings.Trim(digits[len(digits)-fractionalDigits:], "0") != "" {
+		return "", ErrFractional
+	}
+	return digits[:len(digits)-fractionalDigits], nil
+}
+
+func scanDigits(text string, offset int) int {
+	for offset < len(text) && isDigit(text[offset]) {
+		offset++
+	}
+	return offset
+}
+
+func isDigit(character byte) bool { return character >= '0' && character <= '9' }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -20,6 +21,77 @@ func addN() workflow.NodeFactory {
 	return workflow.Factory(func(cfg config) (flow.Node[int, int], error) {
 		return flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + cfg.N, nil }), nil
 	})
+}
+
+// lateBoundNodeSpecFactory intentionally reads NodeSpec's mutable fields at
+// execution time. It makes ownership tests prove that compilation hands the
+// factory an independent snapshot instead of relying on Factory eagerly
+// decoding the same fields.
+func lateBoundNodeSpecFactory() workflow.NodeFactory {
+	type config struct {
+		N int `json:"n"`
+	}
+	return func(spec workflow.NodeSpec) (workflow.Step, error) {
+		bind := workflow.BinderFunc[int](func(store workflow.Store) (int, error) {
+			ref, ok := spec.Inputs.Default()
+			if !ok {
+				return 0, fmt.Errorf("%w %q", workflow.ErrMissingPort, workflow.DefaultPort)
+			}
+			input, err := workflow.Get[int](store, ref)
+			if err != nil {
+				return 0, err
+			}
+			var cfg config
+			if err := json.Unmarshal(spec.Config, &cfg); err != nil {
+				return 0, err
+			}
+			return input + cfg.N, nil
+		})
+		return workflow.Leaf(
+			spec.ID,
+			bind,
+			flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+				return value, nil
+			}),
+		), nil
+	}
+}
+
+func TestCompileSpec_ownsTheFactoryDefinitionSnapshot(t *testing.T) {
+	inputs := workflow.DefaultInput(workflow.Output("start"))
+	config := json.RawMessage(`{"n":1}`)
+	spec := workflow.Spec{
+		Kind:   workflow.KindLeaf,
+		ID:     "node",
+		Type:   "late-bound",
+		Inputs: inputs,
+		Config: config,
+	}
+	step, err := workflow.NewRegistry().
+		MustRegisterNode("late-bound", lateBoundNodeSpecFactory()).
+		CompileSpec(spec)
+	if err != nil {
+		t.Fatalf("CompileSpec: %v", err)
+	}
+
+	inputs[workflow.DefaultPort] = workflow.Output("changed-input")
+	config[len(config)-2] = '9'
+	spec.ID = "changed-node"
+	spec.Type = "changed-type"
+
+	out, err := step.Run(
+		t.Context(),
+		workflow.NewStore().WithOutput("start", 10).WithOutput("changed-input", 100),
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if value, getErr := workflow.Get[int](out, workflow.Output("node")); getErr != nil || value != 11 {
+		t.Fatalf("node output = %d, %v; want 11, nil", value, getErr)
+	}
+	if _, ok := out.Lookup(workflow.Output("changed-node")); ok {
+		t.Fatal("compiled Spec retained its caller's definition storage")
+	}
 }
 
 func TestRegistry_compileSequenceJSON(t *testing.T) {
@@ -47,16 +119,314 @@ func TestRegistry_compileSequenceJSON(t *testing.T) {
 	}
 }
 
+func TestCompileGraphCallsFactoriesOutsideTheRegistryLock(t *testing.T) {
+	registry := workflow.NewRegistry()
+	registry.MustRegisterNode("register-condition", func(spec workflow.NodeSpec) (workflow.Step, error) {
+		// Registration from a factory is unusual, but it is a decisive reentrancy
+		// probe: calling application code under Registry's lock would deadlock.
+		if err := registry.RegisterCondition(
+			"registered-during-build",
+			func(context.Context, int, workflow.Store) (bool, error) { return true, nil },
+		); err != nil {
+			return nil, err
+		}
+		return workflow.Interrupt(spec.ID, nil), nil
+	})
+
+	if _, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
+		ID:   "node",
+		Type: "register-condition",
+	}}}); err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+	body := workflow.Spec{Kind: workflow.KindSequence}
+	if err := registry.ValidateSpec(workflow.Spec{
+		Kind:      workflow.KindLoop,
+		ID:        "loop",
+		Condition: "registered-during-build",
+		Body:      &body,
+	}); err != nil {
+		t.Fatalf("later validation did not observe factory registration: %v", err)
+	}
+}
+
+func TestCompileSpec_rejectsInvalidBuiltDefinition(t *testing.T) {
+	for name, test := range map[string]struct {
+		build func(onRun func()) workflow.Step
+		want  error
+	}{
+		"duplicate identity": {
+			build: func(onRun func()) workflow.Step {
+				leaf := func() workflow.Step {
+					return workflow.LeafFunc(
+						"duplicate",
+						workflow.Output("start"),
+						func(_ context.Context, input int) (int, error) {
+							onRun()
+							return input, nil
+						},
+					)
+				}
+				return workflow.Sequence(leaf(), leaf())
+			},
+			want: workflow.ErrDuplicateStep,
+		},
+		"nil nested step": {
+			build: func(func()) workflow.Step { return workflow.Sequence(nil) },
+			want:  workflow.ErrNilStep,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var calls int
+			registry := workflow.NewRegistry().MustRegisterNode(
+				"invalid",
+				func(workflow.NodeSpec) (workflow.Step, error) {
+					return test.build(func() { calls++ }), nil
+				},
+			)
+
+			_, err := registry.CompileSpec(workflow.Spec{
+				Kind: workflow.KindLeaf,
+				ID:   "outer",
+				Type: "invalid",
+			})
+			if !errors.Is(err, workflow.ErrInvalidSpec) || !errors.Is(err, test.want) {
+				t.Fatalf("CompileSpec error = %v; want ErrInvalidSpec and %v", err, test.want)
+			}
+			if calls != 0 {
+				t.Fatalf("node calls = %d; want validation before execution", calls)
+			}
+		})
+	}
+}
+
+func TestRegistry_rejectsUnsealedFactoryComposite(t *testing.T) {
+	registry := workflow.NewRegistry().MustRegisterNode(
+		"composite",
+		func(spec workflow.NodeSpec) (workflow.Step, error) {
+			return workflow.Sequence(workflow.Interrupt(spec.ID, nil)), nil
+		},
+	)
+
+	t.Run("Spec", func(t *testing.T) {
+		_, err := registry.CompileSpec(workflow.Spec{
+			Kind: workflow.KindLeaf,
+			ID:   "node",
+			Type: "composite",
+		})
+		var specErr *workflow.SpecError
+		if !errors.Is(err, workflow.ErrInvalidSpec) ||
+			!errors.As(err, &specErr) || specErr.Field != "type" ||
+			!strings.Contains(err.Error(), `unsealed "sequence" Step`) {
+			t.Fatalf("CompileSpec error = %v; want unsealed composite error", err)
+		}
+	})
+
+	t.Run("Graph", func(t *testing.T) {
+		_, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
+			ID:   "node",
+			Type: "composite",
+		}}})
+		var graphErr *workflow.GraphError
+		if !errors.Is(err, workflow.ErrInvalidGraph) ||
+			!errors.As(err, &graphErr) || graphErr.Path != "/nodes/0" ||
+			graphErr.NodeID != "node" || graphErr.Field != "type" ||
+			!strings.Contains(err.Error(), `unsealed "sequence" Step`) {
+			t.Fatalf("CompileGraph error = %v; want node unsealed composite error", err)
+		}
+	})
+}
+
+func TestRegistry_reportsFactoryContractErrorsAtNodeType(t *testing.T) {
+	registry := workflow.NewRegistry().MustRegisterNode(
+		"broken",
+		workflow.Factory[struct{}, int, int](nil),
+	)
+
+	t.Run("Graph", func(t *testing.T) {
+		_, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
+			ID: "node", Type: "broken",
+		}}})
+		var graphErr *workflow.GraphError
+		if !errors.Is(err, workflow.ErrInvalidGraph) ||
+			!errors.Is(err, flow.ErrNilFunc) ||
+			!errors.As(err, &graphErr) || graphErr.Path != "/nodes/0" ||
+			graphErr.Field != "type" {
+			t.Fatalf("CompileGraph error = %v; want nil factory function at type", err)
+		}
+	})
+
+	t.Run("Spec", func(t *testing.T) {
+		_, err := registry.CompileSpec(workflow.Spec{
+			Kind: workflow.KindLeaf, ID: "node", Type: "broken",
+		})
+		var specErr *workflow.SpecError
+		if !errors.Is(err, workflow.ErrInvalidSpec) ||
+			!errors.Is(err, flow.ErrNilFunc) ||
+			!errors.As(err, &specErr) || specErr.Field != "type" {
+			t.Fatalf("CompileSpec error = %v; want nil factory function at type", err)
+		}
+	})
+}
+
+func TestRegistry_preservesLeafValidationOperationAcrossCompileBoundaries(t *testing.T) {
+	registry := workflow.NewRegistry().MustRegisterNode(
+		"broken",
+		func(spec workflow.NodeSpec) (workflow.Step, error) {
+			return workflow.Leaf(
+				spec.ID,
+				workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
+				flow.NodeFunc[int, int](nil),
+			), nil
+		},
+	)
+	assertCause := func(t *testing.T, err, outer error) {
+		t.Helper()
+		var stepErr *workflow.StepError
+		if !errors.Is(err, outer) ||
+			!errors.Is(err, flow.ErrNilNode) ||
+			!errors.As(err, &stepErr) ||
+			stepErr.Op != workflow.OpValidate {
+			t.Fatalf(
+				"Compile error = %v; want outer boundary containing OpValidate ErrNilNode",
+				err,
+			)
+		}
+	}
+
+	t.Run("graph", func(t *testing.T) {
+		_, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
+			ID: "node", Type: "broken",
+		}}})
+		assertCause(t, err, workflow.ErrInvalidGraph)
+		var graphErr *workflow.GraphError
+		if !errors.As(err, &graphErr) || graphErr.Field != "type" {
+			t.Fatalf("CompileGraph error = %v; want type GraphError", err)
+		}
+	})
+
+	t.Run("spec", func(t *testing.T) {
+		_, err := registry.CompileSpec(workflow.Spec{
+			Kind: workflow.KindLeaf, ID: "node", Type: "broken",
+		})
+		assertCause(t, err, workflow.ErrInvalidSpec)
+		var specErr *workflow.SpecError
+		if !errors.As(err, &specErr) || specErr.Field != "type" {
+			t.Fatalf("CompileSpec error = %v; want type SpecError", err)
+		}
+	})
+}
+
+func TestRegistry_rejectsSchemaOutputMismatchAtCompilation(t *testing.T) {
+	tests := map[string]struct {
+		factory workflow.NodeFactory
+		schema  workflow.NodeSchema
+		inputs  workflow.Inputs
+	}{
+		"schema promises absent output": {
+			factory: workflow.AwaitFactory(),
+			schema: workflow.NodeSchema{
+				Inputs: workflow.OnePort(workflow.TypeAny),
+				Output: workflow.TypeAny,
+			},
+			inputs: workflow.DefaultInput(workflow.Output("external")),
+		},
+		"schema hides produced output": {
+			factory: workflow.InterruptFactory(),
+			schema:  workflow.NodeSchema{},
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			registry := workflow.NewRegistry().
+				MustRegisterNode("node", test.factory).
+				MustRegisterSchema("node", test.schema)
+
+			t.Run("Graph", func(t *testing.T) {
+				_, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
+					ID: "node", Type: "node", Inputs: test.inputs,
+				}}})
+				var registrationErr *workflow.RegistrationError
+				if !errors.Is(err, workflow.ErrInvalidGraph) ||
+					!errors.Is(err, workflow.ErrInvalidRegistration) ||
+					!errors.As(err, &registrationErr) ||
+					registrationErr.Kind != "schema" || registrationErr.Name != "node" {
+					t.Fatalf("CompileGraph error = %v; want graph and registration errors", err)
+				}
+			})
+
+			t.Run("Spec", func(t *testing.T) {
+				_, err := registry.CompileSpec(workflow.Spec{
+					Kind: workflow.KindLeaf, ID: "node", Type: "node", Inputs: test.inputs,
+				})
+				if !errors.Is(err, workflow.ErrInvalidSpec) ||
+					!errors.Is(err, workflow.ErrInvalidRegistration) {
+					t.Fatalf("CompileSpec error = %v; want spec and registration errors", err)
+				}
+			})
+		})
+	}
+}
+
+func TestCompileBoundaries_countFactoryNestingInsideTheEnclosingDefinition(t *testing.T) {
+	registry := workflow.NewRegistry().MustRegisterNode(
+		"deep",
+		func(spec workflow.NodeSpec) (workflow.Step, error) {
+			body := workflow.Interrupt("value", nil)
+			bodyOutput := workflow.Output("value")
+			for depth := 1; depth < workflow.MaxNestingDepth; depth++ {
+				id := fmt.Sprintf("inner-%d", depth)
+				body = workflow.Subgraph(workflow.SubgraphConfig{
+					ID:         id,
+					Body:       body,
+					BodyOutput: bodyOutput,
+				})
+				bodyOutput = workflow.Output(id)
+			}
+			return workflow.Subgraph(workflow.SubgraphConfig{
+				ID:         spec.ID,
+				Body:       body,
+				BodyOutput: bodyOutput,
+			}), nil
+		},
+	)
+
+	t.Run("Spec", func(t *testing.T) {
+		_, err := registry.CompileSpec(workflow.Spec{
+			Kind: workflow.KindSequence,
+			Steps: []workflow.Spec{{
+				Kind: workflow.KindLeaf,
+				ID:   "node",
+				Type: "deep",
+			}},
+		})
+		if !errors.Is(err, workflow.ErrInvalidSpec) || !errors.Is(err, workflow.ErrMaxDepth) {
+			t.Fatalf("CompileSpec error = %v; want enclosing ErrMaxDepth", err)
+		}
+	})
+
+	t.Run("Graph", func(t *testing.T) {
+		_, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
+			ID:   "node",
+			Type: "deep",
+		}}})
+		if !errors.Is(err, workflow.ErrInvalidGraph) || !errors.Is(err, workflow.ErrMaxDepth) {
+			t.Fatalf("CompileGraph error = %v; want enclosing ErrMaxDepth", err)
+		}
+	})
+}
+
 func TestRegistry_compileBranch(t *testing.T) {
 	reg := workflow.NewRegistry().
 		MustRegisterNode("addN", addN()).
-		MustRegisterResolver("sign", func(_ context.Context, s workflow.Store) (string, error) {
+		MustRegisterResolver("sign", resolverNode(func(_ context.Context, s workflow.Store) (string, error) {
 			v, _ := s.Lookup(workflow.At("start", "output"))
 			if v.(int) >= 0 {
 				return "pos", nil
 			}
 			return "neg", nil
-		})
+		}))
 
 	spec := workflow.Spec{
 		Kind:     workflow.KindBranch,
@@ -136,16 +506,67 @@ func TestRegistry_unknownType(t *testing.T) {
 
 func TestRegistry_unknownKind(t *testing.T) {
 	reg := workflow.NewRegistry()
-	_, err := reg.CompileSpec(workflow.Spec{Kind: "bogus"})
-	if err == nil {
-		t.Fatal("expected error for unknown kind")
+	_, err := reg.CompileSpec(workflow.Spec{
+		Kind:          "bogus",
+		Concurrency:   -1,
+		MaxIterations: -1,
+	})
+	var specErr *workflow.SpecError
+	if !errors.As(err, &specErr) ||
+		specErr.Field != "kind" ||
+		!errors.Is(err, workflow.ErrInvalidSpec) {
+		t.Fatalf("CompileSpec error = %v; want invalid kind diagnostic", err)
+	}
+}
+
+func TestValidateSpec_reportsEmptyRequiredRegistrationNames(t *testing.T) {
+	registry := workflow.NewRegistry()
+	tests := []struct {
+		name  string
+		spec  workflow.Spec
+		field string
+		want  string
+	}{
+		{
+			name: "branch resolver",
+			spec: workflow.Spec{
+				Kind:  workflow.KindBranch,
+				ID:    "branch",
+				Cases: map[string]workflow.Spec{"case": {Kind: workflow.KindSequence}},
+			},
+			field: "resolver",
+			want:  "resolver name is empty",
+		},
+		{
+			name: "loop condition",
+			spec: workflow.Spec{
+				Kind: workflow.KindLoop,
+				ID:   "loop",
+				Body: &workflow.Spec{Kind: workflow.KindSequence},
+			},
+			field: "condition",
+			want:  "condition name is empty",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := registry.ValidateSpec(test.spec)
+			var specErr *workflow.SpecError
+			if !errors.As(err, &specErr) ||
+				specErr.Field != test.field ||
+				!strings.Contains(err.Error(), test.want) {
+				t.Fatalf("ValidateSpec error = %v; want field %q containing %q", err, test.field, test.want)
+			}
+		})
 	}
 }
 
 func TestRegistry_reportsInvalidAndDuplicateRegistrations(t *testing.T) {
 	factory := addN()
 	reg := workflow.NewRegistry()
-	for name, f := range map[string]workflow.NodeFactory{"": factory, "nil": nil} {
+	invalid := string([]byte{0xff})
+	for name, f := range map[string]workflow.NodeFactory{"": factory, invalid: factory, "nil": nil} {
 		if err := reg.RegisterNode(name, f); err == nil {
 			t.Fatalf("RegisterNode(%q) unexpectedly succeeded", name)
 		}
@@ -159,19 +580,34 @@ func TestRegistry_reportsInvalidAndDuplicateRegistrations(t *testing.T) {
 }
 
 func TestRegistry_reportsInvalidResolverAndConditionRegistrations(t *testing.T) {
-	resolver := workflow.Resolver(func(context.Context, workflow.Store) (string, error) {
+	resolver := resolverNode(func(context.Context, workflow.Store) (string, error) {
 		return "", nil
 	})
+	var nilResolver flow.NodeFunc[workflow.Store, string]
+	invalidResolver := flow.Then(
+		resolver,
+		flow.NodeFunc[string, string](nil),
+	)
 	condition := workflow.Condition(func(context.Context, int, workflow.Store) (bool, error) {
 		return false, nil
 	})
 
+	invalid := string([]byte{0xff})
 	for name, register := range map[string]func(*workflow.Registry) error{
 		"resolver empty name": func(reg *workflow.Registry) error {
 			return reg.RegisterResolver("", resolver)
 		},
 		"resolver nil": func(reg *workflow.Registry) error {
 			return reg.RegisterResolver("resolver", nil)
+		},
+		"resolver typed nil": func(reg *workflow.Registry) error {
+			return reg.RegisterResolver("resolver", nilResolver)
+		},
+		"resolver invalid composite": func(reg *workflow.Registry) error {
+			return reg.RegisterResolver("resolver", invalidResolver)
+		},
+		"resolver non-UTF-8 name": func(reg *workflow.Registry) error {
+			return reg.RegisterResolver(invalid, resolver)
 		},
 		"resolver duplicate": func(reg *workflow.Registry) error {
 			if err := reg.RegisterResolver("resolver", resolver); err != nil {
@@ -184,6 +620,9 @@ func TestRegistry_reportsInvalidResolverAndConditionRegistrations(t *testing.T) 
 		},
 		"condition nil": func(reg *workflow.Registry) error {
 			return reg.RegisterCondition("condition", nil)
+		},
+		"condition non-UTF-8 name": func(reg *workflow.Registry) error {
+			return reg.RegisterCondition(invalid, condition)
 		},
 		"condition duplicate": func(reg *workflow.Registry) error {
 			if err := reg.RegisterCondition("condition", condition); err != nil {
@@ -198,6 +637,102 @@ func TestRegistry_reportsInvalidResolverAndConditionRegistrations(t *testing.T) 
 			}
 		})
 	}
+	err := workflow.NewRegistry().RegisterResolver("resolver", nilResolver)
+	if !errors.Is(err, workflow.ErrInvalidRegistration) ||
+		!errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("typed nil resolver error = %v; want registration and nil-node categories", err)
+	}
+	err = workflow.NewRegistry().RegisterResolver("resolver", invalidResolver)
+	if !errors.Is(err, workflow.ErrInvalidRegistration) ||
+		!errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("composed resolver error = %v; want registration and nil-node categories", err)
+	}
+}
+
+func TestRegistry_preservesNilFunctionRegistrationCauses(t *testing.T) {
+	for name, register := range map[string]func(*workflow.Registry) error{
+		"node factory": func(registry *workflow.Registry) error {
+			return registry.RegisterNode("node", nil)
+		},
+		"condition": func(registry *workflow.Registry) error {
+			return registry.RegisterCondition("condition", nil)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := register(workflow.NewRegistry())
+			if !errors.Is(err, workflow.ErrInvalidRegistration) ||
+				!errors.Is(err, flow.ErrNilFunc) {
+				t.Fatalf("registration error = %v; want registration and nil-function categories", err)
+			}
+		})
+	}
+}
+
+func TestValidateSpec_rejectsNonUTF8DefinitionIdentity(t *testing.T) {
+	invalid := string([]byte{0xff})
+	registry := workflow.NewRegistry().
+		MustRegisterNode("node", addN()).
+		MustRegisterResolver("pick", resolverNode(func(context.Context, workflow.Store) (string, error) {
+			return "case", nil
+		})).
+		MustRegisterCondition("done", func(context.Context, int, workflow.Store) (bool, error) {
+			return true, nil
+		})
+	body := workflow.Spec{Kind: workflow.KindSequence}
+	tests := map[string]struct {
+		spec  workflow.Spec
+		field string
+		want  error
+	}{
+		"step ID": {
+			spec:  workflow.Spec{Kind: workflow.KindLeaf, ID: invalid, Type: "node"},
+			field: "id",
+			want:  workflow.ErrInvalidStepID,
+		},
+		"node type": {
+			spec:  workflow.Spec{Kind: workflow.KindLeaf, ID: "node", Type: invalid},
+			field: "type",
+		},
+		"input port": {
+			spec: workflow.Spec{
+				Kind: workflow.KindLeaf, ID: "node", Type: "node",
+				Inputs: workflow.Inputs{invalid: workflow.Output("seed")},
+			},
+			field: "inputs",
+		},
+		"resolver": {
+			spec: workflow.Spec{
+				Kind: workflow.KindBranch, ID: "branch", Resolver: invalid,
+				Cases: map[string]workflow.Spec{"case": body},
+			},
+			field: "resolver",
+		},
+		"case": {
+			spec: workflow.Spec{
+				Kind: workflow.KindBranch, ID: "branch", Resolver: "pick",
+				Cases: map[string]workflow.Spec{invalid: body},
+			},
+			field: "cases",
+		},
+		"condition": {
+			spec: workflow.Spec{
+				Kind: workflow.KindLoop, ID: "loop", Condition: invalid, Body: &body,
+			},
+			field: "condition",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := registry.ValidateSpec(test.spec)
+			var specErr *workflow.SpecError
+			if !errors.Is(err, workflow.ErrInvalidSpec) ||
+				(test.want != nil && !errors.Is(err, test.want)) ||
+				!errors.As(err, &specErr) || specErr.Field != test.field ||
+				!strings.Contains(err.Error(), "not valid UTF-8") {
+				t.Fatalf("ValidateSpec error = %v; want field %q UTF-8 error", err, test.field)
+			}
+		})
+	}
 }
 
 func TestRegistry_mustRegisterPanics(t *testing.T) {
@@ -206,9 +741,9 @@ func TestRegistry_mustRegisterPanics(t *testing.T) {
 			workflow.NewRegistry().MustRegisterNode("", addN())
 		},
 		"resolver": func() {
-			workflow.NewRegistry().MustRegisterResolver("", func(context.Context, workflow.Store) (string, error) {
+			workflow.NewRegistry().MustRegisterResolver("", resolverNode(func(context.Context, workflow.Store) (string, error) {
 				return "", nil
-			})
+			}))
 		},
 		"condition": func() {
 			workflow.NewRegistry().MustRegisterCondition("", func(context.Context, int, workflow.Store) (bool, error) {
@@ -242,8 +777,8 @@ func TestRegistry_rejectsDuplicateIDsInNestedSpec(t *testing.T) {
 func TestRegistry_rejectsNegativeConcurrency(t *testing.T) {
 	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
 	spec := workflow.Spec{Kind: workflow.KindParallel, Concurrency: -1}
-	if _, err := reg.CompileSpec(spec); err == nil {
-		t.Fatal("expected negative concurrency error")
+	if _, err := reg.CompileSpec(spec); !errors.Is(err, flow.ErrInvalidConfig) {
+		t.Fatalf("CompileSpec error = %v; want ErrInvalidConfig", err)
 	}
 }
 
@@ -279,23 +814,225 @@ func TestValidateSpec_rejectsFieldsItsKindWouldIgnore(t *testing.T) {
 
 func TestValidateSpec_rejectsMalformedConfigWithoutANodeSchema(t *testing.T) {
 	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
-	spec := workflow.Spec{
-		Kind:   workflow.KindLeaf,
-		ID:     "a",
-		Type:   "addN",
-		Config: json.RawMessage(`{"n":`),
+	for name, config := range map[string]json.RawMessage{
+		"truncated":  json.RawMessage(`{"n":`),
+		"whitespace": json.RawMessage(" \n\t"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			spec := workflow.Spec{
+				Kind:   workflow.KindLeaf,
+				ID:     "a",
+				Type:   "addN",
+				Config: config,
+			}
+			if err := reg.ValidateSpec(spec); !errors.Is(err, workflow.ErrInvalidSpec) {
+				t.Fatalf("err = %v; want ErrInvalidSpec", err)
+			}
+		})
 	}
-	if err := reg.ValidateSpec(spec); !errors.Is(err, workflow.ErrInvalidSpec) {
-		t.Fatalf("err = %v; want ErrInvalidSpec", err)
+}
+
+func TestValidateSpec_reportsTheNestedSpecPath(t *testing.T) {
+	const caseName = "a/b~c"
+	registry := workflow.NewRegistry().MustRegisterResolver(
+		"pick",
+		resolverNode(func(context.Context, workflow.Store) (string, error) { return caseName, nil }),
+	)
+	spec := workflow.Spec{Kind: workflow.KindSequence, Steps: []workflow.Spec{{
+		Kind:     workflow.KindBranch,
+		ID:       "route",
+		Resolver: "pick",
+		Cases: map[string]workflow.Spec{
+			caseName: {
+				Kind: workflow.KindSequence,
+				Steps: []workflow.Spec{{
+					Kind: workflow.KindLeaf,
+					ID:   "missing",
+					Type: "unknown",
+				}},
+			},
+		},
+	}}}
+
+	err := registry.ValidateSpec(spec)
+	var specErr *workflow.SpecError
+	if !errors.Is(err, workflow.ErrInvalidSpec) ||
+		!errors.Is(err, workflow.ErrUnknownNodeType) ||
+		!errors.As(err, &specErr) ||
+		specErr.Path != "/steps/0/cases/a~1b~0c/steps/0" || specErr.Field != "type" {
+		t.Fatalf("ValidateSpec error = %v; want escaped nested path and type field", err)
+	}
+}
+
+func TestCompileSpec_reportsThePathOfAFactoryContractError(t *testing.T) {
+	registry := workflow.NewRegistry().MustRegisterNode(
+		"opaque",
+		func(workflow.NodeSpec) (workflow.Step, error) {
+			return flow.NodeFunc[workflow.Store, workflow.Store](
+				func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+					return store, nil
+				},
+			), nil
+		},
+	)
+	spec := workflow.Spec{Kind: workflow.KindSequence, Steps: []workflow.Spec{{
+		Kind: workflow.KindLeaf,
+		ID:   "node",
+		Type: "opaque",
+	}}}
+
+	_, err := registry.CompileSpec(spec)
+	var specErr *workflow.SpecError
+	if !errors.Is(err, workflow.ErrInvalidSpec) ||
+		!errors.As(err, &specErr) ||
+		specErr.Path != "/steps/0" || specErr.Field != "type" {
+		t.Fatalf("CompileSpec error = %v; want /steps/0 type factory error", err)
+	}
+}
+
+func TestSpecValidation_reportsImpossibleBodyOutputAtItsField(t *testing.T) {
+	registry := workflow.NewRegistry()
+	tests := map[string]workflow.Spec{
+		"iteration": {
+			Kind:       workflow.KindIteration,
+			ID:         "each",
+			Input:      workflow.Output("items"),
+			Body:       &workflow.Spec{Kind: workflow.KindSequence},
+			BodyOutput: workflow.Output("missing"),
+		},
+		"iteration index child": {
+			Kind:       workflow.KindIteration,
+			ID:         "each",
+			Input:      workflow.Output("items"),
+			Body:       &workflow.Spec{Kind: workflow.KindSequence},
+			BodyOutput: workflow.ItemIndex("each").Child("value"),
+		},
+		"subgraph": {
+			Kind:       workflow.KindSubgraph,
+			ID:         "sub",
+			Body:       &workflow.Spec{Kind: workflow.KindSequence},
+			BodyOutput: workflow.Output("missing"),
+		},
+	}
+
+	for name, child := range tests {
+		t.Run(name, func(t *testing.T) {
+			definition := workflow.Spec{
+				Kind:  workflow.KindSequence,
+				Steps: []workflow.Spec{child},
+			}
+			checks := map[string]func() error{
+				"validate": func() error { return registry.ValidateSpec(definition) },
+				"compile": func() error {
+					_, err := registry.CompileSpec(definition)
+					return err
+				},
+			}
+			for operation, check := range checks {
+				t.Run(operation, func(t *testing.T) {
+					err := check()
+					var specErr *workflow.SpecError
+					if !errors.Is(err, workflow.ErrInvalidSpec) ||
+						!errors.Is(err, flow.ErrInvalidConfig) ||
+						!errors.As(err, &specErr) ||
+						specErr.Path != "/steps/0" ||
+						specErr.Field != "bodyOutput" {
+						t.Fatalf("%s error = %v; want /steps/0 bodyOutput error", operation, err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestValidateSpec_doesNotGuessAnUnschematizedLeafOutput(t *testing.T) {
+	registry := workflow.NewRegistry().MustRegisterNode(
+		"wait",
+		func(spec workflow.NodeSpec) (workflow.Step, error) {
+			return workflow.Await(spec.ID, workflow.Output("seed")), nil
+		},
+	)
+	body := workflow.Spec{
+		Kind: workflow.KindLeaf,
+		ID:   "inner",
+		Type: "wait",
+	}
+	definitions := map[string]workflow.Spec{
+		"iteration": {
+			Kind:       workflow.KindIteration,
+			ID:         "each",
+			Input:      workflow.Output("items"),
+			Body:       &body,
+			BodyOutput: workflow.Output("inner"),
+		},
+		"subgraph": {
+			Kind:       workflow.KindSubgraph,
+			ID:         "sub",
+			Body:       &body,
+			BodyOutput: workflow.Output("inner"),
+		},
+	}
+
+	for name, definition := range definitions {
+		t.Run(name, func(t *testing.T) {
+			if err := registry.ValidateSpec(definition); err != nil {
+				t.Fatalf("ValidateSpec guessed an output contract without a schema: %v", err)
+			}
+			_, err := registry.CompileSpec(definition)
+			var specErr *workflow.SpecError
+			if !errors.Is(err, workflow.ErrInvalidSpec) ||
+				!errors.Is(err, flow.ErrInvalidConfig) ||
+				!errors.As(err, &specErr) ||
+				specErr.Field != "bodyOutput" {
+				t.Fatalf("CompileSpec error = %v; want concrete bodyOutput error", err)
+			}
+		})
+	}
+}
+
+func TestSpec_enforcesProgrammaticNestingLimit(t *testing.T) {
+	registry := workflow.NewRegistry().MustRegisterNode(
+		"interrupt",
+		workflow.InterruptFactory(),
+	)
+	nested := workflow.Spec{Kind: workflow.KindLeaf, ID: "leaf", Type: "interrupt"}
+	for range workflow.MaxNestingDepth {
+		nested = workflow.Spec{Kind: workflow.KindSequence, Steps: []workflow.Spec{nested}}
+	}
+
+	if err := registry.ValidateSpec(nested); err != nil {
+		t.Fatalf("ValidateSpec at nesting limit: %v", err)
+	}
+	if _, err := registry.CompileSpec(nested); err != nil {
+		t.Fatalf("CompileSpec at nesting limit: %v", err)
+	}
+
+	tooDeep := workflow.Spec{Kind: workflow.KindSequence, Steps: []workflow.Spec{nested}}
+	for name, check := range map[string]func() error{
+		"validate": func() error { return registry.ValidateSpec(tooDeep) },
+		"compile": func() error {
+			_, err := registry.CompileSpec(tooDeep)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := check()
+			var specErr *workflow.SpecError
+			if !errors.Is(err, workflow.ErrInvalidSpec) ||
+				!errors.Is(err, workflow.ErrMaxDepth) ||
+				!errors.As(err, &specErr) || specErr.Field != "" {
+				t.Fatalf("error = %v; want whole-spec ErrInvalidSpec and ErrMaxDepth", err)
+			}
+		})
 	}
 }
 
 func TestValidateSpec_rejectsEveryStructuralBoundary(t *testing.T) {
 	reg := workflow.NewRegistry().
 		MustRegisterNode("addN", addN()).
-		MustRegisterResolver("pick", func(context.Context, workflow.Store) (string, error) {
+		MustRegisterResolver("pick", resolverNode(func(context.Context, workflow.Store) (string, error) {
 			return "case", nil
-		}).
+		})).
 		MustRegisterCondition("done", func(context.Context, int, workflow.Store) (bool, error) {
 			return true, nil
 		})
@@ -385,6 +1122,11 @@ func TestValidateSpec_rejectsEveryStructuralBoundary(t *testing.T) {
 			Kind: workflow.KindIteration, ID: "each",
 			Input: workflow.Output("items"), Body: body(),
 		},
+		"invalid iteration body": {
+			Kind: workflow.KindIteration, ID: "each",
+			Input: workflow.Output("items"), Body: &workflow.Spec{},
+			BodyOutput: workflow.Output("value"),
+		},
 		"invalid iteration input": {
 			Kind: workflow.KindIteration, ID: "each",
 			Input: workflow.Ref{NodeID: "items", Path: "/~2"}, Body: body(),
@@ -411,6 +1153,10 @@ func TestValidateSpec_rejectsEveryStructuralBoundary(t *testing.T) {
 		},
 		"missing subgraph body output": {
 			Kind: workflow.KindSubgraph, ID: "sub", Body: body(),
+		},
+		"invalid subgraph body": {
+			Kind: workflow.KindSubgraph, ID: "sub", Body: &workflow.Spec{},
+			BodyOutput: workflow.Output("value"),
 		},
 		"invalid subgraph input": {
 			Kind: workflow.KindSubgraph, ID: "sub",
@@ -446,6 +1192,21 @@ func TestValidateSpec_requiresDeclaredLeafPorts(t *testing.T) {
 	})
 	if !errors.Is(err, workflow.ErrMissingPort) {
 		t.Fatalf("error = %v; want ErrMissingPort", err)
+	}
+}
+
+func TestValidateSpec_registeredZeroInputSchemaRejectsWiring(t *testing.T) {
+	registry := workflow.NewRegistry().
+		MustRegisterNode("source", addN()).
+		MustRegisterSchema("source", workflow.NodeSchema{Output: workflow.TypeNumber})
+	err := registry.ValidateSpec(workflow.Spec{
+		Kind:   workflow.KindLeaf,
+		ID:     "source",
+		Type:   "source",
+		Inputs: workflow.DefaultInput(workflow.Output("external")),
+	})
+	if !errors.Is(err, workflow.ErrUnknownPort) {
+		t.Fatalf("ValidateSpec error = %v; want ErrUnknownPort", err)
 	}
 }
 
@@ -505,6 +1266,93 @@ func TestRegistry_concurrentRegistrationIsRaceFree(t *testing.T) {
 	wg.Wait()
 }
 
+func TestRegistry_concurrentCompilationSharesOnlyImmutableRegistrations(t *testing.T) {
+	registry := workflow.NewRegistry().
+		MustRegisterNode("add", addN()).
+		MustRegisterSchema("add", workflow.NodeSchema{
+			Inputs: workflow.OnePort(workflow.TypeNumber),
+			Output: workflow.TypeNumber,
+			ConfigSchema: json.RawMessage(`{
+				"type":"object",
+				"properties":{"n":{"type":"integer"}},
+				"required":["n"],
+				"additionalProperties":false
+			}`),
+		})
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{{
+		ID:     "add",
+		Type:   "add",
+		Inputs: workflow.DefaultInput(workflow.Output("seed")),
+		Config: json.RawMessage(`{"n":1}`),
+	}}}
+	ctx := t.Context()
+	start := make(chan struct{})
+	var callers sync.WaitGroup
+	for range 64 {
+		callers.Go(func() {
+			<-start
+			step, err := registry.CompileGraph(graph)
+			if err != nil {
+				t.Errorf("CompileGraph: %v", err)
+				return
+			}
+			output, err := step.Run(
+				ctx,
+				workflow.NewStore().WithOutput("seed", 1),
+			)
+			if err != nil {
+				t.Errorf("Run: %v", err)
+				return
+			}
+			if value, err := workflow.Get[int](output, workflow.Output("add")); err != nil || value != 2 {
+				t.Errorf("output = %d, %v; want 2, nil", value, err)
+			}
+		})
+	}
+	close(start)
+	callers.Wait()
+}
+
+func TestRegistry_compileUsesOneRegistrationSnapshot(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	registry := workflow.NewRegistry().MustRegisterNode(
+		"source",
+		func(spec workflow.NodeSpec) (workflow.Step, error) {
+			startedOnce.Do(func() { close(started) })
+			<-release
+			return workflow.Interrupt(spec.ID, nil), nil
+		},
+	)
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{{ID: "source", Type: "source"}}}
+	type compileResult struct {
+		step workflow.Step
+		err  error
+	}
+	compiled := make(chan compileResult, 1)
+	go func() {
+		step, err := registry.CompileGraph(graph)
+		compiled <- compileResult{step: step, err: err}
+	}()
+
+	<-started
+	if err := registry.RegisterSchema("source", workflow.NodeSchema{}); err != nil {
+		t.Fatalf("RegisterSchema: %v", err)
+	}
+	close(release)
+	first := <-compiled
+	if first.err != nil || first.step == nil {
+		t.Fatalf("in-flight CompileGraph = %v, %v; want pre-registration snapshot", first.step, first.err)
+	}
+
+	_, err := registry.CompileGraph(graph)
+	if !errors.Is(err, workflow.ErrInvalidGraph) ||
+		!errors.Is(err, workflow.ErrInvalidRegistration) {
+		t.Fatalf("later CompileGraph error = %v; want newly registered schema mismatch", err)
+	}
+}
+
 func TestRegistry_zeroValueIsUsable(t *testing.T) {
 	var reg workflow.Registry
 	if err := reg.RegisterNode("addN", addN()); err != nil {
@@ -517,6 +1365,6 @@ func TestRegistry_zeroValueIsUsable(t *testing.T) {
 		Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 	}
 	if _, err := reg.CompileSpec(spec); err != nil {
-		t.Fatalf("zero Registry Build: %v", err)
+		t.Fatalf("zero Registry CompileSpec: %v", err)
 	}
 }

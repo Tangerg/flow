@@ -40,6 +40,19 @@ func TestMap_rejectsTypedNilFunctionNodeEvenForEmptyInput(t *testing.T) {
 	}
 }
 
+func TestMap_rejectsInvalidNestedNodeEvenForEmptyInput(t *testing.T) {
+	invalid := flow.Then(
+		flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+			return value, nil
+		}),
+		flow.Node[int, int](nil),
+	)
+	_, err := flow.Map(invalid, flow.MapConfig{}).Run(t.Context(), nil)
+	if !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("err = %v; want ErrNilNode", err)
+	}
+}
+
 func TestMap_failFastCancelsSiblings(t *testing.T) {
 	boom := errors.New("boom")
 	var cancelledSeen atomic.Bool
@@ -79,8 +92,10 @@ func TestMap_boundsConcurrency(t *testing.T) {
 		current atomic.Int32
 		peak    atomic.Int32
 	)
+	started := make(chan struct{}, 30)
+	release := make(chan struct{})
 
-	node := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
+	node := flow.NodeFunc[int, int](func(ctx context.Context, x int) (int, error) {
 		c := current.Add(1)
 		for {
 			old := peak.Load()
@@ -88,13 +103,32 @@ func TestMap_boundsConcurrency(t *testing.T) {
 				break
 			}
 		}
-		time.Sleep(5 * time.Millisecond)
-		current.Add(-1)
-		return x, nil
+		started <- struct{}{}
+		select {
+		case <-release:
+			current.Add(-1)
+			return x, nil
+		case <-ctx.Done():
+			current.Add(-1)
+			return 0, ctx.Err()
+		}
 	})
 
 	in := make([]int, 30)
-	_, err := flow.Map(node, flow.MapConfig{Concurrency: limit}).Run(t.Context(), in)
+	finished := make(chan error, 1)
+	go func() {
+		_, err := flow.Map(node, flow.MapConfig{Concurrency: limit}).Run(t.Context(), in)
+		finished <- err
+	}()
+	for range limit {
+		<-started
+	}
+	gotBeforeRelease := peak.Load()
+	close(release)
+	if gotBeforeRelease != limit {
+		t.Fatalf("observed %d concurrent calls before release; want %d", gotBeforeRelease, limit)
+	}
+	err := <-finished
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -149,15 +183,16 @@ func TestMap_parentCancellationIsNotIndexWrapped(t *testing.T) {
 }
 
 func TestMap_singleItemReportsCancellationAfterRun(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
+	cause := errors.New("stop map")
+	ctx, cancel := context.WithCancelCause(t.Context())
 	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
-		cancel()
+		cancel(cause)
 		return in, nil
 	})
 
 	_, err := flow.Map(node, flow.MapConfig{}).Run(ctx, []int{1})
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("err = %v; want context.Canceled", err)
+	if !errors.Is(err, cause) {
+		t.Fatalf("err = %v; want cancellation cause", err)
 	}
 }
 

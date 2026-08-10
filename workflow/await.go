@@ -1,9 +1,11 @@
 package workflow
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/Tangerg/flow"
 )
 
 // Await returns a [Step] that passes the Store through once ref resolves and
@@ -17,8 +19,10 @@ import (
 //	}
 //
 // The step writes nothing of its own, so it re-evaluates on every run rather
-// than being skipped as completed — which is what makes the wait meaningful.
-// An invalid ID or reference is a validation error rather than a suspension.
+// than being skipped as completed, which is what makes the wait meaningful.
+// An invalid ID or reference is a validation error rather than a suspension. An
+// existing value that cannot provide the JSON view required by a nested ref is
+// a bind failure; waiting cannot turn malformed data into a usable value.
 func Await(id string, ref Ref) Step { return awaitStep{id: id, ref: ref} }
 
 // awaitStep is the [Step] produced by [Await].
@@ -29,36 +33,58 @@ type awaitStep struct {
 
 func (a awaitStep) Run(ctx context.Context, store Store) (Store, error) {
 	run := runFrom(ctx)
-	if a.id == "" {
-		err := &StepError{ID: a.id, Op: OpValidate, Err: ErrInvalidStepID}
-		run.emit(ctx, Event{Kind: EventFailed, ID: a.id, Err: err})
-		return store, err
-	}
-	if err := a.ref.validate(); err != nil {
-		err := &StepError{
-			ID:  a.id,
-			Op:  OpValidate,
-			Err: fmt.Errorf("%w: await reference: %w", ErrInvalidSpec, err),
-		}
+	if err := a.Validate(); err != nil {
 		run.emit(ctx, Event{Kind: EventFailed, ID: a.id, Err: err})
 		return store, err
 	}
 	if err := run.claim(scope(ctx), a.id); err != nil {
-		err := &StepError{ID: a.id, Op: OpValidate, Err: err}
+		err := newStepError(ctx, a.id, OpValidate, err)
 		run.emit(ctx, Event{Kind: EventFailed, ID: a.id, Err: err})
 		return store, err
 	}
-	if _, ok := store.Lookup(a.ref); ok {
-		run.emit(ctx, Event{Kind: EventCompleted, ID: a.id, Store: store})
+	if err := context.Cause(ctx); err != nil {
+		return store, err
+	}
+	_, resolveErr := Get[any](store, a.ref)
+	if err := context.Cause(ctx); err != nil {
+		return store, err
+	}
+	if resolveErr == nil {
+		if err := run.emitAndCheck(ctx, Event{Kind: EventCompleted, ID: a.id, Store: store}); err != nil {
+			return store, err
+		}
 		return store, nil
 	}
+	if !errors.Is(resolveErr, ErrNotFound) {
+		err := newStepError(ctx, a.id, OpBind, resolveErr)
+		run.emit(ctx, Event{Kind: EventFailed, ID: a.id, Err: err})
+		return store, err
+	}
 	suspension := &Suspension{ID: a.id, Scope: Scope(ctx), Await: a.ref}
-	run.emit(ctx, Event{Kind: EventSuspended, ID: a.id, Err: suspension})
+	if err := run.emitAndCheck(ctx, Event{Kind: EventSuspended, ID: a.id, Err: suspension}); err != nil {
+		return store, err
+	}
 	return store, suspension
 }
 
+func (a awaitStep) validate() error {
+	if err := validateStepID(a.id); err != nil {
+		return &StepError{ID: a.id, Op: OpValidate, Err: err}
+	}
+	if err := a.ref.Validate(); err != nil {
+		return &StepError{
+			ID:  a.id,
+			Op:  OpValidate,
+			Err: fmt.Errorf("%w: await reference: %w", flow.ErrInvalidConfig, err),
+		}
+	}
+	return nil
+}
+
+func (a awaitStep) Validate() error { return validateDefinition(a) }
+
 func (a awaitStep) Describe() Description {
-	return Description{ID: a.id, Kind: KindAwait, Label: a.ref.String()}
+	return Description{ID: a.id, Kind: KindAwait}
 }
 
 func (a awaitStep) definition() stepDefinition {
@@ -79,8 +105,8 @@ func AwaitFactory() NodeFactory {
 				return nil, fmt.Errorf("%w %q", ErrUnknownPort, port)
 			}
 		}
-		if len(bytes.TrimSpace(spec.Config)) > 0 {
-			return nil, fmt.Errorf("%w: await config must be omitted", ErrInvalidSpec)
+		if len(spec.Config) > 0 {
+			return nil, fmt.Errorf("%w: await config must be omitted", flow.ErrInvalidConfig)
 		}
 		ref, ok := spec.Inputs.Default()
 		if !ok {

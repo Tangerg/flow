@@ -54,7 +54,18 @@ greet := workflow.LeafFunc(
 ```
 
 Use the lower-level `Leaf(id, bind, node)` form when binding needs several
-references or an existing typed `flow.Node` already carries decorators.
+references or an existing typed `flow.Node` already carries decorators. A
+`Binder[I]` prepares the node's typed input from the current Store. Use `From`
+for one reference, `FirstOf` with at least one mutually exclusive alternative,
+and adapt a custom binding function with `BinderFunc[I]`. Binding is local data
+preparation, so it has no context; put blocking or cancellable work in the typed
+`Node`.
+
+`From` and `FirstOf` retain their references as definitions, so `Leaf` validates
+them before Journal replay. A malformed reference therefore cannot be hidden by
+an older completed record. A custom Binder with static state can provide the
+same guarantee with a pure `Validate() error` method and can call
+`ref.Validate()` rather than duplicating the JSON Pointer rules.
 
 ## 3. Sequence and persistent state
 
@@ -79,9 +90,18 @@ message, err := workflow.Get[string](
 value object: a write returns a new snapshot, the old snapshot remains
 unchanged, and the implementation shares untouched structure.
 
+A Store does not label cells as "input" or "output." Build a fresh seed Store
+for a new logical run unless carrying earlier cells forward is intentional.
+`workflow.Run` resets run-scoped bookkeeping, not Store contents. A compiled
+`Graph` can do more: because all Graph node IDs are declared, it removes those
+internal cells at its boundary and rebuilds them from execution or Journal
+replay.
+
 Stored values themselves are not deep-copied. Treat a map, slice, pointer, or
-other mutable value as immutable after insertion; mutating it would affect every
-snapshot that shares it and could introduce a data race.
+other mutable value as immutable after insertion and after reading it back;
+mutating it would affect every snapshot that shares it and could introduce a
+data race. An exact-type `Get[T]` result is borrowed from the Store. A read that
+needs JSON conversion produces a newly decoded value instead.
 
 ## 4. References are JSON Pointers
 
@@ -98,6 +118,8 @@ fmt.Println(ref.String())
 
 `Child` escapes `/` and `~` according to RFC 6901. Do not invent a dotted path
 format: JSON keys may contain dots, slashes, tildes, or even be empty.
+`Ref.Validate` checks a definition without reading a Store; use it in
+caller-defined Binders and Steps that retain references.
 
 ## 5. Prefer typed reads
 
@@ -108,10 +130,15 @@ value, err := workflow.Get[Order](store, ref)
 ```
 
 `Get[T]` also converts JSON-domain values after a Store has been serialized and
-restored. `store.Lookup(ref)` is useful when infrastructure code genuinely
-needs raw `any`. A raw lookup after JSON decoding may return `json.Number`,
+restored, provided `T` has a faithful JSON round trip. A type with a custom
+`MarshalJSON` method needs the corresponding decoding contract if callers expect
+to recover that Go type. `store.Lookup(ref)` is useful when infrastructure code
+genuinely needs raw `any`. A raw lookup after JSON decoding may return `json.Number`,
 `[]any`, or `map[string]any`, so business code should keep the expected type at
-the call site with `Get[T]`.
+the call site with `Get[T]`. Built-in scalar conversion is lossless by design:
+numeric kinds are not rounded or parsed from strings, and decoding into an
+ordinary struct rejects unknown JSON members instead of silently dropping them.
+A type implementing `json.Unmarshaler` defines its own decoding contract.
 
 ## 6. Direct `Run` or `workflow.Run`
 
@@ -131,6 +158,10 @@ out, err := workflow.Run(
 ```
 
 `RunConfig` belongs to one call. It is not global workflow configuration.
+When a caller-defined composite invokes a child in the same execution, it calls
+`child.Run` directly. Calling package-level `workflow.Run` from inside another
+run creates an independent boundary with a new root scope, identity claims, and
+signal sequence.
 
 ## Common mistakes
 

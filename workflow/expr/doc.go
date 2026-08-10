@@ -12,8 +12,10 @@
 //	if err != nil { ... }
 //	reg.MustRegisterCondition("goodEnough", condition)
 //
-// [Bindings] is the config-shaped form: a JSON document of named expressions
-// that registers as a group.
+// [Bindings] is the config-shaped form: a strict JSON object of named
+// expressions that registers as a group. Non-object documents, unknown and
+// duplicate members, invalid Unicode, and excessive nesting are rejected
+// before the receiver is changed.
 //
 // # Grammar
 //
@@ -22,6 +24,9 @@
 // everything else up front, and there is no code path that evaluates a construct
 // it rejected. In particular there are no assignments, no function literals, no
 // user-defined calls, no type conversions, and no way to reach the host program.
+// Expression trees and reference chains are bounded by
+// [workflow.MaxNestingDepth], matching the runtime's other recursive input
+// boundaries.
 //
 //   - References. A reference is a node ID followed by a path:
 //     "load.output", "load.output.items[0]", or "params[\"rate\"]". IDs that are
@@ -38,26 +43,43 @@
 //
 // # Values
 //
-// A Store holds values as any, so scalar values are normalized on read to the
-// semantics that survive encoding/json: integer kinds become int64 or uint64,
-// fractional floats become float64, integral floats become integers, and named
-// bool and string types become their underlying values. Integer comparison
-// remains exact even against a float outside float64's exact-integer range.
+// A Store holds values as any, so ordinary scalar values are normalized on read
+// to the semantics that survive encoding/json: integer kinds become int64 or
+// uint64, fractional floats become float64, integral floats become integers,
+// and named bool and string types become their underlying values. Integer
+// comparison remains exact even against a float outside float64's exact-integer
+// range.
+//
+// As with [workflow.Store.Lookup], a whole-cell value with a custom JSON
+// representation is still its Go value before persistence and its encoded
+// domain afterward. If a rule reads such a value, store the representation the
+// rule should evaluate (for example, a timestamp string) rather than relying on
+// a custom marshaler to change its kind across the persistence boundary.
 // Integer arithmetic stays exact and wraps on overflow as Go's does; arithmetic
 // involving a fractional float uses float64. Division or remainder by zero is
 // [ErrDivideByZero] rather than an infinity.
 //
-// len accepts strings, arrays, slices, and maps of any concrete Go type, so a
-// JSON-compatible value behaves the same before and after Store serialization.
-// Equality is deliberately scalar: arrays, slices, maps, structs, and other host
-// values report [ErrType] rather than silently choosing deep equality.
+// len accepts strings, arrays, slices, and maps of any concrete Go type. It
+// measures the value currently held by the Store; its result survives a Store
+// round trip only when that value's JSON representation preserves the same
+// top-level kind and length. For example, []byte is a slice in memory but a
+// base64 string in JSON. Equality is deliberately scalar: arrays, slices, maps,
+// structs, and other host values report [ErrType] rather than silently choosing
+// deep equality.
 //
 // There is no implicit truthiness and no implicit conversion. A condition must
 // evaluate to a bool and a resolver to a string, or the result is [ErrType].
-// Reading a reference the Store does not resolve is [ErrUndefined]; guard it with
-// has() when a value is legitimately optional. Because evaluation failures are
-// errors rather than false, a broken condition is never mistaken for "keep
-// looping".
+// References and Switch branch names must be valid UTF-8, matching workflow's
+// persistent definition boundaries.
+// Reading a missing reference is [ErrUndefined]; guard it with has() when a
+// value is legitimately optional. An existing typed value whose JSON
+// representation cannot resolve a nested path is [ErrType] and also preserves
+// [workflow.ErrTypeMismatch]. has() reports false only for absence; it preserves
+// those errors when the Store cannot determine whether a malformed path exists.
+// Because evaluation failures are errors rather than false, a broken condition
+// is never mistaken for "keep looping". A [Switch] with no matching expression
+// and no fallback returns [flow.ErrNoCase], keeping rule selection distinct from
+// missing Store data.
 //
 // # Analysis
 //

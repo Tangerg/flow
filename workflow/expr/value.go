@@ -8,6 +8,8 @@ import (
 	"math"
 	"reflect"
 	"strconv"
+
+	"github.com/Tangerg/flow/internal/jsonnum"
 )
 
 // The value domain is deliberately narrow: nil, bool, string, int64, uint64,
@@ -27,7 +29,6 @@ type (
 	jsonNumber     json.Number
 	integerOperand struct {
 		value    uint64
-		unsigned bool
 		negative bool
 	}
 )
@@ -114,6 +115,22 @@ func (j jsonNumber) normalized() any {
 	}
 	if i, err := strconv.ParseUint(text, 10, 64); err == nil {
 		return i
+	}
+	// JSON's integer domain is mathematical, not lexical: 9007199254740993.0
+	// and 9.007199254740993e15 are integers too. Recognize those forms before a
+	// float64 conversion can round them. Values outside the integer domain below
+	// still fall back to float64 when that representation exists.
+	if integer, err := jsonnum.ParseInteger(text); err == nil {
+		switch {
+		case !integer.Negative && integer.Magnitude <= math.MaxInt64:
+			return int64(integer.Magnitude)
+		case !integer.Negative:
+			return integer.Magnitude
+		case integer.Magnitude == uint64(math.MaxInt64)+1:
+			return int64(math.MinInt64)
+		case integer.Magnitude <= math.MaxInt64:
+			return -int64(integer.Magnitude)
+		}
 	}
 	if f, err := strconv.ParseFloat(text, 64); err == nil {
 		return floatNumber(f).normalized()
@@ -476,7 +493,7 @@ func (o operand) integer() (integerOperand, bool) {
 		}
 		return integerOperand{value: uint64(value)}, true
 	case uint64:
-		return integerOperand{value: value, unsigned: true}, true
+		return integerOperand{value: value}, true
 	default:
 		return integerOperand{}, false
 	}

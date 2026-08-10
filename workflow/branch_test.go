@@ -11,6 +11,18 @@ import (
 	"github.com/Tangerg/flow/workflow"
 )
 
+func resolverNode(
+	fn func(context.Context, workflow.Store) (string, error),
+) workflow.Resolver {
+	return flow.NodeFunc[workflow.Store, string](fn)
+}
+
+type nilSafeResolver struct{}
+
+func (*nilSafeResolver) Run(context.Context, workflow.Store) (string, error) {
+	return "case", nil
+}
+
 func TestBranch_routes(t *testing.T) {
 	label := func(text string) workflow.Step {
 		return workflow.Leaf(text,
@@ -20,13 +32,13 @@ func TestBranch_routes(t *testing.T) {
 	}
 	cases := map[string]workflow.Step{"pos": label("pos"), "neg": label("neg")}
 
-	resolve := func(_ context.Context, s workflow.Store) (string, error) {
+	resolve := resolverNode(func(_ context.Context, s workflow.Store) (string, error) {
 		v, _ := s.Lookup(workflow.At("start", "output"))
 		if v.(int) >= 0 {
 			return "pos", nil
 		}
 		return "neg", nil
-	}
+	})
 	b := workflow.Branch("route", resolve, cases)
 
 	out, err := b.Run(t.Context(), workflow.NewStore().WithOutput("start", 5))
@@ -41,13 +53,67 @@ func TestBranch_routes(t *testing.T) {
 	}
 }
 
+func TestBranch_ownsCaseMapStructure(t *testing.T) {
+	cases := map[string]workflow.Step{"selected": leafStep("original")}
+	branch := workflow.Branch(
+		"route",
+		resolverNode(func(context.Context, workflow.Store) (string, error) {
+			return "selected", nil
+		}),
+		cases,
+	)
+	cases["selected"] = leafStep("changed")
+
+	out, err := branch.Run(t.Context(), workflow.NewStore().WithOutput("start", 1))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, getErr := workflow.Get[int](out, workflow.Output("original")); getErr != nil || got != 1 {
+		t.Fatalf("original output = %d, %v; want 1, nil", got, getErr)
+	}
+	if _, ok := out.Lookup(workflow.Output("changed")); ok {
+		t.Fatal("source-map mutation reconfigured Branch")
+	}
+}
+
+func TestBranch_acceptsComposedResolverNode(t *testing.T) {
+	read := flow.NodeFunc[workflow.Store, int](
+		func(_ context.Context, store workflow.Store) (int, error) {
+			return workflow.Get[int](store, workflow.Output("start"))
+		},
+	)
+	classify := flow.NodeFunc[int, string](
+		func(_ context.Context, value int) (string, error) {
+			if value >= 0 {
+				return "positive", nil
+			}
+			return "negative", nil
+		},
+	)
+	step := workflow.Branch(
+		"route",
+		flow.Then(read, classify),
+		map[string]workflow.Step{
+			"positive": workflow.Sequence(),
+			"negative": workflow.Interrupt("negative", nil),
+		},
+	)
+
+	if _, err := step.Run(
+		t.Context(),
+		workflow.NewStore().WithOutput("start", 1),
+	); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
 // A branch's cases are mutually exclusive, so they may share a step ID. That is
 // how a branch converges on a single output reference a downstream step can read
 // without knowing which case ran.
 func TestValidateSpec_branchCasesMayShareAStepID(t *testing.T) {
 	reg := workflow.NewRegistry().
 		MustRegisterNode("addN", addN()).
-		MustRegisterResolver("pick", func(context.Context, workflow.Store) (string, error) { return "a", nil })
+		MustRegisterResolver("pick", resolverNode(func(context.Context, workflow.Store) (string, error) { return "a", nil }))
 
 	leaf := func(n string) workflow.Spec {
 		return workflow.Spec{
@@ -90,7 +156,7 @@ func TestValidateSpec_branchCasesMayShareAStepID(t *testing.T) {
 func TestValidateSpec_stillRejectsIDsThatCanCollide(t *testing.T) {
 	reg := workflow.NewRegistry().
 		MustRegisterNode("addN", addN()).
-		MustRegisterResolver("pick", func(context.Context, workflow.Store) (string, error) { return "a", nil })
+		MustRegisterResolver("pick", resolverNode(func(context.Context, workflow.Store) (string, error) { return "a", nil }))
 
 	leaf := func(id string) workflow.Spec {
 		return workflow.Spec{
@@ -134,9 +200,12 @@ func TestValidateSpec_stillRejectsIDsThatCanCollide(t *testing.T) {
 }
 
 func TestBranch_noCase(t *testing.T) {
-	resolve := func(_ context.Context, _ workflow.Store) (string, error) { return "missing", nil }
+	resolve := resolverNode(func(_ context.Context, _ workflow.Store) (string, error) { return "missing", nil })
+	cases := map[string]workflow.Step{
+		"present": workflow.Interrupt("present", nil),
+	}
 
-	_, err := workflow.Branch("route", resolve, map[string]workflow.Step{}).Run(t.Context(), workflow.NewStore())
+	_, err := workflow.Branch("route", resolve, cases).Run(t.Context(), workflow.NewStore())
 	var stepErr *workflow.StepError
 	if !errors.Is(err, flow.ErrNoCase) ||
 		!errors.As(err, &stepErr) ||
@@ -146,14 +215,72 @@ func TestBranch_noCase(t *testing.T) {
 	}
 }
 
+func TestBranch_rejectsEmptyCasesBeforeRunningResolver(t *testing.T) {
+	ran := false
+	resolve := resolverNode(func(_ context.Context, _ workflow.Store) (string, error) {
+		ran = true
+		return "missing", nil
+	})
+
+	_, err := workflow.Branch("route", resolve, nil).Run(t.Context(), workflow.NewStore())
+	var stepErr *workflow.StepError
+	if !errors.Is(err, flow.ErrInvalidConfig) ||
+		!errors.As(err, &stepErr) || stepErr.Op != workflow.OpValidate {
+		t.Fatalf("error = %v; want validation StepError wrapping ErrInvalidConfig", err)
+	}
+	if ran {
+		t.Fatal("resolver ran before the empty case set was rejected")
+	}
+}
+
+func TestBranch_rejectsEmptyCaseNameBeforeRunningResolver(t *testing.T) {
+	ran := false
+	resolve := resolverNode(func(_ context.Context, _ workflow.Store) (string, error) {
+		ran = true
+		return "", nil
+	})
+
+	_, err := workflow.Branch("route", resolve, map[string]workflow.Step{
+		"": workflow.Interrupt("result", nil),
+	}).Run(t.Context(), workflow.NewStore())
+	var stepErr *workflow.StepError
+	if !errors.Is(err, flow.ErrInvalidConfig) ||
+		!errors.As(err, &stepErr) || stepErr.Op != workflow.OpValidate {
+		t.Fatalf("error = %v; want validation StepError wrapping ErrInvalidConfig", err)
+	}
+	if ran {
+		t.Fatal("resolver ran before the empty case name was rejected")
+	}
+}
+
+func TestBranch_rejectsNonUTF8CaseNameBeforeRunningResolver(t *testing.T) {
+	ran := false
+	resolve := resolverNode(func(_ context.Context, _ workflow.Store) (string, error) {
+		ran = true
+		return "", nil
+	})
+	invalid := string([]byte{0xff})
+
+	_, err := workflow.Branch("route", resolve, map[string]workflow.Step{
+		invalid: workflow.Interrupt("result", nil),
+	}).Run(t.Context(), workflow.NewStore())
+	var stepErr *workflow.StepError
+	if !errors.As(err, &stepErr) || stepErr.Op != workflow.OpValidate {
+		t.Fatalf("error = %v; want validation StepError", err)
+	}
+	if ran {
+		t.Fatal("resolver ran before the non-UTF-8 case name was rejected")
+	}
+}
+
 func TestBranch_doesNotJournalAnUnknownDecision(t *testing.T) {
 	var calls atomic.Int64
-	resolve := func(_ context.Context, _ workflow.Store) (string, error) {
+	resolve := resolverNode(func(_ context.Context, _ workflow.Store) (string, error) {
 		if calls.Add(1) == 1 {
 			return "missing", nil
 		}
 		return "ready", nil
-	}
+	})
 	journal := workflow.NewJournal()
 	cfg := workflow.RunConfig{Journal: journal}
 	branch := workflow.Branch("route", resolve, map[string]workflow.Step{
@@ -181,10 +308,10 @@ func TestBranch_doesNotJournalANilCase(t *testing.T) {
 	var calls atomic.Int64
 	branch := workflow.Branch(
 		"route",
-		func(context.Context, workflow.Store) (string, error) {
+		resolverNode(func(context.Context, workflow.Store) (string, error) {
 			calls.Add(1)
 			return "broken", nil
-		},
+		}),
 		map[string]workflow.Step{"broken": nil},
 	)
 
@@ -204,10 +331,10 @@ func TestBranch_rejectsTypedNilFunctionCaseBeforeResolver(t *testing.T) {
 	var invalid flow.NodeFunc[workflow.Store, workflow.Store]
 	branch := workflow.Branch(
 		"route",
-		func(context.Context, workflow.Store) (string, error) {
+		resolverNode(func(context.Context, workflow.Store) (string, error) {
 			calls.Add(1)
 			return "broken", nil
-		},
+		}),
 		map[string]workflow.Step{"broken": invalid},
 	)
 
@@ -223,8 +350,8 @@ func TestBranch_rejectsTypedNilFunctionCaseBeforeResolver(t *testing.T) {
 func TestBranch_nilResolver(t *testing.T) {
 	_, err := workflow.Branch("route", nil, map[string]workflow.Step{"x": leafStep("x")}).
 		Run(t.Context(), workflow.NewStore())
-	if !errors.Is(err, flow.ErrNilFunc) {
-		t.Fatalf("err = %v; want ErrNilFunc", err)
+	if !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("err = %v; want ErrNilNode", err)
 	}
 	var stepErr *workflow.StepError
 	if !errors.As(err, &stepErr) || stepErr.ID != "route" || stepErr.Op != workflow.OpValidate {
@@ -232,19 +359,64 @@ func TestBranch_nilResolver(t *testing.T) {
 	}
 }
 
+func TestBranch_acceptsNilSafePointerResolver(t *testing.T) {
+	var resolve *nilSafeResolver
+	_, err := workflow.Branch(
+		"route",
+		resolve,
+		map[string]workflow.Step{"case": workflow.Sequence()},
+	).Run(t.Context(), workflow.NewStore())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
+func TestBranch_validatesComposedResolverBeforeJournalReplay(t *testing.T) {
+	journal := workflow.NewJournal()
+	if err := journal.Record(workflow.JournalKey{ID: "route"}, "case"); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	var calls int
+	first := flow.NodeFunc[workflow.Store, int](
+		func(context.Context, workflow.Store) (int, error) {
+			calls++
+			return 1, nil
+		},
+	)
+	var second flow.NodeFunc[int, string]
+	branch := workflow.Branch(
+		"route",
+		flow.Then(first, second),
+		map[string]workflow.Step{"case": leafStep("case")},
+	)
+
+	_, err := workflow.Run(
+		t.Context(),
+		branch,
+		workflow.NewStore(),
+		workflow.RunConfig{Journal: journal},
+	)
+	if !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("Run error = %v; want ErrNilNode before Journal replay", err)
+	}
+	if calls != 0 {
+		t.Fatalf("first resolver node calls = %d; want 0", calls)
+	}
+}
+
 func TestBranch_rejectsInvalidStaticIdentities(t *testing.T) {
 	leaf := func(id string) workflow.Step {
 		return workflow.Leaf(
 			id,
-			workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+			workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 			flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
 				return 1, nil
 			}),
 		)
 	}
-	resolve := func(context.Context, workflow.Store) (string, error) {
+	resolve := resolverNode(func(context.Context, workflow.Store) (string, error) {
 		return "case", nil
-	}
+	})
 	tests := map[string]workflow.Step{
 		"branch ID collides before branch": workflow.Sequence(
 			leaf("route"),
@@ -273,7 +445,7 @@ func TestBranch_rejectsInvalidStaticIdentities(t *testing.T) {
 func TestBranch_rejectsDuplicateOpaqueInvocation(t *testing.T) {
 	branch := workflow.Branch(
 		"route",
-		func(context.Context, workflow.Store) (string, error) { return "ok", nil },
+		resolverNode(func(context.Context, workflow.Store) (string, error) { return "ok", nil }),
 		map[string]workflow.Step{
 			"ok": flow.NodeFunc[workflow.Store, workflow.Store](
 				func(_ context.Context, store workflow.Store) (workflow.Store, error) {
@@ -301,16 +473,42 @@ func TestBranch_rejectsDuplicateOpaqueInvocation(t *testing.T) {
 	}
 }
 
+func TestBranch_preservesTheSelectedCaseStoreOnError(t *testing.T) {
+	boom := errors.New("case failed")
+	branch := workflow.Branch(
+		"route",
+		resolverNode(func(context.Context, workflow.Store) (string, error) {
+			return "selected", nil
+		}),
+		map[string]workflow.Step{
+			"selected": flow.NodeFunc[workflow.Store, workflow.Store](
+				func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+					return store.WithOutput("partial", true), boom
+				},
+			),
+		},
+	)
+
+	output, err := branch.Run(t.Context(), workflow.NewStore())
+	if !errors.Is(err, boom) {
+		t.Fatalf("Run error = %v; want case failure", err)
+	}
+	value, getErr := workflow.Get[bool](output, workflow.Output("partial"))
+	if getErr != nil || !value {
+		t.Fatalf("partial output = %v, %v; want true, nil", value, getErr)
+	}
+}
+
 func TestBranch_reportsJournalDecisionConflict(t *testing.T) {
 	journal := workflow.NewJournal()
 	branch := workflow.Branch(
 		"route",
-		func(context.Context, workflow.Store) (string, error) {
+		resolverNode(func(context.Context, workflow.Store) (string, error) {
 			if err := journal.Record(workflow.JournalKey{ID: "route"}, "ok"); err != nil {
 				return "", err
 			}
 			return "ok", nil
-		},
+		}),
 		map[string]workflow.Step{"ok": leafStep("ok")},
 	)
 	_, err := workflow.Run(
@@ -331,7 +529,7 @@ func TestBranch_rejectsJournaledDecisionOfWrongType(t *testing.T) {
 	}
 	branch := workflow.Branch(
 		"route",
-		func(context.Context, workflow.Store) (string, error) { return "ok", nil },
+		resolverNode(func(context.Context, workflow.Store) (string, error) { return "ok", nil }),
 		map[string]workflow.Step{"ok": leafStep("ok")},
 	)
 	_, err := workflow.Run(

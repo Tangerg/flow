@@ -100,8 +100,8 @@ rules, and resumption one capability at a time.
 
 ## Exercise
 
-Read the eleven levels in the [`example`](../../example/README.md) index and
-decide how far your use case needs to go. Run the examples to confirm your
-environment is ready.
+Read the remaining ten levels in the [tutorial index](./README.md) and decide
+how far your use case needs to go. Run their counterparts from the
+[`example`](../../example/README.md) index to confirm your environment is ready.
 
 [Next: Nodes and `Then`](./01-node-and-then.md)

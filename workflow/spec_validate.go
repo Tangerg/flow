@@ -1,19 +1,26 @@
 package workflow
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
+
+	"github.com/Tangerg/flow"
 )
 
 // ValidateSpec checks a nested Spec without building it. It verifies its
-// structure, registrations, references, unique IDs, registered node config
-// schemas, and that each kind carries only fields meaningful to that kind.
+// structure, registrations, well-formed references, unique IDs, registered
+// node config schemas and ports, statically knowable collection projections,
+// nesting up to [MaxNestingDepth], and that each kind carries only fields
+// meaningful to that kind. A leaf type without a registered [NodeSchema] keeps
+// its output shape unknown until compilation builds the concrete boundary.
 func (r *Registry) ValidateSpec(spec Spec) error {
-	return r.validateSpec(spec)
+	return r.snapshot().validateSpec(spec)
 }
 
-func (r *Registry) validateSpec(root Spec) error {
+func (r registrySnapshot) validateSpec(root Spec) error {
 	validator := specValidator{
 		registry: r,
 		stepIDs:  make(map[string]struct{}),
@@ -26,79 +33,82 @@ func (r *Registry) validateSpec(root Spec) error {
 // cases and independently scoped repeated bodies may deliberately reuse an
 // output ID.
 type specValidator struct {
-	registry *Registry
+	registry registrySnapshot
 	stepIDs  map[string]struct{}
+	depth    int
 }
 
 func (s *specValidator) validate(spec Spec) error {
-	if err := spec.validateFields(); err != nil {
-		return err
+	if s.depth > MaxNestingDepth {
+		return spec.fieldError("", fmt.Errorf(
+			"%w: nesting depth %d exceeds limit %d",
+			ErrMaxDepth,
+			s.depth,
+			MaxNestingDepth,
+		))
+	}
+
+	var (
+		allowedFields   []string
+		validateVariant func() error
+	)
+	switch spec.Kind {
+	case KindLeaf:
+		allowedFields = []string{fieldID, fieldType, fieldConfig, fieldInputs}
+		validateVariant = func() error { return s.validateLeaf(spec) }
+	case KindSequence:
+		allowedFields = []string{fieldSteps}
+		validateVariant = func() error { return s.validateSteps(spec.Steps) }
+	case KindParallel:
+		allowedFields = []string{fieldSteps, fieldConcurrency}
+		validateVariant = func() error { return s.validateSteps(spec.Steps) }
+	case KindBranch:
+		allowedFields = []string{fieldID, fieldResolver, fieldCases}
+		validateVariant = func() error { return s.validateBranch(spec) }
+	case KindLoop:
+		allowedFields = []string{fieldID, fieldBody, fieldCondition, fieldMaxIterations}
+		validateVariant = func() error { return s.validateLoop(spec) }
+	case KindIteration:
+		allowedFields = []string{fieldID, fieldInput, fieldBody, fieldBodyOutput, fieldConcurrency}
+		validateVariant = func() error { return s.validateIteration(spec) }
+	case KindSubgraph:
+		allowedFields = []string{fieldID, fieldInputs, fieldBody, fieldBodyOutput}
+		validateVariant = func() error { return s.validateSubgraph(spec) }
+	default:
+		return spec.fieldError(
+			fieldKind,
+			fmt.Errorf("unknown kind %q", spec.Kind),
+		)
+	}
+
+	if field := spec.unexpectedField(allowedFields); field != "" {
+		return spec.fieldError(field, fmt.Errorf(
+			"field %q is not valid for a %q spec",
+			field,
+			spec.Kind,
+		))
 	}
 	if err := spec.validateConstraints(); err != nil {
 		return err
 	}
-
-	switch spec.Kind {
-	case KindLeaf:
-		return s.validateLeaf(spec)
-	case KindSequence, KindParallel:
-		return s.validateSteps(spec.Steps)
-	case KindBranch:
-		return s.validateBranch(spec)
-	case KindLoop:
-		return s.validateLoop(spec)
-	case KindIteration:
-		return s.validateIteration(spec)
-	case KindSubgraph:
-		return s.validateSubgraph(spec)
-	default:
-		return spec.fieldError(
-			fieldKind,
-			fmt.Errorf("%w: unknown kind %q", ErrInvalidSpec, spec.Kind),
-		)
-	}
-}
-
-func (s Spec) validateFields() error {
-	if field := s.unexpectedField(); field != "" {
-		return s.fieldError(field, fmt.Errorf(
-			"%w: field %q is not valid for a %q spec",
-			ErrInvalidSpec,
-			field,
-			s.Kind,
-		))
-	}
-	return nil
+	return validateVariant()
 }
 
 func (s Spec) validateConstraints() error {
-	if s.Concurrency < 0 {
-		return s.fieldError(
-			fieldConcurrency,
-			fmt.Errorf(
-				"%w: concurrency must be non-negative, got %d",
-				ErrInvalidSpec,
-				s.Concurrency,
-			),
-		)
+	if err := (flow.MapConfig{Concurrency: s.Concurrency}).Validate(); err != nil {
+		return s.fieldError(fieldConcurrency, err)
 	}
-	if s.MaxIterations < 0 {
-		return s.fieldError(
-			fieldMaxIterations,
-			fmt.Errorf(
-				"%w: max iterations must be non-negative, got %d",
-				ErrInvalidSpec,
-				s.MaxIterations,
-			),
-		)
+	if err := (flow.LoopConfig{MaxIterations: s.MaxIterations}).Validate(); err != nil {
+		return s.fieldError(fieldMaxIterations, err)
 	}
 	return nil
 }
 
 func (s *specValidator) validateSteps(specs []Spec) error {
-	for _, spec := range specs {
-		if err := s.validate(spec); err != nil {
-			return err
+	child := s.child(s.stepIDs)
+	for index, spec := range specs {
+		if err := child.validate(spec); err != nil {
+			return locateSpecError(err, fieldSteps, strconv.Itoa(index))
 		}
 	}
 	return nil
@@ -111,54 +121,53 @@ func (s *specValidator) validateLoop(spec Spec) error {
 	if spec.Body == nil {
 		return spec.fieldError(
 			fieldBody,
-			fmt.Errorf("%w: loop body is required", ErrInvalidSpec),
+			errors.New("loop body is required"),
 		)
+	}
+	if err := validateName("condition name", spec.Condition); err != nil {
+		return spec.fieldError(fieldCondition, err)
 	}
 	if _, ok := s.registry.lookupCondition(spec.Condition); !ok {
 		return spec.fieldError(
 			fieldCondition,
-			fmt.Errorf("%w: unknown condition %q", ErrInvalidSpec, spec.Condition),
+			fmt.Errorf("unknown condition %q", spec.Condition),
 		)
 	}
 	// The loop body runs under a scope derived from the loop ID and iteration
 	// index, so its IDs are local and may be reused outside this loop. Reserve
 	// the loop ID itself because each iteration records the stop decision under
 	// that ID in the same scope.
-	bodyValidator := specValidator{
-		registry: s.registry,
-		stepIDs:  map[string]struct{}{spec.ID: {}},
-	}
-	return bodyValidator.validate(*spec.Body)
+	bodyValidator := s.child(map[string]struct{}{spec.ID: {}})
+	return locateSpecError(bodyValidator.validate(*spec.Body), fieldBody)
 }
 
 func (s *specValidator) validateLeaf(spec Spec) error {
 	if err := s.claimID(spec); err != nil {
 		return err
 	}
-	if spec.Type == "" {
-		return spec.fieldError(
-			fieldType,
-			fmt.Errorf("%w: node type is empty", ErrInvalidSpec),
-		)
+	if err := validateName("node type", spec.Type); err != nil {
+		return spec.fieldError(fieldType, err)
 	}
 	if _, ok := s.registry.lookupNode(spec.Type); !ok {
 		return spec.fieldError(fieldType, fmt.Errorf("%w %q", ErrUnknownNodeType, spec.Type))
 	}
-	registered, _ := s.registry.lookupNodeSchema(spec.Type)
+	registered, schemaKnown := s.registry.lookupNodeSchema(spec.Type)
 	if err := registered.validateConfig(spec.Config); err != nil {
-		return spec.fieldError(fieldConfig, fmt.Errorf("%w: %w", ErrInvalidSpec, err))
+		return spec.fieldError(fieldConfig, err)
 	}
 	if err := spec.Inputs.validate(); err != nil {
-		return spec.fieldError(fieldInputs, fmt.Errorf("%w: %w", ErrInvalidSpec, err))
-	}
-	// A nested Spec has no cross-node index, so ports are checked for
-	// completeness only; edge types are checked when a flat Graph names both
-	// ends.
-	schema := registered.schema
-	if err := schema.validateInputs(spec.Inputs, func(Ref) (ValueType, bool) {
-		return "", false
-	}); err != nil {
 		return spec.fieldError(fieldInputs, err)
+	}
+	if schemaKnown {
+		// A nested Spec has no cross-node index, so ports are checked for
+		// completeness only; edge types are checked when a flat Graph names both
+		// ends.
+		schema := registered.schema
+		if err := schema.validateInputs(spec.Inputs, func(Ref) (ValueType, bool) {
+			return "", false
+		}); err != nil {
+			return spec.fieldError(fieldInputs, err)
+		}
 	}
 	return nil
 }
@@ -170,13 +179,16 @@ func (s *specValidator) validateBranch(spec Spec) error {
 	if len(spec.Cases) == 0 {
 		return spec.fieldError(
 			fieldCases,
-			fmt.Errorf("%w: at least one branch case is required", ErrInvalidSpec),
+			errors.New("at least one branch case is required"),
 		)
+	}
+	if err := validateName("resolver name", spec.Resolver); err != nil {
+		return spec.fieldError(fieldResolver, err)
 	}
 	if _, ok := s.registry.lookupResolver(spec.Resolver); !ok {
 		return spec.fieldError(
 			fieldResolver,
-			fmt.Errorf("%w: unknown resolver %q", ErrInvalidSpec, spec.Resolver),
+			fmt.Errorf("unknown resolver %q", spec.Resolver),
 		)
 	}
 
@@ -185,18 +197,12 @@ func (s *specValidator) validateBranch(spec Spec) error {
 	// visible to the steps after it.
 	introduced := make(map[string]struct{})
 	for _, name := range slices.Sorted(maps.Keys(spec.Cases)) {
-		if name == "" {
-			return spec.fieldError(
-				fieldCases,
-				fmt.Errorf("%w: branch case name is empty", ErrInvalidSpec),
-			)
+		if err := validateName("branch case name", name); err != nil {
+			return spec.fieldError(fieldCases, err)
 		}
-		caseValidator := specValidator{
-			registry: s.registry,
-			stepIDs:  maps.Clone(s.stepIDs),
-		}
+		caseValidator := s.child(maps.Clone(s.stepIDs))
 		if err := caseValidator.validate(spec.Cases[name]); err != nil {
-			return err
+			return locateSpecError(err, fieldCases, name)
 		}
 		for id := range caseValidator.stepIDs {
 			if _, existed := s.stepIDs[id]; !existed {
@@ -215,33 +221,46 @@ func (s *specValidator) validateIteration(spec Spec) error {
 	if spec.Input == (Ref{}) {
 		return spec.fieldError(
 			fieldInput,
-			fmt.Errorf("%w: iteration input is required", ErrInvalidSpec),
+			errors.New("iteration input is required"),
 		)
 	}
 	if spec.Body == nil {
 		return spec.fieldError(
 			fieldBody,
-			fmt.Errorf("%w: iteration body is required", ErrInvalidSpec),
+			errors.New("iteration body is required"),
 		)
 	}
 	if spec.BodyOutput == (Ref{}) {
 		return spec.fieldError(
 			fieldBodyOutput,
-			fmt.Errorf("%w: iteration body output is required", ErrInvalidSpec),
+			errors.New("iteration body output is required"),
 		)
 	}
-	if err := spec.Input.validate(); err != nil {
-		return spec.fieldError(fieldInput, fmt.Errorf("%w: %w", ErrInvalidSpec, err))
+	if err := spec.Input.Validate(); err != nil {
+		return spec.fieldError(fieldInput, err)
 	}
-	if err := spec.BodyOutput.validate(); err != nil {
-		return spec.fieldError(fieldBodyOutput, fmt.Errorf("%w: %w", ErrInvalidSpec, err))
+	if err := spec.BodyOutput.Validate(); err != nil {
+		return spec.fieldError(fieldBodyOutput, err)
 	}
-	// An iteration body's Store and Journal scope are local to one element.
-	bodyValidator := specValidator{
-		registry: s.registry,
-		stepIDs:  make(map[string]struct{}),
+	// Each element gets its own Store snapshot and indexed Journal scope. The
+	// snapshot retains outer cells; Iteration isolates writes between elements,
+	// not the body namespace.
+	bodyValidator := s.child(make(map[string]struct{}))
+	if err := bodyValidator.validate(*spec.Body); err != nil {
+		return locateSpecError(err, fieldBody)
 	}
-	return bodyValidator.validate(*spec.Body)
+	outputs, known := s.guaranteedOutputs(*spec.Body)
+	if known && !iterationOutputGuaranteed(spec.ID, outputs, spec.BodyOutput) {
+		return spec.fieldError(
+			fieldBodyOutput,
+			fmt.Errorf(
+				"%w: iteration body output %s is not produced by its visible body and is not a valid item or index value",
+				flow.ErrInvalidConfig,
+				spec.BodyOutput,
+			),
+		)
+	}
+	return nil
 }
 
 func (s *specValidator) validateSubgraph(spec Spec) error {
@@ -251,31 +270,115 @@ func (s *specValidator) validateSubgraph(spec Spec) error {
 	if spec.Body == nil {
 		return spec.fieldError(
 			fieldBody,
-			fmt.Errorf("%w: subgraph body is required", ErrInvalidSpec),
+			errors.New("subgraph body is required"),
 		)
 	}
 	if spec.BodyOutput == (Ref{}) {
 		return spec.fieldError(
 			fieldBodyOutput,
-			fmt.Errorf("%w: subgraph body output is required", ErrInvalidSpec),
+			errors.New("subgraph body output is required"),
 		)
 	}
 	if err := spec.Inputs.validate(); err != nil {
-		return spec.fieldError(fieldInputs, fmt.Errorf("%w: %w", ErrInvalidSpec, err))
+		return spec.fieldError(fieldInputs, err)
 	}
-	if err := spec.BodyOutput.validate(); err != nil {
-		return spec.fieldError(fieldBodyOutput, fmt.Errorf("%w: %w", ErrInvalidSpec, err))
+	if err := spec.BodyOutput.Validate(); err != nil {
+		return spec.fieldError(fieldBodyOutput, err)
 	}
-	bodyValidator := specValidator{
+	bodyValidator := s.child(make(map[string]struct{}))
+	if err := bodyValidator.validate(*spec.Body); err != nil {
+		return locateSpecError(err, fieldBody)
+	}
+	outputs, known := s.guaranteedOutputs(*spec.Body)
+	if known && !subgraphOutputGuaranteed(spec.Inputs, outputs, spec.BodyOutput) {
+		return spec.fieldError(
+			fieldBodyOutput,
+			fmt.Errorf(
+				"%w: subgraph body output %s is not produced by its sealed body or inputs",
+				flow.ErrInvalidConfig,
+				spec.BodyOutput,
+			),
+		)
+	}
+	return nil
+}
+
+// guaranteedOutputs reports the complete set of conventional output cells a
+// successful Spec must add. The bool is false when an unregistered leaf schema
+// makes that set unknowable without executing its factory. Validation stays
+// conservative at that extension boundary; compilation later checks the
+// concrete Step returned by the factory.
+func (s *specValidator) guaranteedOutputs(spec Spec) (nodeSet, bool) {
+	switch spec.Kind {
+	case KindLeaf:
+		registered, known := s.registry.lookupNodeSchema(spec.Type)
+		if !known {
+			return nil, false
+		}
+		outputs := make(nodeSet)
+		if registered.schema.Output != "" {
+			outputs[spec.ID] = struct{}{}
+		}
+		return outputs, true
+	case KindSequence, KindParallel:
+		return s.guaranteedStepOutputs(spec.Steps)
+	case KindBranch:
+		return s.guaranteedCaseOutputs(spec.Cases)
+	case KindLoop:
+		if spec.Body == nil {
+			return nil, false
+		}
+		return s.guaranteedOutputs(*spec.Body)
+	case KindIteration, KindSubgraph:
+		return nodeSet{spec.ID: {}}, true
+	default:
+		return nil, false
+	}
+}
+
+func (s *specValidator) guaranteedStepOutputs(specs []Spec) (nodeSet, bool) {
+	outputs := make(nodeSet)
+	for _, spec := range specs {
+		child, known := s.guaranteedOutputs(spec)
+		if !known {
+			return nil, false
+		}
+		maps.Copy(outputs, child)
+	}
+	return outputs, true
+}
+
+func (s *specValidator) guaranteedCaseOutputs(cases map[string]Spec) (nodeSet, bool) {
+	var common nodeSet
+	for _, name := range slices.Sorted(maps.Keys(cases)) {
+		outputs, known := s.guaranteedOutputs(cases[name])
+		if !known {
+			return nil, false
+		}
+		if common == nil {
+			common = outputs
+			continue
+		}
+		for id := range common {
+			if _, present := outputs[id]; !present {
+				delete(common, id)
+			}
+		}
+	}
+	return common, true
+}
+
+func (s *specValidator) child(stepIDs map[string]struct{}) specValidator {
+	return specValidator{
 		registry: s.registry,
-		stepIDs:  make(map[string]struct{}),
+		stepIDs:  stepIDs,
+		depth:    s.depth + 1,
 	}
-	return bodyValidator.validate(*spec.Body)
 }
 
 func (s *specValidator) claimID(spec Spec) error {
-	if spec.ID == "" {
-		return spec.fieldError(fieldID, ErrInvalidStepID)
+	if err := validateStepID(spec.ID); err != nil {
+		return spec.fieldError(fieldID, err)
 	}
 	if _, exists := s.stepIDs[spec.ID]; exists {
 		return spec.fieldError(fieldID, ErrDuplicateStep)
@@ -287,38 +390,13 @@ func (s *specValidator) claimID(spec Spec) error {
 // unexpectedField keeps the programmatic Spec API as strict as the JSON
 // schema. A populated field that a kind ignores is almost always a typo, and
 // silently accepting it makes code-built and JSON-built workflows disagree.
-func (s Spec) unexpectedField() string {
-	allowed := s.allowedFields()
-	if allowed == nil {
-		return ""
-	}
+func (s Spec) unexpectedField(allowed []string) string {
 	for _, field := range s.populatedFields() {
 		if !slices.Contains(allowed, field) {
 			return field
 		}
 	}
 	return ""
-}
-
-func (s Spec) allowedFields() []string {
-	switch s.Kind {
-	case KindLeaf:
-		return []string{fieldID, fieldType, fieldConfig, fieldInputs}
-	case KindSequence:
-		return []string{fieldSteps}
-	case KindParallel:
-		return []string{fieldSteps, fieldConcurrency}
-	case KindBranch:
-		return []string{fieldID, fieldResolver, fieldCases}
-	case KindLoop:
-		return []string{fieldID, fieldBody, fieldCondition, fieldMaxIterations}
-	case KindIteration:
-		return []string{fieldID, fieldInput, fieldBody, fieldBodyOutput, fieldConcurrency}
-	case KindSubgraph:
-		return []string{fieldID, fieldInputs, fieldBody, fieldBodyOutput}
-	default:
-		return nil
-	}
 }
 
 func (s Spec) populatedFields() []string {

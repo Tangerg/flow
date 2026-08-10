@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"unicode/utf8"
 )
 
 var (
@@ -14,28 +15,42 @@ var (
 )
 
 // MarshalJSON serializes the Store as nodeID -> key -> value. It reports the
-// cell containing a value that encoding/json cannot encode.
+// cell containing a value that encoding/json cannot encode, whose custom JSON
+// encoding is malformed or ambiguous, or whose encoded form exceeds
+// [MaxNestingDepth]. Application values otherwise follow encoding/json's rules,
+// including replacement of invalid UTF-8 in ordinary Go strings. Node IDs and
+// cell keys must be valid UTF-8 so their identities survive the JSON boundary
+// unchanged.
 func (s Store) MarshalJSON() ([]byte, error) {
 	document := s.jsonDocument()
-	encoded, err := json.Marshal(document)
-	if err == nil {
-		return encoded, nil
+	if err := document.validateNames(); err != nil {
+		return nil, fmt.Errorf("workflow: marshal store: %w", err)
 	}
-
-	// Keep the successful path to one encoding pass. On failure, isolate the
-	// offending cell so callers retain the more useful Store path in the error.
-	if nodeID, key, cellErr := document.firstInvalidValue(); cellErr != nil {
-		return nil, fmt.Errorf(
-			"workflow: marshal store node %q key %q: %w",
-			nodeID,
-			key,
-			cellErr,
-		)
+	if err := document.encodeValues(); err != nil {
+		return nil, fmt.Errorf("workflow: marshal store: %w", err)
 	}
-	return nil, fmt.Errorf("workflow: marshal store: %w", err)
+	encoded, err := document.marshal()
+	if err != nil {
+		return nil, fmt.Errorf("workflow: marshal store: %w", err)
+	}
+	return encoded, nil
 }
 
 type storeJSONDocument map[string]map[string]any
+
+func (s storeJSONDocument) validateNames() error {
+	for _, nodeID := range slices.Sorted(maps.Keys(s)) {
+		if !utf8.ValidString(nodeID) {
+			return fmt.Errorf("node ID %q is not valid UTF-8", nodeID)
+		}
+		for _, key := range slices.Sorted(maps.Keys(s[nodeID])) {
+			if !utf8.ValidString(key) {
+				return fmt.Errorf("node %q key %q is not valid UTF-8", nodeID, key)
+			}
+		}
+	}
+	return nil
+}
 
 func (s Store) jsonDocument() storeJSONDocument {
 	document := make(storeJSONDocument)
@@ -52,6 +67,13 @@ func (s Store) jsonDocument() storeJSONDocument {
 
 func (s storeJSONDocument) put(identity storeKey, cell cell) {
 	values := s[identity.nodeID]
+	if cell.removed {
+		delete(values, identity.key)
+		if len(values) == 0 {
+			delete(s, identity.nodeID)
+		}
+		return
+	}
 	if values == nil {
 		values = make(map[string]any)
 		s[identity.nodeID] = values
@@ -59,26 +81,63 @@ func (s storeJSONDocument) put(identity storeKey, cell cell) {
 	values[identity.key] = cell.value
 }
 
-func (s storeJSONDocument) firstInvalidValue() (string, string, error) {
+// encodeValues invokes application JSON marshalers exactly once, replacing
+// every temporary document value with the resulting immutable JSON fragment.
+func (s storeJSONDocument) encodeValues() error {
 	for _, nodeID := range slices.Sorted(maps.Keys(s)) {
 		values := s[nodeID]
 		for _, key := range slices.Sorted(maps.Keys(values)) {
-			if _, err := json.Marshal(values[key]); err != nil {
-				return nodeID, key, err
+			encoded, err := json.Marshal(values[key])
+			if err != nil {
+				return fmt.Errorf("node %q key %q: %w", nodeID, key, err)
+			}
+			values[key] = json.RawMessage(encoded)
+		}
+	}
+	return nil
+}
+
+// marshal enforces the same recursive boundary as Store.UnmarshalJSON. Each
+// one-cell document has the same maximum depth as the complete document, so
+// validating cells independently both identifies failures and proves the final
+// assembly readable. Values are RawMessages produced by encodeValues; the two
+// structural json.Marshal calls below therefore cannot invoke application code
+// or fail.
+func (s storeJSONDocument) marshal() ([]byte, error) {
+	for _, nodeID := range slices.Sorted(maps.Keys(s)) {
+		values := s[nodeID]
+		for _, key := range slices.Sorted(maps.Keys(values)) {
+			candidate := storeJSONDocument{
+				nodeID: {key: values[key]},
+			}
+			// encodeValues established valid RawMessages and validateNames
+			// established valid map keys.
+			//
+			//nolint:errchkjson // The construction invariant excludes an encoding error.
+			encoded, _ := json.Marshal(candidate)
+			if err := jsonDocument(encoded).validate(); err != nil {
+				return nil, fmt.Errorf("node %q key %q: %w", nodeID, key, err)
 			}
 		}
 	}
-	return "", "", nil
+	// The same invariant applies to the complete map, and the per-cell checks
+	// above proved the package's recursive-input boundary.
+	//
+	//nolint:errchkjson // Only validated map keys and RawMessages remain.
+	encoded, _ := json.Marshal(s)
+	return encoded, nil
 }
 
 // UnmarshalJSON atomically replaces the Store from nodeID -> key -> value JSON.
-// The top level and each node must be objects; null and duplicate object members
-// are rejected. On failure the receiver is unchanged.
+// The top level and each node must be objects; invalid Unicode text, null, and
+// duplicate object members are rejected. On failure the receiver is unchanged.
 //
 // Numbers decode as [json.Number] rather than float64, so a decoded Store loses
 // no precision and an int64 beyond float64's exact range survives the round
 // trip. Read decoded values with [Get], which converts them to the type a caller
-// asks for; a bare [Store.Lookup] returns the JSON-domain value.
+// asks for; a bare [Store.Lookup] returns the JSON-domain value. Decoded cells
+// receive fresh write identities, so [Store.Changes] against a Store from a
+// different lineage reports every decoded cell.
 func (s *Store) UnmarshalJSON(data []byte) error {
 	if s == nil {
 		return errors.New("workflow: unmarshal store: nil store")
@@ -121,9 +180,11 @@ func (s *Store) UnmarshalJSON(data []byte) error {
 	for _, nodeID := range nodeIDs {
 		values := nodes[nodeID]
 		for _, key := range slices.Sorted(maps.Keys(values)) {
+			revision := revisionCounter.Add(1)
 			nextData[storeKey{nodeID: nodeID, key: key}] = cell{
 				value:    values[key],
-				revision: revisionCounter.Add(1),
+				revision: revision,
+				lineage:  revision,
 			}
 		}
 	}

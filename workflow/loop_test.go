@@ -12,7 +12,7 @@ import (
 
 func TestLoop_untilDone(t *testing.T) {
 	// Increment a counter until it reaches 3, threading through the Store.
-	bind := workflow.BindFunc[int](func(s workflow.Store) (int, error) {
+	bind := workflow.BinderFunc[int](func(s workflow.Store) (int, error) {
 		if v, ok := s.Lookup(workflow.Output("step")); ok {
 			return v.(int), nil
 		}
@@ -74,7 +74,7 @@ func TestLoop_nilBody(t *testing.T) {
 
 func TestLoop_maxIterations(t *testing.T) {
 	body := workflow.Leaf("x",
-		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
+		workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 	done := func(context.Context, int, workflow.Store) (bool, error) { return false, nil } // never done
@@ -83,11 +83,15 @@ func TestLoop_maxIterations(t *testing.T) {
 	if !errors.Is(err, flow.ErrMaxIterations) {
 		t.Fatalf("err = %v; want ErrMaxIterations", err)
 	}
+	var stepErr *workflow.StepError
+	if !errors.As(err, &stepErr) || stepErr.ID != "loop" || stepErr.Op != workflow.OpRun {
+		t.Fatalf("err = %v; want loop/run StepError", err)
+	}
 }
 
 func TestLoop_rejectsNegativeMaxIterations(t *testing.T) {
 	body := workflow.Leaf("x",
-		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
+		workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 	done := func(context.Context, int, workflow.Store) (bool, error) { return true, nil }
@@ -124,10 +128,75 @@ func TestLoop_honorsCancellationBeforeAnIteration(t *testing.T) {
 	}
 }
 
+func TestLoop_cancellationDuringBodyRollsBackIteration(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	conditionRan := false
+	body := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+			cancel()
+			return store.WithOutput("partial", 1), nil
+		},
+	)
+
+	output, err := workflow.Loop(
+		"loop",
+		body,
+		func(context.Context, int, workflow.Store) (bool, error) {
+			conditionRan = true
+			return true, nil
+		},
+		workflow.LoopConfig{},
+	).Run(ctx, workflow.NewStore())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v; want context.Canceled", err)
+	}
+	if conditionRan {
+		t.Fatal("condition ran after the body cancelled the context")
+	}
+	if _, ok := output.Lookup(workflow.Output("partial")); ok {
+		t.Fatal("cancelled body leaked the incomplete iteration's Store")
+	}
+}
+
+func TestLoop_cancellationDuringConditionRollsBackIteration(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	journal := workflow.NewJournal()
+	body := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+			return store.WithOutput("partial", 1), nil
+		},
+	)
+
+	step := workflow.Loop(
+		"loop",
+		body,
+		func(context.Context, int, workflow.Store) (bool, error) {
+			cancel()
+			return true, nil
+		},
+		workflow.LoopConfig{},
+	)
+	output, err := workflow.Run(
+		ctx,
+		step,
+		workflow.NewStore(),
+		workflow.RunConfig{Journal: journal},
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v; want context.Canceled", err)
+	}
+	if _, ok := output.Lookup(workflow.Output("partial")); ok {
+		t.Fatal("cancelled condition leaked the incomplete iteration's Store")
+	}
+	if journal.Len() != 0 {
+		t.Fatalf("Journal.Len = %d; cancelled stop decision was persisted", journal.Len())
+	}
+}
+
 func TestLoop_conditionError(t *testing.T) {
 	boom := errors.New("condition failed")
 	body := workflow.Leaf("x",
-		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
+		workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 	done := func(context.Context, int, workflow.Store) (bool, error) { return false, boom }
@@ -136,12 +205,45 @@ func TestLoop_conditionError(t *testing.T) {
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v; want condition error", err)
 	}
+	var stepErr *workflow.StepError
+	if !errors.As(err, &stepErr) ||
+		stepErr.ID != "loop" ||
+		!slices.Equal(stepErr.Scope, indexedScope("loop", 0)) {
+		t.Fatalf("err = %v; want loop error in iteration scope", err)
+	}
+}
+
+func TestLoop_bodyFailureCarriesExecutionScope(t *testing.T) {
+	boom := errors.New("boom")
+	body := workflow.Leaf(
+		"work",
+		workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
+			return struct{}{}, nil
+		}),
+		flow.NodeFunc[struct{}, struct{}](func(context.Context, struct{}) (struct{}, error) {
+			return struct{}{}, boom
+		}),
+	)
+
+	_, err := workflow.Loop(
+		"loop",
+		body,
+		func(context.Context, int, workflow.Store) (bool, error) { return true, nil },
+		workflow.LoopConfig{},
+	).Run(t.Context(), workflow.NewStore())
+	var stepErr *workflow.StepError
+	if !errors.Is(err, boom) ||
+		!errors.As(err, &stepErr) ||
+		stepErr.ID != "work" ||
+		!slices.Equal(stepErr.Scope, indexedScope("loop", 0)) {
+		t.Fatalf("err = %v; want work error in loop iteration 0", err)
+	}
 }
 
 func TestLoop_suspensionPreservesCompletedIterationWrites(t *testing.T) {
 	write := workflow.Leaf(
 		"write",
-		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+		workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
 			return value, nil
 		}),
@@ -238,7 +340,7 @@ func TestLoop_siblingBodiesWithTheSameIDHaveDistinctJournalScopes(t *testing.T) 
 	body := func(runs *int, output string) workflow.Step {
 		return workflow.Leaf(
 			"tick",
-			workflow.BindFunc[string](func(workflow.Store) (string, error) {
+			workflow.BinderFunc[string](func(workflow.Store) (string, error) {
 				return output, nil
 			}),
 			flow.NodeFunc[string, string](func(_ context.Context, value string) (string, error) {
@@ -277,10 +379,10 @@ func TestLoop_siblingBodiesWithTheSameIDHaveDistinctJournalScopes(t *testing.T) 
 	}
 
 	want := []workflow.JournalKey{
-		{ID: "first", Scope: []string{"first[0]"}},
-		{ID: "tick", Scope: []string{"first[0]"}},
-		{ID: "second", Scope: []string{"second[0]"}},
-		{ID: "tick", Scope: []string{"second[0]"}},
+		{ID: "first", Scope: indexedScope("first", 0)},
+		{ID: "tick", Scope: indexedScope("first", 0)},
+		{ID: "second", Scope: indexedScope("second", 0)},
+		{ID: "tick", Scope: indexedScope("second", 0)},
 	}
 	if keys := journal.Keys(); !slices.EqualFunc(
 		keys,
@@ -333,7 +435,7 @@ func TestLoop_rejectsInvalidStaticIdentities(t *testing.T) {
 	leaf := func(id string) workflow.Step {
 		return workflow.Leaf(
 			id,
-			workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+			workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 			flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
 				return 1, nil
 			}),

@@ -3,6 +3,7 @@ package workflow_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/Tangerg/flow"
@@ -48,6 +49,74 @@ func TestDescribe_opaque(t *testing.T) {
 	}
 }
 
+type borrowedDescriptionStep struct {
+	description workflow.Description
+}
+
+func (b *borrowedDescriptionStep) Run(
+	_ context.Context,
+	store workflow.Store,
+) (workflow.Store, error) {
+	return store, nil
+}
+
+func (b *borrowedDescriptionStep) Describe() workflow.Description {
+	return b.description
+}
+
+func newBorrowedDescriptionStep() *borrowedDescriptionStep {
+	return &borrowedDescriptionStep{description: workflow.Description{
+		ID:   "custom",
+		Kind: "custom",
+		Children: []workflow.Description{{
+			ID:   "nested",
+			Kind: "nested",
+			Children: []workflow.Description{{
+				ID:   "leaf",
+				Kind: "leaf-like",
+			}},
+		}},
+	}}
+}
+
+func assertOwnedDescription(
+	t *testing.T,
+	custom *borrowedDescriptionStep,
+	describe func() workflow.Description,
+) {
+	t.Helper()
+
+	first := describe()
+	first.Children[0].ID = "changed"
+	first.Children[0].Children[0].ID = "changed-nested"
+	first.Children[0].Children[0].Children[0].ID = "changed-leaf"
+
+	second := describe()
+	if second.Children[0].ID != "custom" ||
+		second.Children[0].Children[0].ID != "nested" ||
+		second.Children[0].Children[0].Children[0].ID != "leaf" {
+		t.Fatalf("second description = %+v; caller mutation leaked into the Step", second)
+	}
+	if custom.description.Children[0].ID != "nested" ||
+		custom.description.Children[0].Children[0].ID != "leaf" {
+		t.Fatalf("custom description = %+v; description leaked its storage", custom.description)
+	}
+}
+
+func TestDescribe_returnsAnOwnedRecursiveSnapshot(t *testing.T) {
+	custom := newBorrowedDescriptionStep()
+	step := workflow.Sequence(custom)
+	assertOwnedDescription(t, custom, func() workflow.Description {
+		return workflow.Describe(step)
+	})
+}
+
+func TestBuiltInDescriber_returnsAnOwnedRecursiveSnapshot(t *testing.T) {
+	custom := newBorrowedDescriptionStep()
+	describer := workflow.Sequence(custom).(workflow.Describer)
+	assertOwnedDescription(t, custom, describer.Describe)
+}
+
 func TestDescribe_streamFuncUsesLeafBoundary(t *testing.T) {
 	step := workflow.Leaf(
 		"stream",
@@ -66,7 +135,7 @@ func TestDescribe_streamFuncUsesLeafBoundary(t *testing.T) {
 
 func TestBranchDescriptionPreservesIDAndCaseLabel(t *testing.T) {
 	step := workflow.Branch("route",
-		func(context.Context, workflow.Store) (string, error) { return "yes", nil },
+		resolverNode(func(context.Context, workflow.Store) (string, error) { return "yes", nil }),
 		map[string]workflow.Step{"yes": leafStep("actual-id")},
 	)
 	d := workflow.Describe(step)
@@ -75,8 +144,45 @@ func TestBranchDescriptionPreservesIDAndCaseLabel(t *testing.T) {
 	}
 }
 
+func TestBranchDescriptionOrdersCasesByName(t *testing.T) {
+	step := workflow.Branch(
+		"route",
+		resolverNode(func(context.Context, workflow.Store) (string, error) { return "a", nil }),
+		map[string]workflow.Step{
+			"z": leafStep("last"),
+			"a": leafStep("first"),
+			"m": leafStep("middle"),
+		},
+	)
+	description := workflow.Describe(step)
+	labels := make([]string, len(description.Children))
+	for index, child := range description.Children {
+		labels[index] = child.Label
+	}
+	if !slices.Equal(labels, []string{"a", "m", "z"}) {
+		t.Fatalf("case labels = %v; want [a m z]", labels)
+	}
+}
+
+func TestDescriptionLabelBelongsToTheParentRelationship(t *testing.T) {
+	wait := workflow.Await("wait", workflow.Output("approval"))
+	if description := workflow.Describe(wait); description.Label != "" {
+		t.Fatalf("top-level Await label = %q; want no parent relationship", description.Label)
+	}
+
+	branch := workflow.Branch(
+		"route",
+		resolverNode(func(context.Context, workflow.Store) (string, error) { return "approved", nil }),
+		map[string]workflow.Step{"approved": wait},
+	)
+	description := workflow.Describe(branch)
+	if len(description.Children) != 1 || description.Children[0].Label != "approved" {
+		t.Fatalf("branch description = %+v; want the case as the child relationship", description)
+	}
+}
+
 func TestDescribe_everyCompositeReportsItsID(t *testing.T) {
-	yes := func(context.Context, workflow.Store) (string, error) { return "yes", nil }
+	yes := resolverNode(func(context.Context, workflow.Store) (string, error) { return "yes", nil })
 	stop := func(context.Context, int, workflow.Store) (bool, error) { return true, nil }
 
 	steps := map[workflow.Kind]workflow.Step{
@@ -118,9 +224,9 @@ func TestDescribe_everyCompositeReportsItsID(t *testing.T) {
 }
 
 func TestBranchAndLoop_requireAnID(t *testing.T) {
-	yes := func(context.Context, workflow.Store) (string, error) { return "yes", nil }
+	yes := resolverNode(func(context.Context, workflow.Store) (string, error) { return "yes", nil })
 	stop := func(context.Context, int, workflow.Store) (bool, error) { return true, nil }
-	body := workflow.Leaf("b", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+	body := workflow.Leaf("b", workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
 
 	for kind, step := range map[string]workflow.Step{
@@ -138,11 +244,11 @@ func TestBranchAndLoop_requireAnID(t *testing.T) {
 
 func TestBranchAndLoop_propagateDecisionErrors(t *testing.T) {
 	boom := errors.New("boom")
-	body := workflow.Leaf("b", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+	body := workflow.Leaf("b", workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
 
 	// A resolver or condition that fails is a step error naming the composite.
-	_, err := workflow.Branch("route", func(context.Context, workflow.Store) (string, error) { return "", boom },
+	_, err := workflow.Branch("route", resolverNode(func(context.Context, workflow.Store) (string, error) { return "", boom }),
 		map[string]workflow.Step{"a": leafStep("a")}).Run(t.Context(), workflow.NewStore())
 	var stepErr *workflow.StepError
 	if !errors.As(err, &stepErr) || stepErr.ID != "route" || !errors.Is(err, boom) {
@@ -156,9 +262,9 @@ func TestBranchAndLoop_propagateDecisionErrors(t *testing.T) {
 	}
 
 	// A resolver or condition may also suspend, which is not a step error.
-	_, err = workflow.Branch("route", func(context.Context, workflow.Store) (string, error) {
+	_, err = workflow.Branch("route", resolverNode(func(context.Context, workflow.Store) (string, error) {
 		return "", workflow.Suspend("routing needs a person")
-	}, map[string]workflow.Step{"a": leafStep("a")}).Run(t.Context(), workflow.NewStore())
+	}), map[string]workflow.Step{"a": leafStep("a")}).Run(t.Context(), workflow.NewStore())
 	if suspensions := workflow.Suspensions(err); len(suspensions) != 1 || suspensions[0].ID != "route" {
 		t.Fatalf("branch err = %v; want a suspension naming route", err)
 	}

@@ -1,8 +1,9 @@
 # flow
 
 `flow` is a small, type-safe control-flow library for Go. Compose ordinary
-functions into reusable nodes, then opt into `workflow` only when a definition
-must come from JSON, a database, or a visual editor.
+functions into reusable nodes, then opt into `workflow` when execution needs
+named state, runtime definitions, streaming identity, or checkpointed
+resumption.
 
 The library is in-process and explicit:
 
@@ -31,8 +32,8 @@ go get github.com/Tangerg/flow
 | [`workflow/expr`](./workflow/expr) | Optional data-driven branch and loop rules |
 | [`workflow/diagram`](./workflow/diagram) | Deterministic ASCII and Mermaid Graph renderings |
 
-Start with `flow`. Use `workflow` when the definition itself must be assembled
-at run time.
+Start with `flow`. Use `workflow` when the definition must be assembled at run
+time or execution needs its named, observable, resumable step boundaries.
 
 ## Quick start
 
@@ -89,6 +90,7 @@ type Node[I, O any] interface {
 | API | Meaning |
 | --- | --- |
 | `NodeFunc` | Adapt a function to `Node` |
+| `Validate` | Check the complete visible definition without running it |
 | `Then` | Pass one node's output to the next |
 | `Switch` | Select a node from the current input |
 | `Loop` | Repeat a node until a condition is met |
@@ -98,6 +100,12 @@ type Node[I, O any] interface {
 `Map` and `Race` own the goroutines they start, propagate cancellation, and
 wait for started calls to return. Cancellation remains cooperative: nodes must
 observe the context they receive.
+
+Composites from `flow`, `flowx`, and `workflow` expose recursive definition
+validation through `flow.Validate`. A caller-defined composite can participate
+with a pure, concurrency-safe `Validate() error` method; an ordinary node
+remains opaque. This distinction lets a replaying boundary reject an invalid
+visible definition without running application code.
 
 `flowx` contains only derived composition shapes: `Chain`, `FanOut`, `Combine`,
 and `Fallback`. Retry, timeout, tracing, and circuit breaking are policies;
@@ -139,6 +147,18 @@ if err != nil {
 message, err := workflow.Get[string](out, workflow.Output("greet"))
 ```
 
+The lower-level `Leaf` keeps data preparation and computation separate:
+`Binder[I]` reads a typed input from the Store, and `flow.Node[I, O]` computes
+the output. `From` and `FirstOf` provide definition-aware binders; `BinderFunc`
+adapts an application function when binding is custom. A stateful custom Binder
+can join replay-safe definition checks with the same pure `Validate() error`
+method used by composite nodes; `Ref.Validate` supplies the canonical check for
+references it retains.
+
+`Resolver` is only a semantic name for `flow.Node[Store, string]`. A resolver
+can therefore be composed with `flow.Then` and passed unchanged to `Branch`,
+`Route`, or `Registry.RegisterResolver`; adapt a function with `flow.NodeFunc`.
+
 The Store is immutable and copy-on-write. Stored values are shared as-is, so
 treat maps, slices, pointers, and other mutable values as immutable after
 insertion. Prefer `workflow.Get[T]` for typed reads, including after a Store has
@@ -152,8 +172,8 @@ Runtime definitions have two complementary forms:
 | `Spec` | Nested sequence, parallel, branch, loop, iteration, and sealed subgraphs |
 
 A code-built or compiled Step can describe itself with `workflow.Describe`.
-Descriptions use the same typed `workflow.Kind` values as `Spec`—for example,
-`workflow.KindGraph` and `workflow.KindSubgraph`—so tooling does not compare
+Descriptions use the same typed `workflow.Kind` values as `Spec`, for example
+`workflow.KindGraph` and `workflow.KindSubgraph`, so tooling does not compare
 undocumented string literals.
 
 A `Registry` is the capability boundary between external data and executable Go
@@ -164,17 +184,19 @@ JSON -> strict decode -> JSON Schema -> Registry validation -> Step
 ```
 
 ```go
-if err := workflow.ValidateGraphJSON(data); err != nil {
-	return err
-}
 step, err := registry.CompileGraphJSON(data)
 ```
+
+`CompileGraphJSON` includes strict decoding, JSON Schema validation, and
+Registry checks. Use `ValidateGraphJSON` by itself only at a boundary that has
+the document bytes but no Registry, such as an editor or generic API ingress.
 
 `GraphJSONSchema` and `SpecJSONSchema` return self-contained Draft 2020-12
 schemas for editors and API endpoints. Graph input ports are also dependency
 edges: ready nodes start as soon as their own dependencies finish, subject to
-`Graph.Concurrency`. `Subgraph` provides an isolated, reusable region with
-declared inputs and one projected result.
+`Graph.Concurrency`. Registry factories return one named, Store-sealed boundary;
+`Subgraph` is how a composite region crosses that boundary with declared inputs
+and one projected result.
 
 The tutorials cover [Stores and references](./docs/tutorials/03-workflow-store-and-ref.md),
 [Graph compilation](./docs/tutorials/04-graph-registry-and-ports.md),
@@ -196,18 +218,21 @@ out, err := workflow.Run(ctx, step, input, workflow.RunConfig{
 
 | Service | Purpose |
 | --- | --- |
-| `Observer` | Low-volume lifecycle events |
+| `Observer` | Low-volume observable-boundary events |
 | `Emitter` | High-volume intermediate application values |
 | `Journal` | Completed boundaries, decisions, and interrupt responses |
 
 `StreamFunc` remains an ordinary typed `Node`; `Leaf` gives its chunks workflow
-identity. Emission is synchronous and applies backpressure. Chunks describe
-attempted output, not durable delivery: rerunning an incomplete leaf may repeat
-a prefix. See [Streaming output](./docs/tutorials/08-streaming-output.md).
+identity. Emission is synchronous and applies backpressure. If the Emitter
+fails, its error remains the stream's cause even when a producer ignores the
+stopped stream and returns another error. Chunks describe attempted output, not
+durable delivery: rerunning an incomplete leaf may repeat a prefix. See
+[Streaming output](./docs/tutorials/08-streaming-output.md).
 
 `Await`, `Interrupt`, and `Suspend` stop a run with an error matching
-`ErrSuspended`. Persist the returned Store and Journal, record the external
-response, and run the same definition again. Replay restores completed
+`ErrSuspended`. Persist the returned Store and Journal when their application
+values have a faithful JSON round trip, record the external response, and run
+the same definition again. Replay restores completed
 boundaries instead of serializing a Go call stack. See
 [Suspension and resumption](./docs/tutorials/07-suspension-and-resumption.md).
 
@@ -215,11 +240,15 @@ Store and Journal JSON are persistence values, not an application run record.
 Persist the application run ID, active waits, authorization and status, the
 workflow-definition version, and the flow module version separately. A Journal
 document carries its own wire-format version and unsupported versions are
-rejected.
+rejected. `Suspension` and `JournalKey` provide strict, atomic JSON for the wait
+identity and callback correlation data stored in that run record. Admit only
+one active `Run` for a logical execution; Journal locking
+protects concurrent branches inside that run but is not a distributed lease for
+competing runs.
 
 ## Execution boundary
 
-Package dependencies point toward the typed core:
+Public package dependencies point toward the typed core:
 
 ```text
 workflow/diagram ---> workflow ---> flow
@@ -240,16 +269,16 @@ durable timers are requirements.
 
 ## Documentation
 
-- [Tutorials](./docs/tutorials/README.md) — progressive paths from one node to
+- [Tutorials](./docs/tutorials/README.md): progressive paths from one node to
   runtime-defined, resumable workflows.
-- [Executable examples](./example/README.md) — public-API examples with asserted
+- [Executable examples](./example/README.md): public-API examples with asserted
   output.
-- [Documentation index](./docs/README.md) — API reference and maintainer
+- [Documentation index](./docs/README.md): API reference and maintainer
   documents.
-- [Roadmap](./docs/roadmap.md) — remaining stabilization work and engine
+- [Roadmap](./docs/roadmap.md): remaining stabilization work and engine
   boundaries.
-- [Changelog](./CHANGELOG.md) — user-visible work for the next release.
-- [Contributing](./CONTRIBUTING.md) — development and API-review requirements.
+- [Changelog](./CHANGELOG.md): user-visible work for the next release.
+- [Contributing](./CONTRIBUTING.md): development and API-review requirements.
 
 Package comments and examples are the canonical API reference:
 
@@ -274,7 +303,8 @@ Run the local gate before submitting a change:
 ```sh
 test -z "$(gofmt -l .)"
 go mod tidy -diff
-go test -race -cover ./...
+go test -race -coverprofile=coverage.out ./...
+test "$(go tool cover -func=coverage.out | awk '/^total:/ { print $3 }')" = "100.0%"
 go vet ./...
 ```
 

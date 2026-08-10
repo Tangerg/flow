@@ -3,8 +3,8 @@ package workflow_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/Tangerg/flow"
@@ -12,7 +12,7 @@ import (
 )
 
 func TestEvents_emittedForSequence(t *testing.T) {
-	from := func(id string) workflow.BindFunc[int] {
+	from := func(id string) workflow.Binder[int] {
 		return workflow.From[int](workflow.Output(id))
 	}
 	a := workflow.Leaf("a", from("start"), flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
@@ -62,6 +62,78 @@ func TestEvents_failure(t *testing.T) {
 	if f.Kind != workflow.EventFailed || f.ID != "bad" || !errors.Is(f.Err, boom) {
 		t.Fatalf("event 1 = %#v, want failed bad with boom", events[1])
 	}
+}
+
+func TestEvents_distinguishValidationReplayAndAdmission(t *testing.T) {
+	record := func(events *[]workflow.Event) workflow.ObserverFunc {
+		return func(_ context.Context, event workflow.Event) {
+			*events = append(*events, event)
+		}
+	}
+
+	t.Run("validation failure has no start", func(t *testing.T) {
+		var events []workflow.Event
+		_, err := workflow.Run(
+			t.Context(),
+			workflow.Leaf[int, int]("", workflow.From[int](workflow.Output("seed")), flow.NodeFunc[int, int](nil)),
+			workflow.NewStore(),
+			workflow.RunConfig{Observer: record(&events)},
+		)
+		if !errors.Is(err, workflow.ErrInvalidStepID) ||
+			len(events) != 1 ||
+			events[0].Kind != workflow.EventFailed {
+			t.Fatalf("error, events = %v, %+v; want one validation failure", err, events)
+		}
+	})
+
+	t.Run("replay has only skipped", func(t *testing.T) {
+		journal := workflow.NewJournal()
+		if err := journal.Record(workflow.JournalKey{ID: "leaf"}, 7); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+		var events []workflow.Event
+		step := workflow.Leaf(
+			"leaf",
+			workflow.From[int](workflow.Output("seed")),
+			flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+				t.Fatal("replayed node ran")
+				return 0, nil
+			}),
+		)
+		_, err := workflow.Run(
+			t.Context(),
+			step,
+			workflow.NewStore(),
+			workflow.RunConfig{Journal: journal, Observer: record(&events)},
+		)
+		if err != nil || len(events) != 1 || events[0].Kind != workflow.EventSkipped {
+			t.Fatalf("error, events = %v, %+v; want one skipped event", err, events)
+		}
+	})
+
+	t.Run("cancellation before admission has no event", func(t *testing.T) {
+		ctx, cancel := context.WithCancelCause(t.Context())
+		cause := errors.New("stop before admission")
+		cancel(cause)
+		var events []workflow.Event
+		step := workflow.Leaf(
+			"leaf",
+			workflow.From[int](workflow.Output("seed")),
+			flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+				t.Fatal("cancelled node ran")
+				return 0, nil
+			}),
+		)
+		_, err := workflow.Run(
+			ctx,
+			step,
+			workflow.NewStore().WithOutput("seed", 1),
+			workflow.RunConfig{Observer: record(&events)},
+		)
+		if !errors.Is(err, cause) || len(events) != 0 {
+			t.Fatalf("error, events = %v, %+v; want cancellation and no event", err, events)
+		}
+	})
 }
 
 func TestEvents_noObserverIsFine(t *testing.T) {
@@ -150,7 +222,7 @@ func TestEvents_scopeDistinguishesIterationElements(t *testing.T) {
 	var scopes []string
 	cfg := workflow.RunConfig{Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
 		if event.Kind == workflow.EventCompleted {
-			scopes = append(scopes, strings.Join(event.Scope, "/"))
+			scopes = append(scopes, scopeText(event.Scope))
 		}
 	})}
 
@@ -167,7 +239,7 @@ func TestEvents_scopeDistinguishesIterationElements(t *testing.T) {
 func TestEvents_scopeDistinguishesLoopIterations(t *testing.T) {
 	count := 0
 	body := workflow.Leaf("tick",
-		workflow.BindFunc[int](func(workflow.Store) (int, error) { count++; return count, nil }),
+		workflow.BinderFunc[int](func(workflow.Store) (int, error) { count++; return count, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 	done := func(_ context.Context, iter int, _ workflow.Store) (bool, error) { return iter >= 2, nil }
@@ -175,7 +247,7 @@ func TestEvents_scopeDistinguishesLoopIterations(t *testing.T) {
 	var scopes []string
 	cfg := workflow.RunConfig{Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
 		if event.Kind == workflow.EventCompleted {
-			scopes = append(scopes, strings.Join(event.Scope, "/"))
+			scopes = append(scopes, scopeText(event.Scope))
 		}
 	})}
 
@@ -195,7 +267,7 @@ func TestWithScope_isMaintainedWithoutAnObserver(t *testing.T) {
 	// watching. Tying it to the observer let a journaled Loop skip every
 	// iteration after the first.
 	bare := workflow.WithScope(t.Context(), "kept")
-	if scope := workflow.Scope(bare); !slices.Equal(scope, []string{"kept"}) {
+	if scope := workflow.Scope(bare); !slices.Equal(scope, ordinaryScope("kept")) {
 		t.Fatalf("Scope = %v; want [kept] even with no observer", scope)
 	}
 	if scope := workflow.Scope(t.Context()); scope != nil {
@@ -206,11 +278,11 @@ func TestWithScope_isMaintainedWithoutAnObserver(t *testing.T) {
 func TestWithScope_nests(t *testing.T) {
 	outer := workflow.WithScope(t.Context(), "a")
 	inner := workflow.WithScope(outer, "b")
-	if !slices.Equal(workflow.Scope(inner), []string{"a", "b"}) {
+	if !slices.Equal(workflow.Scope(inner), ordinaryScope("a", "b")) {
 		t.Fatalf("inner scope = %v; want [a b]", workflow.Scope(inner))
 	}
 	// Deriving a sibling must not disturb the outer scope.
-	if !slices.Equal(workflow.Scope(outer), []string{"a"}) {
+	if !slices.Equal(workflow.Scope(outer), ordinaryScope("a")) {
 		t.Fatalf("outer scope = %v; want [a]", workflow.Scope(outer))
 	}
 }
@@ -218,8 +290,8 @@ func TestWithScope_nests(t *testing.T) {
 func TestScope_returnsACopy(t *testing.T) {
 	ctx := workflow.WithScope(t.Context(), "original")
 	scope := workflow.Scope(ctx)
-	scope[0] = "changed"
-	if got := workflow.Scope(ctx); !slices.Equal(got, []string{"original"}) {
+	scope[0].ID = "changed"
+	if got := workflow.Scope(ctx); !slices.Equal(got, ordinaryScope("original")) {
 		t.Fatalf("Scope leaked context-owned storage: %v", got)
 	}
 }
@@ -244,8 +316,58 @@ func TestObserverFunc(t *testing.T) {
 	}
 }
 
+func TestObserverContextCannotJoinObservedRun(t *testing.T) {
+	type contextKey struct{}
+
+	callback := workflow.Leaf(
+		"callback",
+		workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+		flow.NodeFunc[int, int](func(ctx context.Context, input int) (int, error) {
+			if got := ctx.Value(contextKey{}); got != "kept" {
+				return 0, fmt.Errorf("callback context value = %v; want kept", got)
+			}
+			if scope := workflow.Scope(ctx); scope != nil {
+				return 0, fmt.Errorf("callback workflow scope = %v; want nil", scope)
+			}
+			return input, nil
+		}),
+	)
+	outer := workflow.Leaf(
+		"outer",
+		workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+		flow.NodeFunc[int, int](func(context.Context, int) (int, error) { return 2, nil }),
+	)
+
+	journal := workflow.NewJournal()
+	var (
+		events      []workflow.Event
+		callbackErr error
+	)
+	ctx := context.WithValue(t.Context(), contextKey{}, "kept")
+	ctx = workflow.WithScope(ctx, "root")
+	_, err := workflow.Run(ctx, outer, workflow.NewStore(), workflow.RunConfig{
+		Journal: journal,
+		Observer: workflow.ObserverFunc(func(ctx context.Context, event workflow.Event) {
+			events = append(events, event)
+			if event.Kind == workflow.EventStarted && event.ID == "outer" {
+				_, callbackErr = callback.Run(ctx, workflow.NewStore())
+			}
+		}),
+	})
+	if err != nil || callbackErr != nil {
+		t.Fatalf("Run, callback = %v, %v; want nil, nil", err, callbackErr)
+	}
+	if len(events) != 2 || events[0].ID != "outer" || events[1].ID != "outer" {
+		t.Fatalf("events = %+v; callback joined the observed run", events)
+	}
+	wantKey := workflow.JournalKey{ID: "outer", Scope: []workflow.ScopeFrame{{ID: "root"}}}
+	if keys := journal.Keys(); !equalJournalKeys(keys, []workflow.JournalKey{wantKey}) {
+		t.Fatalf("Journal keys = %+v; callback wrote into the observed run", keys)
+	}
+}
+
 func TestRun_startsEachEventSequenceAtOne(t *testing.T) {
-	step := workflow.Leaf("a", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+	step := workflow.Leaf("a", workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
 
 	for run := range 2 {
@@ -284,7 +406,7 @@ func TestRun_rejectsNilStep(t *testing.T) {
 
 // Observation and resumption are independent: either alone must work.
 func TestRunConfig_eitherHalfAlone(t *testing.T) {
-	step := workflow.Leaf("a", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+	step := workflow.Leaf("a", workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
 
 	var seen int

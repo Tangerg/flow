@@ -64,6 +64,57 @@ func TestValidateGraph_doesNotGuessNestedOutputTypes(t *testing.T) {
 	}
 }
 
+func TestValidateGraph_rejectsImpossibleNestedOutputPaths(t *testing.T) {
+	for name, test := range map[string]struct {
+		output workflow.ValueType
+		child  string
+		valid  bool
+	}{
+		"string child":       {output: workflow.TypeString, child: "name"},
+		"number child":       {output: workflow.TypeNumber, child: "name"},
+		"boolean child":      {output: workflow.TypeBool, child: "name"},
+		"array object key":   {output: workflow.TypeArray, child: "name"},
+		"array leading zero": {output: workflow.TypeArray, child: "01"},
+		"array index":        {output: workflow.TypeArray, child: "0", valid: true},
+		"object member":      {output: workflow.TypeObject, child: "name", valid: true},
+		"unknown member":     {output: workflow.TypeAny, child: "name", valid: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			registry := workflow.NewRegistry().
+				MustRegisterNode("producer", addN()).
+				MustRegisterSchema("producer", workflow.NodeSchema{Output: test.output}).
+				MustRegisterNode("consumer", addN()).
+				MustRegisterSchema("consumer", workflow.NodeSchema{
+					Inputs: workflow.OnePort(workflow.TypeAny),
+					Output: workflow.TypeAny,
+				})
+			graph := workflow.Graph{Nodes: []workflow.GraphNode{
+				{ID: "source", Type: "producer"},
+				{
+					ID:   "target",
+					Type: "consumer",
+					Inputs: workflow.DefaultInput(
+						workflow.Output("source").Child(test.child),
+					),
+				},
+			}}
+
+			err := registry.ValidateGraph(graph)
+			if test.valid {
+				if err != nil {
+					t.Fatalf("ValidateGraph: %v", err)
+				}
+				return
+			}
+			var graphErr *workflow.GraphError
+			if !errors.Is(err, workflow.ErrIncompatibleType) ||
+				!errors.As(err, &graphErr) || graphErr.Field != "inputs" {
+				t.Fatalf("ValidateGraph error = %v; want inputs ErrIncompatibleType", err)
+			}
+		})
+	}
+}
+
 func TestValidateGraph_unknownType(t *testing.T) {
 	reg := workflow.NewRegistry()
 	g := workflow.Graph{Nodes: []workflow.GraphNode{{ID: "a", Type: "nope"}}}
@@ -95,11 +146,84 @@ func TestValidateGraph_unregisteredSchemaIsAny(t *testing.T) {
 	}
 }
 
+func TestValidateGraph_unregisteredProducerSchemaIsAny(t *testing.T) {
+	registry := workflow.NewRegistry().
+		MustRegisterNode("source", addN()).
+		MustRegisterNode("target", addN()).
+		MustRegisterSchema("target", workflow.NodeSchema{
+			Inputs: workflow.OnePort(workflow.TypeString),
+			Output: workflow.TypeString,
+		})
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
+		{ID: "source", Type: "source", Inputs: workflow.DefaultInput(workflow.Output("external"))},
+		{ID: "target", Type: "target", Inputs: workflow.DefaultInput(workflow.Output("source"))},
+	}}
+
+	if err := registry.ValidateGraph(graph); err != nil {
+		t.Fatalf("ValidateGraph with untyped producer: %v", err)
+	}
+}
+
+func TestValidateGraph_rejectsDataEdgeFromNodeWithoutOutput(t *testing.T) {
+	registry := workflow.NewRegistry().
+		MustRegisterNode("wait", workflow.AwaitFactory()).
+		MustRegisterSchema("wait", workflow.NodeSchema{Inputs: workflow.OnePort(workflow.TypeAny)}).
+		MustRegisterNode("target", addN()).
+		MustRegisterSchema("target", workflow.NodeSchema{
+			Inputs: workflow.OnePort(workflow.TypeAny),
+			Output: workflow.TypeAny,
+		})
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
+		{ID: "wait", Type: "wait", Inputs: workflow.DefaultInput(workflow.Output("external"))},
+		{ID: "target", Type: "target", Inputs: workflow.DefaultInput(workflow.Output("wait"))},
+	}}
+
+	err := registry.ValidateGraph(graph)
+	if !errors.Is(err, workflow.ErrIncompatibleType) {
+		t.Fatalf("ValidateGraph error = %v; want ErrIncompatibleType", err)
+	}
+}
+
+func TestValidateGraph_rejectsInternalCellOutsideNodeOutput(t *testing.T) {
+	registry := workflow.NewRegistry().
+		MustRegisterNode("source", addN()).
+		MustRegisterNode("target", addN())
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
+		{ID: "source", Type: "source", Inputs: workflow.DefaultInput(workflow.Output("external"))},
+		{ID: "target", Type: "target", Inputs: workflow.DefaultInput(workflow.At("source", "private"))},
+	}}
+
+	err := registry.ValidateGraph(graph)
+	if !errors.Is(err, workflow.ErrIncompatibleType) {
+		t.Fatalf("ValidateGraph error = %v; want ErrIncompatibleType", err)
+	}
+}
+
+func TestValidateGraph_registeredZeroInputSchemaRejectsWiring(t *testing.T) {
+	registry := workflow.NewRegistry().
+		MustRegisterNode("source", addN()).
+		MustRegisterSchema("source", workflow.NodeSchema{Output: workflow.TypeNumber})
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{{
+		ID:     "source",
+		Type:   "source",
+		Inputs: workflow.DefaultInput(workflow.Output("external")),
+	}}}
+
+	err := registry.ValidateGraph(graph)
+	if !errors.Is(err, workflow.ErrUnknownPort) {
+		t.Fatalf("ValidateGraph error = %v; want ErrUnknownPort", err)
+	}
+}
+
 func TestRegisterSchema_rejectsInvalidPortsAndTypes(t *testing.T) {
+	invalid := string([]byte{0xff})
 	schemas := map[string]workflow.NodeSchema{
-		"bad output":    {Output: workflow.ValueType("wat")},
-		"bad port type": {Inputs: workflow.OnePort(workflow.ValueType("wat"))},
-		"empty port":    {Inputs: workflow.Ports{"": workflow.TypeNumber}},
+		"bad output":        {Output: workflow.ValueType("wat")},
+		"missing port type": {Inputs: workflow.OnePort(""), Output: workflow.TypeAny},
+		"bad port type":     {Inputs: workflow.OnePort(workflow.ValueType("wat")), Output: workflow.TypeAny},
+		"empty port":        {Inputs: workflow.Ports{"": workflow.TypeNumber}, Output: workflow.TypeAny},
+		"non-UTF-8 port":    {Inputs: workflow.Ports{invalid: workflow.TypeNumber}, Output: workflow.TypeAny},
+		"non-UTF-8 outlet":  {Output: workflow.TypeString, Outlets: []string{invalid}},
 	}
 	for name, schema := range schemas {
 		t.Run(name, func(t *testing.T) {
@@ -112,13 +236,17 @@ func TestRegisterSchema_rejectsInvalidPortsAndTypes(t *testing.T) {
 
 func TestRegisterSchema_rejectsEmptyAndDuplicateNames(t *testing.T) {
 	reg := workflow.NewRegistry()
-	if err := reg.RegisterSchema("", workflow.NodeSchema{}); !errors.Is(err, workflow.ErrInvalidRegistration) {
+	schema := workflow.NodeSchema{}
+	if err := reg.RegisterSchema("", schema); !errors.Is(err, workflow.ErrInvalidRegistration) {
 		t.Fatalf("empty name error = %v; want ErrInvalidRegistration", err)
 	}
-	if err := reg.RegisterSchema("node", workflow.NodeSchema{}); err != nil {
+	if err := reg.RegisterSchema(string([]byte{0xff}), schema); !errors.Is(err, workflow.ErrInvalidRegistration) {
+		t.Fatalf("non-UTF-8 name error = %v; want ErrInvalidRegistration", err)
+	}
+	if err := reg.RegisterSchema("node", schema); err != nil {
 		t.Fatalf("first registration: %v", err)
 	}
-	if err := reg.RegisterSchema("node", workflow.NodeSchema{}); !errors.Is(err, workflow.ErrDuplicateRegistration) {
+	if err := reg.RegisterSchema("node", schema); !errors.Is(err, workflow.ErrDuplicateRegistration) {
 		t.Fatalf("duplicate error = %v; want ErrDuplicateRegistration", err)
 	}
 }
@@ -167,19 +295,31 @@ func TestRegistry_introspection(t *testing.T) {
 	}
 }
 
-func TestRegisterSchema_clonesPorts(t *testing.T) {
+func TestRegisterSchema_ownsDefinitionStorage(t *testing.T) {
 	ports := workflow.OnePort(workflow.TypeNumber)
+	wantConfigSchema := json.RawMessage(`{"type":"object"}`)
+	configSchema := bytes.Clone(wantConfigSchema)
 	reg := workflow.NewRegistry().
 		MustRegisterNode("addN", addN()).
-		MustRegisterSchema("addN", workflow.NodeSchema{Inputs: ports, Output: workflow.TypeNumber})
+		MustRegisterSchema("addN", workflow.NodeSchema{
+			Inputs:       ports,
+			Output:       workflow.TypeNumber,
+			ConfigSchema: configSchema,
+		})
 
-	// Mutating the caller's map must not change what the Registry enforces.
+	// Mutating caller-owned definition storage must not change what the Registry
+	// enforces or returns to tooling.
 	ports["sneaky"] = workflow.TypeString
+	configSchema[0] = 'x'
 
 	g := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "a", Type: "addN", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
 	}}
 	if err := reg.ValidateGraph(g); err != nil {
 		t.Fatalf("Validate: %v", err)
+	}
+	schema, ok := reg.NodeSchema("addN")
+	if !ok || !bytes.Equal(schema.ConfigSchema, wantConfigSchema) {
+		t.Fatalf("ConfigSchema = %q, %t; want %q, true", schema.ConfigSchema, ok, wantConfigSchema)
 	}
 }

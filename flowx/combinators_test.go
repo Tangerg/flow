@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/flowx"
@@ -51,7 +50,7 @@ func TestFanOut_boundsConcurrency(t *testing.T) {
 	select {
 	case <-started:
 		t.Fatal("more than two nodes started before a slot was released")
-	case <-time.After(20 * time.Millisecond):
+	default:
 	}
 	close(release)
 	if err := <-done; err != nil {
@@ -151,6 +150,40 @@ func TestCombine_rejectsNilInputs(t *testing.T) {
 	}
 }
 
+func TestCombine_validationPrecedesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(errors.New("caller stopped"))
+	node := flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+		t.Fatal("invalid Combine ran a child")
+		return 0, nil
+	})
+	merge := func(context.Context, int, int) (int, error) { return 0, nil }
+
+	tests := []struct {
+		name string
+		node flow.Node[int, int]
+		want error
+	}{
+		{
+			name: "nil merge",
+			node: flowx.Combine[int, int, int, int](node, node, nil),
+			want: flow.ErrNilFunc,
+		},
+		{
+			name: "nil node",
+			node: flowx.Combine[int, int, int, int](node, nil, merge),
+			want: flow.ErrNilNode,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := test.node.Run(ctx, 0); !errors.Is(err, test.want) {
+				t.Fatalf("Run error = %v; want %v", err, test.want)
+			}
+		})
+	}
+}
+
 func TestCombine_validatesBothNodesBeforeRunning(t *testing.T) {
 	ran := false
 	node := flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
@@ -191,6 +224,41 @@ func TestCombine_rejectsTypedNilFunctionBeforeRunning(t *testing.T) {
 	}
 }
 
+func TestDerivedCompositesExposeValidation(t *testing.T) {
+	valid := flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+		return 1, nil
+	})
+	invalid := flow.Then(valid, flow.NodeFunc[int, int](nil))
+	merge := func(context.Context, int, int) (int, error) { return 0, nil }
+	tests := map[string]flow.Node[int, int]{
+		"combine":  flowx.Combine(invalid, valid, merge),
+		"fallback": flowx.Fallback(valid, invalid),
+	}
+	for name, node := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := flow.Validate(node); !errors.Is(err, flow.ErrNilNode) {
+				t.Fatalf("Validate error = %v; want ErrNilNode", err)
+			}
+		})
+	}
+
+	fanOut := flowx.FanOut(
+		[]flow.Node[int, int]{valid, invalid},
+		flow.MapConfig{},
+	)
+	var indexErr *flow.IndexError
+	if err := flow.Validate(fanOut); !errors.As(err, &indexErr) ||
+		indexErr.Index != 1 || !errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("Validate FanOut error = %v; want index 1 ErrNilNode", err)
+	}
+	if err := flow.Validate(flowx.FanOut(
+		[]flow.Node[int, int]{valid},
+		flow.MapConfig{Concurrency: -1},
+	)); !errors.Is(err, flow.ErrInvalidConfig) {
+		t.Fatalf("Validate FanOut config error = %v; want ErrInvalidConfig", err)
+	}
+}
+
 func TestCombine_propagatesNodeFailure(t *testing.T) {
 	boom := errors.New("boom")
 	failing := flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
@@ -207,6 +275,24 @@ func TestCombine_propagatesNodeFailure(t *testing.T) {
 	).Run(t.Context(), 1)
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v; want node failure", err)
+	}
+}
+
+func TestCombine_parentCancellationDuringMergeWins(t *testing.T) {
+	cause := errors.New("stop combine")
+	ctx, cancel := context.WithCancelCause(t.Context())
+	node := flowx.Combine(
+		flow.NodeFunc[int, int](func(context.Context, int) (int, error) { return 1, nil }),
+		flow.NodeFunc[int, int](func(context.Context, int) (int, error) { return 2, nil }),
+		func(context.Context, int, int) (int, error) {
+			cancel(cause)
+			return 3, nil
+		},
+	)
+
+	output, err := node.Run(ctx, 0)
+	if !errors.Is(err, cause) || output != 0 {
+		t.Fatalf("Run = %d, %v; want 0, cancellation cause", output, err)
 	}
 }
 
@@ -230,6 +316,17 @@ func TestChain_emptyAndSingle(t *testing.T) {
 	got, err = flowx.Chain(node).Run(t.Context(), 4)
 	if err != nil || got != 5 {
 		t.Fatalf("single Chain = %d, %v", got, err)
+	}
+}
+
+func TestChain_emptyHonorsCancellation(t *testing.T) {
+	cause := errors.New("stop empty chain")
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(cause)
+
+	got, err := flowx.Chain[int]().Run(ctx, 4)
+	if got != 4 || !errors.Is(err, cause) {
+		t.Fatalf("empty Chain = %d, %v; want 4, cancellation cause", got, err)
 	}
 }
 

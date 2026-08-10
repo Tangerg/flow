@@ -3,7 +3,6 @@ package workflow
 import (
 	"context"
 	"fmt"
-	"slices"
 	"sync"
 	"sync/atomic"
 )
@@ -19,7 +18,7 @@ import (
 // Construct it with keyed fields. New run-scoped settings can then be added
 // without breaking callers.
 type RunConfig struct {
-	// Observer receives step lifecycle events. A nil Observer or nil
+	// Observer receives observable workflow-boundary events. A nil Observer or nil
 	// ObserverFunc disables events.
 	Observer Observer
 
@@ -28,8 +27,8 @@ type RunConfig struct {
 	// or consuming sequence numbers.
 	Emitter Emitter
 
-	// Journal records completed steps so a later run can resume instead of
-	// starting over. A nil Journal disables resumption.
+	// Journal holds replayable leaf outputs, control-flow decisions, and
+	// externally recorded interrupt responses. A nil Journal disables resumption.
 	Journal *Journal
 }
 
@@ -42,20 +41,31 @@ type runState struct {
 	config          RunConfig
 	journalRevision uint64
 	seq             atomic.Uint64
-	definitionOnce  sync.Once
-	definitionErr   error
 	claimsMu        sync.Mutex
 	claims          journalNode
 	bypassedMu      sync.RWMutex
 	bypassed        journalNode
 }
 
-// Run executes step once under cfg. Each call establishes a fresh run boundary:
-// signal sequence numbers start at one, while cfg.Journal may deliberately
-// carry completed work across calls. Journal replay is revision-bounded at the
-// start of the call: records added during the call belong to a later run.
+// Run executes step once under cfg. Each call establishes a fresh execution
+// boundary: signal sequence numbers and identity claims start over, while
+// cfg.Journal may deliberately carry completed work across calls. A Run nested
+// inside another Run starts at a new root workflow scope; a scope explicitly
+// attached before the first Run remains its initial scope. Ordinary context
+// values, cancellation, and deadlines still propagate. The input Store is
+// passed to step as supplied; Run does not treat it as a namespace or erase
+// values from an earlier call. Journal replay is revision-bounded at the start
+// of the call: records added during the call belong to a later run.
 // Destructive Journal operations such as Forget, Reset, and UnmarshalJSON belong
-// between runs. A nil step returns [ErrNilStep].
+// between runs. For a caller-defined top-level composite, Run applies its
+// optional Validate method before installing the execution boundary, so an
+// invalid visible definition performs no work. Steps built by this package
+// validate in their own Run method, where they can emit a correctly identified
+// failure event. Run cancels the execution context supplied to step before returning,
+// and also while unwinding a panic, so correctly context-aware background work
+// cannot outlive the run-scoped identity, observers, or Journal configuration.
+// A Step remains responsible for joining work whose result belongs to its Run
+// call. A nil step returns [ErrNilStep].
 //
 //	journal := workflow.NewJournal()
 //	out, err := workflow.Run(ctx, pipeline, in, workflow.RunConfig{
@@ -71,12 +81,30 @@ func Run(ctx context.Context, step Step, in Store, cfg RunConfig) (Store, error)
 	if isNilNode(step) {
 		return in, ErrNilStep
 	}
-	return step.Run(withConfig(ctx, cfg), in)
+	if _, builtIn := step.(definedStep); !builtIn {
+		if err := validateDefinition(step); err != nil {
+			return in, err
+		}
+	}
+	executionCtx, cancel := context.WithCancel(withConfig(ctx, cfg))
+	defer cancel()
+	return step.Run(executionCtx, in)
 }
 
-// withConfig installs a new run even for the zero configuration. Masking an
-// enclosing run is what makes a nested Run call an independent boundary.
+// withConfig installs a new execution boundary even for the zero configuration.
+// Masking an enclosing run is what makes a nested Run call independent.
 func withConfig(ctx context.Context, cfg RunConfig) context.Context {
+	if runFrom(ctx) != nil {
+		// Scope belongs to one execution tree. Inheriting it here would make a
+		// nested Run's otherwise independent Journal keys and signals depend on
+		// the caller's current loop, iteration, or subgraph invocation. A scope
+		// installed before the first Run is intentional and remains intact.
+		ctx = context.WithValue(ctx, scopeKey{}, []ScopeFrame(nil))
+	}
+	return withRunState(ctx, cfg)
+}
+
+func withRunState(ctx context.Context, cfg RunConfig) context.Context {
 	return context.WithValue(ctx, runKey{}, &runState{
 		config:          cfg,
 		journalRevision: cfg.Journal.snapshotRevision(),
@@ -90,7 +118,9 @@ func ensureRun(ctx context.Context) context.Context {
 	if runFrom(ctx) != nil {
 		return ctx
 	}
-	return withConfig(ctx, RunConfig{})
+	// A direct child invocation is still part of its caller's execution tree,
+	// so unlike package-level Run it preserves a scope installed by WithScope.
+	return withRunState(ctx, RunConfig{})
 }
 
 func runFrom(ctx context.Context) *runState {
@@ -138,25 +168,32 @@ func (r *runState) nextSeq() uint64 {
 
 // replay returns a record that existed when this run began. Records written by
 // the current run are deliberately excluded: seeing one again means two steps
-// claimed the same identity, not that the later step is being resumed.
-func (r *runState) replay(scope []string, id string) (any, bool) {
+// claimed the same identity, not that the later step is being resumed. Journal
+// lookup may wait on concurrent access, so cancellation is sampled again after
+// the lookup before a caller restores state or invokes application code.
+func (r *runState) replay(
+	ctx context.Context,
+	scope []ScopeFrame,
+	id string,
+) (any, bool, error) {
 	if r == nil || r.config.Journal == nil {
-		return nil, false
+		return nil, false, context.Cause(ctx)
 	}
-	return r.config.Journal.lookupAt(scope, id, r.journalRevision)
+	value, ok := r.config.Journal.lookupAt(scope, id, r.journalRevision)
+	return value, ok, context.Cause(ctx)
 }
 
 // claim enforces the execution identity invariant independently of the
 // Journal. This catches duplicate IDs even when both invocations would replay
 // the same historical record, and it also covers opaque caller-defined wrappers
 // that static definition validation cannot see through.
-func (r *runState) claim(scope []string, id string) error {
-	if r == nil {
-		return nil
-	}
+func (r *runState) claim(scope []ScopeFrame, id string) error {
 	key := JournalKey{ID: id, Scope: scope}
 	if err := key.validate(); err != nil {
 		return err
+	}
+	if r == nil {
+		return nil
 	}
 
 	r.claimsMu.Lock()
@@ -166,81 +203,52 @@ func (r *runState) claim(scope []string, id string) error {
 			"%w: step %q in scope %q was invoked more than once in one run",
 			ErrDuplicateStep,
 			id,
-			scope,
+			formatScope(scope),
 		)
 	}
 	return nil
 }
 
-func (r *runState) markBypassed(scope []string, id string) {
+func (r *runState) markBypassed(scope []ScopeFrame, id string) {
 	r.bypassedMu.Lock()
 	defer r.bypassedMu.Unlock()
 	r.bypassed.record(scope, id, journalValue{})
 }
 
-func (r *runState) wasBypassed(scope []string, id string) bool {
+func (r *runState) wasBypassed(scope []ScopeFrame, id string) bool {
 	r.bypassedMu.RLock()
 	defer r.bypassedMu.RUnlock()
 	_, ok := r.bypassed.lookup(scope, id)
 	return ok
 }
 
-// validateDefinition checks the static workflow shape once per run and caches
-// the verdict, so nested composites reuse the outermost validation instead of
-// repeating it.
-//
-// Unlike the other runState methods it has no nil receiver guard: every
-// composite calls [ensureRun] before reaching it, which guarantees a run is
-// installed. A composite added later must do the same.
-func (r *runState) validateDefinition(step Step) error {
-	r.definitionOnce.Do(func() {
-		validator := definitionValidator{}
-		r.definitionErr = validator.validate(step)
-	})
-	return r.definitionErr
-}
-
 // emit completes event with the run's sequence number and scope, then delivers
-// it. A nil receiver discards the event, so callers need not check first.
+// it synchronously. A nil receiver discards the event.
 func (r *runState) emit(ctx context.Context, event Event) {
 	if !r.observing() {
 		return
 	}
 	event.Seq = r.nextSeq()
 	event.Scope = Scope(ctx)
-	r.config.Observer.Observe(ctx, event)
+	r.config.Observer.Observe(callbackContext(ctx), event)
 }
 
-type scopeKey struct{}
-
-// WithScope returns a context with an additional scope segment. Composites use it
-// so that a step running once per loop iteration or per collection element can be
-// told apart; write one when building a composite that runs a child more than
-// once.
-//
-// A scope is execution state rather than configuration, which is why it is not a
-// [RunConfig] field: composites push segments as they run. It is maintained
-// whether or not anything is watching, because it identifies a step rather than
-// merely labelling it — [Event.Scope] reports it, and a [Journal] keys its records
-// by it, which is what keeps resumption correct where one step runs many times.
-// Each call copies the scope, so concurrent branches never share a slice.
-func WithScope(ctx context.Context, segment string) context.Context {
-	current := scope(ctx)
-	extended := make([]string, len(current)+1)
-	copy(extended, current)
-	extended[len(current)] = segment
-	return context.WithValue(ctx, scopeKey{}, extended)
+// emitAndCheck is the cancellation checkpoint used after a non-failure event.
+// The synchronous Observer may have blocked while ctx was cancelled. Failure
+// paths call emit directly because an already classified failure keeps priority.
+func (r *runState) emitAndCheck(ctx context.Context, event Event) error {
+	r.emit(ctx, event)
+	return context.Cause(ctx)
 }
 
-// Scope returns the scope of a step running under ctx: its enclosing repeated
-// scopes, outermost first. The returned slice is a copy.
-func Scope(ctx context.Context) []string {
-	return slices.Clone(scope(ctx))
-}
-
-// scope returns the context-owned scope for internal reads. Callers that retain
-// or expose it must clone it.
-func scope(ctx context.Context) []string {
-	current, _ := ctx.Value(scopeKey{}).([]string)
-	return current
+// callbackContext preserves application values, cancellation, and deadlines
+// while removing the engine-owned identity of the execution being observed.
+// Observer and Emitter callbacks consume signals; directly invoking a Step from
+// one must not claim identities, publish signals, or write checkpoints into the
+// producing run. A callback that needs another workflow execution can call Run,
+// which then establishes an explicit, independent boundary.
+func callbackContext(ctx context.Context) context.Context {
+	ctx = context.WithValue(ctx, runKey{}, (*runState)(nil))
+	ctx = context.WithValue(ctx, scopeKey{}, []ScopeFrame(nil))
+	return context.WithValue(ctx, emissionKey{}, (*emissionSession)(nil))
 }

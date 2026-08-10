@@ -2,7 +2,7 @@ package workflow
 
 import (
 	"encoding/json"
-	"strconv"
+	"fmt"
 	"strings"
 )
 
@@ -26,14 +26,19 @@ type pointerEncoder struct {
 //nolint:gosec // strings.Builder's writes are documented never to fail.
 func (p *pointerEncoder) write(segment string) {
 	p.WriteByte('/')
-	for _, character := range segment {
+	for index := range len(segment) {
+		character := segment[index]
 		switch character {
 		case '~':
 			p.WriteString("~0")
 		case '/':
 			p.WriteString("~1")
 		default:
-			p.WriteRune(character)
+			// JSON Pointer escaping only gives the two ASCII delimiter bytes
+			// special forms. Preserving every other byte also preserves an
+			// in-memory Store key that is not valid UTF-8; ranging over runes
+			// would silently replace it with U+FFFD.
+			p.WriteByte(character)
 		}
 	}
 }
@@ -96,18 +101,22 @@ func (p *pointerScanner) next() (segment string, present, valid bool) {
 // segments. JSON-domain maps and arrays remain allocation-free. A typed Go
 // value is converted through JSON at most once, after which the rest of the
 // walk stays in the JSON domain.
-func (p *pointerScanner) lookup(value any) (any, bool) {
+func (p *pointerScanner) lookup(value any) (any, bool, error) {
 	cursor := jsonCursor{value: value}
 	for {
 		segment, present, valid := p.next()
 		if !valid {
-			return nil, false
+			return nil, false, nil
 		}
 		if !present {
-			return cursor.value, true
+			return cursor.value, true, nil
 		}
-		if !cursor.descend(segment) {
-			return nil, false
+		found, err := cursor.descend(segment)
+		if err != nil {
+			return nil, false, err
+		}
+		if !found {
+			return nil, false, nil
 		}
 	}
 }
@@ -120,58 +129,77 @@ type jsonCursor struct {
 	converted bool
 }
 
-func (j *jsonCursor) descend(segment string) bool {
+func (j *jsonCursor) descend(segment string) (bool, error) {
 	switch current := j.value.(type) {
 	case map[string]any:
 		next, ok := current[segment]
 		if ok {
 			j.value = next
 		}
-		return ok
+		return ok, nil
 	case []any:
 		index, ok := pointerToken(segment).index(len(current))
 		if ok {
 			j.value = current[index]
 		}
-		return ok
+		return ok, nil
 	default:
-		if !j.convert() {
-			return false
+		if j.converted {
+			return false, nil
+		}
+		if err := j.convert(); err != nil {
+			return false, err
 		}
 		return j.descend(segment)
 	}
 }
 
-func (j *jsonCursor) convert() bool {
-	if j.converted {
-		return false
-	}
+func (j *jsonCursor) convert() error {
 	encoded, err := json.Marshal(j.value)
 	if err != nil {
-		return false
+		return fmt.Errorf("encode value as JSON: %w", err)
 	}
 	j.value, err = jsonDocument(encoded).value()
 	if err != nil {
-		return false
+		return fmt.Errorf("read encoded JSON value: %w", err)
 	}
 	j.converted = true
-	return true
+	return nil
 }
 
 type pointerToken string
 
-// index implements RFC 6901's array-index grammar. strconv.Atoi alone would
-// incorrectly accept tokens such as "+1" and "01", which are object keys but
-// not canonical array indexes.
-func (p pointerToken) index(length int) (int, bool) {
+func (p pointerToken) isArrayIndex() bool {
 	if p == "" || (len(p) > 1 && p[0] == '0') {
-		return 0, false
+		return false
 	}
-	for index := range len(p) {
-		if p[index] < '0' || p[index] > '9' {
-			return 0, false
+	for offset := range len(p) {
+		if p[offset] < '0' || p[offset] > '9' {
+			return false
 		}
 	}
-	index, err := strconv.Atoi(string(p))
-	return index, err == nil && index < length
+	return true
+}
+
+// index implements RFC 6901's array-index grammar without depending on the
+// machine word size. Tokens such as "+1" and "01" are object keys, not
+// canonical array indexes.
+func (p pointerToken) index(length int) (int, bool) {
+	const decimalRadix = 10
+
+	if !p.isArrayIndex() || length <= 0 {
+		return 0, false
+	}
+	var value int
+	for offset := range len(p) {
+		digit := int(p[offset] - '0')
+		// Once an index reaches length, appending another decimal digit cannot
+		// make it valid. Checking before multiplication also prevents overflow.
+		limit := length - 1
+		if digit > limit || value > (limit-digit)/decimalRadix {
+			return 0, false
+		}
+		value = value*decimalRadix + digit
+	}
+	return value, true
 }

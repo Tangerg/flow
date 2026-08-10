@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -27,6 +28,17 @@ func routingSchema(outlets ...string) workflow.NodeSchema {
 		Output:  workflow.TypeString,
 		Outlets: outlets,
 	}
+}
+
+type singleEncodingRoute struct {
+	calls *atomic.Int64
+}
+
+func (s singleEncodingRoute) MarshalJSON() ([]byte, error) {
+	if call := s.calls.Add(1); call != 1 {
+		return nil, errors.New("routing output encoded more than once")
+	}
+	return []byte(`"yes"`), nil
 }
 
 func TestCompileGraph_routesAndRemovesStaleBranchOutputs(t *testing.T) {
@@ -114,6 +126,110 @@ func TestCompileGraph_routesAndRemovesStaleBranchOutputs(t *testing.T) {
 	}
 }
 
+func TestCompileGraph_routesOnPersistentJSONString(t *testing.T) {
+	var routeCalls atomic.Int64
+	var targetCalls atomic.Int64
+	registry := workflow.NewRegistry().
+		MustRegisterNode("route", routingFactory(func(int) string {
+			routeCalls.Add(1)
+			return string([]byte{0xff, 0xfe})
+		})).
+		MustRegisterSchema("route", routingSchema("��")).
+		MustRegisterNode("target", workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
+			return flow.NodeFunc[int, int](func(_ context.Context, input int) (int, error) {
+				targetCalls.Add(1)
+				return input + 1, nil
+			}), nil
+		}))
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
+		{
+			ID: "route", Type: "route",
+			Inputs: workflow.DefaultInput(workflow.Output("start")),
+		},
+		{
+			ID: "target", Type: "target",
+			Inputs: workflow.DefaultInput(workflow.Output("start")),
+			When:   []workflow.Gate{workflow.When("route", "��")},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+
+	journal := workflow.NewJournal()
+	first, err := workflow.Run(
+		t.Context(),
+		step,
+		workflow.NewStore().WithOutput("start", 1),
+		workflow.RunConfig{Journal: journal},
+	)
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	if value, getErr := workflow.Get[int](first, workflow.Output("target")); getErr != nil || value != 2 {
+		t.Fatalf("first target output = %d, %v; want 2, nil", value, getErr)
+	}
+
+	checkpoint, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatalf("Marshal Journal: %v", err)
+	}
+	restored := workflow.NewJournal()
+	if unmarshalErr := json.Unmarshal(checkpoint, restored); unmarshalErr != nil {
+		t.Fatalf("Unmarshal Journal: %v", unmarshalErr)
+	}
+	second, err := workflow.Run(
+		t.Context(),
+		step,
+		workflow.NewStore().WithOutput("start", 1),
+		workflow.RunConfig{Journal: restored},
+	)
+	if err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+	if value, getErr := workflow.Get[int](second, workflow.Output("target")); getErr != nil || value != 2 {
+		t.Fatalf("resumed target output = %d, %v; want 2, nil", value, getErr)
+	}
+	if routeCalls.Load() != 1 || targetCalls.Load() != 1 {
+		t.Fatalf(
+			"calls = route:%d target:%d; want 1,1 after replay",
+			routeCalls.Load(),
+			targetCalls.Load(),
+		)
+	}
+}
+
+func TestCompileGraph_rejectsOpaqueFactoryStepBeforeGating(t *testing.T) {
+	registry := workflow.NewRegistry().
+		MustRegisterNode("route", routingFactory(func(int) string { return "run" })).
+		MustRegisterSchema("route", routingSchema("run")).
+		MustRegisterNode("opaque", func(spec workflow.NodeSpec) (workflow.Step, error) {
+			return flow.NodeFunc[workflow.Store, workflow.Store](
+				func(_ context.Context, store workflow.Store) (workflow.Store, error) {
+					return store.WithOutput(spec.ID, 42), nil
+				},
+			), nil
+		})
+	_, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
+		{
+			ID:     "route",
+			Type:   "route",
+			Inputs: workflow.DefaultInput(workflow.Output("start")),
+		},
+		{
+			ID:   "target",
+			Type: "opaque",
+			When: []workflow.Gate{workflow.When("route", "run")},
+		},
+	}})
+	var graphErr *workflow.GraphError
+	if !errors.Is(err, workflow.ErrInvalidGraph) ||
+		!errors.As(err, &graphErr) || graphErr.NodeID != "target" ||
+		!strings.Contains(err.Error(), "opaque Step") {
+		t.Fatalf("CompileGraph error = %v; want target opaque-boundary error", err)
+	}
+}
+
 func TestCompileGraph_triggerAnyAndFirstOfMerge(t *testing.T) {
 	registry := workflow.NewRegistry().
 		MustRegisterNode("route", routingFactory(func(int) string { return "left" })).
@@ -164,6 +280,65 @@ func TestCompileGraph_triggerAnyAndFirstOfMerge(t *testing.T) {
 	}
 	if got, err := workflow.Get[int](out, workflow.Output("merge")); err != nil || got != 42 {
 		t.Fatalf("merge = %d, %v; want 42, nil", got, err)
+	}
+}
+
+func TestCompileGraph_triggerAnyReadsEachRoutingSourceOnce(t *testing.T) {
+	var routeEncodes atomic.Int64
+	registry := workflow.NewRegistry().
+		MustRegisterNode("route", func(spec workflow.NodeSpec) (workflow.Step, error) {
+			return workflow.Leaf(
+				spec.ID,
+				workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
+					return struct{}{}, nil
+				}),
+				flow.NodeFunc[struct{}, singleEncodingRoute](
+					func(context.Context, struct{}) (singleEncodingRoute, error) {
+						return singleEncodingRoute{calls: &routeEncodes}, nil
+					},
+				),
+			), nil
+		}).
+		MustRegisterSchema("route", workflow.NodeSchema{
+			Output:  workflow.TypeString,
+			Outlets: []string{"yes", "no"},
+		}).
+		MustRegisterNode("target", func(spec workflow.NodeSpec) (workflow.Step, error) {
+			return workflow.Leaf(
+				spec.ID,
+				workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
+					return struct{}{}, nil
+				}),
+				flow.NodeFunc[struct{}, int](func(context.Context, struct{}) (int, error) {
+					return 1, nil
+				}),
+			), nil
+		})
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
+		{ID: "route", Type: "route"},
+		{
+			ID:   "target",
+			Type: "target",
+			When: []workflow.Gate{
+				workflow.When("route", "no"),
+				workflow.When("route", "yes"),
+			},
+			Trigger: workflow.TriggerAny,
+		},
+	}})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+
+	output, err := step.Run(t.Context(), workflow.NewStore())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if value, getErr := workflow.Get[int](output, workflow.Output("target")); getErr != nil || value != 1 {
+		t.Fatalf("target output = %d, %v; want 1, nil", value, getErr)
+	}
+	if encodes := routeEncodes.Load(); encodes != 1 {
+		t.Fatalf("routing output encodes = %d; want 1", encodes)
 	}
 }
 
@@ -359,7 +534,7 @@ func TestCompileGraph_propagatesBypassThroughConditionalRegions(t *testing.T) {
 	}
 }
 
-func TestCompileGraph_gatedStepPreservesDuplicateIDValidation(t *testing.T) {
+func TestCompileGraph_rejectsMismatchedFactoryIDBeforeGating(t *testing.T) {
 	var calls atomic.Int64
 	registry := workflow.NewRegistry().
 		MustRegisterNode("route", func(workflow.NodeSpec) (workflow.Step, error) {
@@ -383,19 +558,18 @@ func TestCompileGraph_gatedStepPreservesDuplicateIDValidation(t *testing.T) {
 				},
 			), nil
 		})
-	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
+	_, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "route", Type: "route", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
 		{
 			ID: "target", Type: "target", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
 			When: []workflow.Gate{workflow.When("route", "yes")},
 		},
 	}})
-	if err != nil {
-		t.Fatalf("CompileGraph: %v", err)
-	}
-	_, err = step.Run(t.Context(), workflow.NewStore().WithOutput("start", 1))
-	if !errors.Is(err, workflow.ErrDuplicateStep) {
-		t.Fatalf("Run error = %v; want ErrDuplicateStep", err)
+	var graphErr *workflow.GraphError
+	if !errors.Is(err, workflow.ErrInvalidGraph) ||
+		!errors.As(err, &graphErr) || graphErr.Field != "type" ||
+		!strings.Contains(err.Error(), `returned step ID "duplicate"; want "route"`) {
+		t.Fatalf("CompileGraph error = %v; want mismatched route identity", err)
 	}
 	if calls.Load() != 0 {
 		t.Fatalf("node calls = %d; want validation before execution", calls.Load())
@@ -412,13 +586,6 @@ func TestCompileGraph_rejectsRuntimeRoutingContractViolations(t *testing.T) {
 				flow.NodeFunc[int, int](func(_ context.Context, input int) (int, error) {
 					return input, nil
 				}),
-			), nil
-		},
-		"missing output": func(workflow.NodeSpec) (workflow.Step, error) {
-			return flow.NodeFunc[workflow.Store, workflow.Store](
-				func(_ context.Context, store workflow.Store) (workflow.Store, error) {
-					return store, nil
-				},
 			), nil
 		},
 	}
@@ -494,6 +661,71 @@ func TestCompileGraph_validatesEveryGateBeforeApplyingTrigger(t *testing.T) {
 	_, err = step.Run(t.Context(), workflow.NewStore().WithOutput("start", 1))
 	if !errors.Is(err, workflow.ErrUnknownOutlet) {
 		t.Fatalf("Run error = %v; want ErrUnknownOutlet", err)
+	}
+}
+
+func TestCompileGraph_triggerAnyWaitsForEveryRoutingSource(t *testing.T) {
+	var targetCalls atomic.Int64
+	registry := workflow.NewRegistry().
+		MustRegisterNode("match", routingFactory(func(int) string { return "yes" })).
+		MustRegisterSchema("match", routingSchema("yes")).
+		MustRegisterNode("wait", workflow.Factory(
+			func(struct{}) (flow.Node[int, string], error) {
+				return flow.NodeFunc[int, string](
+					func(_ context.Context, input int) (string, error) {
+						return "", workflow.Suspend(input)
+					},
+				), nil
+			},
+		)).
+		MustRegisterSchema("wait", routingSchema("yes")).
+		MustRegisterNode("target", workflow.Factory(
+			func(struct{}) (flow.Node[int, int], error) {
+				return flow.NodeFunc[int, int](
+					func(_ context.Context, input int) (int, error) {
+						targetCalls.Add(1)
+						return input, nil
+					},
+				), nil
+			},
+		))
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
+		{
+			ID:     "match",
+			Type:   "match",
+			Inputs: workflow.DefaultInput(workflow.Output("start")),
+		},
+		{
+			ID:     "wait",
+			Type:   "wait",
+			Inputs: workflow.DefaultInput(workflow.Output("start")),
+		},
+		{
+			ID:     "target",
+			Type:   "target",
+			Inputs: workflow.DefaultInput(workflow.Output("start")),
+			When: []workflow.Gate{
+				workflow.When("match", "yes"),
+				workflow.When("wait", "yes"),
+			},
+			Trigger: workflow.TriggerAny,
+		},
+	}})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+
+	_, err = workflow.Run(
+		t.Context(),
+		step,
+		workflow.NewStore().WithOutput("start", 1),
+		workflow.RunConfig{Journal: workflow.NewJournal()},
+	)
+	if !errors.Is(err, workflow.ErrSuspended) {
+		t.Fatalf("Run error = %v; want ErrSuspended", err)
+	}
+	if targetCalls.Load() != 0 {
+		t.Fatalf("target calls = %d; want 0", targetCalls.Load())
 	}
 }
 

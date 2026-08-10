@@ -143,6 +143,7 @@ func TestCompileGraph_rejectsNegativeConcurrency(t *testing.T) {
 	err := workflow.NewRegistry().ValidateGraph(workflow.Graph{Concurrency: -1})
 	var graphErr *workflow.GraphError
 	if !errors.Is(err, workflow.ErrInvalidGraph) ||
+		!errors.Is(err, flow.ErrInvalidConfig) ||
 		!errors.As(err, &graphErr) ||
 		graphErr.Field != "concurrency" {
 		t.Fatalf("error = %v; want concurrency GraphError", err)
@@ -167,12 +168,48 @@ func TestCompileGraph_emptyGraphIsAnIdentity(t *testing.T) {
 	}
 }
 
+func TestCompileGraph_ownsTheFactoryDefinitionSnapshot(t *testing.T) {
+	inputs := workflow.DefaultInput(workflow.Output("start"))
+	config := json.RawMessage(`{"n":1}`)
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{{
+		ID:     "node",
+		Type:   "late-bound",
+		Inputs: inputs,
+		Config: config,
+	}}}
+	step, err := workflow.NewRegistry().
+		MustRegisterNode("late-bound", lateBoundNodeSpecFactory()).
+		CompileGraph(graph)
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+
+	inputs[workflow.DefaultPort] = workflow.Output("changed-input")
+	config[len(config)-2] = '9'
+	graph.Nodes[0].ID = "changed-node"
+	graph.Nodes[0].Type = "changed-type"
+
+	out, err := step.Run(
+		t.Context(),
+		workflow.NewStore().WithOutput("start", 10).WithOutput("changed-input", 100),
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if value, getErr := workflow.Get[int](out, workflow.Output("node")); getErr != nil || value != 11 {
+		t.Fatalf("node output = %d, %v; want 11, nil", value, getErr)
+	}
+	if _, ok := out.Lookup(workflow.Output("changed-node")); ok {
+		t.Fatal("compiled Graph retained its caller's definition storage")
+	}
+}
+
 func TestCompileGraph_checksContextBeforeStartingNodes(t *testing.T) {
 	calls := 0
 	registry := workflow.NewRegistry().MustRegisterNode("node", func(spec workflow.NodeSpec) (workflow.Step, error) {
 		return workflow.Leaf(
 			spec.ID,
-			workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+			workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
 				calls++
 				return struct{}{}, nil
 			}),
@@ -202,7 +239,7 @@ func TestCompileGraph_parentCancellationStopsRunningNodes(t *testing.T) {
 	registry := workflow.NewRegistry().MustRegisterNode("blocking", func(spec workflow.NodeSpec) (workflow.Step, error) {
 		return workflow.Leaf(
 			spec.ID,
-			workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+			workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
 				return struct{}{}, nil
 			}),
 			flow.NodeFunc[struct{}, struct{}](func(ctx context.Context, _ struct{}) (struct{}, error) {
@@ -235,12 +272,13 @@ func TestCompileGraph_parentCancellationStopsRunningNodes(t *testing.T) {
 func TestCompileGraph_failureKeepsCompletedNodesAndCancelsSiblings(t *testing.T) {
 	boom := errors.New("boom")
 	blockedStarted := make(chan struct{})
+	blockedCause := make(chan error, 1)
 	descendantCalls := 0
 	registry := workflow.NewRegistry().
 		MustRegisterNode("complete", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
-				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+				workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
 					return struct{}{}, nil
 				}),
 				flow.NodeFunc[struct{}, string](func(context.Context, struct{}) (string, error) {
@@ -251,10 +289,14 @@ func TestCompileGraph_failureKeepsCompletedNodesAndCancelsSiblings(t *testing.T)
 		MustRegisterNode("fail", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
-				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+				workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
 					return struct{}{}, nil
 				}),
 				flow.NodeFunc[struct{}, struct{}](func(context.Context, struct{}) (struct{}, error) {
+					// The scheduler may cancel an admitted goroutine before it enters
+					// user code. Wait until the sibling is actually running so this
+					// test exercises failure propagation to running work.
+					<-blockedStarted
 					return struct{}{}, boom
 				}),
 			), nil
@@ -262,12 +304,13 @@ func TestCompileGraph_failureKeepsCompletedNodesAndCancelsSiblings(t *testing.T)
 		MustRegisterNode("blocking", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
-				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+				workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
 					return struct{}{}, nil
 				}),
 				flow.NodeFunc[struct{}, struct{}](func(ctx context.Context, _ struct{}) (struct{}, error) {
 					close(blockedStarted)
 					<-ctx.Done()
+					blockedCause <- context.Cause(ctx)
 					return struct{}{}, ctx.Err()
 				}),
 			), nil
@@ -275,7 +318,7 @@ func TestCompileGraph_failureKeepsCompletedNodesAndCancelsSiblings(t *testing.T)
 		MustRegisterNode("descendant", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
-				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+				workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
 					descendantCalls++
 					return struct{}{}, nil
 				}),
@@ -299,6 +342,9 @@ func TestCompileGraph_failureKeepsCompletedNodesAndCancelsSiblings(t *testing.T)
 		t.Fatalf("Run error = %v; want boom", err)
 	}
 	<-blockedStarted
+	if cause := <-blockedCause; !errors.Is(cause, boom) {
+		t.Fatalf("blocking sibling cause = %v; want failing node error", cause)
+	}
 	if value, getErr := workflow.Get[string](output, workflow.Output("complete")); getErr != nil || value != "committed" {
 		t.Fatalf("completed output = %v, %v; want committed", value, getErr)
 	}
@@ -307,60 +353,12 @@ func TestCompileGraph_failureKeepsCompletedNodesAndCancelsSiblings(t *testing.T)
 	}
 }
 
-func TestCompileGraph_mergesCompletedStoresInDeclarationOrder(t *testing.T) {
-	secondCompleted := make(chan struct{})
-	registry := workflow.NewRegistry().
-		MustRegisterNode("first", func(workflow.NodeSpec) (workflow.Step, error) {
-			return flow.NodeFunc[workflow.Store, workflow.Store](
-				func(_ context.Context, store workflow.Store) (workflow.Store, error) {
-					<-secondCompleted
-					return store.WithOutput("shared", "first"), nil
-				},
-			), nil
-		}).
-		MustRegisterNode("second", func(workflow.NodeSpec) (workflow.Step, error) {
-			return flow.NodeFunc[workflow.Store, workflow.Store](
-				func(_ context.Context, store workflow.Store) (workflow.Store, error) {
-					close(secondCompleted)
-					return store.WithOutput("shared", "second"), nil
-				},
-			), nil
-		}).
-		MustRegisterNode("reader", func(spec workflow.NodeSpec) (workflow.Step, error) {
-			return workflow.Leaf(
-				spec.ID,
-				workflow.From[string](workflow.Output("shared")),
-				flow.NodeFunc[string, string](func(_ context.Context, value string) (string, error) {
-					return value, nil
-				}),
-			), nil
-		})
-	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
-		{ID: "first", Type: "first"},
-		{ID: "second", Type: "second"},
-		{ID: "reader", Type: "reader", DependsOn: []string{"second", "first"}},
-	}})
-	if err != nil {
-		t.Fatalf("CompileGraph: %v", err)
-	}
-	output, err := step.Run(t.Context(), workflow.NewStore())
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if value, getErr := workflow.Get[string](output, workflow.Output("shared")); getErr != nil || value != "second" {
-		t.Fatalf("shared = %v, %v; want declaration-order winner second", value, getErr)
-	}
-	if value, getErr := workflow.Get[string](output, workflow.Output("reader")); getErr != nil || value != "second" {
-		t.Fatalf("reader = %v, %v; want dependency-order winner second", value, getErr)
-	}
-}
-
 func TestCompileGraph_nodesSeeOnlyDeclaredDependencies(t *testing.T) {
 	registry := workflow.NewRegistry().
 		MustRegisterNode("constant", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
-				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+				workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
 					return struct{}{}, nil
 				}),
 				flow.NodeFunc[struct{}, int](func(context.Context, struct{}) (int, error) {
@@ -368,6 +366,11 @@ func TestCompileGraph_nodesSeeOnlyDeclaredDependencies(t *testing.T) {
 				}),
 			), nil
 		}).
+		MustRegisterNode("copy", workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
+			return flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+				return value, nil
+			}), nil
+		})).
 		MustRegisterNode("hidden-read", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			// This deliberately violates the factory contract by hiding a Store
 			// reference instead of declaring it in spec.Inputs.
@@ -383,7 +386,16 @@ func TestCompileGraph_nodesSeeOnlyDeclaredDependencies(t *testing.T) {
 		Concurrency: 1,
 		Nodes: []workflow.GraphNode{
 			{ID: "unrelated", Type: "constant"},
-			{ID: "reader", Type: "hidden-read"},
+			{
+				ID:     "middle",
+				Type:   "copy",
+				Inputs: workflow.DefaultInput(workflow.Output("unrelated")),
+			},
+			{
+				ID:        "reader",
+				Type:      "hidden-read",
+				DependsOn: []string{"middle"},
+			},
 		},
 	})
 	if err != nil {
@@ -397,9 +409,12 @@ func TestCompileGraph_nodesSeeOnlyDeclaredDependencies(t *testing.T) {
 	if value, getErr := workflow.Get[int](output, workflow.Output("unrelated")); getErr != nil || value != 1 {
 		t.Fatalf("unrelated output = %v, %v; want retained value 1", value, getErr)
 	}
+	if value, getErr := workflow.Get[int](output, workflow.Output("middle")); getErr != nil || value != 1 {
+		t.Fatalf("middle output = %v, %v; want retained value 1", value, getErr)
+	}
 }
 
-func TestCompileGraph_deduplicatesExplicitAndInferredDependency(t *testing.T) {
+func TestCompileGraph_rejectsExplicitDependencyAlreadyImpliedByInput(t *testing.T) {
 	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
 	graph := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "a", Type: "addN", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
@@ -410,8 +425,39 @@ func TestCompileGraph_deduplicatesExplicitAndInferredDependency(t *testing.T) {
 			DependsOn: []string{"a"},
 		},
 	}}
-	if _, err := reg.CompileGraph(graph); err != nil {
-		t.Fatalf("CompileGraph: %v", err)
+	_, err := reg.CompileGraph(graph)
+	var graphErr *workflow.GraphError
+	if !errors.Is(err, workflow.ErrInvalidGraph) ||
+		!errors.As(err, &graphErr) || graphErr.NodeID != "b" || graphErr.Field != "dependsOn" {
+		t.Fatalf("CompileGraph error = %v; want b dependsOn redundancy error", err)
+	}
+}
+
+func TestCompileGraph_rejectsExplicitDependencyAlreadyImpliedByGate(t *testing.T) {
+	registry := workflow.NewRegistry().
+		MustRegisterNode("route", routingFactory(func(int) string { return "yes" })).
+		MustRegisterSchema("route", routingSchema("yes")).
+		MustRegisterNode("target", addN())
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
+		{
+			ID:     "route",
+			Type:   "route",
+			Inputs: workflow.DefaultInput(workflow.Output("start")),
+		},
+		{
+			ID:        "target",
+			Type:      "target",
+			Inputs:    workflow.DefaultInput(workflow.Output("start")),
+			When:      []workflow.Gate{workflow.When("route", "yes")},
+			DependsOn: []string{"route"},
+		},
+	}}
+
+	_, err := registry.CompileGraph(graph)
+	var graphErr *workflow.GraphError
+	if !errors.Is(err, workflow.ErrInvalidGraph) ||
+		!errors.As(err, &graphErr) || graphErr.NodeID != "target" || graphErr.Field != "dependsOn" {
+		t.Fatalf("CompileGraph error = %v; want target dependsOn redundancy error", err)
 	}
 }
 
@@ -485,9 +531,43 @@ func TestCompileGraph_keepsFactoryErrorsAtTheGraphBoundary(t *testing.T) {
 		t.Fatalf("err = %v; want GraphError and no SpecError", err)
 	}
 	if graphErr.NodeID != "a" || graphErr.Field != "config" ||
+		graphErr.Path != "/nodes/0" ||
 		!errors.Is(err, workflow.ErrInvalidGraph) ||
-		!errors.Is(err, workflow.ErrInvalidSpec) {
-		t.Fatalf("err = %v; want a/config with both invalid sentinels", err)
+		!errors.Is(err, flow.ErrInvalidConfig) ||
+		errors.Is(err, workflow.ErrInvalidSpec) {
+		t.Fatalf("err = %v; want a/config with graph and config sentinels", err)
+	}
+}
+
+func TestCompileGraph_rejectsDataFromAFactoryBoundaryWithoutOutput(t *testing.T) {
+	registry := workflow.NewRegistry().
+		MustRegisterNode("wait", workflow.AwaitFactory()).
+		MustRegisterNode("use", addN())
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
+		{
+			ID:     "approval",
+			Type:   "wait",
+			Inputs: workflow.DefaultInput(workflow.Output("external")),
+		},
+		{
+			ID:     "consumer",
+			Type:   "use",
+			Inputs: workflow.DefaultInput(workflow.Output("approval")),
+		},
+	}}
+
+	// Validation remains metadata-only and does not invoke user factories. The
+	// concrete output contract becomes knowable during compilation.
+	if err := registry.ValidateGraph(graph); err != nil {
+		t.Fatalf("ValidateGraph without schemas: %v", err)
+	}
+	_, err := registry.CompileGraph(graph)
+	var graphErr *workflow.GraphError
+	if !errors.Is(err, workflow.ErrInvalidGraph) ||
+		!errors.Is(err, workflow.ErrIncompatibleType) ||
+		!errors.As(err, &graphErr) ||
+		graphErr.NodeID != "consumer" || graphErr.Field != "inputs" {
+		t.Fatalf("CompileGraph error = %v; want consumer inputs output-presence error", err)
 	}
 }
 
@@ -506,6 +586,18 @@ func TestCompileGraph_rejectsANilStepFromAFactory(t *testing.T) {
 	_, err = reg.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{ID: "a", Type: "broken"}}})
 	if !errors.Is(err, workflow.ErrNilStep) || !errors.Is(err, workflow.ErrInvalidGraph) {
 		t.Fatalf("typed nil err = %v; want ErrNilStep and ErrInvalidGraph", err)
+	}
+
+	reg = workflow.NewRegistry().MustRegisterNode("broken", func(workflow.NodeSpec) (workflow.Step, error) {
+		return workflow.Sequence(nil), nil
+	})
+	_, err = reg.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{ID: "a", Type: "broken"}}})
+	var graphErr *workflow.GraphError
+	if !errors.Is(err, workflow.ErrNilStep) ||
+		!errors.Is(err, workflow.ErrInvalidGraph) ||
+		!errors.As(err, &graphErr) ||
+		graphErr.NodeID != "a" || graphErr.Field != "type" {
+		t.Fatalf("nested nil err = %v; want node a ErrNilStep", err)
 	}
 }
 
@@ -567,8 +659,11 @@ func TestCompileGraph_programmaticValidationMatchesJSONSchema(t *testing.T) {
 				{ID: "parent", Type: "addN"},
 				node,
 			}}
-			if err := reg.ValidateGraph(g); !errors.Is(err, workflow.ErrInvalidGraph) {
-				t.Fatalf("err = %v; want ErrInvalidGraph", err)
+			err := reg.ValidateGraph(g)
+			var graphErr *workflow.GraphError
+			if !errors.Is(err, workflow.ErrInvalidGraph) ||
+				!errors.As(err, &graphErr) || graphErr.Path != "/nodes/1" {
+				t.Fatalf("err = %v; want GraphError at /nodes/1", err)
 			}
 		})
 	}
@@ -576,11 +671,18 @@ func TestCompileGraph_programmaticValidationMatchesJSONSchema(t *testing.T) {
 
 func TestValidateGraph_rejectsMalformedConfigWithoutANodeSchema(t *testing.T) {
 	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
-	g := workflow.Graph{Nodes: []workflow.GraphNode{{
-		ID: "a", Type: "addN", Config: json.RawMessage(`{"n":`),
-	}}}
-	if err := reg.ValidateGraph(g); !errors.Is(err, workflow.ErrInvalidGraph) {
-		t.Fatalf("err = %v; want ErrInvalidGraph", err)
+	for name, config := range map[string]json.RawMessage{
+		"truncated":  json.RawMessage(`{"n":`),
+		"whitespace": json.RawMessage(" \n\t"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := workflow.Graph{Nodes: []workflow.GraphNode{{
+				ID: "a", Type: "addN", Config: config,
+			}}}
+			if err := reg.ValidateGraph(g); !errors.Is(err, workflow.ErrInvalidGraph) {
+				t.Fatalf("err = %v; want ErrInvalidGraph", err)
+			}
+		})
 	}
 }
 
@@ -640,14 +742,17 @@ func TestCompileGraph_rejectsMalformedPortRef(t *testing.T) {
 			g := workflow.Graph{Nodes: []workflow.GraphNode{
 				{ID: "n", Type: "sum", Inputs: workflow.Inputs{"a": ref, "b": workflow.Output("start")}},
 			}}
-			if err := reg.ValidateGraph(g); !errors.Is(err, workflow.ErrInvalidGraph) {
-				t.Fatalf("err = %v; want ErrInvalidGraph", err)
+			err := reg.ValidateGraph(g)
+			var graphErr *workflow.GraphError
+			if !errors.Is(err, workflow.ErrInvalidGraph) ||
+				!errors.As(err, &graphErr) || graphErr.Path != "/nodes/0" {
+				t.Fatalf("err = %v; want GraphError at /nodes/0", err)
 			}
 		})
 	}
 }
 
-func TestValidateGraph_identifiesEmptyNodeIDByIndex(t *testing.T) {
+func TestValidateGraph_identifiesEmptyNodeIDByPath(t *testing.T) {
 	reg := workflow.NewRegistry().MustRegisterNode("addN", addN())
 	err := reg.ValidateGraph(workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "valid", Type: "addN"},
@@ -655,10 +760,86 @@ func TestValidateGraph_identifiesEmptyNodeIDByIndex(t *testing.T) {
 	}})
 	var graphErr *workflow.GraphError
 	if !errors.Is(err, workflow.ErrInvalidGraph) ||
+		!errors.Is(err, workflow.ErrInvalidStepID) ||
 		!errors.As(err, &graphErr) ||
 		graphErr.Field != "id" ||
-		!strings.Contains(err.Error(), "index 1") {
-		t.Fatalf("err = %v; want empty node ID at index 1", err)
+		graphErr.Path != "/nodes/1" {
+		t.Fatalf("err = %v; want empty node ID at /nodes/1", err)
+	}
+}
+
+func TestValidateGraph_rejectsNonUTF8DefinitionIdentity(t *testing.T) {
+	invalid := string([]byte{0xff})
+	base := workflow.NewRegistry().
+		MustRegisterNode("node", addN()).
+		MustRegisterNode("route", routingFactory(func(int) string { return "yes" })).
+		MustRegisterSchema("route", routingSchema("yes"))
+	tests := map[string]struct {
+		graph workflow.Graph
+		field string
+		want  error
+	}{
+		"node ID": {
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{{ID: invalid, Type: "node"}}},
+			field: "id",
+			want:  workflow.ErrInvalidStepID,
+		},
+		"node type": {
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{{ID: "node", Type: invalid}}},
+			field: "type",
+		},
+		"input port": {
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{{
+				ID: "node", Type: "node",
+				Inputs: workflow.Inputs{invalid: workflow.Output("seed")},
+			}}},
+			field: "inputs",
+		},
+		"reference node ID": {
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{{
+				ID: "node", Type: "node",
+				Inputs: workflow.DefaultInput(workflow.Output(invalid)),
+			}}},
+			field: "inputs",
+		},
+		"reference path": {
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{{
+				ID: "node", Type: "node",
+				Inputs: workflow.DefaultInput(workflow.Ref{NodeID: "seed", Path: "/" + invalid}),
+			}}},
+			field: "inputs",
+		},
+		"dependency": {
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{{
+				ID: "node", Type: "node", DependsOn: []string{invalid},
+			}}},
+			field: "dependsOn",
+		},
+		"gate source": {
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{{
+				ID: "node", Type: "node", When: []workflow.Gate{workflow.When(invalid, "yes")},
+			}}},
+			field: "when",
+		},
+		"gate outlet": {
+			graph: workflow.Graph{Nodes: []workflow.GraphNode{
+				{ID: "route", Type: "route"},
+				{ID: "node", Type: "node", When: []workflow.Gate{workflow.When("route", invalid)}},
+			}},
+			field: "when",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := base.ValidateGraph(test.graph)
+			var graphErr *workflow.GraphError
+			if !errors.Is(err, workflow.ErrInvalidGraph) ||
+				(test.want != nil && !errors.Is(err, test.want)) ||
+				!errors.As(err, &graphErr) || graphErr.Field != test.field ||
+				!strings.Contains(err.Error(), "not valid UTF-8") {
+				t.Fatalf("ValidateGraph error = %v; want field %q UTF-8 error", err, test.field)
+			}
+		})
 	}
 }
 
@@ -689,11 +870,57 @@ func TestGraph_inputs(t *testing.T) {
 	}
 }
 
+func TestGraph_inputsIncludePotentialReadsOfConditionalNodes(t *testing.T) {
+	input := workflow.At("request", "declineReason")
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
+		{
+			ID:     "route",
+			Type:   "router",
+			Inputs: workflow.DefaultInput(workflow.Output("start")),
+		},
+		{
+			ID:     "decline",
+			Type:   "message",
+			Inputs: workflow.DefaultInput(input),
+			When:   []workflow.Gate{workflow.When("route", "declined")},
+		},
+	}}
+
+	wantInputs := []workflow.Ref{input, workflow.Output("start")}
+	if got := graph.Inputs(); !slices.Equal(got, wantInputs) {
+		t.Fatalf("Graph.Inputs = %v; want %v", got, wantInputs)
+	}
+	seed := workflow.NewStore().WithOutput("start", 1)
+	if got := graph.MissingInputs(seed); !slices.Equal(got, []workflow.Ref{input}) {
+		t.Fatalf("Graph.MissingInputs = %v; want unresolved potential input %s", got, input)
+	}
+
+	registry := workflow.NewRegistry().
+		MustRegisterNode("router", routingFactory(func(int) string { return "accepted" })).
+		MustRegisterSchema("router", routingSchema("accepted", "declined")).
+		MustRegisterNode("message", workflow.Factory(func(struct{}) (flow.Node[string, string], error) {
+			return flow.NodeFunc[string, string](func(_ context.Context, message string) (string, error) {
+				return message, nil
+			}), nil
+		}))
+	step, err := registry.CompileGraph(graph)
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+	output, err := step.Run(t.Context(), seed)
+	if err != nil {
+		t.Fatalf("Run without bypassed input: %v", err)
+	}
+	if _, ok := output.Lookup(workflow.Output("decline")); ok {
+		t.Fatal("bypassed node unexpectedly produced output")
+	}
+}
+
 func TestCompileGraph_descriptionPreservesDeclarationOrder(t *testing.T) {
 	constant := func(spec workflow.NodeSpec) (workflow.Step, error) {
 		return workflow.Leaf(
 			spec.ID,
-			workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
+			workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
 			flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) { return value, nil }),
 		), nil
 	}
@@ -732,7 +959,7 @@ func TestCompileGraph_startsReadyDescendantWithoutWaitingForUnrelatedRoot(t *tes
 		MustRegisterNode("slow", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
-				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+				workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
 					return struct{}{}, nil
 				}),
 				flow.NodeFunc[struct{}, struct{}](func(ctx context.Context, _ struct{}) (struct{}, error) {
@@ -749,7 +976,7 @@ func TestCompileGraph_startsReadyDescendantWithoutWaitingForUnrelatedRoot(t *tes
 		MustRegisterNode("constant", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
-				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+				workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
 					return struct{}{}, nil
 				}),
 				flow.NodeFunc[struct{}, int](func(context.Context, struct{}) (int, error) {
@@ -805,7 +1032,7 @@ func TestCompileGraph_suspensionBlocksDependentsButNotUnrelatedWork(t *testing.T
 		MustRegisterNode("unrelated", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
-				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+				workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
 					return struct{}{}, nil
 				}),
 				flow.NodeFunc[struct{}, int](func(context.Context, struct{}) (int, error) {
@@ -817,7 +1044,7 @@ func TestCompileGraph_suspensionBlocksDependentsButNotUnrelatedWork(t *testing.T
 		MustRegisterNode("target", func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
-				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+				workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
 					return struct{}{}, nil
 				}),
 				flow.NodeFunc[struct{}, string](func(context.Context, struct{}) (string, error) {
@@ -866,40 +1093,5 @@ func TestCompileGraph_suspensionBlocksDependentsButNotUnrelatedWork(t *testing.T
 	}
 	if value, getErr := workflow.Get[string](second, workflow.Output("target")); getErr != nil || value != "ran" {
 		t.Fatalf("target output = %v, %v; want ran", value, getErr)
-	}
-}
-
-func TestCompileGraph_preservesWritesReturnedWithSuspension(t *testing.T) {
-	registry := workflow.NewRegistry().MustRegisterNode(
-		"composite",
-		func(workflow.NodeSpec) (workflow.Step, error) {
-			completed := workflow.Leaf(
-				"completed",
-				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
-					return struct{}{}, nil
-				}),
-				flow.NodeFunc[struct{}, string](func(context.Context, struct{}) (string, error) {
-					return "kept", nil
-				}),
-			)
-			return workflow.Parallel(
-				[]workflow.Step{completed, workflow.Interrupt("wait", "continue?")},
-				workflow.ParallelConfig{},
-			), nil
-		},
-	)
-	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
-		ID: "composite", Type: "composite",
-	}}})
-	if err != nil {
-		t.Fatalf("CompileGraph: %v", err)
-	}
-
-	output, err := step.Run(t.Context(), workflow.NewStore())
-	if !errors.Is(err, workflow.ErrSuspended) {
-		t.Fatalf("Run error = %v; want suspension", err)
-	}
-	if value, getErr := workflow.Get[string](output, workflow.Output("completed")); getErr != nil || value != "kept" {
-		t.Fatalf("completed output = %v, %v; want kept", value, getErr)
 	}
 }

@@ -3,6 +3,9 @@ package workflow
 import (
 	"fmt"
 	"slices"
+	"strconv"
+
+	"github.com/Tangerg/flow"
 )
 
 // plan validates the graph structurally. Registry-level semantic checks build
@@ -41,6 +44,7 @@ type graphPlanner struct {
 // separate from graphPlanner makes the node-local routing rules independent of
 // dependency indexing.
 type gateValidator struct {
+	path    string
 	nodeID  string
 	trigger Trigger
 	gates   []Gate
@@ -49,14 +53,10 @@ type gateValidator struct {
 }
 
 func (g *graphPlanner) build() (graphPlan, error) {
-	if g.graph.Concurrency < 0 {
+	if err := (flow.MapConfig{Concurrency: g.graph.Concurrency}).Validate(); err != nil {
 		return graphPlan{}, &GraphError{
 			Field: fieldConcurrency,
-			Err: fmt.Errorf(
-				"%w: concurrency must be non-negative, got %d",
-				ErrInvalidGraph,
-				g.graph.Concurrency,
-			),
+			Err:   err,
 		}
 	}
 	if err := g.indexNodes(); err != nil {
@@ -76,30 +76,40 @@ func (g *graphPlanner) build() (graphPlan, error) {
 
 func (g *graphPlanner) indexNodes() error {
 	for index, node := range g.graph.Nodes {
-		switch {
-		case node.ID == "":
+		path := graphNodePath(index)
+		if err := validateStepID(node.ID); err != nil {
 			return &GraphError{
+				Path:  path,
 				Field: fieldID,
-				Err:   fmt.Errorf("%w: node at index %d has an empty ID", ErrInvalidGraph, index),
+				Err:   err,
 			}
-		case node.Type == "":
+		}
+		if err := validateName("node type", node.Type); err != nil {
 			return &GraphError{
+				Path:   path,
 				NodeID: node.ID,
 				Field:  fieldType,
-				Err:    fmt.Errorf("%w: node type is empty", ErrInvalidGraph),
+				Err:    err,
 			}
 		}
 		if _, duplicate := g.plan.nodesByID[node.ID]; duplicate {
-			return &GraphError{NodeID: node.ID, Field: fieldID, Err: ErrDuplicateNode}
+			return &GraphError{
+				Path:   path,
+				NodeID: node.ID,
+				Field:  fieldID,
+				Err:    ErrDuplicateNode,
+			}
 		}
 		if err := node.Inputs.validate(); err != nil {
 			return &GraphError{
+				Path:   path,
 				NodeID: node.ID,
 				Field:  fieldInputs,
-				Err:    fmt.Errorf("%w: %w", ErrInvalidGraph, err),
+				Err:    err,
 			}
 		}
 		gates := gateValidator{
+			path:    path,
 			nodeID:  node.ID,
 			trigger: node.Trigger,
 			gates:   node.When,
@@ -116,16 +126,14 @@ func (g *graphPlanner) indexNodes() error {
 func (g *gateValidator) validate() error {
 	if !g.trigger.valid() {
 		return g.fieldError(fieldTrigger, fmt.Errorf(
-			"%w: unknown trigger %q",
-			ErrInvalidGraph,
+			"unknown trigger %q",
 			g.trigger,
 		))
 	}
 	if len(g.gates) == 0 {
 		if g.trigger == TriggerAny {
 			return g.fieldError(fieldTrigger, fmt.Errorf(
-				"%w: trigger %q requires at least one gate",
-				ErrInvalidGraph,
+				"trigger %q requires at least one gate",
 				g.trigger,
 			))
 		}
@@ -143,22 +151,15 @@ func (g *gateValidator) validate() error {
 }
 
 func (g *gateValidator) validateGate(gate Gate) error {
-	switch {
-	case gate.NodeID == "":
-		return g.fieldError(
-			fieldWhen,
-			fmt.Errorf("%w: gate source node ID is empty", ErrInvalidGraph),
-		)
-	case gate.Outlet == "":
-		return g.fieldError(
-			fieldWhen,
-			fmt.Errorf("%w: gate outlet is empty", ErrInvalidGraph),
-		)
+	if err := validateName("gate source node ID", gate.NodeID); err != nil {
+		return g.fieldError(fieldWhen, err)
+	}
+	if err := validateName("gate outlet", gate.Outlet); err != nil {
+		return g.fieldError(fieldWhen, err)
 	}
 	if _, duplicate := g.seen[gate]; duplicate {
 		return g.fieldError(fieldWhen, fmt.Errorf(
-			"%w: gate %q/%q is declared more than once",
-			ErrInvalidGraph,
+			"gate %q/%q is declared more than once",
 			gate.NodeID,
 			gate.Outlet,
 		))
@@ -168,8 +169,7 @@ func (g *gateValidator) validateGate(gate Gate) error {
 	if previous, duplicateSource := g.sources[gate.NodeID]; duplicateSource &&
 		g.trigger == TriggerAll {
 		return g.fieldError(fieldWhen, fmt.Errorf(
-			"%w: trigger %q requires routing node %q to select both %q and %q",
-			ErrInvalidGraph,
+			"trigger %q requires routing node %q to select both %q and %q",
 			TriggerAll,
 			gate.NodeID,
 			previous,
@@ -181,7 +181,12 @@ func (g *gateValidator) validateGate(gate Gate) error {
 }
 
 func (g *gateValidator) fieldError(field string, err error) error {
-	return &GraphError{NodeID: g.nodeID, Field: field, Err: err}
+	return &GraphError{
+		Path:   g.path,
+		NodeID: g.nodeID,
+		Field:  field,
+		Err:    err,
+	}
 }
 
 func (g *graphPlanner) connectNodes() error {
@@ -189,6 +194,7 @@ func (g *graphPlanner) connectNodes() error {
 		connector := nodeConnector{
 			planner:   g,
 			nodeIndex: nodeIndex,
+			path:      graphNodePath(nodeIndex),
 			nodeID:    node.ID,
 			connected: make(map[string]struct{}),
 			explicit:  make(map[string]struct{}, len(node.DependsOn)),
@@ -206,6 +212,7 @@ func (g *graphPlanner) connectNodes() error {
 type nodeConnector struct {
 	planner   *graphPlanner
 	nodeIndex int
+	path      string
 	nodeID    string
 	connected map[string]struct{}
 	explicit  map[string]struct{}
@@ -239,20 +246,22 @@ func (n *nodeConnector) connectGate(dependency string) error {
 }
 
 func (n *nodeConnector) connectExplicit(dependency string) error {
-	if dependency == "" {
-		return n.fieldError(
-			fieldDependsOn,
-			fmt.Errorf("%w: dependency ID is empty", ErrInvalidGraph),
-		)
+	if err := validateName("dependency ID", dependency); err != nil {
+		return n.fieldError(fieldDependsOn, err)
 	}
 	if _, duplicate := n.explicit[dependency]; duplicate {
 		return n.fieldError(fieldDependsOn, fmt.Errorf(
-			"%w: dependency %q is listed more than once",
-			ErrInvalidGraph,
+			"dependency %q is listed more than once",
 			dependency,
 		))
 	}
 	n.explicit[dependency] = struct{}{}
+	if _, implied := n.connected[dependency]; implied {
+		return n.fieldError(fieldDependsOn, fmt.Errorf(
+			"dependency %q is already implied by an input or gate",
+			dependency,
+		))
+	}
 
 	dependencyIndex, exists := n.planner.indexByID[dependency]
 	if !exists {
@@ -294,7 +303,16 @@ func (n *nodeConnector) connectDependency(
 }
 
 func (n *nodeConnector) fieldError(field string, err error) error {
-	return &GraphError{NodeID: n.nodeID, Field: field, Err: err}
+	return &GraphError{
+		Path:   n.path,
+		NodeID: n.nodeID,
+		Field:  field,
+		Err:    err,
+	}
+}
+
+func graphNodePath(index int) string {
+	return pointerPath{fieldNodes, strconv.Itoa(index)}.encode()
 }
 
 func (g *graphPlanner) validateAcyclic() error {

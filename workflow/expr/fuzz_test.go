@@ -1,6 +1,8 @@
 package expr_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/Tangerg/flow/workflow"
@@ -82,5 +84,52 @@ func FuzzParse(f *testing.F) {
 		_, _ = e.Bool(s)
 		_, _ = e.String(s)
 		_, _ = e.Eval(workflow.NewStore())
+	})
+}
+
+// FuzzBindingsJSON locks the configuration boundary to one strict, atomic,
+// lossless contract. Any accepted document must have a stable encoded form;
+// any rejected document must leave its destination unchanged.
+func FuzzBindingsJSON(f *testing.F) {
+	for _, seed := range [][]byte{
+		[]byte(`{}`),
+		[]byte(`null`),
+		[]byte(`[]`),
+		[]byte(`{"conditions":{"done":"work.output == true"}}`),
+		[]byte(`{"resolvers":{"route":"classify.output"}}`),
+		[]byte(`{"switches":{"size":{"cases":[{"when":"n.output > 1","then":"large"}],"fallback":"small"}}}`),
+		[]byte(`{"conditions":{},"conditions":{}}`),
+		[]byte(`{"unknown":true}`),
+		{'{', '"', 0xff, '"', ':', '1', '}'},
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		target := expr.Bindings{Conditions: map[string]string{"sentinel": "true"}}
+		err := json.Unmarshal(data, &target)
+		if err != nil {
+			if len(target.Conditions) != 1 || target.Conditions["sentinel"] != "true" ||
+				target.Resolvers != nil || target.Switches != nil {
+				t.Fatalf("failed Unmarshal changed receiver: %#v", target)
+			}
+			return
+		}
+
+		encoded, err := json.Marshal(target)
+		if err != nil {
+			t.Fatalf("accepted Bindings cannot be marshaled: %v", err)
+		}
+		var restored expr.Bindings
+		if decodeErr := json.Unmarshal(encoded, &restored); decodeErr != nil {
+			t.Fatalf("encoded Bindings cannot be decoded: %v", decodeErr)
+		}
+		reencoded, err := json.Marshal(restored)
+		if err != nil {
+			t.Fatalf("restored Bindings cannot be marshaled: %v", err)
+		}
+		if !bytes.Equal(reencoded, encoded) {
+			t.Fatalf("encoding is not idempotent: got %s; want %s", reencoded, encoded)
+		}
 	})
 }

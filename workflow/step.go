@@ -2,8 +2,6 @@ package workflow
 
 import (
 	"context"
-	"reflect"
-	"strconv"
 
 	"github.com/Tangerg/flow"
 )
@@ -12,37 +10,49 @@ import (
 // Store extended with its output. A Step is a flow.Node[Store, Store], so it
 // composes with flow's primitives; steps built by this package also implement
 // [Describer].
+//
+// As with a read operation returning both bytes and a terminal error, the Store
+// returned with a non-nil error can carry meaningful completed state. A
+// caller-defined Step must define that result deliberately rather than treating
+// it as an ignored return slot. Transparent control flow such as [Sequence] and
+// [Branch] preserves the selected child's result; composites that introduce a
+// commit boundary document what they retain or roll back. Parent cancellation
+// is stricter: when it is observed as a child returns, built-in composites give
+// it precedence and discard that child's unaccepted result.
+//
+// Built-in composites validate their complete visible definition before work
+// begins and do not admit another child after observing parent cancellation.
+// They also participate in [flow.Validate], so the same checks remain visible
+// when Steps are nested inside root-package composites. In the other direction,
+// built-in workflow composites honor a caller-defined Step's optional Validate
+// method without assuming anything about its hidden structure. Validation can
+// inspect only immutable definition state and therefore cannot suspend; a
+// validator that returns [ErrSuspended] is reported as [flow.ErrInvalidConfig].
 type Step = flow.Node[Store, Store]
 
-// decoratedStep is the transparent execution metadata shared by internal
-// wrappers. It preserves static validation and public descriptions instead of
-// turning a built-in step opaque.
+// decoratedStep is the transparent base shared by internal wrappers. It
+// preserves validation, identity, output shape, and public descriptions instead
+// of duplicating metadata or turning a built-in step opaque.
 type decoratedStep struct {
-	id   string
-	step Step
+	step definedStep
 }
 
-func (d decoratedStep) Describe() Description {
-	description := Describe(d.step)
-	if description.ID == "" {
-		description.ID = d.id
-	}
-	return description
-}
+func (d decoratedStep) validate() error { return d.step.validate() }
+
+func (d decoratedStep) Describe() Description { return d.step.Describe() }
 
 func (d decoratedStep) definition() stepDefinition {
-	if defined, ok := d.step.(definedStep); ok {
-		return defined.definition()
-	}
-	return stepDefinition{kind: definitionNamed, id: d.id}
+	return d.step.definition()
 }
+
+func (d decoratedStep) stepID() string { return d.definition().id }
 
 // scopedStep owns one child-step invocation in a repeated execution scope.
 // Context remains an explicit method argument, following the standard context
 // contract instead of being retained in a struct.
 type scopedStep struct {
-	step    Step
-	segment string
+	step  Step
+	frame ScopeFrame
 }
 
 // run invokes the child under its scope. Composites validate their body before
@@ -52,12 +62,17 @@ func (s scopedStep) run(ctx context.Context, store Store) (Store, error) {
 }
 
 func (s scopedStep) indexed(id string, index int) scopedStep {
-	s.segment = id + "[" + strconv.Itoa(index) + "]"
+	s.frame = ScopeFrame{
+		ID:      id,
+		Indexed: true,
+		// #nosec G115 -- callers supply indexes produced by non-negative range loops.
+		Index: uint64(index),
+	}
 	return s
 }
 
 func (s scopedStep) childContext(parent context.Context) context.Context {
-	return WithScope(parent, s.segment)
+	return withScopeFrame(parent, s.frame)
 }
 
 type stepList []Step
@@ -71,33 +86,39 @@ func (s stepList) validate() error {
 	return nil
 }
 
-// isNilNode recognizes nil function-backed Nodes hidden in an interface.
-// Function adapters cannot run without a function; nil pointers remain valid
-// because a caller-defined pointer receiver may intentionally handle nil.
+// isNilNode recognizes flow's nil function adapter hidden in an interface.
+// NodeFunc cannot run without a function. Caller-defined concrete types,
+// including named function and pointer types, own their nil-receiver behavior.
 func isNilNode[I, O any](node flow.Node[I, O]) bool {
 	if node == nil {
 		return true
 	}
-	value := reflect.ValueOf(node)
-	return value.Kind() == reflect.Func && value.IsNil()
+	function, ok := node.(flow.NodeFunc[I, O])
+	return ok && function == nil
 }
 
 func (s stepList) run(ctx context.Context, store Store) (Store, error) {
 	current := store
 	for _, step := range s {
-		var err error
-		current, err = step.Run(ctx, current)
-		if err != nil {
+		if err := context.Cause(ctx); err != nil {
 			return current, err
 		}
+		next, err := step.Run(ctx, current)
+		if contextErr := context.Cause(ctx); contextErr != nil {
+			return current, contextErr
+		}
+		if err != nil {
+			return next, err
+		}
+		current = next
 	}
-	return current, nil
+	return current, context.Cause(ctx)
 }
 
 func (s stepList) describe() []Description {
 	descriptions := make([]Description, len(s))
 	for index, step := range s {
-		descriptions[index] = Describe(step)
+		descriptions[index] = describe(step)
 	}
 	return descriptions
 }

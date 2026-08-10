@@ -88,6 +88,27 @@ func TestLoop_respectsCancellation(t *testing.T) {
 	}
 }
 
+func TestLoop_cancellationDuringBodyRollsBackIteration(t *testing.T) {
+	cause := errors.New("stop loop")
+	for name, bodyErr := range map[string]error{
+		"successful body": nil,
+		"failing body":    errors.New("body failed"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancelCause(t.Context())
+			node := flow.Loop(func(_ context.Context, _ int, value int) (int, bool, error) {
+				cancel(cause)
+				return value + 1, true, bodyErr
+			}, flow.LoopConfig{})
+
+			got, err := node.Run(ctx, 41)
+			if !errors.Is(err, cause) || got != 41 {
+				t.Fatalf("Run = %d, %v; want 41, cancellation cause", got, err)
+			}
+		})
+	}
+}
+
 func TestLoop_nilBody(t *testing.T) {
 	_, err := flow.Loop[int](nil, flow.LoopConfig{}).Run(t.Context(), 0)
 	if !errors.Is(err, flow.ErrNilFunc) {

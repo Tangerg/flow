@@ -30,6 +30,23 @@ func TestRace_firstWins(t *testing.T) {
 	}
 }
 
+func TestRace_ownsNodeSliceStructure(t *testing.T) {
+	nodes := []flow.Node[int, int]{
+		flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
+			return in + 1, nil
+		}),
+	}
+	race := flow.Race(nodes...)
+	nodes[0] = flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
+		return in + 100, nil
+	})
+
+	got, err := race.Run(t.Context(), 1)
+	if err != nil || got != 2 {
+		t.Fatalf("Run after source-slice mutation = %d, %v; want 2, nil", got, err)
+	}
+}
+
 func TestRace_waitsForLosingNodesToStop(t *testing.T) {
 	started := make(chan struct{})
 	stopped := make(chan struct{})
@@ -92,11 +109,15 @@ func TestRace_allFail(t *testing.T) {
 
 func TestRace_allFailErrorOrderIsStable(t *testing.T) {
 	e1, e2 := errors.New("first"), errors.New("second")
+	secondFinished := make(chan struct{})
 	n1 := flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) {
-		time.Sleep(time.Millisecond)
+		<-secondFinished
 		return 0, e1
 	})
-	n2 := flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, e2 })
+	n2 := flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) {
+		close(secondFinished)
+		return 0, e2
+	})
 
 	_, err := flow.Race(n1, n2).Run(t.Context(), 0)
 	if err == nil || err.Error() != "flow: index 0: first\nflow: index 1: second" {
@@ -112,13 +133,14 @@ func TestRace_noNodes(t *testing.T) {
 }
 
 func TestRace_cancelledBeforeRun(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
+	cause := errors.New("stop race")
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(cause)
 	node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in, nil })
 
 	_, err := flow.Race(node).Run(ctx, 1)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("err = %v; want context.Canceled", err)
+	if !errors.Is(err, cause) {
+		t.Fatalf("err = %v; want cancellation cause", err)
 	}
 }
 

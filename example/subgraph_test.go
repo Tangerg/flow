@@ -23,7 +23,7 @@ func Example_subgraph() {
 	)
 
 	sum := workflow.BindFactory(
-		func(_ struct{}, inputs workflow.Inputs) (workflow.BindFunc[[2]int], error) {
+		func(_ struct{}, inputs workflow.Inputs) (workflow.Binder[[2]int], error) {
 			left, leftOK := inputs.Ref("left")
 			right, rightOK := inputs.Ref("right")
 			if !leftOK || !rightOK {
@@ -32,14 +32,14 @@ func Example_subgraph() {
 					workflow.ErrMissingPort,
 				)
 			}
-			return func(store workflow.Store) ([2]int, error) {
+			return workflow.BinderFunc[[2]int](func(store workflow.Store) ([2]int, error) {
 				a, err := workflow.Get[int](store, left)
 				if err != nil {
 					return [2]int{}, err
 				}
 				b, err := workflow.Get[int](store, right)
 				return [2]int{a, b}, err
-			}, nil
+			}), nil
 		},
 		func(struct{}) (flow.Node[[2]int, int], error) {
 			return flow.NodeFunc[[2]int, int](

@@ -14,11 +14,51 @@ import (
 	"github.com/Tangerg/flow/workflow"
 )
 
+type journalRecordingMarshaler struct {
+	journal *workflow.Journal
+}
+
+func (j journalRecordingMarshaler) MarshalJSON() ([]byte, error) {
+	if err := j.journal.Record(workflow.JournalKey{ID: "recorded-during-marshal"}, 2); err != nil {
+		return nil, err
+	}
+	return []byte(`1`), nil
+}
+
+func TestJournalMarshalJSONInvokesApplicationCodeOutsideTheSnapshotLock(t *testing.T) {
+	journal := workflow.NewJournal()
+	if err := journal.Record(
+		workflow.JournalKey{ID: "original"},
+		journalRecordingMarshaler{journal: journal},
+	); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	data, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if keys := journal.Keys(); !equalJournalKeys(keys, []workflow.JournalKey{
+		{ID: "original"},
+		{ID: "recorded-during-marshal"},
+	}) {
+		t.Fatalf("Journal keys = %+v; want the reentrant record", keys)
+	}
+
+	restored := workflow.NewJournal()
+	if err := json.Unmarshal(data, restored); err != nil {
+		t.Fatalf("Unmarshal snapshot: %v", err)
+	}
+	if keys := restored.Keys(); !equalJournalKeys(keys, []workflow.JournalKey{{ID: "original"}}) {
+		t.Fatalf("snapshot keys = %+v; want only the pre-marshal record", keys)
+	}
+}
+
 func TestJournal_recordsOnlyCompletedSteps(t *testing.T) {
 	boom := errors.New("boom")
-	ok := workflow.Leaf("ok", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+	ok := workflow.Leaf("ok", workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
-	bad := workflow.Leaf("bad", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+	bad := workflow.Leaf("bad", workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(context.Context, int) (int, error) { return 0, boom }))
 
 	journal := workflow.NewJournal()
@@ -33,12 +73,76 @@ func TestJournal_recordsOnlyCompletedSteps(t *testing.T) {
 	}
 }
 
+func TestJournalKey_JSONBoundaryIsStrictLosslessAndAtomic(t *testing.T) {
+	invalid := map[string][]byte{
+		"unknown field":       []byte(`{"id":"wait","unknown":true}`),
+		"duplicate identity":  []byte(`{"id":"first","id":"second"}`),
+		"invalid UTF-8":       {'{', '"', 'i', 'd', '"', ':', '"', 0xff, '"', '}'},
+		"unpaired surrogate":  []byte(`{"id":"\ud800"}`),
+		"invalid scope":       []byte(`{"id":"wait","scope":[{"id":"loop","index":1}]}`),
+		"unknown scope field": []byte(`{"id":"wait","scope":[{"id":"loop","extra":1}]}`),
+		"null":                []byte(`null`),
+		"array":               []byte(`[]`),
+	}
+	for name, data := range invalid {
+		t.Run(name, func(t *testing.T) {
+			target := workflow.JournalKey{ID: "kept", Scope: ordinaryScope("outer")}
+			if err := json.Unmarshal(data, &target); err == nil {
+				t.Fatal("Unmarshal unexpectedly succeeded")
+			}
+			if target.ID != "kept" || !equalJournalKeys(
+				[]workflow.JournalKey{target},
+				[]workflow.JournalKey{{ID: "kept", Scope: ordinaryScope("outer")}},
+			) {
+				t.Fatalf("failed Unmarshal changed receiver: %#v", target)
+			}
+		})
+	}
+	var nilKey *workflow.JournalKey
+	if err := nilKey.UnmarshalJSON([]byte(`{"id":"wait"}`)); err == nil {
+		t.Fatal("nil receiver UnmarshalJSON unexpectedly succeeded")
+	}
+
+	tooDeep := workflow.JournalKey{ID: "wait", Scope: make([]workflow.ScopeFrame, workflow.MaxNestingDepth+1)}
+	for index := range tooDeep.Scope {
+		tooDeep.Scope[index] = workflow.ScopeFrame{ID: strconv.Itoa(index)}
+	}
+	if _, err := json.Marshal(tooDeep); !errors.Is(err, workflow.ErrMaxDepth) {
+		t.Fatalf("Marshal depth error = %v; want ErrMaxDepth", err)
+	}
+
+	bad := string([]byte{0xff})
+	for name, key := range map[string]workflow.JournalKey{
+		"ID":    {ID: bad},
+		"scope": {ID: "wait", Scope: ordinaryScope(bad)},
+	} {
+		t.Run("marshal "+name, func(t *testing.T) {
+			if _, err := json.Marshal(key); err == nil {
+				t.Fatal("Marshal accepted invalid identity text")
+			}
+		})
+	}
+
+	original := workflow.JournalKey{ID: "wait", Scope: indexedScope("items", 1<<63)}
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var restored workflow.JournalKey
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !equalJournalKeys([]workflow.JournalKey{restored}, []workflow.JournalKey{original}) {
+		t.Fatalf("round trip = %#v; want %#v", restored, original)
+	}
+}
+
 func TestSequence_rejectsDuplicateIDsBeforeRunning(t *testing.T) {
 	var runs int
 	step := func() workflow.Step {
 		return workflow.Leaf(
 			"same",
-			workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+			workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 			flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
 				runs++
 				return value, nil
@@ -56,12 +160,62 @@ func TestSequence_rejectsDuplicateIDsBeforeRunning(t *testing.T) {
 	}
 }
 
+func TestSequence_validatesBuiltInCompositeBehindOpaqueBoundary(t *testing.T) {
+	var runs int
+	step := func() workflow.Step {
+		return workflow.Leaf(
+			"same",
+			workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+			flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+				runs++
+				return value, nil
+			}),
+		)
+	}
+	inner := workflow.Sequence(step(), step())
+	opaque := flow.NodeFunc[workflow.Store, workflow.Store](inner.Run)
+
+	_, err := workflow.Sequence(opaque).Run(t.Context(), workflow.NewStore())
+	if !errors.Is(err, workflow.ErrDuplicateStep) {
+		t.Fatalf("err = %v; want ErrDuplicateStep", err)
+	}
+	if runs != 0 {
+		t.Fatalf("steps ran %d times; want inner validation before side effects", runs)
+	}
+}
+
+func TestSequence_validatesNestedConstructionBeforeRunning(t *testing.T) {
+	var runs int
+	valid := workflow.LeafFunc(
+		"valid",
+		workflow.Output("start"),
+		func(_ context.Context, input int) (int, error) {
+			runs++
+			return input, nil
+		},
+	)
+	invalid := workflow.Leaf[int, int]("invalid", nil, flow.NodeFunc[int, int](
+		func(_ context.Context, input int) (int, error) { return input, nil },
+	))
+
+	_, err := workflow.Sequence(valid, invalid).Run(
+		t.Context(),
+		workflow.NewStore().WithOutput("start", 1),
+	)
+	if !errors.Is(err, flow.ErrNilFunc) {
+		t.Fatalf("err = %v; want flow.ErrNilFunc", err)
+	}
+	if runs != 0 {
+		t.Fatalf("valid step ran %d times; want complete validation first", runs)
+	}
+}
+
 func TestRun_rejectsDuplicateIDsHiddenByOpaqueStepsOnFreshAndReplay(t *testing.T) {
 	var firstRuns, secondRuns int
 	hidden := func(runs *int) workflow.Step {
 		leaf := workflow.Leaf(
 			"same",
-			workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+			workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 			flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
 				(*runs)++
 				return value, nil
@@ -96,7 +250,7 @@ func TestJournal_internalConflictIsReturnedByRun(t *testing.T) {
 	journal := workflow.NewJournal()
 	step := workflow.Leaf(
 		"same",
-		workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+		workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
 			if err := journal.Record(workflow.JournalKey{ID: "same"}, "external"); err != nil {
 				return 0, err
@@ -116,22 +270,61 @@ func TestJournal_internalConflictIsReturnedByRun(t *testing.T) {
 	}
 }
 
-func TestNilJournalJSONMethods(t *testing.T) {
+func TestNilJournalJSONRepresentsAbsence(t *testing.T) {
 	var journal *workflow.Journal
 	data, err := journal.MarshalJSON()
 	if err != nil {
 		t.Fatalf("MarshalJSON: %v", err)
 	}
-	var restored workflow.Journal
-	if err := restored.UnmarshalJSON(data); err != nil {
-		t.Fatalf("UnmarshalJSON encoded nil Journal: %v", err)
+	if string(data) != "null" {
+		t.Fatalf("MarshalJSON = %s; want null", data)
 	}
-	if restored.Len() != 0 {
-		t.Fatalf("restored Len = %d; want 0", restored.Len())
+	encoded, err := json.Marshal(journal)
+	if err != nil || string(encoded) != "null" {
+		t.Fatalf("json.Marshal = %s, %v; want null, nil", encoded, err)
+	}
+
+	var restored *workflow.Journal
+	if err := json.Unmarshal(data, &restored); err != nil || restored != nil {
+		t.Fatalf("json.Unmarshal = %#v, %v; want nil Journal", restored, err)
+	}
+	var concrete workflow.Journal
+	if err := json.Unmarshal(data, &concrete); err == nil {
+		t.Fatal("concrete Journal accepted null checkpoint")
 	}
 	if err := journal.UnmarshalJSON(data); err == nil ||
 		!strings.Contains(err.Error(), "nil journal") {
 		t.Fatalf("nil receiver UnmarshalJSON err = %v; want nil journal", err)
+	}
+}
+
+func TestJournal_MarshalEnforcesRoundTripDepth(t *testing.T) {
+	atLimit := workflow.NewJournal()
+	if err := atLimit.Record(
+		workflow.JournalKey{ID: "deep"},
+		nestedArrays(workflow.MaxNestingDepth-3),
+	); err != nil {
+		t.Fatalf("Record at depth limit: %v", err)
+	}
+	data, err := json.Marshal(atLimit)
+	if err != nil {
+		t.Fatalf("Marshal at depth limit: %v", err)
+	}
+	var restored workflow.Journal
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal value produced at depth limit: %v", err)
+	}
+
+	tooDeep := workflow.NewJournal()
+	if err := tooDeep.Record(
+		workflow.JournalKey{ID: "deep"},
+		nestedArrays(workflow.MaxNestingDepth-2),
+	); err != nil {
+		t.Fatalf("Record beyond depth limit: %v", err)
+	}
+	if _, err := json.Marshal(tooDeep); !errors.Is(err, workflow.ErrMaxDepth) ||
+		!strings.Contains(err.Error(), `record "deep"`) {
+		t.Fatalf("Marshal beyond depth limit error = %v; want record-scoped ErrMaxDepth", err)
 	}
 }
 
@@ -143,7 +336,7 @@ func equalJournalKeys(a, b []workflow.JournalKey) bool {
 
 func TestJournal_forgetAndReset(t *testing.T) {
 	var runs int
-	step := workflow.Leaf("a", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+	step := workflow.Leaf("a", workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { runs++; return x, nil }))
 
 	journal := workflow.NewJournal()
@@ -158,7 +351,9 @@ func TestJournal_forgetAndReset(t *testing.T) {
 		t.Fatalf("ran %d times; want 1", runs)
 	}
 
-	journal.Forget(workflow.JournalKey{ID: "a"})
+	if err := journal.Forget(workflow.JournalKey{ID: "a"}); err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
 	if _, err := workflow.Run(t.Context(), step, workflow.NewStore(), cfg); err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -180,46 +375,99 @@ func TestJournal_forgetAndReset(t *testing.T) {
 
 func TestJournal_recordExternalCompletion(t *testing.T) {
 	var journal workflow.Journal
-	key := workflow.JournalKey{ID: "approval", Scope: []string{"items[0]"}}
+	key := workflow.JournalKey{ID: "approval", Scope: indexedScope("items", 0)}
 	if err := journal.Record(key, map[string]any{"approved": true}); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
-	key.Scope[0] = "changed"
+	key.Scope[0].ID = "changed"
 	if keys := journal.Keys(); !equalJournalKeys(keys, []workflow.JournalKey{
-		{ID: "approval", Scope: []string{"items[0]"}},
+		{ID: "approval", Scope: indexedScope("items", 0)},
 	}) {
 		t.Fatalf("Keys = %+v; Record retained the caller's scope slice", keys)
 	}
 	if err := journal.Record(workflow.JournalKey{
-		ID: "approval", Scope: []string{"items[0]"},
+		ID: "approval", Scope: indexedScope("items", 0),
 	}, false); !errors.Is(err, workflow.ErrJournalConflict) {
 		t.Fatalf("duplicate Record error = %v; want ErrJournalConflict", err)
 	}
 
-	journal.Forget(workflow.JournalKey{ID: "approval", Scope: []string{"items[0]"}})
+	if err := journal.Forget(workflow.JournalKey{
+		ID: "approval", Scope: indexedScope("items", 0),
+	}); err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
 	if err := journal.Record(workflow.JournalKey{
-		ID: "approval", Scope: []string{"items[0]"},
+		ID: "approval", Scope: indexedScope("items", 0),
 	}, false); err != nil {
 		t.Fatalf("Record after Forget: %v", err)
 	}
-	journal.Forget(workflow.JournalKey{ID: "approval", Scope: []string{"missing"}})
+	if err := journal.Forget(workflow.JournalKey{
+		ID: "approval", Scope: ordinaryScope("missing"),
+	}); err != nil {
+		t.Fatalf("Forget missing record: %v", err)
+	}
 	if journal.Len() != 1 {
 		t.Fatalf("Len after forgetting a missing scope = %d; want 1", journal.Len())
 	}
 	if err := journal.Record(workflow.JournalKey{}, true); !errors.Is(err, workflow.ErrInvalidStepID) {
 		t.Fatalf("empty key error = %v; want ErrInvalidStepID", err)
 	}
+	if err := journal.Forget(workflow.JournalKey{}); !errors.Is(err, workflow.ErrInvalidStepID) {
+		t.Fatalf("empty Forget key error = %v; want ErrInvalidStepID", err)
+	}
 
 	var nilJournal *workflow.Journal
 	if err := nilJournal.Record(workflow.JournalKey{ID: "approval"}, true); err == nil {
 		t.Fatal("nil Journal Record unexpectedly succeeded")
 	}
+	if err := nilJournal.Forget(workflow.JournalKey{ID: "approval"}); err == nil {
+		t.Fatal("nil Journal Forget unexpectedly succeeded")
+	}
+}
+
+func TestJournal_rejectsInvalidScopeFrames(t *testing.T) {
+	tests := []workflow.ScopeFrame{
+		{},
+		{ID: "items", Index: 1},
+	}
+	for _, frame := range tests {
+		journal := workflow.NewJournal()
+		if err := journal.Record(workflow.JournalKey{
+			ID:    "step",
+			Scope: []workflow.ScopeFrame{frame},
+		}, true); err == nil {
+			t.Errorf("Record accepted invalid scope frame %+v", frame)
+		}
+		if journal.Len() != 0 {
+			t.Errorf("invalid scope frame %+v changed Journal", frame)
+		}
+	}
+}
+
+func TestJournal_scopeIndexesArePortableAcrossWordSizes(t *testing.T) {
+	const beyondUint32 = uint64(1) << 32
+	document := []byte(`{"version":3,"records":[{"scope":[{"id":"items","indexed":true,"index":4294967296}],"id":"step","value":true}]}`)
+	journal := workflow.NewJournal()
+	if err := json.Unmarshal(document, journal); err != nil {
+		t.Fatalf("Unmarshal 64-bit scope index: %v", err)
+	}
+	keys := journal.Keys()
+	if len(keys) != 1 || len(keys[0].Scope) != 1 || keys[0].Scope[0].Index != beyondUint32 {
+		t.Fatalf("Keys = %+v; want portable index %d", keys, beyondUint32)
+	}
+	encoded, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"index":4294967296`) {
+		t.Fatalf("encoded Journal = %s; want portable index", encoded)
+	}
 }
 
 func TestJournal_enforcesOneSharedDepthLimit(t *testing.T) {
-	deepScope := make([]string, workflow.MaxNestingDepth)
+	deepScope := make([]workflow.ScopeFrame, workflow.MaxNestingDepth)
 	for index := range deepScope {
-		deepScope[index] = strconv.Itoa(index)
+		deepScope[index] = workflow.ScopeFrame{ID: strconv.Itoa(index)}
 	}
 
 	journal := workflow.NewJournal()
@@ -242,7 +490,7 @@ func TestJournal_enforcesOneSharedDepthLimit(t *testing.T) {
 		t.Fatalf("Unmarshal deep Journal: %v", err)
 	}
 
-	tooDeep := append(slices.Clone(deepScope), "too-deep")
+	tooDeep := append(slices.Clone(deepScope), workflow.ScopeFrame{ID: "too-deep"})
 	if err := journal.Record(
 		workflow.JournalKey{ID: "rejected", Scope: tooDeep},
 		true,
@@ -251,7 +499,7 @@ func TestJournal_enforcesOneSharedDepthLimit(t *testing.T) {
 	}
 
 	document, marshalErr := json.Marshal(map[string]any{
-		"version": 2,
+		"version": 3,
 		"records": []any{map[string]any{
 			"id": "rejected", "scope": tooDeep, "value": true,
 		}},
@@ -270,7 +518,7 @@ func TestJournal_jsonRoundTrip(t *testing.T) {
 	}
 	journal := workflow.NewJournal()
 	step := func(id string, value any) workflow.Step {
-		return workflow.Leaf(id, workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
+		return workflow.Leaf(id, workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
 			flow.NodeFunc[int, any](func(context.Context, int) (any, error) { return value, nil }))
 	}
 	cfg := workflow.RunConfig{Journal: journal}
@@ -320,7 +568,7 @@ func TestJournal_keysAreStructuredAndCollisionFree(t *testing.T) {
 	var firstRuns, secondRuns int
 	step := func(id string, runs *int) workflow.Step {
 		return workflow.Leaf(id,
-			workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
+			workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
 			flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
 				(*runs)++
 				return value, nil
@@ -351,19 +599,21 @@ func TestJournal_keysAreStructuredAndCollisionFree(t *testing.T) {
 	}
 
 	want := []workflow.JournalKey{
-		{Scope: []string{"a"}, ID: "b/c"},
-		{Scope: []string{"a/b"}, ID: "c"},
+		{Scope: ordinaryScope("a"), ID: "b/c"},
+		{Scope: ordinaryScope("a/b"), ID: "c"},
 	}
 	if got := journal.Keys(); !equalJournalKeys(got, want) {
 		t.Fatalf("Keys = %v; want %v", got, want)
 	}
 	keys := journal.Keys()
-	keys[0].Scope[0] = "changed"
+	keys[0].Scope[0].ID = "changed"
 	if got := journal.Keys(); !equalJournalKeys(got, want) {
 		t.Fatalf("Keys leaked its scope storage: %v", got)
 	}
 
-	journal.Forget(want[1])
+	if err := journal.Forget(want[1]); err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
 	run()
 	if firstRuns != 2 || secondRuns != 1 {
 		t.Fatalf("runs after Forget = %d,%d; want 2,1", firstRuns, secondRuns)
@@ -371,18 +621,18 @@ func TestJournal_keysAreStructuredAndCollisionFree(t *testing.T) {
 }
 
 func TestJournal_jsonFormatIsVersionedAndRejectsDuplicateKeys(t *testing.T) {
-	empty, err := json.Marshal(workflow.NewJournal())
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
+	empty, marshalErr := json.Marshal(workflow.NewJournal())
+	if marshalErr != nil {
+		t.Fatalf("Marshal: %v", marshalErr)
 	}
-	if got, want := string(empty), `{"version":2,"records":[]}`; got != want {
+	if got, want := string(empty), `{"version":3,"records":[]}`; got != want {
 		t.Fatalf("empty Journal JSON = %s; want %s", got, want)
 	}
 
 	journal := workflow.NewJournal()
-	duplicate := []byte(`{"version":2,"records":[
-		{"scope":["a/b"],"id":"c","value":1},
-		{"scope":["a/b"],"id":"c","value":2}
+	duplicate := []byte(`{"version":3,"records":[
+		{"scope":[{"id":"a/b"}],"id":"c","value":1},
+		{"scope":[{"id":"a/b"}],"id":"c","value":2}
 	]}`)
 	if err := json.Unmarshal(duplicate, journal); err == nil {
 		t.Fatal("duplicate structured key unexpectedly decoded")
@@ -390,26 +640,96 @@ func TestJournal_jsonFormatIsVersionedAndRejectsDuplicateKeys(t *testing.T) {
 	if journal.Len() != 0 {
 		t.Fatalf("failed decode changed Journal: %d records", journal.Len())
 	}
+	if err := journal.Record(workflow.JournalKey{
+		ID:    "ordinary",
+		Scope: ordinaryScope("same"),
+	}, 1); err != nil {
+		t.Fatalf("Record ordinary frame: %v", err)
+	}
+	if err := journal.Record(workflow.JournalKey{
+		ID:    "indexed",
+		Scope: indexedScope("same", 0),
+	}, 2); err != nil {
+		t.Fatalf("Record indexed frame: %v", err)
+	}
+	if got := journal.Keys(); len(got) != 2 || got[0].ID != "ordinary" || got[1].ID != "indexed" {
+		t.Fatalf("Keys = %+v; want ordinary frame before indexed frame", got)
+	}
+	encoded, marshalErr := json.Marshal(journal)
+	if marshalErr != nil {
+		t.Fatalf("Marshal structured scopes: %v", marshalErr)
+	}
+	if got, want := string(encoded), `{"version":3,"records":[{"scope":[{"id":"same"}],"id":"ordinary","value":1},{"scope":[{"id":"same","indexed":true}],"id":"indexed","value":2}]}`; got != want {
+		t.Fatalf("structured Journal JSON = %s; want %s", got, want)
+	}
+	journal.Reset()
 	for _, data := range [][]byte{
 		[]byte(`[]`),
-		[]byte(`{"version":"2","records":[]}`),
-		[]byte(`{"version":2.0,"records":[]}`),
-		[]byte(`{"version":2,"version":2,"records":[]}`),
-		[]byte(`{"version":3,"records":[]}`),
-		[]byte(`{"version":2}`),
-		[]byte(`{"version":2,"records":null}`),
-		[]byte(`{"version":2,"records":[],"extra":true}`),
-		[]byte(`{"version":2,"records":[null]}`),
-		[]byte(`{"version":2,"records":[{"value":1}]}`),
-		[]byte(`{"version":2,"records":[{"id":1,"value":1}]}`),
-		[]byte(`{"version":2,"records":[{"id":"","value":1}]}`),
-		[]byte(`{"version":2,"records":[{"id":"a"}]}`),
-		[]byte(`{"version":2,"records":[{"scope":null,"id":"a","value":1}]}`),
-		[]byte(`{"version":2,"records":[{"scope":[1],"id":"a","value":1}]}`),
+		[]byte(`{"version":"3","records":[]}`),
+		[]byte(`{"version":3.5,"records":[]}`),
+		[]byte(`{"version":3,"version":3,"records":[]}`),
+		[]byte(`{"version":2,"records":[]}`),
+		[]byte(`{"version":3}`),
+		[]byte(`{"version":3,"records":null}`),
+		[]byte(`{"version":3,"records":[],"extra":true}`),
+		[]byte(`{"version":3,"records":[null]}`),
+		[]byte(`{"version":3,"records":[{"value":1}]}`),
+		[]byte(`{"version":3,"records":[{"id":1,"value":1}]}`),
+		[]byte(`{"version":3,"records":[{"id":"","value":1}]}`),
+		[]byte(`{"version":3,"records":[{"id":"a"}]}`),
+		[]byte(`{"version":3,"records":[{"scope":null,"id":"a","value":1}]}`),
+		[]byte(`{"version":3,"records":[{"scope":[1],"id":"a","value":1}]}`),
+		[]byte(`{"version":3,"records":[{"scope":[{}],"id":"a","value":1}]}`),
+		[]byte(`{"version":3,"records":[{"scope":[{"id":1}],"id":"a","value":1}]}`),
+		[]byte(`{"version":3,"records":[{"scope":[{"id":""}],"id":"a","value":1}]}`),
+		[]byte(`{"version":3,"records":[{"scope":[{"id":"s","extra":1}],"id":"a","value":1}]}`),
+		[]byte(`{"version":3,"records":[{"scope":[{"id":"s","indexed":"yes"}],"id":"a","value":1}]}`),
+		[]byte(`{"version":3,"records":[{"scope":[{"id":"s","index":0}],"id":"a","value":1}]}`),
+		[]byte(`{"version":3,"records":[{"scope":[{"id":"s","indexed":true,"index":"0"}],"id":"a","value":1}]}`),
+		[]byte(`{"version":3,"records":[{"scope":[{"id":"s","indexed":true,"index":0.5}],"id":"a","value":1}]}`),
+		[]byte(`{"version":3,"records":[{"scope":[{"id":"s","indexed":true,"index":999999999999999999999999999}],"id":"a","value":1}]}`),
+		[]byte(`{"version":3,"records":[{"scope":[{"id":"s","indexed":true,"index":-1}],"id":"a","value":1}]}`),
+		[]byte(`{"version":3,"records":[{"id":"\ud800","value":1}]}`),
 	} {
 		if err := json.Unmarshal(data, journal); err == nil {
 			t.Fatalf("invalid Journal JSON decoded: %s", data)
 		}
+	}
+}
+
+func TestJournal_unmarshalAcceptsMathematicalIntegerSpellings(t *testing.T) {
+	tests := map[string]struct {
+		document string
+		want     uint64
+	}{
+		"decimal version and exponent index": {
+			document: `{"version":3.0,"records":[{"scope":[{"id":"s","indexed":true,"index":1e0}],"id":"a","value":true}]}`,
+			want:     1,
+		},
+		"exponent version and decimal max uint64": {
+			document: `{"version":3e0,"records":[{"scope":[{"id":"s","indexed":true,"index":18446744073709551615.0}],"id":"a","value":true}]}`,
+			want:     ^uint64(0),
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			journal := workflow.NewJournal()
+			if err := json.Unmarshal([]byte(test.document), journal); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			keys := journal.Keys()
+			if len(keys) != 1 || len(keys[0].Scope) != 1 || keys[0].Scope[0].Index != test.want {
+				t.Fatalf("Keys = %+v; want index %d", keys, test.want)
+			}
+		})
+	}
+}
+
+func TestJournal_versionDiagnosticsAreMachineIndependent(t *testing.T) {
+	const document = `{"version":2147483648,"records":[]}`
+	err := json.Unmarshal([]byte(document), workflow.NewJournal())
+	if err == nil || !strings.Contains(err.Error(), "unsupported version 2147483648") {
+		t.Fatalf("Unmarshal error = %v; want fixed-width unsupported-version diagnostic", err)
 	}
 }
 
@@ -419,11 +739,11 @@ func TestJournal_jsonFormatIsVersionedAndRejectsDuplicateKeys(t *testing.T) {
 // wire contract to ordinary struct decoding.
 func TestJournal_unmarshalRejectsNoncanonicalAndCaseCollidingMembers(t *testing.T) {
 	tests := []string{
-		`{"version":2,"reCords":[]}`,
-		`{"version":2,"records":[],"Records":[{"id":"a","value":1}]}`,
-		`{"version":2,"records":[{"id":"a","vAlue":1}]}`,
-		`{"version":2,"records":[{"id":"a","value":1,"Value":2}]}`,
-		`{"version":2,"records":[{"scope":[],"Scope":["changed"],"id":"a","value":1}]}`,
+		`{"version":3,"reCords":[]}`,
+		`{"version":3,"records":[],"Records":[{"id":"a","value":1}]}`,
+		`{"version":3,"records":[{"id":"a","vAlue":1}]}`,
+		`{"version":3,"records":[{"id":"a","value":1,"Value":2}]}`,
+		`{"version":3,"records":[{"scope":[],"Scope":[{"id":"changed"}],"id":"a","value":1}]}`,
 	}
 	for _, data := range tests {
 		journal := workflow.NewJournal()
@@ -442,7 +762,7 @@ func TestJournal_unmarshalRejectsNoncanonicalAndCaseCollidingMembers(t *testing.
 func TestJournal_unmarshalSeparatesRecordedNilFromAbsentValue(t *testing.T) {
 	journal := workflow.NewJournal()
 	if err := json.Unmarshal(
-		[]byte(`{"version":2,"records":[{"id":"a","value":null}]}`),
+		[]byte(`{"version":3,"records":[{"id":"a","value":null}]}`),
 		journal,
 	); err != nil {
 		t.Fatalf("Unmarshal explicit null: %v", err)
@@ -451,11 +771,11 @@ func TestJournal_unmarshalSeparatesRecordedNilFromAbsentValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	if got, want := string(encoded), `{"version":2,"records":[{"id":"a","value":null}]}`; got != want {
+	if got, want := string(encoded), `{"version":3,"records":[{"id":"a","value":null}]}`; got != want {
 		t.Fatalf("round trip = %s; want %s", got, want)
 	}
 	if err := json.Unmarshal(
-		[]byte(`{"version":2,"records":[{"id":"a"}]}`),
+		[]byte(`{"version":3,"records":[{"id":"a"}]}`),
 		workflow.NewJournal(),
 	); err == nil {
 		t.Fatal("record without a value unexpectedly decoded")
@@ -464,7 +784,7 @@ func TestJournal_unmarshalSeparatesRecordedNilFromAbsentValue(t *testing.T) {
 
 func TestJournal_marshalReportsTheOffendingRecord(t *testing.T) {
 	journal := workflow.NewJournal()
-	step := workflow.Leaf("bad", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
+	step := workflow.Leaf("bad", workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
 		flow.NodeFunc[int, any](func(context.Context, int) (any, error) { return func() {}, nil }))
 	if _, err := workflow.Run(t.Context(), step, workflow.NewStore(),
 		workflow.RunConfig{Journal: journal}); err != nil {
@@ -477,9 +797,75 @@ func TestJournal_marshalReportsTheOffendingRecord(t *testing.T) {
 	}
 }
 
+func TestJournal_marshalRejectsDuplicateMembersFromApplicationMarshaler(t *testing.T) {
+	journal := workflow.NewJournal()
+	if err := journal.Record(
+		workflow.JournalKey{ID: "duplicate"},
+		duplicateObjectJSON{},
+	); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	_, err := json.Marshal(journal)
+	if err == nil ||
+		!strings.Contains(err.Error(), `record "duplicate"`) ||
+		!strings.Contains(err.Error(), `duplicate object member "same"`) {
+		t.Fatalf("Marshal error = %v; want record-scoped duplicate member", err)
+	}
+}
+
+func TestJournal_marshalRejectsUnpairedSurrogateFromApplicationMarshaler(t *testing.T) {
+	journal := workflow.NewJournal()
+	if err := journal.Record(
+		workflow.JournalKey{ID: "surrogate"},
+		unpairedSurrogateJSON{},
+	); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	_, err := json.Marshal(journal)
+	if err == nil ||
+		!strings.Contains(err.Error(), `record "surrogate"`) ||
+		!strings.Contains(err.Error(), "unpaired UTF-16 surrogate") {
+		t.Fatalf("Marshal error = %v; want record-scoped Unicode error", err)
+	}
+}
+
+func TestJournal_recordRejectsNonUTF8Identities(t *testing.T) {
+	invalid := string([]byte{0xff})
+	tests := map[string]struct {
+		key  workflow.JournalKey
+		want string
+	}{
+		"step ID": {
+			key:  workflow.JournalKey{ID: invalid},
+			want: "not valid UTF-8",
+		},
+		"scope ID": {
+			key: workflow.JournalKey{
+				ID:    "step",
+				Scope: []workflow.ScopeFrame{{ID: invalid}},
+			},
+			want: "scope frame 0: scope frame ID is not valid UTF-8",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			journal := workflow.NewJournal()
+			err := journal.Record(test.key, 1)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Record error = %v; want %q", err, test.want)
+			}
+			if journal.Len() != 0 {
+				t.Fatal("invalid identity changed Journal")
+			}
+		})
+	}
+}
+
 func TestJournal_unmarshalIsAtomic(t *testing.T) {
 	journal := workflow.NewJournal()
-	if err := json.Unmarshal([]byte(`{"version":2,"records":[{"id":"a","value":1}]}`), journal); err != nil {
+	if err := json.Unmarshal([]byte(`{"version":3,"records":[{"id":"a","value":1}]}`), journal); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	if err := json.Unmarshal([]byte(`{"b":`), journal); err == nil {
@@ -496,10 +882,12 @@ func TestJournal_nilIsSafe(t *testing.T) {
 		t.Fatal("nil Journal did not read as empty")
 	}
 	journal.Reset()
-	journal.Forget(workflow.JournalKey{ID: "a"})
+	if err := journal.Forget(workflow.JournalKey{ID: "a"}); err == nil {
+		t.Fatal("nil Journal Forget unexpectedly succeeded")
+	}
 
 	// A nil Journal disables resumption rather than being attached.
-	step := workflow.Leaf("a", workflow.BindFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+	step := workflow.Leaf("a", workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
 	if _, err := workflow.Run(t.Context(), step, workflow.NewStore(),
 		workflow.RunConfig{Journal: nil}); err != nil {
@@ -512,7 +900,7 @@ func TestJournal_concurrentBranchesRecordSafely(t *testing.T) {
 	steps := make([]workflow.Step, branches)
 	for i := range steps {
 		id := "b" + strconv.Itoa(i)
-		steps[i] = workflow.Leaf(id, workflow.BindFunc[int](func(workflow.Store) (int, error) { return i, nil }),
+		steps[i] = workflow.Leaf(id, workflow.BinderFunc[int](func(workflow.Store) (int, error) { return i, nil }),
 			flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
 	}
 
@@ -530,7 +918,11 @@ func TestJournal_concurrentBranchesRecordSafely(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() { _ = journal.Keys() })
-		wg.Go(func() { journal.Forget(workflow.JournalKey{ID: "b0"}) })
+		wg.Go(func() {
+			if err := journal.Forget(workflow.JournalKey{ID: "b0"}); err != nil {
+				t.Errorf("Forget: %v", err)
+			}
+		})
 	}
 	wg.Wait()
 }
@@ -579,8 +971,8 @@ func TestAwaitFactory_requiresAWiredPort(t *testing.T) {
 		ID:     "a",
 		Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("x")},
 		Config: json.RawMessage(`{}`),
-	}); !errors.Is(err, workflow.ErrInvalidSpec) {
-		t.Fatalf("config error = %v; want ErrInvalidSpec", err)
+	}); !errors.Is(err, flow.ErrInvalidConfig) {
+		t.Fatalf("config error = %v; want ErrInvalidConfig", err)
 	}
 }
 
@@ -634,13 +1026,13 @@ func TestInterruptFactory_rejectsInputsAndInvalidConfig(t *testing.T) {
 	if _, err := factory(workflow.NodeSpec{
 		ID:     "approval",
 		Config: json.RawMessage(`{`),
-	}); !errors.Is(err, workflow.ErrInvalidSpec) {
-		t.Fatalf("config error = %v; want ErrInvalidSpec", err)
+	}); !errors.Is(err, flow.ErrInvalidConfig) {
+		t.Fatalf("config error = %v; want ErrInvalidConfig", err)
 	}
 	if _, err := factory(workflow.NodeSpec{
 		ID:     "approval",
 		Config: json.RawMessage(`{"question":"first","question":"second"}`),
-	}); !errors.Is(err, workflow.ErrInvalidSpec) {
-		t.Fatalf("duplicate config error = %v; want ErrInvalidSpec", err)
+	}); !errors.Is(err, flow.ErrInvalidConfig) {
+		t.Fatalf("duplicate config error = %v; want ErrInvalidConfig", err)
 	}
 }

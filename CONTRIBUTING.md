@@ -8,6 +8,7 @@ exported API, read the package boundaries in the
 
 - Go 1.26 or newer.
 - `golangci-lint` v2 (CI currently pins v2.12.2).
+- `actionlint` (CI currently pins v1.7.10).
 - `govulncheck` (CI currently pins v1.6.0).
 - Node.js 22 or newer when changing Markdown documentation.
 - A clean module graph with no committed `replace` directives.
@@ -28,9 +29,11 @@ Before opening a pull request, run the complete gate used by CI:
 ```sh
 test -z "$(gofmt -l .)"
 go mod tidy -diff
-go test -race -cover ./...
+go test -race -coverprofile=coverage.out ./...
+test "$(go tool cover -func=coverage.out | awk '/^total:/ { print $3 }')" = "100.0%"
 go vet ./...
 golangci-lint run ./...
+actionlint
 govulncheck ./...
 npx --yes markdownlint-cli2@0.23.2
 ```
@@ -44,7 +47,7 @@ go test ./example -run Example -v
 ## Design boundaries
 
 - Keep `flow.Node` a single-method interface.
-- Put irreducible control-flow primitives in `flow`.
+- Put general control-flow primitives in `flow`.
 - Put derived combinators and decorators in `flowx`.
 - Put named state and runtime definitions in `workflow`.
 - Keep the expression language optional in `workflow/expr`.

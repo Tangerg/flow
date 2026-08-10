@@ -27,8 +27,12 @@ unary := func(op func(int, int) int) workflow.NodeFactory {
 }
 ```
 
-`Factory` strictly decodes JSON into `unaryConfig`, builds the typed node, and
-binds the graph's default port to that node.
+For an ordinary struct such as `unaryConfig`, `Factory` validates one complete
+JSON value, rejects unknown fields, builds the typed node, and binds the graph's
+default port to that node. A config type with its own `UnmarshalJSON` method
+owns its field-level decoding rules; pair it with an explicit
+`NodeSchema.ConfigSchema` when editor-time validation must enforce the same
+contract.
 
 Register node **types**, not graph instances:
 
@@ -43,6 +47,10 @@ registry := workflow.NewRegistry().
 		unary(func(a, b int) int { return a * b }),
 	)
 ```
+
+A factory builds an immutable definition and has no execution context. Keep it
+prompt and deterministic; network, model, database, and other cancellable work
+belongs in the `Node` returned by the factory.
 
 `MustRegister...` is appropriate during application startup. Use the
 error-returning registration methods when definitions arrive from plugins or
@@ -60,7 +68,7 @@ type pair struct {
 }
 
 sum := workflow.BindFactory(
-	func(_ struct{}, inputs workflow.Inputs) (workflow.BindFunc[pair], error) {
+	func(_ struct{}, inputs workflow.Inputs) (workflow.Binder[pair], error) {
 		left, leftOK := inputs.Ref("left")
 		right, rightOK := inputs.Ref("right")
 		if !leftOK || !rightOK {
@@ -69,14 +77,14 @@ sum := workflow.BindFactory(
 				workflow.ErrMissingPort,
 			)
 		}
-		return func(store workflow.Store) (pair, error) {
+		return workflow.BinderFunc[pair](func(store workflow.Store) (pair, error) {
 			a, err := workflow.Get[int](store, left)
 			if err != nil {
 				return pair{}, err
 			}
 			b, err := workflow.Get[int](store, right)
 			return pair{Left: a, Right: b}, err
-		}, nil
+		}), nil
 	},
 	func(struct{}) (flow.Node[pair, int], error) {
 		return flow.NodeFunc[pair, int](
@@ -87,6 +95,10 @@ sum := workflow.BindFactory(
 	},
 )
 ```
+
+`BindFactory` returns a `Binder`, the same protocol accepted by `Leaf`. The
+example uses `BinderFunc` to adapt an ordinary function, just as `flow.NodeFunc`
+adapts an ordinary node function.
 
 Port names are part of the node type's contract. A missing required port
 matches `ErrMissingPort`; wiring a port the type does not declare matches
@@ -123,6 +135,21 @@ registry.
 `NodeSchema` validates wiring and configuration. The factory and `Get[T]` remain
 responsible for the actual Go types at execution time. Keep the schema and the
 domain type aligned; they are two views of the same boundary.
+
+Registration makes the schema authoritative. An empty `Inputs` map means the
+node accepts zero ports, so wiring any port is `ErrUnknownPort`. Omit schema
+registration only when deliberately accepting no schema-level preflight for
+wiring and config; the factory can still reject either during compilation.
+Even without a schema, compilation inspects the concrete boundary returned by
+the factory and rejects a data edge from a node that produces no output;
+`ValidateGraph` stays factory-free and therefore cannot report that case.
+Every input port has an explicit type; use `TypeAny` when its shape is
+intentionally unrestricted. Leave `Output` zero only for a node such as `Await`
+that publishes no conventional output. A data edge from such a node is
+rejected; use `DependsOn` when downstream work needs ordering without a value.
+Nested references may descend through `TypeObject`, `TypeArray`, or `TypeAny`.
+Scalar outputs have no child paths, and the first child of an array output must
+be a canonical non-negative index; impossible paths are rejected before run.
 
 ## 4. Describe data flow with a Graph
 
@@ -168,9 +195,9 @@ topological barriers, so a fast dependency chain never waits for an unrelated
 slow branch. `Graph.Concurrency` bounds the whole graph; zero leaves it
 unbounded.
 
-Each node receives the initial Store plus only its declared dependencies,
-merged in graph declaration order. Completion timing therefore cannot expose an
-undeclared value or change the winner of a same-cell conflict.
+Each node receives the initial Store plus only the writes of its declared direct
+dependencies, applied in graph declaration order. Completion timing therefore
+cannot expose a transitive or unrelated value.
 
 Use `DependsOn` for a pure control dependency. Ordinary data dependencies
 belong in ports. If a factory hides Store references inside its config, graph
@@ -185,6 +212,12 @@ fmt.Println(graph.Inputs())
 fmt.Println(graph.MissingInputs(workflow.NewStore()))
 // [start#/output]
 ```
+
+This is the graph's complete potential-input set, not an unconditional
+required-parameter set. A conditional node contributes its inputs even when a
+particular routing decision bypasses it. `MissingInputs` reports which potential
+inputs do not currently resolve; the run itself determines whether a conditional
+one is needed.
 
 Compile once the Registry and graph are ready:
 
@@ -201,12 +234,15 @@ out, err := step.Run(
 ```
 
 Compilation rejects duplicate IDs, unknown node types, invalid ports,
-incompatible edge types, and cycles. A successful result is an ordinary,
+incompatible edge types, cycles, and factory results that are opaque, use the
+wrong ID, or expose an unsealed composite. A successful result is an ordinary,
 reusable `workflow.Step`.
 
 ## Common mistakes
 
 - Reading undeclared Store references from factory configuration.
+- Returning a bare Step or composite from a factory. Use `Leaf` for typed work
+  and `Subgraph` for a composite region.
 - Registering node instances instead of constructors for node types.
 - Repeating a data dependency in `DependsOn`.
 - Assuming declaration order creates a dependency or that unrelated branches

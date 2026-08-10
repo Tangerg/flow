@@ -125,7 +125,7 @@ func ExampleResolver() {
 	}
 
 	store := workflow.NewStore().WithOutput("classify", map[string]any{"intent": "refund"})
-	fmt.Println(resolver(context.Background(), store))
+	fmt.Println(resolver.Run(context.Background(), store))
 
 	// Output: refund <nil>
 }

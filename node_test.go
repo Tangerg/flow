@@ -60,3 +60,70 @@ func TestFunc_Run_passesContext(t *testing.T) {
 		t.Fatalf("context value = %q, want %q", got, "v")
 	}
 }
+
+type validatingNode struct {
+	err error
+}
+
+func (v validatingNode) Run(_ context.Context, value int) (int, error) {
+	return value, nil
+}
+
+func (v validatingNode) Validate() error { return v.err }
+
+type opaqueNode struct{}
+
+func (opaqueNode) Run(_ context.Context, value int) (int, error) {
+	return value, nil
+}
+
+// nilSafeFuncNode proves that a caller-defined function type owns its nil
+// behavior just like a caller-defined pointer type. Only flow.NodeFunc is the
+// library's adapter and therefore subject to flow's nil-adapter rule.
+type nilSafeFuncNode func()
+
+func (nilSafeFuncNode) Run(_ context.Context, value int) (int, error) {
+	return value * 2, nil
+}
+
+func TestValidate_checksTheCompleteVisibleDefinition(t *testing.T) {
+	invalid := errors.New("invalid definition")
+	valid := flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+		return 0, nil
+	})
+	tests := map[string]struct {
+		node flow.Node[int, int]
+		want error
+	}{
+		"nil interface":       {node: nil, want: flow.ErrNilNode},
+		"typed nil function":  {node: flow.NodeFunc[int, int](nil), want: flow.ErrNilNode},
+		"opaque node":         {node: opaqueNode{}},
+		"opt-in validator":    {node: validatingNode{err: invalid}, want: invalid},
+		"nested opt-in node":  {node: flow.Then(valid, validatingNode{err: invalid}), want: invalid},
+		"nested nil function": {node: flow.Then(valid, flow.NodeFunc[int, int](nil)), want: flow.ErrNilNode},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := flow.Validate(test.node); !errors.Is(err, test.want) {
+				t.Fatalf("Validate error = %v; want %v", err, test.want)
+			}
+		})
+	}
+
+	var nilSafe *nilSafeNode
+	if err := flow.Validate[int, int](nilSafe); err != nil {
+		t.Fatalf("Validate nil-safe pointer: %v", err)
+	}
+	var nilSafeFunc nilSafeFuncNode
+	if err := flow.Validate[int, int](nilSafeFunc); err != nil {
+		t.Fatalf("Validate nil-safe function type: %v", err)
+	}
+	if output, err := flow.Then[int, int, int](
+		nilSafeFunc,
+		flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+			return value + 1, nil
+		}),
+	).Run(t.Context(), 21); err != nil || output != 43 {
+		t.Fatalf("Then nil-safe function type = %d, %v; want 43, nil", output, err)
+	}
+}

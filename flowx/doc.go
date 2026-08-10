@@ -1,18 +1,24 @@
-// Package flowx provides derived control-flow combinators built on package
-// flow's minimal primitives — the syntactic sugar the core deliberately omits.
+// Package flowx provides control-flow conveniences built from package flow's
+// core operations.
 //
-// Package flow stays intentionally small: it holds only the primitives that
-// cannot be expressed in terms of one another. Everything derivable lives here,
-// with exactly one implementation per control-flow shape:
+// Each function adds a derived composition shape rather than a new Node
+// protocol:
 //
 //   - [Chain]: variadic same-type sequence (sugar over flow.Then).
 //   - [FanOut]: run several nodes on the same input concurrently.
-//   - [Combine]: heterogeneous fan-in — merge two differently typed nodes.
+//   - [Combine]: heterogeneous fan-in from two differently typed nodes.
 //   - [Fallback]: run a primary node, then an alternate if it fails.
 //
-// These are pure control-flow composition — no tunable policies (retry, timeout,
-// circuit breaking) and no external integrations (tracing, metrics). A decorator
-// is just a flow.Node[I, O] -> flow.Node[I, O]: wrap a node yourself or reach for
-// a dedicated library. The parallel-any primitive ("first success wins") lives in
-// the core as flow.Race, the disjunction twin of flow.Map.
+// These composites expose their complete visible child definitions to
+// [flow.Validate], just like the core composites.
+//
+// Definition collections are snapshots: [FanOut] copies its node slice, and
+// [Chain] consumes its variadic argument during construction. The Node values
+// themselves are retained as-is and must be safe for every concurrent use the
+// selected composite permits.
+//
+// Retry, timeout, circuit breaking, tracing, and metrics are policies rather
+// than composition shapes. Implement them as flow.Node[I, O] decorators or use
+// a dedicated package. The first-success operation remains [flow.Race] in the
+// core.
 package flowx

@@ -11,22 +11,20 @@ const (
 	graphNodePending graphNodeState = iota
 	graphNodeRunning
 	graphNodeCompleted
-	graphNodeSuspended
 )
 
 // graphExecution owns all mutable state of one compiled graph invocation.
 // Keeping it separate from graphStep makes the compiled definition safe for
 // concurrent reuse without locks.
 type graphExecution struct {
-	graph  graphStep
-	input  Store
-	counts []int
-	states []graphNodeState
-	stores []Store
-	writes [][]storeWrite
-	ready  []int
-	head   int
-	active int
+	graph   graphStep
+	input   Store
+	counts  []int
+	states  []graphNodeState
+	changes [][]storeChange
+	ready   []int
+	head    int
+	active  int
 
 	failure     error
 	suspensions suspensionList
@@ -49,7 +47,7 @@ type graphCall struct {
 }
 
 func (g graphCall) run(ctx context.Context) graphOutcome {
-	if err := ctx.Err(); err != nil {
+	if err := context.Cause(ctx); err != nil {
 		return graphOutcome{index: g.index, input: g.input, store: g.input, err: err}
 	}
 	store, err := g.step.Run(ctx, g.input)
@@ -63,8 +61,7 @@ func (g *graphExecution) run(ctx context.Context) (Store, error) {
 
 	g.counts = slices.Clone(g.graph.dependencyCounts)
 	g.states = make([]graphNodeState, len(g.graph.steps))
-	g.stores = make([]Store, len(g.graph.steps))
-	g.writes = make([][]storeWrite, len(g.graph.steps))
+	g.changes = make([][]storeChange, len(g.graph.steps))
 	g.ready = make([]int, 0, len(g.graph.steps))
 	for index, count := range g.counts {
 		if count == 0 {
@@ -72,8 +69,8 @@ func (g *graphExecution) run(ctx context.Context) (Store, error) {
 		}
 	}
 
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	runCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	outcomes := make(chan graphOutcome, len(g.graph.steps))
 	limit := g.graph.limit
 	if limit == 0 || limit > len(g.graph.steps) {
@@ -90,7 +87,7 @@ func (g *graphExecution) run(ctx context.Context) (Store, error) {
 
 		outcome := <-outcomes
 		if g.accept(outcome, ctx.Err() != nil) {
-			cancel()
+			cancel(g.failure)
 		}
 	}
 
@@ -109,8 +106,6 @@ func (g *graphExecution) accept(outcome graphOutcome, parentCanceled bool) bool 
 		return false
 	}
 	if waiting, only := (suspensionTree{err: outcome.err}).suspensions(); only {
-		g.states[outcome.index] = graphNodeSuspended
-		g.writes[outcome.index] = outcome.store.writesSince(outcome.input)
 		g.suspensions = append(g.suspensions, waiting...)
 		return false
 	}
@@ -120,7 +115,7 @@ func (g *graphExecution) accept(outcome graphOutcome, parentCanceled bool) bool 
 
 func (g *graphExecution) result(ctx context.Context) (Store, error) {
 	result := g.completedStore()
-	if err := ctx.Err(); err != nil {
+	if err := context.Cause(ctx); err != nil {
 		return result, err
 	}
 	if g.failure != nil {
@@ -155,23 +150,16 @@ func (g *graphExecution) startReady(
 
 func (g *graphExecution) nodeInput(index int) Store {
 	dependencies := g.graph.dependencyNodeIndexes[index]
-	switch len(dependencies) {
-	case 0:
-		return g.input
-	case 1:
-		return g.stores[dependencies[0]]
-	}
-	stores := make([]Store, 0, len(dependencies))
+	input := g.input
 	for _, dependency := range dependencies {
-		stores = append(stores, g.stores[dependency])
+		input = input.withChanges(g.changes[dependency])
 	}
-	return g.input.merge(stores...)
+	return input
 }
 
 func (g *graphExecution) complete(outcome graphOutcome) {
 	g.states[outcome.index] = graphNodeCompleted
-	g.stores[outcome.index] = outcome.store
-	g.writes[outcome.index] = outcome.store.writesSince(outcome.input)
+	g.changes[outcome.index] = outcome.store.changesSince(outcome.input)
 	for _, dependent := range g.graph.dependentNodeIndexes[outcome.index] {
 		g.counts[dependent]--
 		if g.counts[dependent] == 0 {
@@ -181,12 +169,11 @@ func (g *graphExecution) complete(outcome graphOutcome) {
 }
 
 func (g *graphExecution) completedStore() Store {
-	var writes []storeWrite
-	for index := range g.stores {
-		if g.states[index] == graphNodeCompleted ||
-			g.states[index] == graphNodeSuspended {
-			writes = append(writes, g.writes[index]...)
+	var changes []storeChange
+	for index := range g.changes {
+		if g.states[index] == graphNodeCompleted {
+			changes = append(changes, g.changes[index]...)
 		}
 	}
-	return g.input.withWrites(writes)
+	return g.input.withChanges(changes)
 }

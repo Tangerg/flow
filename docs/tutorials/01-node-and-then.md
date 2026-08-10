@@ -51,6 +51,14 @@ Trying to connect `flow.Node[string, int]` to `flow.Node[bool, int]` does not
 compile. An invalid edge is rejected while building the program rather than
 halfway through a run.
 
+`flow.Validate(pipeline)` checks the complete visible composition without
+running either node. Composites from `flow`, `flowx`, and `workflow` participate
+recursively. A caller-defined composite can opt in with a pure,
+concurrency-safe `Validate() error` method; an ordinary node remains an opaque
+boundary. Applications rarely need this directly. It exists for boundaries
+such as a replaying workflow leaf that must reject an invalid definition even
+when it does not call `Run`.
+
 ## 3. Execution semantics
 
 `flow.Then(a, b)`:

@@ -242,10 +242,8 @@ func BenchmarkParallelBaseScaling(b *testing.B) {
 func BenchmarkCompileGraphScaling(b *testing.B) {
 	registry := workflow.NewRegistry().MustRegisterNode(
 		"noop",
-		func(workflow.NodeSpec) (workflow.Step, error) {
-			return flow.NodeFunc[workflow.Store, workflow.Store](func(_ context.Context, store workflow.Store) (workflow.Store, error) {
-				return store, nil
-			}), nil
+		func(spec workflow.NodeSpec) (workflow.Step, error) {
+			return workflow.Interrupt(spec.ID, nil), nil
 		},
 	)
 
@@ -270,7 +268,7 @@ func BenchmarkGraphRunScaling(b *testing.B) {
 		func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
-				workflow.BindFunc[struct{}](func(workflow.Store) (struct{}, error) {
+				workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
 					return struct{}{}, nil
 				}),
 				flow.NodeFunc[struct{}, struct{}](
@@ -321,9 +319,9 @@ func BenchmarkValidateGraphJSONScaling(b *testing.B) {
 
 func BenchmarkJournalDeepTraversal(b *testing.B) {
 	for _, depth := range []int{16, 256, workflow.MaxNestingDepth} {
-		scope := make([]string, depth)
+		scope := make([]workflow.ScopeFrame, depth)
 		for index := range scope {
-			scope[index] = strconv.Itoa(index)
+			scope[index] = workflow.ScopeFrame{ID: strconv.Itoa(index)}
 		}
 		journal := workflow.NewJournal()
 		if err := journal.Record(

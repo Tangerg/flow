@@ -2,8 +2,9 @@
 
 This level combines two engine properties: a Graph starts work when its actual
 dependencies are ready, and a Subgraph makes a reusable region explicit without
-exposing its internal Store or step IDs. The executable counterpart is
-[`example/subgraph_test.go`](../../example/subgraph_test.go).
+exposing its internal Store or step IDs. The executable counterparts are
+[`example/subgraph_test.go`](../../example/subgraph_test.go) and
+[`example/custom_composite_test.go`](../../example/custom_composite_test.go).
 
 ## 1. Understand dependency-triggered execution
 
@@ -22,12 +23,10 @@ any two ready nodes may occupy the slots; zero means unbounded.
 
 The Store contract stays deterministic:
 
-- a node sees the initial Store plus only its declared dependencies;
+- a node sees the initial Store plus only its direct dependencies' writes;
 - dependency results merge in graph declaration order;
-- completion order cannot change a same-cell conflict;
 - failure returns already completed node writes with the error; and
-- suspension blocks descendants, retains the waiting composite's returned
-  writes, and lets unrelated ready work finish.
+- suspension blocks descendants and lets unrelated ready work finish.
 
 The last rule is what makes routing safe. Every gate source is a real dependency,
 so a target cannot run while its routing decision is suspended.
@@ -76,6 +75,10 @@ Subgraph does not add another Journal record. Completed inner leaves replay,
 then the projected result is derived again. If the body suspends, the outer
 output remains absent.
 
+When the body consists only of visible built-in steps, validation also proves
+that `BodyOutput` exists on every successful path. An opaque caller-defined body
+keeps responsibility for that contract and reports a missing output at run time.
+
 ## 4. Register the boundary as a Graph node
 
 ```go
@@ -95,7 +98,8 @@ body remains sealed, while the boundary stays visible to Graph validation:
 - an edge into `value` participates in cycle detection;
 - an external edge appears in `Graph.Inputs`;
 - `NodeSchema` checks the input and output types; and
-- the body validates its own inner Graph or Spec.
+- the complete visible body is validated as part of the registered node type,
+  rather than being misreported as config on each graph node that uses it.
 
 Do not hide additional references inside factory config. A dependency is
 statically useful only when it crosses the boundary through `GraphNode.Inputs`.
@@ -121,12 +125,63 @@ The nested DSL exposes the same boundary:
 }
 ```
 
-`SpecJSONSchema` checks the shape, and `Registry.CompileSpecJSON` validates and
-builds both the boundary and its body.
+`SpecJSONSchema` checks the wire shape. `Registry.ValidateSpec` also rejects a
+`bodyOutput` that registered node schemas prove unavailable, without invoking a
+factory; `Registry.CompileSpecJSON` builds the concrete boundaries and closes
+the remaining uncertainty for node types that have no schema.
+
+## 6. Preserve identity in a custom repeated composite
+
+Prefer `Loop` or `Iteration` when either matches the control flow. If you build
+a different repeated composite, validate its static definition and attach a
+structured index before each body invocation:
+
+```go
+func (r repeatStep) Validate() error {
+	if err := (workflow.ScopeFrame{ID: r.id, Indexed: true}).Validate(); err != nil {
+		return err
+	}
+	if r.count < 0 {
+		return flow.ErrInvalidConfig
+	}
+	return flow.Validate(r.body)
+}
+
+for index := range count {
+	if err := context.Cause(ctx); err != nil {
+		return current, err
+	}
+	next, err := body.Run(
+		workflow.WithScopeIndex(ctx, id, uint64(index)),
+		current,
+	)
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return current, contextErr
+	}
+	if err != nil {
+		return next, err
+	}
+	current = next
+}
+```
+
+Call the custom composite through `workflow.Run`, even with a zero `RunConfig`.
+This gives every child one shared run identity and calls the optional validation
+contract before work. Built-in workflow composites honor the same contract on a
+caller-defined child. The custom composite's own `Run` method should still call
+`Validate`, so a direct call or an opaque caller-defined parent remains safe.
+Call the child Step directly: a nested package-level `workflow.Run` starts an
+independent root scope. Check parent cancellation before admission and after the
+child returns; if it races with completion, preserve the Store from before that
+invocation. `WithScopeIndex` isolates Journal, event, chunk, and suspension
+identity; it does not isolate Store cells. Wrap the body in `Subgraph` when each
+invocation also needs a sealed Store.
 
 ## Common mistakes
 
 - Reusing a body directly and then adding ad-hoc `WithScope` calls.
+- Formatting an index into a scope ID. Use `WithScopeIndex`; persisted identity
+  must not depend on display text.
 - Running the body on the outer Store, which leaks inner cells.
 - Recording a second Journal cell for the projected output.
 - Treating an inner node ID as an outer Graph dependency.

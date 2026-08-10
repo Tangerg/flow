@@ -24,8 +24,34 @@ func (f *failOnceJSON) MarshalJSON() ([]byte, error) {
 	return []byte(`true`), nil
 }
 
+type duplicateObjectJSON struct{}
+
+func (duplicateObjectJSON) MarshalJSON() ([]byte, error) {
+	return []byte(`{"same":1,"same":2}`), nil
+}
+
+type unpairedSurrogateJSON struct{}
+
+func (unpairedSurrogateJSON) MarshalJSON() ([]byte, error) {
+	return []byte(`"\ud800"`), nil
+}
+
+var errBrokenJSON = errors.New("broken JSON value")
+
+type brokenJSON struct{}
+
+func (brokenJSON) MarshalJSON() ([]byte, error) { return nil, errBrokenJSON }
+
 type nestedValue struct {
 	Next *nestedValue `json:"next,omitempty"`
+}
+
+func nestedArrays(depth int) any {
+	var value any = 0
+	for range depth {
+		value = []any{value}
+	}
+	return value
 }
 
 func TestRef_helpers(t *testing.T) {
@@ -56,6 +82,42 @@ func TestRef_helpers(t *testing.T) {
 	if got, ok := store.Lookup(escaped); !ok || got != "found" {
 		t.Fatalf("Lookup(%s) = %v, %v; want found, true", escaped, got, ok)
 	}
+
+	invalidUTF8Key := string([]byte{0xff, '/', '~'})
+	invalidUTF8Ref := workflow.At("step", invalidUTF8Key)
+	wantPath := string([]byte{'/', 0xff, '~', '1', '~', '0'})
+	if invalidUTF8Ref.Path != wantPath {
+		t.Fatalf("invalid UTF-8 Path bytes = %v; want %v", []byte(invalidUTF8Ref.Path), []byte(wantPath))
+	}
+	store = store.WithCell("step", invalidUTF8Key, "byte-preserving")
+	if got, ok := store.Lookup(invalidUTF8Ref); !ok || got != "byte-preserving" {
+		t.Fatalf("Lookup invalid UTF-8 key = %v, %v; want byte-preserving, true", got, ok)
+	}
+}
+
+func TestRef_Validate(t *testing.T) {
+	invalidUTF8 := string([]byte{0xff})
+	tests := map[string]struct {
+		ref   workflow.Ref
+		valid bool
+	}{
+		"output":                 {ref: workflow.Output("step"), valid: true},
+		"empty object key":       {ref: workflow.At("step", ""), valid: true},
+		"empty node ID":          {ref: workflow.Ref{Path: "/output"}},
+		"non-UTF-8 node ID":      {ref: workflow.Ref{NodeID: invalidUTF8, Path: "/output"}},
+		"empty path":             {ref: workflow.Ref{NodeID: "step"}},
+		"relative path":          {ref: workflow.Ref{NodeID: "step", Path: "output"}},
+		"invalid pointer escape": {ref: workflow.Ref{NodeID: "step", Path: "/~2"}},
+		"non-UTF-8 path":         {ref: workflow.Ref{NodeID: "step", Path: "/" + invalidUTF8}},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := test.ref.Validate()
+			if (err == nil) != test.valid {
+				t.Fatalf("Validate error = %v; valid = %v", err, test.valid)
+			}
+		})
+	}
 }
 
 func TestStore_LookupRejectsMalformedJSONPointers(t *testing.T) {
@@ -64,6 +126,49 @@ func TestStore_LookupRejectsMalformedJSONPointers(t *testing.T) {
 		if value, ok := store.Lookup(workflow.Ref{NodeID: "step", Path: path}); ok {
 			t.Fatalf("Lookup path %q = %v, true; want unresolved", path, value)
 		}
+	}
+}
+
+func TestGet_reportsNestedJSONResolutionErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   any
+		wantErr error
+		want    string
+	}{
+		{
+			name:    "marshaler error",
+			value:   brokenJSON{},
+			wantErr: errBrokenJSON,
+		},
+		{
+			name:  "ambiguous JSON object",
+			value: duplicateObjectJSON{},
+			want:  `duplicate object member "same"`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ref := workflow.Output("step").Child("field")
+			store := workflow.NewStore().WithOutput("step", test.value)
+
+			if value, ok := store.Lookup(ref); ok {
+				t.Fatalf("Lookup = %v, true; want unresolved", value)
+			}
+			_, err := workflow.Get[any](store, ref)
+			var refErr *workflow.RefError
+			if !errors.As(err, &refErr) ||
+				!errors.Is(err, workflow.ErrTypeMismatch) ||
+				refErr.Got == "" {
+				t.Fatalf("Get error = %v; want typed RefError and ErrTypeMismatch", err)
+			}
+			if test.wantErr != nil && !errors.Is(err, test.wantErr) {
+				t.Fatalf("Get error = %v; want cause %v", err, test.wantErr)
+			}
+			if test.want != "" && !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Get error = %v; want text %q", err, test.want)
+			}
+		})
 	}
 }
 
@@ -129,6 +234,23 @@ func TestStore_ChangesAgainstUnrelatedStore(t *testing.T) {
 	// A Store has no delete, so a cell missing from s is not reported.
 	if got := workflow.NewStore().Changes(unrelated); len(got) != 0 {
 		t.Fatalf("Changes = %+v; want none", got)
+	}
+}
+
+func TestStore_ChangesTreatsDecodedCellsAsFreshWrites(t *testing.T) {
+	base := workflow.NewStore().WithOutput("x", 1)
+	encoded, err := json.Marshal(base)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded workflow.Store
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	changes := decoded.Changes(base)
+	if len(changes) != 1 || changes[0].Ref() != workflow.Output("x") {
+		t.Fatalf("Changes = %+v; want decoded x output as a fresh write", changes)
 	}
 }
 
@@ -230,7 +352,13 @@ func TestStore_arrayPathsUseCanonicalJSONPointerIndexes(t *testing.T) {
 	if value, ok := store.Lookup(workflow.Output("array").Child("1")); !ok || value != "one" {
 		t.Fatalf("canonical index = %v, %v; want one, true", value, ok)
 	}
-	for _, token := range []string{"01", "+1", "-1", "-"} {
+	for _, token := range []string{
+		"01",
+		"+1",
+		"-1",
+		"-",
+		"999999999999999999999999999999999999999999999999999999999999",
+	} {
 		if value, ok := store.Lookup(workflow.Output("array").Child(token)); ok {
 			t.Fatalf("array token %q resolved to %v; want miss", token, value)
 		}
@@ -316,6 +444,9 @@ func TestStore_rejectsInvalidPointerAndUnrepresentableNestedValues(t *testing.T)
 	if _, ok := store.Lookup(workflow.Output("deep").Child("next")); ok {
 		t.Fatal("excessively nested value unexpectedly resolved")
 	}
+	if _, err := workflow.Get[map[string]any](store, workflow.Output("deep")); !errors.Is(err, workflow.ErrMaxDepth) {
+		t.Fatalf("deep conversion error = %v; want ErrMaxDepth", err)
+	}
 }
 
 func TestGet_reportsValuesThatCannotBeMarshaled(t *testing.T) {
@@ -349,6 +480,30 @@ func TestStore_JSONRoundTrip(t *testing.T) {
 	// Get hides the difference, which is what lets a typed step resume.
 	if got, err := workflow.Get[int](decoded, workflow.Output("b")); err != nil || got != 42 {
 		t.Fatalf("Get[int] = %v, %v; want 42", got, err)
+	}
+}
+
+func TestStore_MarshalEnforcesRoundTripDepth(t *testing.T) {
+	atLimit := workflow.NewStore().WithOutput(
+		"deep",
+		nestedArrays(workflow.MaxNestingDepth-2),
+	)
+	data, err := json.Marshal(atLimit)
+	if err != nil {
+		t.Fatalf("Marshal at depth limit: %v", err)
+	}
+	var restored workflow.Store
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal value produced at depth limit: %v", err)
+	}
+
+	tooDeep := workflow.NewStore().WithOutput(
+		"deep",
+		nestedArrays(workflow.MaxNestingDepth-1),
+	)
+	if _, err := json.Marshal(tooDeep); !errors.Is(err, workflow.ErrMaxDepth) ||
+		!strings.Contains(err.Error(), `node "deep" key "output"`) {
+		t.Fatalf("Marshal beyond depth limit error = %v; want cell-scoped ErrMaxDepth", err)
 	}
 }
 
@@ -438,15 +593,30 @@ func TestGet_convertsWithoutReinterpreting(t *testing.T) {
 	}
 }
 
+func TestGet_rejectsUnknownStructMembers(t *testing.T) {
+	type partial struct {
+		Known int `json:"known"`
+	}
+	store := workflow.NewStore().WithOutput("n", map[string]any{
+		"known": 1,
+		"extra": 2,
+	})
+
+	if _, err := workflow.Get[partial](store, workflow.Output("n")); !errors.Is(err, workflow.ErrTypeMismatch) {
+		t.Fatalf("Get error = %v; want ErrTypeMismatch", err)
+	}
+}
+
 func TestStore_UnmarshalIsAtomic(t *testing.T) {
 	for name, data := range map[string]string{
-		"truncated":      `{"new":{"output":1}`,
-		"wrong shape":    `{"new":"not an object"}`,
-		"null store":     `null`,
-		"null node":      `{"new":null}`,
-		"duplicate node": `{"new":{"output":1},"new":{"output":2}}`,
-		"duplicate cell": `{"new":{"output":1,"output":2}}`,
-		"trailing":       `{"new":{"output":1}} {}`,
+		"truncated":          `{"new":{"output":1}`,
+		"wrong shape":        `{"new":"not an object"}`,
+		"null store":         `null`,
+		"null node":          `{"new":null}`,
+		"duplicate node":     `{"new":{"output":1},"new":{"output":2}}`,
+		"duplicate cell":     `{"new":{"output":1,"output":2}}`,
+		"unpaired surrogate": `{"new":{"output":"\ud800"}}`,
+		"trailing":           `{"new":{"output":1}} {}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			store := workflow.NewStore().WithOutput("old", 1)
@@ -535,6 +705,31 @@ func TestStore_MarshalReportsCell(t *testing.T) {
 	}
 }
 
+func TestStore_MarshalRejectsNonUTF8Identities(t *testing.T) {
+	invalid := string([]byte{0xff})
+	tests := map[string]struct {
+		store workflow.Store
+		want  string
+	}{
+		"node ID": {
+			store: workflow.NewStore().WithOutput(invalid, 1),
+			want:  `node ID "\xff" is not valid UTF-8`,
+		},
+		"cell key": {
+			store: workflow.NewStore().WithCell("node", invalid, 1),
+			want:  `node "node" key "\xff" is not valid UTF-8`,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := json.Marshal(test.store)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Marshal error = %v; want %s", err, test.want)
+			}
+		})
+	}
+}
+
 func TestStore_MarshalReportsTheFirstBadCellDeterministically(t *testing.T) {
 	store := workflow.NewStore().
 		WithOutput("z", func() {}).
@@ -547,13 +742,31 @@ func TestStore_MarshalReportsTheFirstBadCellDeterministically(t *testing.T) {
 	}
 }
 
-func TestStore_MarshalPreservesOriginalErrorWhenRetrySucceeds(t *testing.T) {
+func TestStore_MarshalInvokesApplicationMarshalerOnce(t *testing.T) {
 	value := new(failOnceJSON)
 	_, err := json.Marshal(workflow.NewStore().WithOutput("flaky", value))
-	if err == nil || !strings.Contains(err.Error(), "marshal store") {
-		t.Fatalf("error = %v; want Store marshal error", err)
+	if err == nil || !strings.Contains(err.Error(), `node "flaky" key "output"`) {
+		t.Fatalf("error = %v; want Store cell error", err)
 	}
-	if value.calls != 2 {
-		t.Fatalf("MarshalJSON calls = %d; want 2", value.calls)
+	if value.calls != 1 {
+		t.Fatalf("MarshalJSON calls = %d; want exactly 1", value.calls)
+	}
+}
+
+func TestStore_MarshalRejectsDuplicateMembersFromApplicationMarshaler(t *testing.T) {
+	_, err := json.Marshal(workflow.NewStore().WithOutput("duplicate", duplicateObjectJSON{}))
+	if err == nil ||
+		!strings.Contains(err.Error(), `node "duplicate" key "output"`) ||
+		!strings.Contains(err.Error(), `duplicate object member "same"`) {
+		t.Fatalf("Marshal error = %v; want cell-scoped duplicate member", err)
+	}
+}
+
+func TestStore_MarshalRejectsUnpairedSurrogateFromApplicationMarshaler(t *testing.T) {
+	_, err := json.Marshal(workflow.NewStore().WithOutput("surrogate", unpairedSurrogateJSON{}))
+	if err == nil ||
+		!strings.Contains(err.Error(), `node "surrogate" key "output"`) ||
+		!strings.Contains(err.Error(), "unpaired UTF-16 surrogate") {
+		t.Fatalf("Marshal error = %v; want cell-scoped Unicode error", err)
 	}
 }

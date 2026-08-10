@@ -10,13 +10,14 @@ import (
 var (
 	// ErrSyntax reports an expression that is not a well-formed expression.
 	ErrSyntax = errors.New("expr: syntax error")
-	// ErrUnsupported reports a construct outside the supported grammar. It is
-	// always reported by [Parse], never at evaluation time.
+	// ErrUnsupported reports a construct or nesting depth outside the supported
+	// grammar. It is always reported by [Parse], never at evaluation time.
 	ErrUnsupported = errors.New("expr: unsupported expression")
 	// ErrType reports an operator applied to values it does not accept.
 	ErrType = errors.New("expr: type error")
-	// ErrUndefined reports a reference the [workflow.Store] does not resolve.
-	// Guard a reference with has() when it may legitimately be absent.
+	// ErrUndefined reports a reference missing from the [workflow.Store]. Guard
+	// a reference with has() when it may legitimately be absent. has() still
+	// reports malformed data and conversion failures as [ErrType].
 	ErrUndefined = errors.New("expr: undefined reference")
 	// ErrDivideByZero reports a division or remainder by zero. Unlike Go, expr
 	// never yields an infinity.
