@@ -52,10 +52,9 @@ func Combine[I, A, B, O any](a flow.Node[I, A], b flow.Node[I, B], merge func(ct
 	return combineNode[I, A, B, O]{a: a, b: b, merge: merge}
 }
 
-// combineNode keeps Combine's definition visible to its own Run boundary.
-// Building the derived Map/Then pipeline inside Run then delegates execution
-// semantics without letting their cancellation admission hide invalid Combine
-// arguments.
+// combineNode keeps Combine's immutable definition visible to validation. Each
+// Run creates a combineExecution that owns its two mutable result slots, while
+// flow.Map supplies admission, cancellation, and join semantics.
 type combineNode[I, A, B, O any] struct {
 	a     flow.Node[I, A]
 	b     flow.Node[I, B]
@@ -67,28 +66,8 @@ func (c combineNode[I, A, B, O]) Run(ctx context.Context, in I) (O, error) {
 	if err := c.Validate(); err != nil {
 		return zero, err
 	}
-
-	gather := flow.NodeFunc[I, combination[A, B]](func(ctx context.Context, in I) (combination[A, B], error) {
-		var result combination[A, B]
-		tasks := flow.NodeFunc[int, struct{}](func(ctx context.Context, task int) (struct{}, error) {
-			var err error
-			switch task {
-			case 0:
-				result.a, err = c.a.Run(ctx, in)
-			case 1:
-				result.b, err = c.b.Run(ctx, in)
-			}
-			return struct{}{}, err
-		})
-		if _, err := flow.Map(tasks, flow.MapConfig{}).Run(ctx, []int{0, 1}); err != nil {
-			return combination[A, B]{}, err
-		}
-		return result, nil
-	})
-	combine := flow.NodeFunc[combination[A, B], O](func(ctx context.Context, values combination[A, B]) (O, error) {
-		return c.merge(ctx, values.a, values.b)
-	})
-	return flow.Then(gather, combine).Run(ctx, in)
+	execution := combineExecution[I, A, B, O]{combine: c, input: in}
+	return execution.execute(ctx)
 }
 
 func (c combineNode[I, A, B, O]) Validate() error {
@@ -104,6 +83,50 @@ func (c combineNode[I, A, B, O]) Validate() error {
 type combination[A, B any] struct {
 	a A
 	b B
+}
+
+type combineTask uint8
+
+const (
+	combineA combineTask = iota
+	combineB
+)
+
+// combineExecution owns the mutable result slots of one Combine invocation.
+// flow.Map may call Run concurrently, but each admitted task owns exactly one
+// slot; execute joins both calls before reading either value or invoking merge.
+type combineExecution[I, A, B, O any] struct {
+	combine combineNode[I, A, B, O]
+	input   I
+	result  combination[A, B]
+}
+
+func (c *combineExecution[I, A, B, O]) execute(ctx context.Context) (O, error) {
+	var zero O
+	if _, err := flow.Map(c, flow.MapConfig{}).Run(ctx, []combineTask{combineA, combineB}); err != nil {
+		return zero, err
+	}
+	if err := context.Cause(ctx); err != nil {
+		return zero, err
+	}
+	output, err := c.combine.merge(ctx, c.result.a, c.result.b)
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return zero, contextErr
+	}
+	return output, err
+}
+
+// Run executes one of the two fixed input branches. The task value is private
+// input produced by execute, so no default case is part of the protocol.
+func (c *combineExecution[I, A, B, O]) Run(ctx context.Context, task combineTask) (struct{}, error) {
+	var err error
+	switch task {
+	case combineA:
+		c.result.a, err = c.combine.a.Run(ctx, c.input)
+	case combineB:
+		c.result.b, err = c.combine.b.Run(ctx, c.input)
+	}
+	return struct{}{}, err
 }
 
 // Chain composes any number of same-type nodes in sequence via flow.Then. It is

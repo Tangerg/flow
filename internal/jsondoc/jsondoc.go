@@ -86,7 +86,7 @@ func (c Codec) Value(data []byte) (any, error) {
 	if err := validateUTF8(data); err != nil {
 		return nil, err
 	}
-	if err := validateUnicodeEscapes(data); err != nil {
+	if err := (&unicodeEscapeValidator{data: data}).validate(); err != nil {
 		return nil, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -105,63 +105,86 @@ func (c Codec) Value(data []byte) (any, error) {
 	return value, nil
 }
 
-// validateUnicodeEscapes rejects lone UTF-16 surrogate escapes. The input
-// bytes can be valid UTF-8 while encoding/json still replaces such an escape
-// with U+FFFD, which would silently change identity-bearing text.
-func validateUnicodeEscapes(data []byte) error {
-	for offset := 0; offset < len(data); offset++ {
-		if data[offset] != '"' {
+// unicodeEscapeValidator owns the cursor used to inspect JSON strings for lone
+// UTF-16 surrogate escapes. The JSON decoder remains responsible for ordinary
+// syntax; this pass rejects the one otherwise-valid shape encoding/json would
+// silently replace with U+FFFD and thereby change identity-bearing text.
+type unicodeEscapeValidator struct {
+	data   []byte
+	offset int
+}
+
+func (u *unicodeEscapeValidator) validate() error {
+	for u.offset = 0; u.offset < len(u.data); u.offset++ {
+		if u.data[u.offset] != '"' {
 			continue
 		}
-		for offset++; offset < len(data) && data[offset] != '"'; offset++ {
-			if data[offset] != '\\' {
-				continue
-			}
-			escapeOffset := offset
-			offset++
-			if offset >= len(data) || data[offset] != 'u' {
-				continue
-			}
-			code, ok := unicodeEscape(data, offset+1)
-			if !ok {
-				continue // The JSON decoder reports the malformed escape.
-			}
-			offset += unicodeEscapeDigits
-			switch {
-			case code >= 0xD800 && code <= 0xDBFF:
-				next := offset + 1
-				low, paired := unicodeEscapePair(data, next)
-				if !paired || low < 0xDC00 || low > 0xDFFF {
-					return fmt.Errorf(
-						"unpaired UTF-16 surrogate escape at byte %d",
-						escapeOffset+1,
-					)
-				}
-				offset += unicodeEscapeLength
-			case code >= 0xDC00 && code <= 0xDFFF:
-				return fmt.Errorf(
-					"unpaired UTF-16 surrogate escape at byte %d",
-					escapeOffset+1,
-				)
-			}
+		if err := u.validateString(); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func unicodeEscapePair(data []byte, offset int) (uint64, bool) {
-	if len(data)-offset < unicodeEscapeLength || data[offset] != '\\' || data[offset+1] != 'u' {
-		return 0, false
+func (u *unicodeEscapeValidator) validateString() error {
+	for u.offset++; u.offset < len(u.data) && u.data[u.offset] != '"'; u.offset++ {
+		if u.data[u.offset] != '\\' {
+			continue
+		}
+		if err := u.validateEscape(); err != nil {
+			return err
+		}
 	}
-	return unicodeEscape(data, offset+unicodeEscapePrefix)
+	return nil
 }
 
-func unicodeEscape(data []byte, offset int) (uint64, bool) {
-	if len(data)-offset < unicodeEscapeDigits {
+func (u *unicodeEscapeValidator) validateEscape() error {
+	escapeOffset := u.offset
+	u.offset++
+	if u.offset >= len(u.data) || u.data[u.offset] != 'u' {
+		return nil
+	}
+	code, ok := u.codeUnit(u.offset + 1)
+	if !ok {
+		return nil // The JSON decoder reports the malformed escape.
+	}
+	u.offset += unicodeEscapeDigits
+	switch {
+	case code >= 0xD800 && code <= 0xDBFF:
+		low, paired := u.surrogatePair(u.offset + 1)
+		if !paired || low < 0xDC00 || low > 0xDFFF {
+			return unpairedSurrogateError(escapeOffset)
+		}
+		u.offset += unicodeEscapeLength
+	case code >= 0xDC00 && code <= 0xDFFF:
+		return unpairedSurrogateError(escapeOffset)
+	}
+	return nil
+}
+
+func (u *unicodeEscapeValidator) surrogatePair(offset int) (uint64, bool) {
+	if len(u.data)-offset < unicodeEscapeLength ||
+		u.data[offset] != '\\' ||
+		u.data[offset+1] != 'u' {
 		return 0, false
 	}
-	value, err := strconv.ParseUint(string(data[offset:offset+unicodeEscapeDigits]), 16, 16)
+	return u.codeUnit(offset + unicodeEscapePrefix)
+}
+
+func (u *unicodeEscapeValidator) codeUnit(offset int) (uint64, bool) {
+	if len(u.data)-offset < unicodeEscapeDigits {
+		return 0, false
+	}
+	value, err := strconv.ParseUint(
+		string(u.data[offset:offset+unicodeEscapeDigits]),
+		16,
+		16,
+	)
 	return value, err == nil
+}
+
+func unpairedSurrogateError(offset int) error {
+	return fmt.Errorf("unpaired UTF-16 surrogate escape at byte %d", offset+1)
 }
 
 func validateUTF8(data []byte) error {

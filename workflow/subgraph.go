@@ -57,50 +57,75 @@ type subgraphStep struct {
 
 func (s subgraphStep) Run(ctx context.Context, outer Store) (Store, error) {
 	ctx = ensureRun(ctx)
-	run := runFrom(ctx)
-	if err := s.Validate(); err != nil {
-		return outer, err
+	execution := subgraphExecution{
+		subgraph: s,
+		outer:    outer,
+		run:      runFrom(ctx),
 	}
-	if err := validateChildScope(scope(ctx)); err != nil {
-		return outer, newStepError(ctx, s.id, OpValidate, err)
-	}
-	if err := run.claim(scope(ctx), s.id); err != nil {
-		return outer, newStepError(ctx, s.id, OpValidate, err)
-	}
-	if contextErr := context.Cause(ctx); contextErr != nil {
-		return outer, contextErr
+	return execution.execute(ctx)
+}
+
+// subgraphExecution owns the two Store namespaces and identity state of one
+// invocation. Every method either advances the sealed inner execution or
+// returns the untouched outer Store, so projection cannot leak partial cells.
+type subgraphExecution struct {
+	subgraph subgraphStep
+	outer    Store
+	run      *runState
+}
+
+func (s *subgraphExecution) execute(ctx context.Context) (Store, error) {
+	if err := s.validate(ctx); err != nil {
+		return s.outer, err
 	}
 
-	inner, err := s.bind(ctx, outer)
+	inner, err := s.bind(ctx)
 	if contextErr := context.Cause(ctx); contextErr != nil {
-		return outer, contextErr
+		return s.outer, contextErr
 	}
 	if err != nil {
-		return outer, newStepError(ctx, s.id, OpBind, err)
+		return s.outer, newStepError(ctx, s.subgraph.id, OpBind, err)
 	}
-	result, err := s.body.Run(WithScope(ctx, s.id), inner)
+	result, err := s.subgraph.body.Run(WithScope(ctx, s.subgraph.id), inner)
 	if contextErr := context.Cause(ctx); contextErr != nil {
-		return outer, contextErr
+		return s.outer, contextErr
 	}
 	if err != nil {
 		if SuspendedOnly(err) {
-			return outer, err
+			return s.outer, err
 		}
-		return outer, newStepError(ctx, s.id, OpRun, err)
+		return s.outer, newStepError(ctx, s.subgraph.id, OpRun, err)
 	}
-	output, err := Get[any](result, s.bodyOutput)
+	return s.project(ctx, result)
+}
+
+func (s *subgraphExecution) validate(ctx context.Context) error {
+	if err := s.subgraph.Validate(); err != nil {
+		return err
+	}
+	if err := validateChildScope(scope(ctx)); err != nil {
+		return newStepError(ctx, s.subgraph.id, OpValidate, err)
+	}
+	if err := s.run.claim(scope(ctx), s.subgraph.id); err != nil {
+		return newStepError(ctx, s.subgraph.id, OpValidate, err)
+	}
+	return context.Cause(ctx)
+}
+
+func (s *subgraphExecution) project(ctx context.Context, inner Store) (Store, error) {
+	output, err := Get[any](inner, s.subgraph.bodyOutput)
 	if contextErr := context.Cause(ctx); contextErr != nil {
-		return outer, contextErr
+		return s.outer, contextErr
 	}
 	if err != nil {
-		return outer, newStepError(
+		return s.outer, newStepError(
 			ctx,
-			s.id,
+			s.subgraph.id,
 			OpRun,
-			fmt.Errorf("read body output %s: %w", s.bodyOutput, err),
+			fmt.Errorf("read body output %s: %w", s.subgraph.bodyOutput, err),
 		)
 	}
-	return outer.WithOutput(s.id, output), nil
+	return s.outer.WithOutput(s.subgraph.id, output), nil
 }
 
 func (s subgraphStep) validate() error {
@@ -129,14 +154,14 @@ func (s subgraphStep) validate() error {
 
 func (s subgraphStep) Validate() error { return validateDefinition(s) }
 
-func (s subgraphStep) bind(ctx context.Context, outer Store) (Store, error) {
+func (s *subgraphExecution) bind(ctx context.Context) (Store, error) {
 	inner := NewStore()
-	for _, seedID := range s.inputs.names() {
+	for _, seedID := range s.subgraph.inputs.names() {
 		if err := context.Cause(ctx); err != nil {
 			return Store{}, err
 		}
-		ref := s.inputs[seedID]
-		value, err := Get[any](outer, ref)
+		ref := s.subgraph.inputs[seedID]
+		value, err := Get[any](s.outer, ref)
 		if contextErr := context.Cause(ctx); contextErr != nil {
 			return Store{}, contextErr
 		}
@@ -145,7 +170,7 @@ func (s subgraphStep) bind(ctx context.Context, outer Store) (Store, error) {
 		}
 		inner = inner.WithOutput(seedID, value)
 	}
-	return inner, nil
+	return inner, context.Cause(ctx)
 }
 
 func (s subgraphStep) Describe() Description {

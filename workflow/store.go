@@ -68,8 +68,6 @@ type storeKey struct {
 
 type storeCells map[storeKey]cell
 
-type nodeSet map[string]struct{}
-
 // revisionCounter gives each internal mutation an identity. Parallel uses it to
 // distinguish a branch's changes from cells merely inherited from its input
 // snapshot, without comparing arbitrary values.

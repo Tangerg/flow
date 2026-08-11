@@ -58,7 +58,13 @@ func (l loopStep) Run(ctx context.Context, s Store) (Store, error) {
 		return s, newStepError(ctx, l.id, OpValidate, err)
 	}
 
-	return l.runIterations(ctx, s)
+	execution := loopExecution{
+		loop:    l,
+		run:     runFrom(ctx),
+		current: s,
+		limit:   l.iterationLimit(),
+	}
+	return execution.runIterations(ctx)
 }
 
 func (l loopStep) validate() error {
@@ -83,65 +89,83 @@ func (l loopStep) validate() error {
 
 func (l loopStep) Validate() error { return validateDefinition(l) }
 
-// runIterations owns workflow-specific loop semantics. In particular, a
-// suspension is a third outcome: writes returned by a waiting body or by the
-// body preceding a waiting condition remain visible to the caller. Ordinary
-// failures retain flow.Loop's rollback-to-the-previous-iteration behavior.
-func (l loopStep) runIterations(ctx context.Context, store Store) (Store, error) {
+func (l loopStep) iterationLimit() int {
 	limit := l.config.MaxIterations
 	if limit == 0 {
 		limit = flow.DefaultMaxIterations
 	}
+	return limit
+}
 
-	current := store
-	for iteration := range limit {
+// loopExecution owns the mutable Store snapshot and decision history of one
+// loop invocation. current is the last committed iteration. A suspension is
+// the sole transition that may expose an uncommitted next Store; ordinary
+// failure and parent cancellation leave current at the previous iteration.
+type loopExecution struct {
+	loop    loopStep
+	run     *runState
+	current Store
+	limit   int
+}
+
+func (l *loopExecution) runIterations(ctx context.Context) (Store, error) {
+	for iteration := range l.limit {
 		if err := context.Cause(ctx); err != nil {
-			return current, err
+			return l.current, err
 		}
-
-		body := (scopedStep{step: l.body}).indexed(l.id, iteration)
-		next, err := body.run(ctx, current)
-		if contextErr := context.Cause(ctx); contextErr != nil {
-			return current, contextErr
-		}
+		stop, err := l.advance(ctx, iteration)
 		if err != nil {
-			if SuspendedOnly(err) {
-				return next, err
-			}
-			return current, err
+			return l.current, err
 		}
-
-		stop, err := l.stop(body.childContext(ctx), iteration, next)
-		if contextErr := context.Cause(ctx); contextErr != nil {
-			return current, contextErr
-		}
-		if err != nil {
-			if SuspendedOnly(err) {
-				return next, err
-			}
-			return current, err
-		}
-		current = next
 		if stop {
-			return current, nil
+			return l.current, nil
 		}
 	}
-	return current, newStepError(
+	return l.current, newStepError(
 		ctx,
-		l.id,
+		l.loop.id,
 		OpRun,
-		fmt.Errorf("%w: limit %d", flow.ErrMaxIterations, limit),
+		fmt.Errorf("%w: limit %d", flow.ErrMaxIterations, l.limit),
 	)
+}
+
+// advance runs one body and its stop decision. It commits next only after both
+// succeed. A suspension deliberately promotes next before returning, preserving
+// the waiting body's writes; every other error keeps the previous current.
+func (l *loopExecution) advance(ctx context.Context, iteration int) (bool, error) {
+	body := (scopedStep{step: l.loop.body}).indexed(l.loop.id, iteration)
+	next, err := body.run(ctx, l.current)
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return false, contextErr
+	}
+	if err != nil {
+		if SuspendedOnly(err) {
+			l.current = next
+		}
+		return false, err
+	}
+
+	stop, err := l.stop(body.childContext(ctx), iteration, next)
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return false, contextErr
+	}
+	if err != nil {
+		if SuspendedOnly(err) {
+			l.current = next
+		}
+		return false, err
+	}
+	l.current = next
+	return stop, nil
 }
 
 // stop returns whether the loop ends after this iteration, reusing the recorded
 // decision when the run is resuming.
-func (l loopStep) stop(ctx context.Context, iter int, s Store) (bool, error) {
-	run := runFrom(ctx)
-	if err := run.claim(scope(ctx), l.id); err != nil {
-		return false, newStepError(ctx, l.id, OpValidate, err)
+func (l *loopExecution) stop(ctx context.Context, iter int, s Store) (bool, error) {
+	if err := l.run.claim(scope(ctx), l.loop.id); err != nil {
+		return false, newStepError(ctx, l.loop.id, OpValidate, err)
 	}
-	recorded, replayed, err := run.replay(ctx, scope(ctx), l.id)
+	recorded, replayed, err := l.run.replay(ctx, scope(ctx), l.loop.id)
 	if err != nil {
 		return false, err
 	}
@@ -151,7 +175,7 @@ func (l loopStep) stop(ctx context.Context, iter int, s Store) (bool, error) {
 		}
 		return false, newStepError(
 			ctx,
-			l.id,
+			l.loop.id,
 			OpRun,
 			fmt.Errorf(
 				"%w: journaled loop decision has type %T; want bool",
@@ -161,22 +185,22 @@ func (l loopStep) stop(ctx context.Context, iter int, s Store) (bool, error) {
 		)
 	}
 
-	stop, err := l.done(ctx, iter, s)
+	stop, err := l.loop.done(ctx, iter, s)
 	if contextErr := context.Cause(ctx); contextErr != nil {
 		return false, contextErr
 	}
 	if err != nil {
 		if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
-			return false, suspensions.identify(l.id, scope(ctx)).err()
+			return false, suspensions.identify(l.loop.id, scope(ctx)).err()
 		}
-		return false, newStepError(ctx, l.id, OpRun, err)
+		return false, newStepError(ctx, l.loop.id, OpRun, err)
 	}
-	journalErr := run.journal().record(scope(ctx), l.id, stop)
+	journalErr := l.run.journal().record(scope(ctx), l.loop.id, stop)
 	if contextErr := context.Cause(ctx); contextErr != nil {
 		return false, contextErr
 	}
 	if journalErr != nil {
-		return false, newStepError(ctx, l.id, OpRun, journalErr)
+		return false, newStepError(ctx, l.loop.id, OpRun, journalErr)
 	}
 	return stop, nil
 }

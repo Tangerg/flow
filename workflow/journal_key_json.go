@@ -23,15 +23,8 @@ func (j *JournalKey) UnmarshalJSON(data []byte) error {
 	if j == nil {
 		return errors.New("workflow: unmarshal journal key: nil key")
 	}
-	document, err := jsonDocument(data).value()
-	if err != nil {
+	if _, err := jsonDocument(data).object(); err != nil {
 		return fmt.Errorf("workflow: unmarshal journal key: %w", err)
-	}
-	if _, ok := document.(map[string]any); !ok {
-		return fmt.Errorf(
-			"workflow: unmarshal journal key: expected object, got %s",
-			jsonValue{raw: document}.kind(),
-		)
 	}
 
 	var decoded journalKeyJSON

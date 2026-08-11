@@ -165,7 +165,7 @@ func (s suspensionTree) collect() (suspensionList, bool) {
 
 		if many, ok := err.(interface{ Unwrap() []error }); ok {
 			children := many.Unwrap()
-			if hasNonNilError(children) {
+			if slices.ContainsFunc(children, func(err error) bool { return err != nil }) {
 				return s.collectMany(children)
 			}
 			return s.collectIdentity()
@@ -202,10 +202,6 @@ func (s suspensionTree) collectIdentity() (suspensionList, bool) {
 		return suspensionList{{Value: s.err.Error()}}, true
 	}
 	return nil, false
-}
-
-func hasNonNilError(errs []error) bool {
-	return slices.ContainsFunc(errs, func(err error) bool { return err != nil })
 }
 
 func (s suspensionTree) collectMany(children []error) (suspensionList, bool) {
@@ -306,12 +302,13 @@ type multiSuspension struct {
 
 func (m *multiSuspension) Error() string { return m.message }
 
-// Unwrap returns each suspension so errors.As finds the first and errors.Is
-// matches [ErrSuspended].
+// Unwrap returns a copy of each suspension so errors.As finds the first and
+// errors.Is matches [ErrSuspended] without exposing multiSuspension's immutable
+// error tree to mutation through Suspension's exported fields.
 func (m *multiSuspension) Unwrap() []error {
 	errs := make([]error, len(m.suspensions))
 	for index, suspension := range m.suspensions {
-		errs[index] = suspension
+		errs[index] = suspension.clone()
 	}
 	return errs
 }

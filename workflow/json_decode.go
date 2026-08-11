@@ -36,6 +36,18 @@ func (j jsonDocument) value() (any, error) {
 	return value, translateJSONError(err)
 }
 
+func (j jsonDocument) object() (map[string]any, error) {
+	value, err := j.value()
+	if err != nil {
+		return nil, err
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("expected object, got %s", jsonValue{raw: value}.kind())
+	}
+	return object, nil
+}
+
 func translateJSONError(err error) error {
 	var depthErr *jsondoc.DepthError
 	if !errors.As(err, &depthErr) {

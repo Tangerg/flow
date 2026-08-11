@@ -45,52 +45,83 @@ type branchStep struct {
 
 func (b branchStep) Run(ctx context.Context, s Store) (Store, error) {
 	ctx = ensureRun(ctx)
-	if err := b.Validate(); err != nil {
-		return s, err
+	execution := branchExecution{
+		branch: b,
+		input:  s,
+		run:    runFrom(ctx),
 	}
-	if err := runFrom(ctx).claim(scope(ctx), b.id); err != nil {
-		return s, newStepError(ctx, b.id, OpValidate, err)
-	}
-	if contextErr := context.Cause(ctx); contextErr != nil {
-		return s, contextErr
-	}
+	return execution.execute(ctx)
+}
 
-	name, replayed, err := b.decide(ctx, s)
+// branchExecution owns the selection and persistence boundary of one Branch
+// invocation. A case becomes admissible only after its name has been validated
+// against the definition and, for a fresh decision, committed to the configured
+// Journal when resumption is enabled.
+type branchExecution struct {
+	branch branchStep
+	input  Store
+	run    *runState
+}
+
+func (b *branchExecution) execute(ctx context.Context) (Store, error) {
+	if err := b.validate(ctx); err != nil {
+		return b.input, err
+	}
+	step, err := b.selectCase(ctx)
+	if err != nil {
+		return b.input, err
+	}
+	result, err := step.Run(ctx, b.input)
 	if contextErr := context.Cause(ctx); contextErr != nil {
-		return s, contextErr
+		return b.input, contextErr
+	}
+	return result, err
+}
+
+func (b *branchExecution) validate(ctx context.Context) error {
+	if err := b.branch.Validate(); err != nil {
+		return err
+	}
+	if err := b.run.claim(scope(ctx), b.branch.id); err != nil {
+		return newStepError(ctx, b.branch.id, OpValidate, err)
+	}
+	return context.Cause(ctx)
+}
+
+func (b *branchExecution) selectCase(ctx context.Context) (Step, error) {
+	name, replayed, err := b.decide(ctx)
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return nil, contextErr
 	}
 	if err != nil {
-		return s, err
+		return nil, err
 	}
-	step, ok := b.cases[name]
+	step, ok := b.branch.cases[name]
 	if !ok {
-		return s, newStepError(
+		return nil, newStepError(
 			ctx,
-			b.id,
+			b.branch.id,
 			OpRun,
 			fmt.Errorf("%w: resolver selected %q", flow.ErrNoCase, name),
 		)
 	}
+
 	// A decision is durable only after it names an actual case. Recording an
 	// unknown name would poison the Journal and make every later run fail before
 	// the resolver had a chance to recover.
 	if !replayed {
-		journalErr := runFrom(ctx).journal().record(scope(ctx), b.id, name)
+		journalErr := b.run.journal().record(scope(ctx), b.branch.id, name)
 		if contextErr := context.Cause(ctx); contextErr != nil {
-			return s, contextErr
+			return nil, contextErr
 		}
 		if journalErr != nil {
-			return s, newStepError(ctx, b.id, OpRun, journalErr)
+			return nil, newStepError(ctx, b.branch.id, OpRun, journalErr)
 		}
 	}
 	if contextErr := context.Cause(ctx); contextErr != nil {
-		return s, contextErr
+		return nil, contextErr
 	}
-	result, err := step.Run(ctx, s)
-	if contextErr := context.Cause(ctx); contextErr != nil {
-		return s, contextErr
-	}
-	return result, err
+	return step, nil
 }
 
 func (b branchStep) validate() error {
@@ -130,8 +161,8 @@ func (b branchStep) Validate() error { return validateDefinition(b) }
 
 // decide returns the branch to take, reusing the recorded decision when the run
 // is resuming. Run records a fresh decision only after verifying the case.
-func (b branchStep) decide(ctx context.Context, s Store) (string, bool, error) {
-	recorded, replayed, err := runFrom(ctx).replay(ctx, scope(ctx), b.id)
+func (b *branchExecution) decide(ctx context.Context) (string, bool, error) {
+	recorded, replayed, err := b.run.replay(ctx, scope(ctx), b.branch.id)
 	if err != nil {
 		return "", false, err
 	}
@@ -141,7 +172,7 @@ func (b branchStep) decide(ctx context.Context, s Store) (string, bool, error) {
 		}
 		return "", false, newStepError(
 			ctx,
-			b.id,
+			b.branch.id,
 			OpRun,
 			fmt.Errorf(
 				"%w: journaled branch decision has type %T; want string",
@@ -151,12 +182,12 @@ func (b branchStep) decide(ctx context.Context, s Store) (string, bool, error) {
 		)
 	}
 
-	name, err := b.resolve.Run(ctx, s)
+	name, err := b.branch.resolve.Run(ctx, b.input)
 	if err != nil {
 		if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
-			return "", false, suspensions.identify(b.id, scope(ctx)).err()
+			return "", false, suspensions.identify(b.branch.id, scope(ctx)).err()
 		}
-		return "", false, newStepError(ctx, b.id, OpRun, err)
+		return "", false, newStepError(ctx, b.branch.id, OpRun, err)
 	}
 	return name, false, nil
 }

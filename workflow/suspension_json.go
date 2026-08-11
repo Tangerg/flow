@@ -30,15 +30,8 @@ func (s *Suspension) UnmarshalJSON(data []byte) error {
 	if s == nil {
 		return errors.New("workflow: unmarshal suspension: nil suspension")
 	}
-	document, err := jsonDocument(data).value()
-	if err != nil {
+	if _, err := jsonDocument(data).object(); err != nil {
 		return fmt.Errorf("workflow: unmarshal suspension: %w", err)
-	}
-	if _, ok := document.(map[string]any); !ok {
-		return fmt.Errorf(
-			"workflow: unmarshal suspension: expected object, got %s",
-			jsonValue{raw: document}.kind(),
-		)
 	}
 
 	var decoded suspensionJSON

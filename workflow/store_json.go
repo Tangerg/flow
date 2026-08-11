@@ -136,16 +136,9 @@ func (s *Store) UnmarshalJSON(data []byte) error {
 	if s == nil {
 		return errors.New("workflow: unmarshal store: nil store")
 	}
-	document, err := jsonDocument(data).value()
+	raw, err := jsonDocument(data).object()
 	if err != nil {
 		return fmt.Errorf("workflow: unmarshal store: %w", err)
-	}
-	raw, ok := document.(map[string]any)
-	if !ok {
-		return fmt.Errorf(
-			"workflow: unmarshal store: expected object, got %s",
-			jsonValue{raw: document}.kind(),
-		)
 	}
 
 	// Validating every node before assigning any revision keeps a malformed

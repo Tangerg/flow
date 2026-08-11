@@ -23,7 +23,7 @@ func (r *Registry) ValidateSpec(spec Spec) error {
 func (r registrySnapshot) validateSpec(root Spec) error {
 	validator := specValidator{
 		registry: r,
-		stepIDs:  make(map[string]struct{}),
+		stepIDs:  newDefinitionIDs(),
 	}
 	return validator.validate(root)
 }
@@ -34,7 +34,7 @@ func (r registrySnapshot) validateSpec(root Spec) error {
 // output ID.
 type specValidator struct {
 	registry registrySnapshot
-	stepIDs  map[string]struct{}
+	stepIDs  definitionIDs
 	depth    int
 }
 
@@ -137,7 +137,7 @@ func (s *specValidator) validateLoop(spec Spec) error {
 	// index, so its IDs are local and may be reused outside this loop. Reserve
 	// the loop ID itself because each iteration records the stop decision under
 	// that ID in the same scope.
-	bodyValidator := s.child(map[string]struct{}{spec.ID: {}})
+	bodyValidator := s.child(newDefinitionIDs(spec.ID))
 	return locateSpecError(bodyValidator.validate(*spec.Body), fieldBody)
 }
 
@@ -195,22 +195,18 @@ func (s *specValidator) validateBranch(spec Spec) error {
 	// At most one case runs, so sibling cases may reuse an ID. Each case is
 	// checked against the path before the branch, and their introduced IDs are
 	// visible to the steps after it.
-	introduced := make(map[string]struct{})
+	introduced := newDefinitionIDs()
 	for _, name := range slices.Sorted(maps.Keys(spec.Cases)) {
 		if err := validateName("branch case name", name); err != nil {
 			return spec.fieldError(fieldCases, err)
 		}
-		caseValidator := s.child(maps.Clone(s.stepIDs))
+		caseValidator := s.child(s.stepIDs.clone())
 		if err := caseValidator.validate(spec.Cases[name]); err != nil {
 			return locateSpecError(err, fieldCases, name)
 		}
-		for id := range caseValidator.stepIDs {
-			if _, existed := s.stepIDs[id]; !existed {
-				introduced[id] = struct{}{}
-			}
-		}
+		introduced.addAll(s.stepIDs.additions(caseValidator.stepIDs))
 	}
-	maps.Copy(s.stepIDs, introduced)
+	s.stepIDs.addAll(introduced)
 	return nil
 }
 
@@ -245,12 +241,12 @@ func (s *specValidator) validateIteration(spec Spec) error {
 	// Each element gets its own Store snapshot and indexed Journal scope. The
 	// snapshot retains outer cells; Iteration isolates writes between elements,
 	// not the body namespace.
-	bodyValidator := s.child(make(map[string]struct{}))
+	bodyValidator := s.child(newDefinitionIDs())
 	if err := bodyValidator.validate(*spec.Body); err != nil {
 		return locateSpecError(err, fieldBody)
 	}
-	outputs, known := s.guaranteedOutputs(*spec.Body)
-	if known && !iterationOutputGuaranteed(spec.ID, outputs, spec.BodyOutput) {
+	outputs := s.guaranteedOutputs(*spec.Body)
+	if outputs.known && !iterationOutputGuaranteed(spec.ID, outputs, spec.BodyOutput) {
 		return spec.fieldError(
 			fieldBodyOutput,
 			fmt.Errorf(
@@ -285,12 +281,12 @@ func (s *specValidator) validateSubgraph(spec Spec) error {
 	if err := spec.BodyOutput.Validate(); err != nil {
 		return spec.fieldError(fieldBodyOutput, err)
 	}
-	bodyValidator := s.child(make(map[string]struct{}))
+	bodyValidator := s.child(newDefinitionIDs())
 	if err := bodyValidator.validate(*spec.Body); err != nil {
 		return locateSpecError(err, fieldBody)
 	}
-	outputs, known := s.guaranteedOutputs(*spec.Body)
-	if known && !subgraphOutputGuaranteed(spec.Inputs, outputs, spec.BodyOutput) {
+	outputs := s.guaranteedOutputs(*spec.Body)
+	if outputs.known && !subgraphOutputGuaranteed(spec.Inputs, outputs, spec.BodyOutput) {
 		return spec.fieldError(
 			fieldBodyOutput,
 			fmt.Errorf(
@@ -304,71 +300,64 @@ func (s *specValidator) validateSubgraph(spec Spec) error {
 }
 
 // guaranteedOutputs reports the complete set of conventional output cells a
-// successful Spec must add. The bool is false when an unregistered leaf schema
-// makes that set unknowable without executing its factory. Validation stays
-// conservative at that extension boundary; compilation later checks the
+// successful Spec must add. The guarantee is unknown when an unregistered leaf
+// schema makes that set unknowable without executing its factory. Validation
+// stays conservative at that extension boundary; compilation later checks the
 // concrete Step returned by the factory.
-func (s *specValidator) guaranteedOutputs(spec Spec) (nodeSet, bool) {
+func (s *specValidator) guaranteedOutputs(spec Spec) outputGuarantee {
 	switch spec.Kind {
 	case KindLeaf:
 		registered, known := s.registry.lookupNodeSchema(spec.Type)
 		if !known {
-			return nil, false
+			return outputGuarantee{}
 		}
-		outputs := make(nodeSet)
 		if registered.schema.Output != "" {
-			outputs[spec.ID] = struct{}{}
+			return knownOutputs(spec.ID)
 		}
-		return outputs, true
+		return knownOutputs()
 	case KindSequence, KindParallel:
 		return s.guaranteedStepOutputs(spec.Steps)
 	case KindBranch:
 		return s.guaranteedCaseOutputs(spec.Cases)
 	case KindLoop:
 		if spec.Body == nil {
-			return nil, false
+			return outputGuarantee{}
 		}
 		return s.guaranteedOutputs(*spec.Body)
 	case KindIteration, KindSubgraph:
-		return nodeSet{spec.ID: {}}, true
+		return knownOutputs(spec.ID)
 	default:
-		return nil, false
+		return outputGuarantee{}
 	}
 }
 
-func (s *specValidator) guaranteedStepOutputs(specs []Spec) (nodeSet, bool) {
-	outputs := make(nodeSet)
+func (s *specValidator) guaranteedStepOutputs(specs []Spec) outputGuarantee {
+	outputs := knownOutputs()
 	for _, spec := range specs {
-		child, known := s.guaranteedOutputs(spec)
-		if !known {
-			return nil, false
-		}
-		maps.Copy(outputs, child)
+		outputs = outputs.union(s.guaranteedOutputs(spec))
 	}
-	return outputs, true
+	return outputs
 }
 
-func (s *specValidator) guaranteedCaseOutputs(cases map[string]Spec) (nodeSet, bool) {
-	var common nodeSet
+func (s *specValidator) guaranteedCaseOutputs(cases map[string]Spec) outputGuarantee {
+	var common outputGuarantee
+	first := true
 	for _, name := range slices.Sorted(maps.Keys(cases)) {
-		outputs, known := s.guaranteedOutputs(cases[name])
-		if !known {
-			return nil, false
-		}
-		if common == nil {
+		outputs := s.guaranteedOutputs(cases[name])
+		if first {
 			common = outputs
+			first = false
 			continue
 		}
-		for id := range common {
-			if _, present := outputs[id]; !present {
-				delete(common, id)
-			}
-		}
+		common = common.intersection(outputs)
 	}
-	return common, true
+	if first {
+		return knownOutputs()
+	}
+	return common
 }
 
-func (s *specValidator) child(stepIDs map[string]struct{}) specValidator {
+func (s *specValidator) child(stepIDs definitionIDs) specValidator {
 	return specValidator{
 		registry: s.registry,
 		stepIDs:  stepIDs,
@@ -380,10 +369,9 @@ func (s *specValidator) claimID(spec Spec) error {
 	if err := validateStepID(spec.ID); err != nil {
 		return spec.fieldError(fieldID, err)
 	}
-	if _, exists := s.stepIDs[spec.ID]; exists {
+	if !s.stepIDs.claim(spec.ID) {
 		return spec.fieldError(fieldID, ErrDuplicateStep)
 	}
-	s.stepIDs[spec.ID] = struct{}{}
 	return nil
 }
 

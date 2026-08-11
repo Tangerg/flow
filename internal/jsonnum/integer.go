@@ -57,6 +57,30 @@ func (n numberParser) parse() (numberParser, error) {
 	if n.text == "" {
 		return numberParser{}, ErrSyntax
 	}
+	var err error
+	n, err = n.parseSign()
+	if err != nil {
+		return numberParser{}, err
+	}
+	n, err = n.parseIntegerPart()
+	if err != nil {
+		return numberParser{}, err
+	}
+	n, err = n.parseFraction()
+	if err != nil {
+		return numberParser{}, err
+	}
+	n, err = n.parseExponentPart()
+	if err != nil {
+		return numberParser{}, err
+	}
+	if n.offset != len(n.text) {
+		return numberParser{}, ErrSyntax
+	}
+	return n, nil
+}
+
+func (n numberParser) parseSign() (numberParser, error) {
 	if n.text[n.offset] == '-' {
 		n.negative = true
 		n.offset++
@@ -64,7 +88,10 @@ func (n numberParser) parse() (numberParser, error) {
 			return numberParser{}, ErrSyntax
 		}
 	}
+	return n, nil
+}
 
+func (n numberParser) parseIntegerPart() (numberParser, error) {
 	n.integerStart = n.offset
 	switch {
 	case n.text[n.offset] == '0':
@@ -78,27 +105,28 @@ func (n numberParser) parse() (numberParser, error) {
 		return numberParser{}, ErrSyntax
 	}
 	n.integerEnd = n.offset
+	return n, nil
+}
 
-	if n.offset < len(n.text) && n.text[n.offset] == '.' {
-		n.offset++
-		n.fractionStart = n.offset
-		n.offset = scanDigits(n.text, n.offset)
-		if n.offset == n.fractionStart {
-			return numberParser{}, ErrSyntax
-		}
-		n.fractionEnd = n.offset
+func (n numberParser) parseFraction() (numberParser, error) {
+	if n.offset >= len(n.text) || n.text[n.offset] != '.' {
+		return n, nil
 	}
-	if n.offset < len(n.text) && (n.text[n.offset] == 'e' || n.text[n.offset] == 'E') {
-		var err error
-		n, err = n.parseExponent()
-		if err != nil {
-			return numberParser{}, err
-		}
-	}
-	if n.offset != len(n.text) {
+	n.offset++
+	n.fractionStart = n.offset
+	n.offset = scanDigits(n.text, n.offset)
+	if n.offset == n.fractionStart {
 		return numberParser{}, ErrSyntax
 	}
+	n.fractionEnd = n.offset
 	return n, nil
+}
+
+func (n numberParser) parseExponentPart() (numberParser, error) {
+	if n.offset >= len(n.text) || (n.text[n.offset] != 'e' && n.text[n.offset] != 'E') {
+		return n, nil
+	}
+	return n.parseExponent()
 }
 
 func (n numberParser) parseExponent() (numberParser, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
+	"slices"
 	"sync"
 
 	"github.com/Tangerg/flow"
@@ -15,6 +16,39 @@ const (
 	registrationResolver  = "resolver"
 	registrationSchema    = "schema"
 )
+
+// registrationTable owns the common zero-value, uniqueness, snapshot, and
+// lookup semantics of one Registry namespace. Registry supplies synchronization
+// around mutation; a registrySnapshot receives cloned tables and is immutable.
+type registrationTable[T any] map[string]T
+
+func (r *registrationTable[T]) add(kind, name string, value T) error {
+	if *r == nil {
+		*r = make(registrationTable[T])
+	}
+	if _, exists := (*r)[name]; exists {
+		return &RegistrationError{
+			Kind: kind,
+			Name: name,
+			Err:  ErrDuplicateRegistration,
+		}
+	}
+	(*r)[name] = value
+	return nil
+}
+
+func (r registrationTable[T]) clone() registrationTable[T] {
+	return maps.Clone(r)
+}
+
+func (r registrationTable[T]) lookup(name string) (T, bool) {
+	value, ok := r[name]
+	return value, ok
+}
+
+func (r registrationTable[T]) names() []string {
+	return slices.Sorted(maps.Keys(r))
+}
 
 // NodeSpec carries everything a [NodeFactory] needs to build one node: its
 // execution ID, wired input ports, and raw JSON config. The returned boundary
@@ -78,10 +112,10 @@ type Condition func(ctx context.Context, iter int, s Store) (bool, error)
 // be copied after first use.
 type Registry struct {
 	mu         sync.RWMutex
-	nodes      map[string]NodeFactory
-	resolvers  map[string]Resolver
-	conditions map[string]Condition
-	schemas    map[string]registeredNodeSchema
+	nodes      registrationTable[NodeFactory]
+	resolvers  registrationTable[Resolver]
+	conditions registrationTable[Condition]
+	schemas    registrationTable[registeredNodeSchema]
 }
 
 // registrySnapshot is the immutable registration view consumed by one
@@ -89,10 +123,10 @@ type Registry struct {
 // ownership boundary structural: compilation cannot accidentally mutate its
 // source or carry synchronization intended only for registration.
 type registrySnapshot struct {
-	nodes      map[string]NodeFactory
-	resolvers  map[string]Resolver
-	conditions map[string]Condition
-	schemas    map[string]registeredNodeSchema
+	nodes      registrationTable[NodeFactory]
+	resolvers  registrationTable[Resolver]
+	conditions registrationTable[Condition]
+	schemas    registrationTable[registeredNodeSchema]
 }
 
 // NewRegistry returns an empty Registry. The zero Registry is also ready to use.
@@ -115,12 +149,7 @@ func (r *Registry) RegisterNode(nodeType string, factory NodeFactory) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.initLocked()
-	if _, exists := r.nodes[nodeType]; exists {
-		return &RegistrationError{Kind: registrationNode, Name: nodeType, Err: ErrDuplicateRegistration}
-	}
-	r.nodes[nodeType] = factory
-	return nil
+	return r.nodes.add(registrationNode, nodeType, factory)
 }
 
 // MustRegisterNode is like [Registry.RegisterNode] but panics on error. It
@@ -149,12 +178,7 @@ func (r *Registry) RegisterResolver(name string, resolver Resolver) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.initLocked()
-	if _, exists := r.resolvers[name]; exists {
-		return &RegistrationError{Kind: registrationResolver, Name: name, Err: ErrDuplicateRegistration}
-	}
-	r.resolvers[name] = resolver
-	return nil
+	return r.resolvers.add(registrationResolver, name, resolver)
 }
 
 // MustRegisterResolver is like [Registry.RegisterResolver] but panics on error.
@@ -179,12 +203,7 @@ func (r *Registry) RegisterCondition(name string, condition Condition) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.initLocked()
-	if _, exists := r.conditions[name]; exists {
-		return &RegistrationError{Kind: registrationCondition, Name: name, Err: ErrDuplicateRegistration}
-	}
-	r.conditions[name] = condition
-	return nil
+	return r.conditions.add(registrationCondition, name, condition)
 }
 
 func validateRegistrationName(kind, name string) error {
@@ -211,21 +230,6 @@ func (r *Registry) MustRegisterCondition(name string, condition Condition) *Regi
 	return r
 }
 
-func (r *Registry) initLocked() {
-	if r.nodes == nil {
-		r.nodes = make(map[string]NodeFactory)
-	}
-	if r.resolvers == nil {
-		r.resolvers = make(map[string]Resolver)
-	}
-	if r.conditions == nil {
-		r.conditions = make(map[string]Condition)
-	}
-	if r.schemas == nil {
-		r.schemas = make(map[string]registeredNodeSchema)
-	}
-}
-
 // snapshot returns one immutable logical view for a multi-stage validation or
 // compilation. Holding Registry.mu while calling a user factory would risk a
 // deadlock if that code registered another capability; taking separate locks
@@ -234,29 +238,25 @@ func (r *Registry) snapshot() registrySnapshot {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return registrySnapshot{
-		nodes:      maps.Clone(r.nodes),
-		resolvers:  maps.Clone(r.resolvers),
-		conditions: maps.Clone(r.conditions),
-		schemas:    maps.Clone(r.schemas),
+		nodes:      r.nodes.clone(),
+		resolvers:  r.resolvers.clone(),
+		conditions: r.conditions.clone(),
+		schemas:    r.schemas.clone(),
 	}
 }
 
 func (r registrySnapshot) lookupNode(nodeType string) (NodeFactory, bool) {
-	factory, ok := r.nodes[nodeType]
-	return factory, ok
+	return r.nodes.lookup(nodeType)
 }
 
 func (r registrySnapshot) lookupResolver(name string) (Resolver, bool) {
-	resolver, ok := r.resolvers[name]
-	return resolver, ok
+	return r.resolvers.lookup(name)
 }
 
 func (r registrySnapshot) lookupCondition(name string) (Condition, bool) {
-	condition, ok := r.conditions[name]
-	return condition, ok
+	return r.conditions.lookup(name)
 }
 
 func (r registrySnapshot) lookupNodeSchema(nodeType string) (registeredNodeSchema, bool) {
-	schema, ok := r.schemas[nodeType]
-	return schema, ok
+	return r.schemas.lookup(nodeType)
 }

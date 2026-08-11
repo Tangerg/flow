@@ -82,6 +82,9 @@ being presented as migrations from a version that was never published.
 
 ### Fixed
 
+- Joined suspensions no longer expose their internal error tree through
+  `errors.As`; mutating a returned `Suspension` cannot change later
+  `Suspensions` results from the same error.
 - Iteration validation now rejects a child path below `ItemIndex`, whose value
   is always a scalar integer, instead of accepting an output reference that can
   only fail while collecting results at run time.

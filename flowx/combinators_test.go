@@ -9,6 +9,45 @@ import (
 	"github.com/Tangerg/flow/flowx"
 )
 
+// cancelOnCheckContext closes its Done channel when Err reaches cancelAt. It
+// makes the microscopic boundary between a completed fan-out and merge
+// admission deterministic without sleeps or scheduler assumptions.
+type cancelOnCheckContext struct {
+	context.Context //nolint:containedctx // A custom Context must retain its parent.
+	done            chan struct{}
+	cause           error
+	cancelAt        int
+	checks          int
+}
+
+func newCancelOnCheckContext(
+	parent context.Context,
+	cancelAt int,
+	cause error,
+) *cancelOnCheckContext {
+	return &cancelOnCheckContext{
+		Context:  parent,
+		done:     make(chan struct{}),
+		cause:    cause,
+		cancelAt: cancelAt,
+	}
+}
+
+func (c *cancelOnCheckContext) Done() <-chan struct{} { return c.done }
+
+func (c *cancelOnCheckContext) Err() error {
+	c.checks++
+	if c.checks < c.cancelAt {
+		return nil
+	}
+	select {
+	case <-c.done:
+	default:
+		close(c.done)
+	}
+	return c.cause
+}
+
 func TestFanOut(t *testing.T) {
 	nodes := []flow.Node[int, int]{
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil }),
@@ -293,6 +332,25 @@ func TestCombine_parentCancellationDuringMergeWins(t *testing.T) {
 	output, err := node.Run(ctx, 0)
 	if !errors.Is(err, cause) || output != 0 {
 		t.Fatalf("Run = %d, %v; want 0, cancellation cause", output, err)
+	}
+}
+
+func TestCombine_parentCancellationBeforeMergeWins(t *testing.T) {
+	cause := errors.New("stop before merge")
+	ctx := newCancelOnCheckContext(t.Context(), 2, cause)
+	merged := false
+	node := flowx.Combine(
+		flow.NodeFunc[int, int](func(context.Context, int) (int, error) { return 1, nil }),
+		flow.NodeFunc[int, int](func(context.Context, int) (int, error) { return 2, nil }),
+		func(context.Context, int, int) (int, error) {
+			merged = true
+			return 3, nil
+		},
+	)
+
+	output, err := node.Run(ctx, 0)
+	if !errors.Is(err, cause) || output != 0 || merged {
+		t.Fatalf("Run = %d, %v, merged %t; want 0, cancellation cause, false", output, err, merged)
 	}
 }
 

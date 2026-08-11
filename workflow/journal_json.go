@@ -45,6 +45,29 @@ type journalEntry struct {
 	value any
 }
 
+// journalObject is one object in the versioned Journal wire format. It owns the
+// canonical-member contract, leaving journalDecoder responsible only for
+// building record state.
+type journalObject map[string]any
+
+func (j journalObject) require(kind string, required ...string) error {
+	for _, name := range required {
+		if _, present := j[name]; !present {
+			return fmt.Errorf("%s field %q is missing", kind, name)
+		}
+	}
+	return nil
+}
+
+func (j journalObject) allow(allowed ...string) error {
+	for _, name := range slices.Sorted(maps.Keys(j)) {
+		if !slices.Contains(allowed, name) {
+			return fmt.Errorf("unknown field %q", name)
+		}
+	}
+	return nil
+}
+
 // journalDecoder owns the wire contract of Journal version 3. It reads the
 // ordinary JSON domain produced by jsonDocument exactly once, so member names
 // retain JSON's case-sensitive meaning instead of being folded by struct
@@ -191,15 +214,15 @@ func (j *journalDecoder) decode(data []byte) error {
 	if err != nil {
 		return err
 	}
-	document, ok := value.(map[string]any)
+	raw, ok := value.(map[string]any)
 	if !ok {
 		return errors.New("document must be an object")
 	}
-	if fieldErr := j.allowFields(document, journalFieldVersion, journalFieldRecords); fieldErr != nil {
+	document := journalObject(raw)
+	if fieldErr := document.allow(journalFieldVersion, journalFieldRecords); fieldErr != nil {
 		return fieldErr
 	}
-	if fieldErr := j.requireFields(
-		document,
+	if fieldErr := document.require(
 		"document",
 		journalFieldVersion,
 		journalFieldRecords,
@@ -236,14 +259,15 @@ func (j *journalDecoder) decode(data []byte) error {
 }
 
 func (j *journalDecoder) decodeRecord(value any) error {
-	record, ok := value.(map[string]any)
+	raw, ok := value.(map[string]any)
 	if !ok {
 		return errors.New("must be an object")
 	}
-	if err := j.allowFields(record, journalFieldScope, journalFieldID, journalFieldValue); err != nil {
+	record := journalObject(raw)
+	if err := record.allow(journalFieldScope, journalFieldID, journalFieldValue); err != nil {
 		return err
 	}
-	if err := j.requireFields(record, "record", journalFieldID, journalFieldValue); err != nil {
+	if err := record.require("record", journalFieldID, journalFieldValue); err != nil {
 		return err
 	}
 
@@ -270,7 +294,7 @@ func (j *journalDecoder) decodeRecord(value any) error {
 	return nil
 }
 
-func (j *journalDecoder) decodeScope(record map[string]any) ([]ScopeFrame, error) {
+func (j *journalDecoder) decodeScope(record journalObject) ([]ScopeFrame, error) {
 	value, present := record[journalFieldScope]
 	if !present {
 		return nil, nil
@@ -294,19 +318,19 @@ func (j *journalDecoder) decodeScope(record map[string]any) ([]ScopeFrame, error
 }
 
 func (j *journalDecoder) decodeScopeFrame(value any) (ScopeFrame, error) {
-	object, ok := value.(map[string]any)
+	raw, ok := value.(map[string]any)
 	if !ok {
 		return ScopeFrame{}, errors.New("must be an object")
 	}
-	if err := j.allowFields(
-		object,
+	object := journalObject(raw)
+	if err := object.allow(
 		journalFieldID,
 		journalFieldIndexed,
 		journalFieldIndex,
 	); err != nil {
 		return ScopeFrame{}, err
 	}
-	if err := j.requireFields(object, "scope frame", journalFieldID); err != nil {
+	if err := object.require("scope frame", journalFieldID); err != nil {
 		return ScopeFrame{}, err
 	}
 
@@ -343,28 +367,6 @@ func (j *journalDecoder) decodeScopeFrame(value any) (ScopeFrame, error) {
 		return ScopeFrame{}, err
 	}
 	return frame, nil
-}
-
-func (j *journalDecoder) requireFields(
-	object map[string]any,
-	kind string,
-	required ...string,
-) error {
-	for _, name := range required {
-		if _, present := object[name]; !present {
-			return fmt.Errorf("%s field %q is missing", kind, name)
-		}
-	}
-	return nil
-}
-
-func (*journalDecoder) allowFields(object map[string]any, allowed ...string) error {
-	for _, name := range slices.Sorted(maps.Keys(object)) {
-		if !slices.Contains(allowed, name) {
-			return fmt.Errorf("unknown field %q", name)
-		}
-	}
-	return nil
 }
 
 func (j *journalNode) setRevision(revision uint64) {

@@ -105,7 +105,12 @@ func TestReplayBoundaries_resampleCancellationAfterLookup(t *testing.T) {
 
 	t.Run("branch decision", func(t *testing.T) {
 		ctx := withConfig(newCancelOnCheckContext(t.Context(), 1, cause), RunConfig{})
-		_, _, err := (branchStep{id: "branch"}).decide(ctx, NewStore())
+		execution := branchExecution{
+			branch: branchStep{id: "branch"},
+			input:  NewStore(),
+			run:    runFrom(ctx),
+		}
+		_, _, err := execution.decide(ctx)
 		if !errors.Is(err, cause) {
 			t.Fatalf("decide error = %v; want cancellation", err)
 		}
@@ -113,7 +118,8 @@ func TestReplayBoundaries_resampleCancellationAfterLookup(t *testing.T) {
 
 	t.Run("loop decision", func(t *testing.T) {
 		ctx := withConfig(newCancelOnCheckContext(t.Context(), 1, cause), RunConfig{})
-		_, err := (loopStep{id: "loop"}).stop(ctx, 0, NewStore())
+		execution := loopExecution{loop: loopStep{id: "loop"}, run: runFrom(ctx)}
+		_, err := execution.stop(ctx, 0, NewStore())
 		if !errors.Is(err, cause) {
 			t.Fatalf("stop error = %v; want cancellation", err)
 		}
@@ -143,12 +149,16 @@ func TestLoopStop_resamplesCancellationAfterJournalRecord(t *testing.T) {
 				}
 			}
 
-			stop, err := (loopStep{
-				id: "loop",
-				done: func(context.Context, int, Store) (bool, error) {
-					return true, nil
+			execution := loopExecution{
+				loop: loopStep{
+					id: "loop",
+					done: func(context.Context, int, Store) (bool, error) {
+						return true, nil
+					},
 				},
-			}).stop(ctx, 0, NewStore())
+				run: runFrom(ctx),
+			}
+			stop, err := execution.stop(ctx, 0, NewStore())
 			if !errors.Is(err, cause) || stop {
 				t.Fatalf("stop = %t, error = %v; want cancellation", stop, err)
 			}
@@ -214,9 +224,11 @@ func TestSubgraphBind_rejectsCancellationBeforeInputRead(t *testing.T) {
 	cause := errors.New("cancel before subgraph input")
 	ctx, cancel := context.WithCancelCause(t.Context())
 	cancel(cause)
-	_, err := (subgraphStep{
-		inputs: Inputs{"seed": Output("missing")},
-	}).bind(ctx, NewStore())
+	execution := subgraphExecution{
+		subgraph: subgraphStep{inputs: Inputs{"seed": Output("missing")}},
+		outer:    NewStore(),
+	}
+	_, err := execution.bind(ctx)
 	if !errors.Is(err, cause) {
 		t.Fatalf("bind error = %v; want cancellation cause", err)
 	}
@@ -373,7 +385,11 @@ func TestIterationCollect_resamplesParentCancellation(t *testing.T) {
 	for _, cancelAt := range []int{1, 2, 3} {
 		t.Run(fmt.Sprintf("check %d", cancelAt), func(t *testing.T) {
 			ctx := newCancelOnCheckContext(t.Context(), cancelAt, cause)
-			output, err := (iterationStep{id: "items"}).collect(ctx, input, outcomes)
+			execution := iterationExecution{
+				iteration: iterationStep{id: "items"},
+				input:     input,
+			}
+			output, err := execution.collect(ctx, outcomes)
 			if !errors.Is(err, cause) {
 				t.Fatalf("collect error = %v; want cancellation cause", err)
 			}
@@ -414,6 +430,7 @@ func TestGuaranteedOutputsModelsEveryBuiltInShape(t *testing.T) {
 			}},
 			want: []string{"value"}, known: true,
 		},
+		{name: "empty branch", step: branchStep{}, known: true},
 		{
 			name: "opaque branch",
 			step: branchStep{cases: map[string]Step{"a": produces, "b": opaque}},
@@ -443,9 +460,9 @@ func TestGuaranteedOutputsModelsEveryBuiltInShape(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			outputs, known := guaranteedOutputs(test.step)
-			if known != test.known || !slices.Equal(slices.Sorted(maps.Keys(outputs)), test.want) {
-				t.Fatalf("guaranteedOutputs = %v, %t; want %v, %t", outputs, known, test.want, test.known)
+			outputs := guaranteedOutputs(test.step)
+			if outputs.known != test.known || !slices.Equal(slices.Sorted(maps.Keys(outputs.nodes)), test.want) {
+				t.Fatalf("guaranteedOutputs = %v, %t; want %v, %t", outputs.nodes, outputs.known, test.want, test.known)
 			}
 		})
 	}
@@ -492,6 +509,7 @@ func TestSpecGuaranteedOutputsModelsEverySerializableShape(t *testing.T) {
 			}},
 			want: []string{"value"}, known: true,
 		},
+		{name: "empty branch", spec: Spec{Kind: KindBranch}, known: true},
 		{
 			name: "branch removes non-common output",
 			spec: Spec{Kind: KindBranch, Cases: map[string]Spec{
@@ -528,9 +546,9 @@ func TestSpecGuaranteedOutputsModelsEverySerializableShape(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			outputs, known := validator.guaranteedOutputs(test.spec)
-			if known != test.known || !slices.Equal(slices.Sorted(maps.Keys(outputs)), test.want) {
-				t.Fatalf("guaranteedOutputs = %v, %t; want %v, %t", outputs, known, test.want, test.known)
+			outputs := validator.guaranteedOutputs(test.spec)
+			if outputs.known != test.known || !slices.Equal(slices.Sorted(maps.Keys(outputs.nodes)), test.want) {
+				t.Fatalf("guaranteedOutputs = %v, %t; want %v, %t", outputs.nodes, outputs.known, test.want, test.known)
 			}
 		})
 	}

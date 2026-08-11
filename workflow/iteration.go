@@ -120,14 +120,33 @@ func (i iterationStep) Run(ctx context.Context, s Store) (Store, error) {
 	if err != nil {
 		return s, newStepError(ctx, i.id, OpBind, err)
 	}
-	outcomes, err := i.runElements(ctx, s, items)
+	execution := iterationExecution{
+		iteration: i,
+		input:     s,
+		items:     items,
+	}
+	return execution.execute(ctx)
+}
+
+// iterationExecution owns the immutable element set and outer Store for one
+// invocation. It doubles as the Node scheduled by flow.Map: concurrent calls
+// read shared definition state, while every element creates its own scoped
+// Store and result.
+type iterationExecution struct {
+	iteration iterationStep
+	input     Store
+	items     []any
+}
+
+func (i *iterationExecution) execute(ctx context.Context) (Store, error) {
+	outcomes, err := i.runElements(ctx)
 	if contextErr := context.Cause(ctx); contextErr != nil {
-		return s, contextErr
+		return i.input, contextErr
 	}
 	if err != nil {
-		return s, newStepError(ctx, i.id, OpRun, err)
+		return i.input, newStepError(ctx, i.iteration.id, OpRun, err)
 	}
-	return i.collect(ctx, s, outcomes)
+	return i.collect(ctx, outcomes)
 }
 
 func (i iterationStep) validate() error {
@@ -163,51 +182,49 @@ func (i iterationStep) validate() error {
 
 func (i iterationStep) Validate() error { return validateDefinition(i) }
 
-func (i iterationStep) runElements(
-	ctx context.Context,
-	s Store,
-	items []any,
-) ([]elementOutcome, error) {
-	elementIndexes := make([]int, len(items))
-	for index := range items {
+func (i *iterationExecution) runElements(ctx context.Context) ([]elementOutcome, error) {
+	elementIndexes := make([]int, len(i.items))
+	for index := range i.items {
 		elementIndexes[index] = index
 	}
-
-	apply := flow.NodeFunc[int, elementOutcome](func(ctx context.Context, index int) (elementOutcome, error) {
-		scoped := s.WithCell(i.id, itemKey, items[index]).WithCell(i.id, indexKey, index)
-		body := (scopedStep{step: i.body}).indexed(i.id, index)
-		result, err := body.run(ctx, scoped)
-		if contextErr := context.Cause(ctx); contextErr != nil {
-			return elementOutcome{}, contextErr
-		}
-		if err != nil {
-			// As in Parallel, a suspension travels as a value so the other
-			// elements finish and their journaled boundaries are retained rather
-			// than being cancelled.
-			if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
-				return elementOutcome{suspensions: suspensions}, nil
-			}
-			return elementOutcome{}, err
-		}
-		value, err := Get[any](result, i.bodyOutput)
-		if err != nil {
-			return elementOutcome{}, fmt.Errorf("read body output %s: %w", i.bodyOutput, err)
-		}
-		return elementOutcome{value: value}, nil
-	})
-	return flow.Map(apply, flow.MapConfig{Concurrency: i.limit}).Run(ctx, elementIndexes)
+	return flow.Map(i, flow.MapConfig{Concurrency: i.iteration.limit}).Run(ctx, elementIndexes)
 }
 
-func (i iterationStep) collect(
-	ctx context.Context,
-	s Store,
-	outcomes []elementOutcome,
-) (Store, error) {
+// Run executes one indexed element. A suspension travels as a value so Map
+// does not cancel the remaining elements; ordinary failures retain Map's
+// fail-fast behavior.
+func (i *iterationExecution) Run(ctx context.Context, index int) (elementOutcome, error) {
+	scoped := i.input.
+		WithCell(i.iteration.id, itemKey, i.items[index]).
+		WithCell(i.iteration.id, indexKey, index)
+	body := (scopedStep{step: i.iteration.body}).indexed(i.iteration.id, index)
+	result, err := body.run(ctx, scoped)
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return elementOutcome{}, contextErr
+	}
+	if err != nil {
+		if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
+			return elementOutcome{suspensions: suspensions}, nil
+		}
+		return elementOutcome{}, err
+	}
+	value, err := Get[any](result, i.iteration.bodyOutput)
+	if err != nil {
+		return elementOutcome{}, fmt.Errorf(
+			"read body output %s: %w",
+			i.iteration.bodyOutput,
+			err,
+		)
+	}
+	return elementOutcome{value: value}, nil
+}
+
+func (i *iterationExecution) collect(ctx context.Context, outcomes []elementOutcome) (Store, error) {
 	outputs := make([]any, len(outcomes))
 	var suspensions suspensionList
 	for index, outcome := range outcomes {
 		if contextErr := context.Cause(ctx); contextErr != nil {
-			return s, contextErr
+			return i.input, contextErr
 		}
 		if len(outcome.suspensions) > 0 {
 			suspensions = append(suspensions, outcome.suspensions...)
@@ -216,17 +233,17 @@ func (i iterationStep) collect(
 		outputs[index] = outcome.value
 	}
 	if contextErr := context.Cause(ctx); contextErr != nil {
-		return s, contextErr
+		return i.input, contextErr
 	}
 	if len(suspensions) > 0 {
 		// The collection is incomplete, so it is not written: a partial slice
 		// with holes would read as a finished result. Journaled inner boundaries
 		// that did finish can replay; opaque work without one runs again.
-		return s, suspensions.err()
+		return i.input, suspensions.err()
 	}
-	result := s.WithOutput(i.id, outputs)
+	result := i.input.WithOutput(i.iteration.id, outputs)
 	if contextErr := context.Cause(ctx); contextErr != nil {
-		return s, contextErr
+		return i.input, contextErr
 	}
 	return result, nil
 }

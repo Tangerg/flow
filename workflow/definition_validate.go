@@ -70,7 +70,7 @@ func (s stepDefinition) nodeBoundary() bool {
 }
 
 type definitionValidator struct {
-	ids map[string]struct{}
+	ids definitionIDs
 }
 
 // validateDefinition checks local construction and the static shape visible
@@ -109,7 +109,7 @@ func normalizeDefinitionError(source string, err error) error {
 }
 
 func (d *definitionValidator) validate(step Step) error {
-	d.ids = make(map[string]struct{})
+	d.ids = newDefinitionIDs()
 	return d.validateStep(step, 0)
 }
 
@@ -154,7 +154,7 @@ func (d *definitionValidator) validateShape(
 		// collide with the surrounding workflow or another loop body. The loop
 		// ID remains reserved because its stop decision uses the same scope.
 		bodyValidator := definitionValidator{
-			ids: map[string]struct{}{definition.id: {}},
+			ids: newDefinitionIDs(definition.id),
 		}
 		return bodyValidator.validateStep(definition.body, depth+1)
 	case definitionIteration:
@@ -163,7 +163,7 @@ func (d *definitionValidator) validateShape(
 		}
 		// Each element inherits the outer Store but has its own Journal scope and
 		// publishes only the collected iteration output.
-		bodyValidator := definitionValidator{ids: make(map[string]struct{})}
+		bodyValidator := definitionValidator{ids: newDefinitionIDs()}
 		if err := bodyValidator.validateStep(definition.body, depth+1); err != nil {
 			return err
 		}
@@ -174,7 +174,7 @@ func (d *definitionValidator) validateShape(
 		}
 		// A subgraph body has an isolated Store and a scope derived from the
 		// subgraph ID, so its execution identities are local to that instance.
-		bodyValidator := definitionValidator{ids: make(map[string]struct{})}
+		bodyValidator := definitionValidator{ids: newDefinitionIDs()}
 		if err := bodyValidator.validateStep(definition.body, depth+1); err != nil {
 			return err
 		}
@@ -190,8 +190,8 @@ func (d *definitionValidator) validateShape(
 }
 
 func (s stepDefinition) validateSubgraphOutput() error {
-	outputs, known := guaranteedOutputs(s.body)
-	if !known {
+	outputs := guaranteedOutputs(s.body)
+	if !outputs.known {
 		return nil
 	}
 	if subgraphOutputGuaranteed(s.inputs, outputs, s.bodyOutput) {
@@ -209,8 +209,8 @@ func (s stepDefinition) validateSubgraphOutput() error {
 }
 
 func (s stepDefinition) validateIterationOutput() error {
-	outputs, known := guaranteedOutputs(s.body)
-	if !known {
+	outputs := guaranteedOutputs(s.body)
+	if !outputs.known {
 		return nil
 	}
 	if iterationOutputGuaranteed(s.id, outputs, s.bodyOutput) {
@@ -231,39 +231,86 @@ func (s stepDefinition) validateIterationOutput() error {
 // projection rules for code-built definitions and serialized Specs. Keeping
 // the rules independent of either representation prevents validation and
 // compilation from accepting different data-flow contracts.
-func subgraphOutputGuaranteed(inputs Inputs, outputs nodeSet, ref Ref) bool {
+func subgraphOutputGuaranteed(inputs Inputs, outputs outputGuarantee, ref Ref) bool {
 	_, seed := inputs[ref.NodeID]
-	_, produced := outputs[ref.NodeID]
+	produced := outputs.contains(ref.NodeID)
 	return (seed || produced) && ref.withinOutput()
 }
 
-func iterationOutputGuaranteed(id string, outputs nodeSet, ref Ref) bool {
+func iterationOutputGuaranteed(id string, outputs outputGuarantee, ref Ref) bool {
 	if TypeAny.acceptsCellPath(ref, id, itemKey) ||
 		TypeNumber.acceptsCellPath(ref, id, indexKey) {
 		return true
 	}
-	_, produced := outputs[ref.NodeID]
-	return produced && ref.withinOutput()
+	return outputs.contains(ref.NodeID) && ref.withinOutput()
+}
+
+// outputGuarantee is the set of conventional output cells a successful
+// definition must add. known is false at an opaque extension boundary or a
+// conditional graph, where rejecting a projection would require guessing.
+// Keeping uncertainty with the set prevents callers from accidentally treating
+// an unknown contract as a known empty one.
+type outputGuarantee struct {
+	nodes nodeSet
+	known bool
+}
+
+func knownOutputs(ids ...string) outputGuarantee {
+	nodes := make(nodeSet, len(ids))
+	for _, id := range ids {
+		nodes[id] = struct{}{}
+	}
+	return outputGuarantee{nodes: nodes, known: true}
+}
+
+func (o outputGuarantee) contains(id string) bool {
+	_, present := o.nodes[id]
+	return o.known && present
+}
+
+// union combines outputs produced by steps that all run. Unknown is absorbing:
+// one opaque child makes the complete guaranteed set unknowable.
+func (o outputGuarantee) union(other outputGuarantee) outputGuarantee {
+	if !o.known || !other.known {
+		return outputGuarantee{}
+	}
+	nodes := maps.Clone(o.nodes)
+	maps.Copy(nodes, other.nodes)
+	return outputGuarantee{nodes: nodes, known: true}
+}
+
+// intersection keeps outputs produced on either of two mutually exclusive
+// paths. Unknown is absorbing for the same reason as union.
+func (o outputGuarantee) intersection(other outputGuarantee) outputGuarantee {
+	if !o.known || !other.known {
+		return outputGuarantee{}
+	}
+	nodes := make(nodeSet)
+	for id := range o.nodes {
+		if other.contains(id) {
+			nodes[id] = struct{}{}
+		}
+	}
+	return outputGuarantee{nodes: nodes, known: true}
 }
 
 // guaranteedOutputs returns the conventional output cells that a successful
 // built-in definition must add, independently of the Store it receives. The
-// bool is false at an opaque caller-defined boundary or a conditional Graph,
-// where rejecting an output would require guessing about code this package
-// cannot see.
-func guaranteedOutputs(step Step) (nodeSet, bool) {
+// guarantee is unknown at an opaque caller-defined boundary or a conditional
+// Graph, where rejecting an output would require guessing about code this
+// package cannot see.
+func guaranteedOutputs(step Step) outputGuarantee {
 	defined, ok := step.(definedStep)
 	if !ok {
-		return nil, false
+		return outputGuarantee{}
 	}
 	definition := defined.definition()
 	switch definition.kind {
 	case definitionNamed:
-		outputs := make(nodeSet)
 		if definition.output {
-			outputs[definition.id] = struct{}{}
+			return knownOutputs(definition.id)
 		}
-		return outputs, true
+		return knownOutputs()
 	case definitionSteps:
 		return guaranteedStepListOutputs(definition.steps)
 	case definitionBranch:
@@ -271,44 +318,38 @@ func guaranteedOutputs(step Step) (nodeSet, bool) {
 	case definitionLoop:
 		return guaranteedOutputs(definition.body)
 	case definitionIteration, definitionSubgraph:
-		return nodeSet{definition.id: {}}, true
+		return knownOutputs(definition.id)
 	case definitionGraph:
-		return nil, false
+		return outputGuarantee{}
 	default:
-		return nil, false
+		return outputGuarantee{}
 	}
 }
 
-func guaranteedStepListOutputs(steps stepList) (nodeSet, bool) {
-	outputs := make(nodeSet)
+func guaranteedStepListOutputs(steps stepList) outputGuarantee {
+	outputs := knownOutputs()
 	for _, step := range steps {
-		child, known := guaranteedOutputs(step)
-		if !known {
-			return nil, false
-		}
-		maps.Copy(outputs, child)
+		outputs = outputs.union(guaranteedOutputs(step))
 	}
-	return outputs, true
+	return outputs
 }
 
-func guaranteedBranchOutputs(cases map[string]Step) (nodeSet, bool) {
-	var common nodeSet
+func guaranteedBranchOutputs(cases map[string]Step) outputGuarantee {
+	var common outputGuarantee
+	first := true
 	for _, name := range slices.Sorted(maps.Keys(cases)) {
-		outputs, known := guaranteedOutputs(cases[name])
-		if !known {
-			return nil, false
-		}
-		if common == nil {
+		outputs := guaranteedOutputs(cases[name])
+		if first {
 			common = outputs
+			first = false
 			continue
 		}
-		for id := range common {
-			if _, present := outputs[id]; !present {
-				delete(common, id)
-			}
-		}
+		common = common.intersection(outputs)
 	}
-	return common, true
+	if first {
+		return knownOutputs()
+	}
+	return common
 }
 
 func (d *definitionValidator) validateSteps(
@@ -330,26 +371,21 @@ func (d *definitionValidator) validateCases(
 	// Only one case runs. Cases may reuse IDs with one another, but every case
 	// must remain conflict-free with the path before the branch and with steps
 	// that follow it.
-	introduced := make(map[string]struct{})
+	introduced := newDefinitionIDs()
 	for _, name := range slices.Sorted(maps.Keys(cases)) {
-		caseValidator := definitionValidator{ids: maps.Clone(d.ids)}
+		caseValidator := definitionValidator{ids: d.ids.clone()}
 		if err := caseValidator.validateStep(cases[name], depth); err != nil {
 			return err
 		}
-		for id := range caseValidator.ids {
-			if _, existed := d.ids[id]; !existed {
-				introduced[id] = struct{}{}
-			}
-		}
+		introduced.addAll(d.ids.additions(caseValidator.ids))
 	}
-	maps.Copy(d.ids, introduced)
+	d.ids.addAll(introduced)
 	return nil
 }
 
 func (d *definitionValidator) claim(id string) error {
-	if _, duplicate := d.ids[id]; duplicate {
+	if !d.ids.claim(id) {
 		return &StepError{ID: id, Op: OpValidate, Err: ErrDuplicateStep}
 	}
-	d.ids[id] = struct{}{}
 	return nil
 }

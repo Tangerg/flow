@@ -2,8 +2,52 @@ package workflow
 
 import (
 	"fmt"
+	"maps"
 	"unicode/utf8"
 )
+
+// nodeSet is a set of workflow node IDs used by static output analysis and
+// engine-owned Store namespace boundaries.
+type nodeSet map[string]struct{}
+
+// definitionIDs owns path-local execution identity during static traversal.
+// Branch cases clone the path they inherit, then merge only newly introduced
+// IDs after every mutually exclusive case has been checked.
+type definitionIDs map[string]struct{}
+
+func newDefinitionIDs(ids ...string) definitionIDs {
+	set := make(definitionIDs, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	return set
+}
+
+func (d definitionIDs) clone() definitionIDs {
+	return maps.Clone(d)
+}
+
+func (d definitionIDs) claim(id string) bool {
+	if _, duplicate := d[id]; duplicate {
+		return false
+	}
+	d[id] = struct{}{}
+	return true
+}
+
+func (d definitionIDs) additions(candidate definitionIDs) definitionIDs {
+	introduced := newDefinitionIDs()
+	for id := range candidate {
+		if _, existed := d[id]; !existed {
+			introduced[id] = struct{}{}
+		}
+	}
+	return introduced
+}
+
+func (d definitionIDs) addAll(other definitionIDs) {
+	maps.Copy(d, other)
+}
 
 // validateStepID keeps the execution identity usable by every workflow
 // boundary. Step IDs travel through definitions, events, Journal keys, and

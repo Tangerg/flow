@@ -320,16 +320,17 @@ type jsonSchemaError struct {
 // Error reports the deduplicated leaf diagnostics. leaves always yields at least
 // the root error, so the joined message is never empty.
 func (j *jsonSchemaError) Error() string {
-	return strings.Join(uniqueMessages(j.leaves()), "; ")
+	return strings.Join(j.messages(), "; ")
 }
 
-// uniqueMessages renders each leaf once in deterministic diagnostic order. The
+// messages renders each leaf once in deterministic diagnostic order. The
 // validator aggregates object and schema failures through maps, so its cause
 // order is not a public contract and can differ between identical calls. Sort
 // only the final text: that keeps backend structure private while making logs,
 // editor caches, and tests stable. One document error commonly surfaces the same
 // message under several sub-schemas, so duplicates are removed before sorting.
-func uniqueMessages(leaves []*jschema.ValidationError) []string {
+func (j *jsonSchemaError) messages() []string {
+	leaves := j.leaves()
 	messages := make([]string, 0, len(leaves))
 	seen := make(map[string]struct{}, len(leaves))
 	for _, leaf := range leaves {

@@ -89,13 +89,7 @@ func (r *Registry) RegisterSchema(nodeType string, schema NodeSchema) error {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.initLocked()
-	_, exists := r.schemas[nodeType]
-	if exists {
-		return &RegistrationError{Kind: registrationSchema, Name: nodeType, Err: ErrDuplicateRegistration}
-	}
-	r.schemas[nodeType] = registered
-	return nil
+	return r.schemas.add(registrationSchema, nodeType, registered)
 }
 
 func (n NodeSchema) compile() (registeredNodeSchema, error) {
@@ -192,7 +186,7 @@ func (r *Registry) MustRegisterSchema(nodeType string, schema NodeSchema) *Regis
 func (r *Registry) NodeSchema(nodeType string) (NodeSchema, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	registered, ok := r.schemas[nodeType]
+	registered, ok := r.schemas.lookup(nodeType)
 	if !ok {
 		return NodeSchema{}, false
 	}
@@ -203,7 +197,7 @@ func (r *Registry) NodeSchema(nodeType string) (NodeSchema, bool) {
 func (r *Registry) NodeTypes() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return slices.Sorted(maps.Keys(r.nodes))
+	return r.nodes.names()
 }
 
 func (v ValueType) validOutput() bool {

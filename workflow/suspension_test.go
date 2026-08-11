@@ -1213,6 +1213,14 @@ func TestJoinSuspensions_normalizesAndCopies(t *testing.T) {
 		!slices.Equal(got[1].Scope, indexedScope("items", 1)) {
 		t.Fatalf("joined suspension changed with its input: %+v", got[1])
 	}
+	var exposed *workflow.Suspension
+	if !errors.As(err, &exposed) {
+		t.Fatal("errors.As did not find a joined suspension")
+	}
+	exposed.ID = "changed through errors.As"
+	if got = workflow.Suspensions(err); got[0].ID != "a" {
+		t.Fatalf("joined suspension changed through Unwrap: %+v", got[0])
+	}
 	if err := workflow.JoinSuspensions(nil, nil); err != nil {
 		t.Fatalf("JoinSuspensions(nil, nil) = %v; want nil", err)
 	}
