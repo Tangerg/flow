@@ -77,13 +77,15 @@ type Event struct {
 // Observer receives low-volume workflow-boundary events synchronously. Pass one
 // to [Run] through [RunConfig]. Observe may be called from multiple goroutines
 // and should return promptly. A slow Observer delays the boundary emitting the
-// event. Cancellation that occurs while a non-failure terminal event is being
-// observed is sampled before that boundary returns; definition errors and an
-// already-classified failure retain their own error. The context preserves the
-// run's cancellation, deadline, and application values, but is detached from
-// its workflow identity: calling a Step directly from Observe does not join the
-// observed run. Call [Run] to start an independent execution. Use [Emitter] for
-// intermediate application values.
+// event. An Observer must not wait for a later event from the same boundary
+// invocation: synchronous delivery would deadlock that invocation. Cancellation
+// that occurs while a non-failure terminal event is being observed is sampled
+// before that boundary returns; definition errors and an already-classified
+// failure retain their own error. The context preserves the run's cancellation,
+// deadline, and application values, but is detached from its workflow identity:
+// calling a Step directly from Observe does not join the observed run. Call
+// [Run] to start an independent execution. Use [Emitter] for intermediate
+// application values.
 type Observer interface {
 	Observe(ctx context.Context, event Event)
 }

@@ -110,7 +110,7 @@ func (s subgraphStep) validate() error {
 	if isNilNode(s.body) {
 		return &StepError{ID: s.id, Op: OpValidate, Err: ErrNilStep}
 	}
-	if err := s.inputs.validate(); err != nil {
+	if err := s.inputs.validateSeeds(); err != nil {
 		return &StepError{
 			ID:  s.id,
 			Op:  OpValidate,
@@ -131,7 +131,7 @@ func (s subgraphStep) Validate() error { return validateDefinition(s) }
 
 func (s subgraphStep) bind(ctx context.Context, outer Store) (Store, error) {
 	inner := NewStore()
-	for _, seedID := range s.inputs.PortNames() {
+	for _, seedID := range s.inputs.names() {
 		if err := context.Cause(ctx); err != nil {
 			return Store{}, err
 		}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -190,8 +191,10 @@ func TestSubgraph_validatesBoundaryBeforeRunningBody(t *testing.T) {
 	)
 	var nilBody flow.NodeFunc[workflow.Store, workflow.Store]
 	tests := map[string]struct {
-		step workflow.Step
-		want error
+		step        workflow.Step
+		want        error
+		wantMessage string
+		rejectText  string
 	}{
 		"empty ID": {
 			step: workflow.Subgraph(workflow.SubgraphConfig{
@@ -218,6 +221,15 @@ func TestSubgraph_validatesBoundaryBeforeRunningBody(t *testing.T) {
 			}),
 			want: flow.ErrInvalidConfig,
 		},
+		"invalid seed ID": {
+			step: workflow.Subgraph(workflow.SubgraphConfig{
+				ID: "sub", Inputs: workflow.Inputs{"": workflow.Output("seed")},
+				Body: body, BodyOutput: workflow.Output("body"),
+			}),
+			want:        flow.ErrInvalidConfig,
+			wantMessage: "subgraph seed ID",
+			rejectText:  "input port",
+		},
 		"invalid body output": {
 			step: workflow.Subgraph(workflow.SubgraphConfig{
 				ID: "sub", Body: body,
@@ -237,6 +249,12 @@ func TestSubgraph_validatesBoundaryBeforeRunningBody(t *testing.T) {
 			_, err := test.step.Run(t.Context(), workflow.NewStore())
 			if !errors.Is(err, test.want) {
 				t.Fatalf("Run error = %v; want %v", err, test.want)
+			}
+			if test.wantMessage != "" && !strings.Contains(err.Error(), test.wantMessage) {
+				t.Fatalf("Run error = %v; want text %q", err, test.wantMessage)
+			}
+			if test.rejectText != "" && strings.Contains(err.Error(), test.rejectText) {
+				t.Fatalf("Run error = %v; reject text %q", err, test.rejectText)
 			}
 		})
 	}

@@ -71,8 +71,14 @@ being presented as migrations from a version that was never published.
 - The optional `workflow/diagram` package for deterministic ASCII and Mermaid
   Graph renderings.
 - A progressive tutorial series, output-checked public examples, and CI gates
-  for formatting, module tidiness, race detection, exact statement coverage,
+  for formatting, module tidiness, race detection, statement coverage,
   vet, lint, vulnerability scanning, documentation, and fuzzing.
+
+### Changed
+
+- The CI statement-coverage gate now enforces a 95% minimum instead of exact
+  100%. Coverage remains a regression signal without forcing unreachable
+  defensive branches or implementation-coupled tests into the library.
 
 ### Fixed
 
@@ -137,6 +143,11 @@ being presented as migrations from a version that was never published.
 - Workflow validation can no longer be mistaken for a resumable suspension: a
   validator that returns `ErrSuspended` is rejected as `flow.ErrInvalidConfig`
   before an enclosing composite classifies execution outcomes.
+- Node factories likewise cannot turn definition construction into a resumable
+  outcome: `CompileGraph` and `CompileSpec` classify a factory suspension as a
+  node-type `flow.ErrInvalidConfig` error without retaining `ErrSuspended`.
+- Subgraph input diagnostics now identify inner seed IDs instead of calling
+  them Graph input ports.
 - Loop stop checkpoints now re-sample parent cancellation after the Journal
   write, so cancellation retains the pre-iteration Store and takes precedence
   over a concurrent Journal conflict, matching leaf and branch checkpoints.

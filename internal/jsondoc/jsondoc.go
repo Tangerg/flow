@@ -20,10 +20,11 @@ const (
 	unicodeEscapeLength = unicodeEscapePrefix + unicodeEscapeDigits
 )
 
-// Decoder applies one strict document contract: one complete value, valid
-// Unicode text, no duplicate object members, preserved numbers, bounded
-// nesting, and optional typed decoding. MaxDepth counts nested JSON containers.
-type Decoder struct {
+// Codec applies one strict document contract in both directions: one complete
+// value, valid Unicode text, no duplicate object members, preserved numbers,
+// bounded nesting, and optional typed decoding. MaxDepth counts nested JSON
+// containers.
+type Codec struct {
 	MaxDepth int
 }
 
@@ -39,23 +40,39 @@ func (d *DepthError) Error() string {
 }
 
 // Validate checks data without retaining its decoded value.
-func (d Decoder) Validate(data []byte) error {
-	_, err := d.Value(data)
+func (c Codec) Validate(data []byte) error {
+	_, err := c.Value(data)
 	return err
+}
+
+// Marshal encodes value and then validates the complete resulting document.
+// Validation reads only the encoded bytes, so it does not invoke a custom
+// MarshalJSON method a second time for any encoded occurrence. Callers that
+// attach identity semantics to Go strings must validate those strings before
+// calling Marshal because encoding/json replaces invalid UTF-8 by design.
+func (c Codec) Marshal(value any) ([]byte, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.Validate(data); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 // Decode validates data and then maps it into dst. Unknown struct fields are
 // rejected. dst is not guaranteed to remain unchanged; callers that require an
 // atomic update must decode into a temporary value and assign after success.
-func (d Decoder) Decode(data []byte, dst any) error {
-	if err := d.Validate(data); err != nil {
+func (c Codec) Decode(data []byte, dst any) error {
+	if err := c.Validate(data); err != nil {
 		return err
 	}
-	return d.DecodeParsed(data, dst)
+	return c.DecodeParsed(data, dst)
 }
 
 // DecodeParsed maps data already accepted by Value into dst.
-func (Decoder) DecodeParsed(data []byte, dst any) error {
+func (Codec) DecodeParsed(data []byte, dst any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	decoder.UseNumber()
@@ -65,7 +82,7 @@ func (Decoder) DecodeParsed(data []byte, dst any) error {
 // Value decodes data into the ordinary JSON domain while enforcing the strict
 // document contract. Object members are retained exactly once, so schema and
 // typed decoding cannot observe a different document from the caller.
-func (d Decoder) Value(data []byte) (any, error) {
+func (c Codec) Value(data []byte) (any, error) {
 	if err := validateUTF8(data); err != nil {
 		return nil, err
 	}
@@ -74,7 +91,7 @@ func (d Decoder) Value(data []byte) (any, error) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
-	reader := reader{decoder: decoder, maxDepth: d.MaxDepth}
+	reader := reader{decoder: decoder, maxDepth: c.MaxDepth}
 	value, err := reader.read()
 	if err != nil {
 		return nil, err

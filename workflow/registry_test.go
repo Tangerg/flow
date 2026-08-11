@@ -269,6 +269,56 @@ func TestRegistry_reportsFactoryContractErrorsAtNodeType(t *testing.T) {
 	})
 }
 
+func TestRegistry_factorySuspensionIsAnInvalidDefinition(t *testing.T) {
+	factories := map[string]workflow.NodeFactory{
+		"direct": func(workflow.NodeSpec) (workflow.Step, error) {
+			return nil, workflow.Suspend("factory cannot wait")
+		},
+		"typed adapter": workflow.Factory(
+			func(struct{}) (flow.Node[int, int], error) {
+				return nil, workflow.Suspend("builder cannot wait")
+			},
+		),
+	}
+
+	for name, factory := range factories {
+		t.Run(name, func(t *testing.T) {
+			registry := workflow.NewRegistry().MustRegisterNode("broken", factory)
+			inputs := workflow.DefaultInput(workflow.Output("external"))
+
+			t.Run("Graph", func(t *testing.T) {
+				_, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
+					ID: "node", Type: "broken", Inputs: inputs,
+				}}})
+				var graphErr *workflow.GraphError
+				if !errors.Is(err, workflow.ErrInvalidGraph) ||
+					!errors.Is(err, flow.ErrInvalidConfig) ||
+					errors.Is(err, workflow.ErrSuspended) ||
+					workflow.SuspendedOnly(err) ||
+					len(workflow.Suspensions(err)) != 0 ||
+					!errors.As(err, &graphErr) || graphErr.Field != "type" {
+					t.Fatalf("CompileGraph error = %v; want non-suspending type error", err)
+				}
+			})
+
+			t.Run("Spec", func(t *testing.T) {
+				_, err := registry.CompileSpec(workflow.Spec{
+					Kind: workflow.KindLeaf, ID: "node", Type: "broken", Inputs: inputs,
+				})
+				var specErr *workflow.SpecError
+				if !errors.Is(err, workflow.ErrInvalidSpec) ||
+					!errors.Is(err, flow.ErrInvalidConfig) ||
+					errors.Is(err, workflow.ErrSuspended) ||
+					workflow.SuspendedOnly(err) ||
+					len(workflow.Suspensions(err)) != 0 ||
+					!errors.As(err, &specErr) || specErr.Field != "type" {
+					t.Fatalf("CompileSpec error = %v; want non-suspending type error", err)
+				}
+			})
+		})
+	}
+}
+
 func TestRegistry_preservesLeafValidationOperationAcrossCompileBoundaries(t *testing.T) {
 	registry := workflow.NewRegistry().MustRegisterNode(
 		"broken",

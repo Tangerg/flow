@@ -100,7 +100,7 @@ func (g *graphPlanner) indexNodes() error {
 				Err:    ErrDuplicateNode,
 			}
 		}
-		if err := node.Inputs.validate(); err != nil {
+		if err := node.Inputs.validatePorts(); err != nil {
 			return &GraphError{
 				Path:   path,
 				NodeID: node.ID,

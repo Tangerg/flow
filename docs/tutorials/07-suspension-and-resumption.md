@@ -148,7 +148,10 @@ bytes cannot make renamed steps or changed control flow safe to resume.
 
 A nil `*Journal` means resumption is disabled and encodes as JSON `null`. An
 allocated zero-value Journal encodes as an empty versioned checkpoint. Persist
-the latter when the run has no records yet but will resume later.
+the latter when the run has no records yet but will resume later. Always pass a
+`*Journal` to `encoding/json`: its synchronized JSON implementation belongs to
+the pointer method set. A `Journal` value has only unexported implementation
+fields and is not a checkpoint representation.
 
 `Suspension.Value` may be a string, map, slice, array, or struct. It is owned by
 the application and must be treated as immutable. Decoding a suspension through

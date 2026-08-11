@@ -1,7 +1,6 @@
 package workflow
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 )
@@ -14,7 +13,7 @@ func (j JournalKey) MarshalJSON() ([]byte, error) {
 	if err := j.validate(); err != nil {
 		return nil, fmt.Errorf("workflow: marshal journal key: %w", err)
 	}
-	return json.Marshal(journalKeyJSON(j))
+	return marshalJSON(journalKeyJSON(j))
 }
 
 // UnmarshalJSON atomically replaces a JournalKey from one strict JSON object.

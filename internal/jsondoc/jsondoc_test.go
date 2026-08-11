@@ -7,33 +7,68 @@ import (
 	"testing"
 )
 
-func TestDecoder(t *testing.T) {
-	decoder := Decoder{MaxDepth: 4}
+type countingMarshaler struct {
+	calls *int
+	data  string
+}
+
+func (m countingMarshaler) MarshalJSON() ([]byte, error) {
+	(*m.calls)++
+	return []byte(m.data), nil
+}
+
+func TestCodec(t *testing.T) {
+	codec := Codec{MaxDepth: 4}
 	var target struct {
 		Number json.Number `json:"number"`
 	}
-	if err := decoder.Decode([]byte(`{"number":1.0}`), &target); err != nil {
+	if err := codec.Decode([]byte(`{"number":1.0}`), &target); err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
 	if target.Number != "1.0" {
 		t.Fatalf("number = %q; want 1.0", target.Number)
 	}
-	if err := decoder.Validate([]byte(`[true,null,{"value":"ok"}]`)); err != nil {
+	if err := codec.Validate([]byte(`[true,null,{"value":"ok"}]`)); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	if err := decoder.Decode([]byte(`{"unknown":1}`), &target); err == nil {
+	if err := codec.Decode([]byte(`{"unknown":1}`), &target); err == nil {
 		t.Fatal("Decode accepted an unknown field")
 	}
-	if err := decoder.Decode([]byte(`{`), &target); err == nil {
+	if err := codec.Decode([]byte(`{`), &target); err == nil {
 		t.Fatal("Decode accepted malformed JSON")
 	}
-	if err := decoder.DecodeParsed([]byte(`{`), &target); err == nil {
+	if err := codec.DecodeParsed([]byte(`{`), &target); err == nil {
 		t.Fatal("DecodeParsed accepted malformed JSON")
 	}
 }
 
-func TestDecoder_rejectsAmbiguousOrLossyDocuments(t *testing.T) {
-	decoder := Decoder{MaxDepth: 8}
+func TestCodecMarshal(t *testing.T) {
+	codec := Codec{MaxDepth: 4}
+	calls := 0
+	data, err := codec.Marshal(countingMarshaler{calls: &calls, data: `{"value":1}`})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if string(data) != `{"value":1}` || calls != 1 {
+		t.Fatalf("Marshal = %s with %d calls; want one exact call", data, calls)
+	}
+
+	if _, err := codec.Marshal(make(chan int)); err == nil {
+		t.Fatal("Marshal accepted an unsupported value")
+	}
+	if _, err := codec.Marshal(countingMarshaler{
+		calls: &calls,
+		data:  `{"same":1,"same":2}`,
+	}); err == nil || !strings.Contains(err.Error(), "duplicate object member") {
+		t.Fatalf("Marshal duplicate error = %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("MarshalJSON calls = %d; want exactly one per invocation", calls)
+	}
+}
+
+func TestCodec_rejectsAmbiguousOrLossyDocuments(t *testing.T) {
+	codec := Codec{MaxDepth: 8}
 	tests := []struct {
 		name string
 		data []byte
@@ -53,7 +88,7 @@ func TestDecoder_rejectsAmbiguousOrLossyDocuments(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := decoder.Value(test.data)
+			_, err := codec.Value(test.data)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Value error = %v; want %q", err, test.want)
 			}
@@ -66,14 +101,14 @@ func TestDecoder_rejectsAmbiguousOrLossyDocuments(t *testing.T) {
 		[]byte(`"\\ud800"`),
 		[]byte(`"\"value"`),
 	} {
-		if _, err := decoder.Value(data); err != nil {
+		if _, err := codec.Value(data); err != nil {
 			t.Fatalf("Value(%s): %v", data, err)
 		}
 	}
 }
 
-func TestDecoder_depth(t *testing.T) {
-	_, err := (Decoder{MaxDepth: 2}).Value([]byte(`{"a":[[]]}`))
+func TestCodec_depth(t *testing.T) {
+	_, err := (Codec{MaxDepth: 2}).Value([]byte(`{"a":[[]]}`))
 	var depthErr *DepthError
 	if !errors.As(err, &depthErr) {
 		t.Fatalf("Value error = %v; want DepthError", err)

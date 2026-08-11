@@ -47,8 +47,9 @@ type NodeSpec struct {
 // compilation validates the complete visible built-in boundary before any
 // execution begins and verifies its output presence against a registered
 // NodeSchema. A factory is definition construction rather than execution: it
-// should return promptly and leave blocking or cancellable I/O to the Node it
-// builds.
+// should return promptly, must not return a suspension, and leaves blocking or
+// cancellable I/O to the Node it builds. Compilation reports a suspension from
+// a factory as [flow.ErrInvalidConfig], not as a resumable run-time outcome.
 type NodeFactory func(NodeSpec) (Step, error)
 
 // Resolver is the typed node shape that picks a branch or outlet name from a

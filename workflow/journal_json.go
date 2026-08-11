@@ -62,9 +62,13 @@ type journalDecoder struct {
 // including replacement of invalid UTF-8 in ordinary Go strings. Step and scope
 // IDs must be valid UTF-8 so their identities survive the JSON boundary
 // unchanged. A nil *Journal encodes as null, matching encoding/json's nil
-// pointer behavior and representing that resumption is disabled. Records are
-// emitted in [Journal.Keys] order, so equal record values produce stable bytes.
-// Allocate a zero Journal when an empty, versioned checkpoint is required.
+// pointer behavior and representing that resumption is disabled. Always pass a
+// *Journal to encoding/json: the synchronized JSON method belongs to the
+// pointer method set, while a Journal value has only unexported implementation
+// fields and is not a checkpoint representation. Records are emitted in
+// [Journal.Keys] order, so equal record values produce stable bytes. Call
+// [NewJournal], or take the address of a zero Journal, when an empty versioned
+// checkpoint is required.
 func (j *Journal) MarshalJSON() ([]byte, error) {
 	if j == nil {
 		return []byte("null"), nil
@@ -121,11 +125,7 @@ func (j *Journal) MarshalJSON() ([]byte, error) {
 // marshal enforces the same recursive boundary as Journal.UnmarshalJSON, so a
 // successful encoding is always structurally readable by this package.
 func (j journalDocument) marshal() ([]byte, error) {
-	encoded := j.encode()
-	if err := jsonDocument(encoded).validate(); err != nil {
-		return nil, err
-	}
-	return encoded, nil
+	return marshalJSON(j)
 }
 
 // encode assembles a document from JSON fragments produced by json.Marshal.

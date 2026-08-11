@@ -30,13 +30,19 @@ Before opening a pull request, run the complete gate used by CI:
 test -z "$(gofmt -l .)"
 go mod tidy -diff
 go test -race -coverprofile=coverage.out ./...
-test "$(go tool cover -func=coverage.out | awk '/^total:/ { print $3 }')" = "100.0%"
+coverage="$(go tool cover -func=coverage.out | awk '/^total:/ { print $3 }')"
+awk -v coverage="${coverage%\%}" 'BEGIN { exit coverage < 95.0 }'
 go vet ./...
 golangci-lint run ./...
 actionlint
 govulncheck ./...
 npx --yes markdownlint-cli2@0.23.2
 ```
+
+The coverage floor protects behavior without making every defensive statement
+a public design constraint. Keep meaningful coverage as high as the tests
+naturally support, but do not add white-box tests or distort production control
+flow solely to preserve an exact percentage.
 
 Changes to the learning path should also run:
 

@@ -94,10 +94,7 @@ func (g graphJSONEncoder) marshal() ([]byte, error) {
 			}
 		}
 	}
-	encoded, err := json.Marshal(graphJSONFields(g.graph))
-	if err == nil {
-		err = jsonDocument(encoded).validate()
-	}
+	encoded, err := marshalJSON(graphJSONFields(g.graph))
 	if err != nil {
 		return nil, &GraphError{Field: fieldJSON, Err: err}
 	}
@@ -117,7 +114,7 @@ func (n GraphNode) validateJSONText() (string, error) {
 			return field.name, err
 		}
 	}
-	if err := n.Inputs.validateJSONText(); err != nil {
+	if err := n.Inputs.validatePortJSONText(); err != nil {
 		return fieldInputs, err
 	}
 	if len(n.Config) > 0 {
@@ -146,14 +143,12 @@ func (s *specJSONEncoder) marshal() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	encoded, err := json.Marshal(output)
-	if err == nil {
-		// Logical Spec depth bounds construction and detects pointer cycles. The
-		// complete wire document has additional object and array containers, and
-		// a valid Config gains enclosing containers here, so only validating the
-		// assembled bytes proves that this package can read its own output.
-		err = jsonDocument(encoded).validate()
-	}
+	// The logical Spec-depth check bounds construction and detects pointer
+	// cycles. The complete wire document has additional object and array
+	// containers, and a valid Config gains enclosing containers here, so only
+	// validating the assembled bytes proves that this package can read its own
+	// output.
+	encoded, err := marshalJSON(output)
 	if err != nil {
 		return nil, s.root.fieldError(fieldJSON, err)
 	}
@@ -245,8 +240,14 @@ func (s Spec) validateJSONText() (string, error) {
 	if err := s.Input.validateJSONText(); err != nil {
 		return fieldInput, err
 	}
-	if err := s.Inputs.validateJSONText(); err != nil {
-		return fieldInputs, err
+	var inputsErr error
+	if s.Kind == KindSubgraph {
+		inputsErr = s.Inputs.validateSeedJSONText()
+	} else {
+		inputsErr = s.Inputs.validatePortJSONText()
+	}
+	if inputsErr != nil {
+		return fieldInputs, inputsErr
 	}
 	if err := s.BodyOutput.validateJSONText(); err != nil {
 		return fieldBodyOutput, err

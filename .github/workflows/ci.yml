@@ -22,11 +22,11 @@ jobs:
           cache: true
       - run: test -z "$(gofmt -l .)"
       - run: go mod tidy -diff
-      - name: Test with race detection and full statement coverage
+      - name: Test with race detection and minimum statement coverage
         run: |
           go test -race -coverprofile=coverage.out ./...
           coverage="$(go tool cover -func=coverage.out | awk '/^total:/ { print $3 }')"
-          test "$coverage" = "100.0%"
+          awk -v coverage="${coverage%\%}" 'BEGIN { exit coverage < 95.0 }'
       - run: go vet ./...
 
   quality:

@@ -12,7 +12,12 @@ import (
 // depth diagnostic into its stable ErrMaxDepth category here.
 type jsonDocument []byte
 
-var strictJSON = jsondoc.Decoder{MaxDepth: MaxNestingDepth}
+var strictJSON = jsondoc.Codec{MaxDepth: MaxNestingDepth}
+
+func marshalJSON(value any) ([]byte, error) {
+	data, err := strictJSON.Marshal(value)
+	return data, translateJSONError(err)
+}
 
 func (j jsonDocument) validate() error {
 	return translateJSONError(strictJSON.Validate(j))

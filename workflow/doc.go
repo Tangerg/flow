@@ -186,8 +186,8 @@
 // of failure, so [Parallel], [Loop], [Iteration], and [Graph] preserve work that
 // completed before or independently of the wait rather than cancelling or
 // discarding it. It is exclusively a run-time outcome: definition validation
-// cannot wait, and a validator that returns ErrSuspended is rejected as
-// [flow.ErrInvalidConfig].
+// and construction cannot wait, so a validator or [NodeFactory] that returns
+// ErrSuspended is rejected as [flow.ErrInvalidConfig].
 //
 // Await is a Store gate: it passes through once its Ref exists. Interrupt is a
 // request/response Step: it exposes a value, then produces the response under
@@ -280,10 +280,11 @@
 // accidentally swallow cancellation, invalid definitions, or suspension.
 //
 // Errors preserve caller errors and stable package causes for errors.Is and
-// errors.As, except that a validation error matching [ErrSuspended] is
-// deliberately normalized to [flow.ErrInvalidConfig]: validation cannot expose
-// a resumable run-time outcome. Replaceable backend types such as the JSON
-// Schema validator remain implementation details. [RefError],
+// errors.As, except that a definition-time validator or NodeFactory error
+// matching [ErrSuspended] is deliberately normalized to
+// [flow.ErrInvalidConfig]: construction cannot expose a resumable run-time
+// outcome. Replaceable backend types such as the JSON Schema validator remain
+// implementation details. [RefError],
 // [RegistrationError], [GraphError], [SpecError], and [StepError] identify the
 // exact boundary that failed. A runtime StepError carries the same structured
 // execution scope used by events, chunks, suspensions, and Journal keys; a

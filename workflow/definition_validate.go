@@ -81,26 +81,29 @@ type definitionValidator struct {
 // composite's validation and turn a construction error into partial execution.
 func validateDefinition(step Step) error {
 	validator := definitionValidator{}
-	return normalizeValidationError(validator.validate(step))
+	return normalizeDefinitionError("validation", validator.validate(step))
 }
 
 // validateNode is the only bridge from flow's generic validation convention to
 // workflow definition semantics. In particular, a workflow validator cannot
 // turn immutable definition inspection into a resumable run-time outcome.
 func validateNode[I, O any](node flow.Node[I, O]) error {
-	return normalizeValidationError(flow.Validate(node))
+	return normalizeDefinitionError("validation", flow.Validate(node))
 }
 
-func normalizeValidationError(err error) error {
+// normalizeDefinitionError keeps every definition-construction extension point
+// on the same side of the execution boundary. Suspension is meaningful only
+// after a run has begun; a validator or factory returning one has produced an
+// invalid definition, not a resumable outcome. The original error is rendered
+// rather than wrapped so errors.Is cannot misclassify it as ErrSuspended.
+func normalizeDefinitionError(source string, err error) error {
 	if !errors.Is(err, ErrSuspended) {
 		return err
 	}
-	// Validation inspects immutable definition state and cannot legitimately
-	// wait for a run-time value. Keep a broken validator from turning an invalid
-	// definition into a resumable third outcome at an enclosing composite.
 	return fmt.Errorf(
-		"%w: validation returned a suspension: %s",
+		"%w: %s returned a suspension: %s",
 		flow.ErrInvalidConfig,
+		source,
 		err.Error(),
 	)
 }

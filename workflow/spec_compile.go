@@ -121,6 +121,12 @@ func (l leafCompiler) compile(spec Spec) (definedStep, string, error) {
 		Config: bytes.Clone(spec.Config),
 	})
 	if err != nil {
+		if errors.Is(err, ErrSuspended) {
+			// A factory constructs an immutable definition. Treat a suspension
+			// here as a broken node-type contract, never as a resumable run or
+			// a JSON config error the caller could repair.
+			return nil, fieldType, normalizeDefinitionError("node factory", err)
+		}
 		return nil, l.errorField(err), err
 	}
 	if isNilNode(step) {

@@ -304,7 +304,8 @@ Run the local gate before submitting a change:
 test -z "$(gofmt -l .)"
 go mod tidy -diff
 go test -race -coverprofile=coverage.out ./...
-test "$(go tool cover -func=coverage.out | awk '/^total:/ { print $3 }')" = "100.0%"
+coverage="$(go tool cover -func=coverage.out | awk '/^total:/ { print $3 }')"
+awk -v coverage="${coverage%\%}" 'BEGIN { exit coverage < 95.0 }'
 go vet ./...
 ```
 

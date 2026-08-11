@@ -1,7 +1,6 @@
 package expr
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -12,7 +11,7 @@ import (
 	"github.com/Tangerg/flow/workflow"
 )
 
-var strictJSON = jsondoc.Decoder{MaxDepth: workflow.MaxNestingDepth}
+var strictJSON = jsondoc.Codec{MaxDepth: workflow.MaxNestingDepth}
 
 type (
 	bindingsJSON   Bindings
@@ -25,7 +24,8 @@ func (b Bindings) MarshalJSON() ([]byte, error) {
 	if err := b.validateJSONText(); err != nil {
 		return nil, err
 	}
-	return json.Marshal(bindingsJSON(b))
+	data, err := strictJSON.Marshal(bindingsJSON(b))
+	return data, translateJSONError(err)
 }
 
 // UnmarshalJSON applies the same strict object boundary as workflow's Graph and
@@ -50,7 +50,8 @@ func (s SwitchSpec) MarshalJSON() ([]byte, error) {
 	if err := s.validateJSONText(); err != nil {
 		return nil, err
 	}
-	return json.Marshal(switchSpecJSON(s))
+	data, err := strictJSON.Marshal(switchSpecJSON(s))
+	return data, translateJSONError(err)
 }
 
 // UnmarshalJSON strictly and atomically decodes a standalone SwitchSpec JSON

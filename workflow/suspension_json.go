@@ -1,7 +1,6 @@
 package workflow
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 )
@@ -16,11 +15,8 @@ func (s Suspension) MarshalJSON() ([]byte, error) {
 	if err := s.validateIdentity(); err != nil {
 		return nil, fmt.Errorf("workflow: marshal suspension: %w", err)
 	}
-	encoded, err := json.Marshal(suspensionJSON(s))
+	encoded, err := marshalJSON(suspensionJSON(s))
 	if err != nil {
-		return nil, fmt.Errorf("workflow: marshal suspension: %w", err)
-	}
-	if err := jsonDocument(encoded).validate(); err != nil {
 		return nil, fmt.Errorf("workflow: marshal suspension: %w", err)
 	}
 	return encoded, nil

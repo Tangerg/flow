@@ -155,7 +155,7 @@ func (s *specValidator) validateLeaf(spec Spec) error {
 	if err := registered.validateConfig(spec.Config); err != nil {
 		return spec.fieldError(fieldConfig, err)
 	}
-	if err := spec.Inputs.validate(); err != nil {
+	if err := spec.Inputs.validatePorts(); err != nil {
 		return spec.fieldError(fieldInputs, err)
 	}
 	if schemaKnown {
@@ -279,7 +279,7 @@ func (s *specValidator) validateSubgraph(spec Spec) error {
 			errors.New("subgraph body output is required"),
 		)
 	}
-	if err := spec.Inputs.validate(); err != nil {
+	if err := spec.Inputs.validateSeeds(); err != nil {
 		return spec.fieldError(fieldInputs, err)
 	}
 	if err := spec.BodyOutput.Validate(); err != nil {

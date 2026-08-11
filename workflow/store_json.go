@@ -100,9 +100,8 @@ func (s storeJSONDocument) encodeValues() error {
 // marshal enforces the same recursive boundary as Store.UnmarshalJSON. Each
 // one-cell document has the same maximum depth as the complete document, so
 // validating cells independently both identifies failures and proves the final
-// assembly readable. Values are RawMessages produced by encodeValues; the two
-// structural json.Marshal calls below therefore cannot invoke application code
-// or fail.
+// assembly readable. Values are RawMessages produced by encodeValues, so the
+// structural encodings below cannot invoke application code.
 func (s storeJSONDocument) marshal() ([]byte, error) {
 	for _, nodeID := range slices.Sorted(maps.Keys(s)) {
 		values := s[nodeID]
@@ -110,12 +109,7 @@ func (s storeJSONDocument) marshal() ([]byte, error) {
 			candidate := storeJSONDocument{
 				nodeID: {key: values[key]},
 			}
-			// encodeValues established valid RawMessages and validateNames
-			// established valid map keys.
-			//
-			//nolint:errchkjson // The construction invariant excludes an encoding error.
-			encoded, _ := json.Marshal(candidate)
-			if err := jsonDocument(encoded).validate(); err != nil {
+			if _, err := marshalJSON(candidate); err != nil {
 				return nil, fmt.Errorf("node %q key %q: %w", nodeID, key, err)
 			}
 		}
