@@ -69,7 +69,7 @@ func (i interruptStep) Run(ctx context.Context, store Store) (Store, error) {
 
 func (i interruptStep) validate() error {
 	if err := validateStepID(i.id); err != nil {
-		return &StepError{ID: i.id, Op: OpValidate, Err: err}
+		return newValidationError(i.id, err)
 	}
 	return nil
 }

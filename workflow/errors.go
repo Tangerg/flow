@@ -115,8 +115,8 @@ func (s *StepError) Error() string {
 func (s *StepError) Unwrap() error { return s.Err }
 
 // newStepError captures the structured identity of a failure observed during
-// execution. Definition validation constructs StepError directly because no
-// invocation — and therefore no execution scope — exists yet.
+// execution. Use [newValidationError] for an invalid definition, which has no
+// invocation and therefore no execution scope.
 func newStepError(ctx context.Context, id string, op StepOp, err error) *StepError {
 	return &StepError{
 		ID:    id,
@@ -124,6 +124,14 @@ func newStepError(ctx context.Context, id string, op StepOp, err error) *StepErr
 		Op:    op,
 		Err:   err,
 	}
+}
+
+// newValidationError reports an invalid step definition. A definition is wrong
+// everywhere it would run rather than at one execution scope, so the error
+// carries no [Scope] even when a run discovers it. Naming that once keeps every
+// step from restating the decision by omitting a field.
+func newValidationError(id string, err error) *StepError {
+	return &StepError{ID: id, Op: OpValidate, Err: err}
 }
 
 // RefError reports a failed typed lookup in a [Store]. Want is the requested

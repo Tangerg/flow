@@ -139,32 +139,26 @@ func (b *branchExecution) selectCase(ctx context.Context) (Step, error) {
 
 func (b branchStep) validate() error {
 	if err := validateStepID(b.id); err != nil {
-		return &StepError{ID: b.id, Op: OpValidate, Err: err}
+		return newValidationError(b.id, err)
 	}
 	if err := validateNode(b.resolve); err != nil {
-		return &StepError{ID: b.id, Op: OpValidate, Err: err}
+		return newValidationError(b.id, err)
 	}
 	if len(b.cases) == 0 {
-		return &StepError{
-			ID:  b.id,
-			Op:  OpValidate,
-			Err: fmt.Errorf("%w: branch requires at least one case", flow.ErrInvalidConfig),
-		}
+		return newValidationError(
+			b.id,
+			fmt.Errorf("%w: branch requires at least one case", flow.ErrInvalidConfig))
 	}
 	for _, name := range slices.Sorted(maps.Keys(b.cases)) {
 		if err := validateName("branch case name", name); err != nil {
-			return &StepError{
-				ID:  b.id,
-				Op:  OpValidate,
-				Err: fmt.Errorf("%w: %w", flow.ErrInvalidConfig, err),
-			}
+			return newValidationError(
+				b.id,
+				fmt.Errorf("%w: %w", flow.ErrInvalidConfig, err))
 		}
 		if isNilNode(b.cases[name]) {
-			return &StepError{
-				ID:  b.id,
-				Op:  OpValidate,
-				Err: fmt.Errorf("case %q: %w", name, ErrNilStep),
-			}
+			return newValidationError(
+				b.id,
+				fmt.Errorf("case %q: %w", name, ErrNilStep))
 		}
 	}
 	return nil

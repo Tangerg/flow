@@ -197,15 +197,13 @@ func (s stepDefinition) validateSubgraphOutput() error {
 	if subgraphOutputGuaranteed(s.inputs, outputs, s.bodyOutput) {
 		return nil
 	}
-	return &StepError{
-		ID: s.id,
-		Op: OpValidate,
-		Err: fmt.Errorf(
+	return newValidationError(
+		s.id,
+		fmt.Errorf(
 			"%w: subgraph body output %s is not produced by its sealed body or inputs",
 			flow.ErrInvalidConfig,
 			s.bodyOutput,
-		),
-	}
+		))
 }
 
 func (s stepDefinition) validateIterationOutput() error {
@@ -216,15 +214,13 @@ func (s stepDefinition) validateIterationOutput() error {
 	if iterationOutputGuaranteed(s.id, outputs, s.bodyOutput) {
 		return nil
 	}
-	return &StepError{
-		ID: s.id,
-		Op: OpValidate,
-		Err: fmt.Errorf(
+	return newValidationError(
+		s.id,
+		fmt.Errorf(
 			"%w: iteration body output %s is not produced by its visible body and is not a valid item or index value",
 			flow.ErrInvalidConfig,
 			s.bodyOutput,
-		),
-	}
+		))
 }
 
 // subgraphOutputGuaranteed and iterationOutputGuaranteed are the shared
@@ -385,7 +381,7 @@ func (d *definitionValidator) validateCases(
 
 func (d *definitionValidator) claim(id string) error {
 	if !d.ids.claim(id) {
-		return &StepError{ID: id, Op: OpValidate, Err: ErrDuplicateStep}
+		return newValidationError(id, ErrDuplicateStep)
 	}
 	return nil
 }

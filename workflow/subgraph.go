@@ -130,24 +130,20 @@ func (s *subgraphExecution) project(ctx context.Context, inner Store) (Store, er
 
 func (s subgraphStep) validate() error {
 	if err := validateStepID(s.id); err != nil {
-		return &StepError{ID: s.id, Op: OpValidate, Err: err}
+		return newValidationError(s.id, err)
 	}
 	if isNilNode(s.body) {
-		return &StepError{ID: s.id, Op: OpValidate, Err: ErrNilStep}
+		return newValidationError(s.id, ErrNilStep)
 	}
 	if err := s.inputs.validateSeeds(); err != nil {
-		return &StepError{
-			ID:  s.id,
-			Op:  OpValidate,
-			Err: fmt.Errorf("%w: subgraph inputs: %w", flow.ErrInvalidConfig, err),
-		}
+		return newValidationError(
+			s.id,
+			fmt.Errorf("%w: subgraph inputs: %w", flow.ErrInvalidConfig, err))
 	}
 	if err := s.bodyOutput.Validate(); err != nil {
-		return &StepError{
-			ID:  s.id,
-			Op:  OpValidate,
-			Err: fmt.Errorf("%w: subgraph body output: %w", flow.ErrInvalidConfig, err),
-		}
+		return newValidationError(
+			s.id,
+			fmt.Errorf("%w: subgraph body output: %w", flow.ErrInvalidConfig, err))
 	}
 	return nil
 }

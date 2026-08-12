@@ -167,30 +167,24 @@ func (l leafStep[I, O]) Run(ctx context.Context, store Store) (Store, error) {
 
 func (l leafStep[I, O]) validate() error {
 	if err := validateStepID(l.id); err != nil {
-		return &StepError{ID: l.id, Op: OpValidate, Err: err}
+		return newValidationError(l.id, err)
 	}
 	if isNilBinder(l.bind) {
-		return &StepError{
-			ID:  l.id,
-			Op:  OpValidate,
-			Err: fmt.Errorf("binder: %w", flow.ErrNilFunc),
-		}
+		return newValidationError(
+			l.id,
+			fmt.Errorf("binder: %w", flow.ErrNilFunc))
 	}
 	if validator, ok := l.bind.(binderValidator); ok {
 		if err := validator.Validate(); err != nil {
-			return &StepError{
-				ID:  l.id,
-				Op:  OpValidate,
-				Err: fmt.Errorf("%w: binder: %w", flow.ErrInvalidConfig, err),
-			}
+			return newValidationError(
+				l.id,
+				fmt.Errorf("%w: binder: %w", flow.ErrInvalidConfig, err))
 		}
 	}
 	if err := validateNode(l.node); err != nil {
-		return &StepError{
-			ID:  l.id,
-			Op:  OpValidate,
-			Err: fmt.Errorf("node: %w", err),
-		}
+		return newValidationError(
+			l.id,
+			fmt.Errorf("node: %w", err))
 	}
 	return nil
 }

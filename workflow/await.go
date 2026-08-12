@@ -69,14 +69,12 @@ func (a awaitStep) Run(ctx context.Context, store Store) (Store, error) {
 
 func (a awaitStep) validate() error {
 	if err := validateStepID(a.id); err != nil {
-		return &StepError{ID: a.id, Op: OpValidate, Err: err}
+		return newValidationError(a.id, err)
 	}
 	if err := a.ref.Validate(); err != nil {
-		return &StepError{
-			ID:  a.id,
-			Op:  OpValidate,
-			Err: fmt.Errorf("%w: await reference: %w", flow.ErrInvalidConfig, err),
-		}
+		return newValidationError(
+			a.id,
+			fmt.Errorf("%w: await reference: %w", flow.ErrInvalidConfig, err))
 	}
 	return nil
 }

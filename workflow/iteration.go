@@ -151,31 +151,25 @@ func (i *iterationExecution) execute(ctx context.Context) (Store, error) {
 
 func (i iterationStep) validate() error {
 	if err := validateStepID(i.id); err != nil {
-		return &StepError{ID: i.id, Op: OpValidate, Err: err}
+		return newValidationError(i.id, err)
 	}
 	if isNilNode(i.body) {
-		return &StepError{ID: i.id, Op: OpValidate, Err: ErrNilStep}
+		return newValidationError(i.id, ErrNilStep)
 	}
 	if err := (flow.MapConfig{Concurrency: i.limit}).Validate(); err != nil {
-		return &StepError{
-			ID:  i.id,
-			Op:  OpValidate,
-			Err: err,
-		}
+		return newValidationError(
+			i.id,
+			err)
 	}
 	if err := i.input.Validate(); err != nil {
-		return &StepError{
-			ID:  i.id,
-			Op:  OpValidate,
-			Err: fmt.Errorf("%w: iteration input: %w", flow.ErrInvalidConfig, err),
-		}
+		return newValidationError(
+			i.id,
+			fmt.Errorf("%w: iteration input: %w", flow.ErrInvalidConfig, err))
 	}
 	if err := i.bodyOutput.Validate(); err != nil {
-		return &StepError{
-			ID:  i.id,
-			Op:  OpValidate,
-			Err: fmt.Errorf("%w: iteration body output: %w", flow.ErrInvalidConfig, err),
-		}
+		return newValidationError(
+			i.id,
+			fmt.Errorf("%w: iteration body output: %w", flow.ErrInvalidConfig, err))
 	}
 	return nil
 }

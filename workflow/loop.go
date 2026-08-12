@@ -76,22 +76,20 @@ func (l loopStep) Run(ctx context.Context, s Store) (Store, error) {
 
 func (l loopStep) validate() error {
 	if err := validateStepID(l.config.ID); err != nil {
-		return &StepError{ID: l.config.ID, Op: OpValidate, Err: err}
+		return newValidationError(l.config.ID, err)
 	}
 	if isNilNode(l.config.Body) {
-		return &StepError{ID: l.config.ID, Op: OpValidate, Err: ErrNilStep}
+		return newValidationError(l.config.ID, ErrNilStep)
 	}
 	if err := validateNode(l.config.Done); err != nil {
-		return &StepError{ID: l.config.ID, Op: OpValidate, Err: err}
+		return newValidationError(l.config.ID, err)
 	}
 	// The kernel owns the meaning of the iteration cap, so its config validates
 	// the value this one carries rather than restating the rule.
 	if err := (flow.LoopConfig{MaxIterations: l.config.MaxIterations}).Validate(); err != nil {
-		return &StepError{
-			ID:  l.config.ID,
-			Op:  OpValidate,
-			Err: err,
-		}
+		return newValidationError(
+			l.config.ID,
+			err)
 	}
 	return nil
 }
