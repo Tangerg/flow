@@ -100,14 +100,8 @@ func (s *subgraphExecution) execute(ctx context.Context) (Store, error) {
 }
 
 func (s *subgraphExecution) validate(ctx context.Context) error {
-	if err := s.subgraph.Validate(); err != nil {
+	if err := admitScopedStep(ctx, s.subgraph.id, s.subgraph.Validate()); err != nil {
 		return err
-	}
-	if err := validateChildScope(scope(ctx)); err != nil {
-		return newStepError(ctx, s.subgraph.id, OpValidate, err)
-	}
-	if err := s.run.claim(scope(ctx), s.subgraph.id); err != nil {
-		return newStepError(ctx, s.subgraph.id, OpValidate, err)
 	}
 	return context.Cause(ctx)
 }

@@ -55,14 +55,8 @@ type loopStep struct {
 
 func (l loopStep) Run(ctx context.Context, s Store) (Store, error) {
 	ctx = ensureRun(ctx)
-	if err := l.Validate(); err != nil {
+	if err := admitScopedStep(ctx, l.config.ID, l.Validate()); err != nil {
 		return s, err
-	}
-	if err := validateChildScope(scope(ctx)); err != nil {
-		return s, newStepError(ctx, l.config.ID, OpValidate, err)
-	}
-	if err := runFrom(ctx).claim(scope(ctx), l.config.ID); err != nil {
-		return s, newStepError(ctx, l.config.ID, OpValidate, err)
 	}
 
 	execution := loopExecution{

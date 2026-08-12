@@ -212,11 +212,7 @@ func (n *nodeConnector) connect(node GraphNode) error {
 }
 
 func (n *nodeConnector) connectGate(dependency string) error {
-	dependencyIndex, exists := n.planner.indexByID[dependency]
-	if !exists {
-		return n.fieldError(fieldWhen, fmt.Errorf("%w %q", ErrUnknownNode, dependency))
-	}
-	return n.connectDependency(dependency, dependencyIndex, fieldWhen)
+	return n.connectNamed(dependency, fieldWhen)
 }
 
 func (n *nodeConnector) connectExplicit(dependency string) error {
@@ -237,11 +233,19 @@ func (n *nodeConnector) connectExplicit(dependency string) error {
 		))
 	}
 
+	return n.connectNamed(dependency, fieldDependsOn)
+}
+
+// connectNamed links a dependency the document named directly. Unlike an input
+// reference, which may point at an external seed, a gate or a DependsOn entry
+// must name a node of this graph, so an unresolved name is an error at the field
+// that named it.
+func (n *nodeConnector) connectNamed(dependency, field string) error {
 	dependencyIndex, exists := n.planner.indexByID[dependency]
 	if !exists {
-		return n.fieldError(fieldDependsOn, fmt.Errorf("%w %q", ErrUnknownNode, dependency))
+		return n.fieldError(field, fmt.Errorf("%w %q", ErrUnknownNode, dependency))
 	}
-	return n.connectDependency(dependency, dependencyIndex, fieldDependsOn)
+	return n.connectDependency(dependency, dependencyIndex, field)
 }
 
 func (n *nodeConnector) connectInput(dependency string) error {

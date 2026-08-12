@@ -227,6 +227,11 @@ type suspensionList []*Suspension
 // already identified, including when its nil Scope deliberately names the root
 // of an independent nested Run. An anonymous wait is owned wholly by the
 // current boundary rather than retaining a caller-supplied partial identity.
+//
+// It writes through the pointers it holds, which is safe because every list
+// reaching it came from [suspensionList.normalized] and therefore holds clones —
+// see [Suspension.clone]. Assigning an ID also changes the sort key, so a caller
+// that needs order must normalize again afterwards, which err does.
 func (s suspensionList) identify(id string, scope []ScopeFrame) suspensionList {
 	for _, suspension := range s {
 		if suspension.ID == "" {

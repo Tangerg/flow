@@ -101,14 +101,8 @@ type iterationStep struct {
 
 func (i iterationStep) Run(ctx context.Context, s Store) (Store, error) {
 	ctx = ensureRun(ctx)
-	if err := i.Validate(); err != nil {
+	if err := admitScopedStep(ctx, i.id, i.Validate()); err != nil {
 		return s, err
-	}
-	if err := validateChildScope(scope(ctx)); err != nil {
-		return s, newStepError(ctx, i.id, OpValidate, err)
-	}
-	if err := runFrom(ctx).claim(scope(ctx), i.id); err != nil {
-		return s, newStepError(ctx, i.id, OpValidate, err)
 	}
 	if contextErr := context.Cause(ctx); contextErr != nil {
 		return s, contextErr

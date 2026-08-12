@@ -192,11 +192,18 @@ func (s *specValidator) validateSteps(specs []Spec) error {
 	return nil
 }
 
-func (s *specValidator) validateLoop(spec Spec) error {
+// admit is what every named kind does first: claim the identity the document
+// gives it, then check the fields that kind cannot do without. A leaf requires
+// none, so the second check is a no-op there and the order stays uniform.
+func (s *specValidator) admit(spec Spec) error {
 	if err := s.claimID(spec); err != nil {
 		return err
 	}
-	if err := spec.requireKindFields(); err != nil {
+	return spec.requireKindFields()
+}
+
+func (s *specValidator) validateLoop(spec Spec) error {
+	if err := s.admit(spec); err != nil {
 		return err
 	}
 	if err := validateName("condition name", spec.Condition); err != nil {
@@ -214,7 +221,7 @@ func (s *specValidator) validateLoop(spec Spec) error {
 }
 
 func (s *specValidator) validateLeaf(spec Spec) error {
-	if err := s.claimID(spec); err != nil {
+	if err := s.admit(spec); err != nil {
 		return err
 	}
 	if err := validateName("node type", spec.Type); err != nil {
@@ -245,10 +252,7 @@ func (s *specValidator) validateLeaf(spec Spec) error {
 }
 
 func (s *specValidator) validateBranch(spec Spec) error {
-	if err := s.claimID(spec); err != nil {
-		return err
-	}
-	if err := spec.requireKindFields(); err != nil {
+	if err := s.admit(spec); err != nil {
 		return err
 	}
 	if err := validateName("resolver name", spec.Resolver); err != nil {
@@ -293,10 +297,7 @@ func (s *specValidator) validateOwnBody(spec Spec) error {
 }
 
 func (s *specValidator) validateIteration(spec Spec) error {
-	if err := s.claimID(spec); err != nil {
-		return err
-	}
-	if err := spec.requireKindFields(); err != nil {
+	if err := s.admit(spec); err != nil {
 		return err
 	}
 	if err := spec.Input.Validate(); err != nil {
@@ -313,10 +314,7 @@ func (s *specValidator) validateIteration(spec Spec) error {
 }
 
 func (s *specValidator) validateSubgraph(spec Spec) error {
-	if err := s.claimID(spec); err != nil {
-		return err
-	}
-	if err := spec.requireKindFields(); err != nil {
+	if err := s.admit(spec); err != nil {
 		return err
 	}
 	if err := spec.Inputs.validateSeeds(); err != nil {

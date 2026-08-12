@@ -153,3 +153,24 @@ func admitBoundary(ctx context.Context, id string, invalid error) (*runState, er
 func bodyOutputError(output Ref, err error) error {
 	return fmt.Errorf("read body output %s: %w", output, err)
 }
+
+// admitScopedStep is the admission a composite performs when it will push a new
+// scope frame: reject an invalid definition, refuse a scope already at the depth
+// limit, and claim the execution identity. Unlike [admitBoundary] it publishes
+// nothing, because a composite is transparent and adds no lifecycle events of its
+// own.
+//
+// Branch is deliberately not a caller. It selects a case in the current scope
+// rather than pushing a frame, so running at the depth limit is legal for it.
+func admitScopedStep(ctx context.Context, id string, invalid error) error {
+	if invalid != nil {
+		return invalid
+	}
+	if err := validateChildScope(scope(ctx)); err != nil {
+		return newStepError(ctx, id, OpValidate, err)
+	}
+	if err := runFrom(ctx).claim(scope(ctx), id); err != nil {
+		return newStepError(ctx, id, OpValidate, err)
+	}
+	return nil
+}
