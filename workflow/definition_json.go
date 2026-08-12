@@ -27,6 +27,13 @@ type specJSON struct {
 // specJSONDecoder owns the recursive raw members while one Spec is decoded.
 // Keeping child conversion on this receiver leaves specJSON as a small wire
 // adapter and keeps application Config bytes out of the normalization path.
+//
+// A child failure is located by wrapping on the way out — "steps[0]: case ..." —
+// because json.Unmarshaler cannot be handed a position on the way in. That reads
+// differently from the JSON Pointer the schema reports, and only for the failures
+// the schema cannot see, which is an integer beyond int64. Threading a path down
+// would mean bypassing the Unmarshaler seam and turning these into SpecError
+// values, which the outer wrap in Spec.UnmarshalJSON would then name twice.
 type specJSONDecoder struct {
 	fields        specJSONFields
 	steps         []json.RawMessage
@@ -173,9 +180,6 @@ func (s *specJSONEncoder) encode(spec Spec) (specJSONOutput, error) {
 	if len(spec.Cases) > 0 {
 		output.Cases = make(map[string]specJSONOutput, len(spec.Cases))
 		for _, name := range slices.Sorted(maps.Keys(spec.Cases)) {
-			if err := validateText("branch case name", name); err != nil {
-				return specJSONOutput{}, spec.fieldError(fieldCases, err)
-			}
 			encoded, err := s.encodeChild(spec.Cases[name])
 			if err != nil {
 				return specJSONOutput{}, locateSpecError(err, fieldCases, name)
@@ -241,6 +245,14 @@ func (s Spec) validateJSONText() (string, error) {
 	}
 	if err := s.BodyOutput.validateJSONText(); err != nil {
 		return fieldBodyOutput, err
+	}
+	// A case name is an object member on the wire, so it carries identity that
+	// encoding/json would replace rather than reject. Sorted, so a Spec with more
+	// than one invalid name always reports the same one.
+	for _, name := range slices.Sorted(maps.Keys(s.Cases)) {
+		if err := validateText("branch case name", name); err != nil {
+			return fieldCases, err
+		}
 	}
 	return "", nil
 }

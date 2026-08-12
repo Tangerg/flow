@@ -175,3 +175,65 @@ func TestDecodersDistinguishAnEmptyMemberFromAnAbsentOne(t *testing.T) {
 		t.Fatalf("UnmarshalJSON of an empty id = %v; want an invalid-identity error", err)
 	}
 }
+
+// TestSpecRoundTripsEveryKind is the Spec half of the check above, which has to
+// be written per kind: a Spec's members depend on its Kind, so no single
+// populated value exercises the format. Byte stability is the property that
+// matters here — a definition is stored and compared as bytes, so re-encoding
+// what was just decoded must not move a member or drop one.
+func TestSpecRoundTripsEveryKind(t *testing.T) {
+	leaf := workflow.Spec{
+		Kind: workflow.KindLeaf, ID: "leaf", Type: "registered",
+		Config: json.RawMessage(`{"k":"v"}`),
+		Inputs: workflow.OneInput(workflow.Output("seed")),
+	}
+	kinds := map[workflow.Kind]workflow.Spec{
+		workflow.KindLeaf:     leaf,
+		workflow.KindSequence: {Kind: workflow.KindSequence, Steps: []workflow.Spec{leaf}},
+		workflow.KindParallel: {
+			Kind: workflow.KindParallel, Steps: []workflow.Spec{leaf}, Concurrency: 3,
+		},
+		workflow.KindBranch: {
+			Kind: workflow.KindBranch, ID: "branch", Resolver: "pick",
+			// Two cases, because their order on the wire comes from sorting rather
+			// than from Go's map iteration.
+			Cases: map[string]workflow.Spec{"accept": leaf, "reject": leaf},
+		},
+		workflow.KindLoop: {
+			Kind: workflow.KindLoop, ID: "loop", Body: &leaf,
+			Condition: "stop", MaxIterations: 7,
+		},
+		workflow.KindIteration: {
+			Kind: workflow.KindIteration, ID: "each", Input: workflow.Output("items"),
+			Body: &leaf, BodyOutput: workflow.Output("leaf"), Concurrency: 2,
+		},
+		workflow.KindSubgraph: {
+			Kind: workflow.KindSubgraph, ID: "sub",
+			Inputs: workflow.OneInput(workflow.Output("seed")),
+			Body:   &leaf, BodyOutput: workflow.Output("leaf"),
+		},
+	}
+
+	for kind, spec := range kinds {
+		t.Run(string(kind), func(t *testing.T) {
+			first, err := json.Marshal(spec)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			var decoded workflow.Spec
+			if err := json.Unmarshal(first, &decoded); err != nil {
+				t.Fatalf("Unmarshal of what Marshal produced: %v\nwire: %s", err, first)
+			}
+			if !reflect.DeepEqual(decoded, spec) {
+				t.Fatalf("round trip changed the value:\n got: %+v\nwant: %+v", decoded, spec)
+			}
+			second, err := json.Marshal(decoded)
+			if err != nil {
+				t.Fatalf("Marshal of the decoded Spec: %v", err)
+			}
+			if string(second) != string(first) {
+				t.Fatalf("re-encoding moved bytes:\nfirst:  %s\nsecond: %s", first, second)
+			}
+		})
+	}
+}
