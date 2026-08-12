@@ -108,10 +108,7 @@ func (p parallelStep) runOne(ctx context.Context, s Store) (Store, error) {
 }
 
 func (p parallelStep) runMany(ctx context.Context, s Store) (Store, error) {
-	branchInput := s
-	if branchInput.depth >= storeOverlayLimit {
-		branchInput = branchInput.compact()
-	}
+	branchInput := s.sharedBase()
 
 	// A suspension comes back as a value so it does not cancel the siblings; a
 	// real failure is still returned as an error, which keeps flow.Map's

@@ -82,6 +82,17 @@ go test ./example -run Example -v
   positional parameters: `Leaf`, `Await`, `Interrupt`, `Route`. Delegate the
   meaning of a shared setting to the `flow` config that defines it rather than
   restating the rule.
+- Let `Store` own every decision about its own representation. A composite must
+  not read `Store.depth` or compare it against `storeOverlayLimit`; it calls the
+  named `Store` method for what it is about to do. `Store.bounded` is the single
+  place the overlay limit is enforced, so every path that extends an overlay
+  ends there rather than restating the threshold. A composite that hands one
+  Store to concurrent derivers — parallel branches, iteration elements, graph
+  nodes — passes it through `Store.sharedBase` first, or each deriver flattens
+  the snapshot separately and the fan-out costs one copy per deriver.
+  `BenchmarkParallelBaseScaling`, `BenchmarkIterationBaseScaling`, and
+  `BenchmarkGraphRunBaseScaling` vary the input overlay length so a new fan-out
+  site that skips this shows up as an allocation cliff at the limit.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

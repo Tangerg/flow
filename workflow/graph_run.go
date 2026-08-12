@@ -59,6 +59,8 @@ func (g *graphExecution) run(ctx context.Context) (Store, error) {
 		return g.input, nil
 	}
 
+	// Every node's input derives from this one, and ready nodes run concurrently.
+	g.input = g.input.sharedBase()
 	g.counts = slices.Clone(g.graph.dependencyCounts)
 	g.states = make([]graphNodeState, len(g.graph.steps))
 	g.changes = make([][]storeChange, len(g.graph.steps))

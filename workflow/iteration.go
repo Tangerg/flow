@@ -122,8 +122,9 @@ func (i iterationStep) Run(ctx context.Context, s Store) (Store, error) {
 	}
 	execution := iterationExecution{
 		iteration: i,
-		input:     s,
-		items:     items,
+		// Every element derives its own scoped Store from this one concurrently.
+		input: s.sharedBase(),
+		items: items,
 	}
 	return execution.execute(ctx)
 }

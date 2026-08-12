@@ -49,18 +49,31 @@ type Store struct {
 	depth    int
 }
 
+// storeOverlayLimit is the longest overlay a Store hands back to a caller. A
+// lookup scans the overlay before consulting the snapshot, so the constant
+// trades that bounded scan against copying the snapshot map: a write is cheap
+// and a flattening is proportional to the whole Store, which is worth paying
+// once per limit writes rather than on every write. Every path that extends an
+// overlay ends at [Store.bounded], so the bound is a Store invariant rather
+// than a rule each path restates.
 const storeOverlayLimit = 64
 
+// storeSnapshot gives a flattened cell map a comparable identity. Two Stores
+// that share one are known to agree on everything outside their overlays, which
+// is what lets change detection compare overlays instead of values.
 type storeSnapshot struct {
 	data storeCells
 }
 
+// storeDelta is one write in the linked overlay that a Store carries over its
+// snapshot, newest first.
 type storeDelta struct {
 	parent *storeDelta
 	key    storeKey
 	cell   cell
 }
 
+// storeKey identifies a cell: the node that owns it and the key under that node.
 type storeKey struct {
 	nodeID string
 	key    string
@@ -108,13 +121,7 @@ func (s Store) WithCell(nodeID, key string, value any) Store {
 		lineage = current.lineage
 	}
 	next := cell{value: value, revision: revision, lineage: lineage}
-	if s.depth < storeOverlayLimit {
-		return s.withDelta(identity, next)
-	}
-
-	data := s.materialize()
-	data[identity] = next
-	return Store{snapshot: &storeSnapshot{data: data}}
+	return s.withDelta(identity, next).bounded()
 }
 
 func (s Store) withDelta(key storeKey, value cell) Store {
@@ -125,9 +132,39 @@ func (s Store) withDelta(key storeKey, value cell) Store {
 	}
 }
 
-// compact flattens a Store that carries an overlay. Callers reach it only for a
-// Store whose depth is above a threshold, which implies a non-nil delta; calling
-// it on a delta-free Store would copy the snapshot to no effect.
+// bounded enforces [storeOverlayLimit]. It is the single exit of every path that
+// extends an overlay, whether by one write or by a batch of merged changes, so no
+// Store leaves this package's internals carrying a longer one.
+func (s Store) bounded() Store {
+	if s.depth <= storeOverlayLimit {
+		return s
+	}
+	return s.compact()
+}
+
+// sharedBase returns the Store to hand to concurrent derivers: parallel
+// branches, iteration elements, or graph nodes. A Store whose overlay already
+// reaches [storeOverlayLimit] would make every deriver's first write flatten it
+// separately, so a fan-out of n pays n snapshot copies instead of one, and each
+// deriver ends up owning an unrelated snapshot — which also drops a later merge
+// onto its whole-Store fallback. Flattening once here leaves every deriver
+// sharing one snapshot with a full overlay budget to extend. A shorter overlay
+// is left alone: copying the snapshot would cost more than the scans it saves.
+//
+// This bounds what the shared input forces on all derivers at once. A deriver
+// that goes on to make enough writes of its own still crosses the limit, which
+// is the ordinary amortized cost of writing.
+func (s Store) sharedBase() Store {
+	if s.depth < storeOverlayLimit {
+		return s
+	}
+	return s.compact()
+}
+
+// compact flattens a Store that carries an overlay. Callers reach it through
+// [Store.bounded] or [Store.sharedBase] for a Store at or past the limit, which
+// implies a non-nil delta; calling it on a delta-free Store would copy the
+// snapshot to no effect.
 func (s Store) compact() Store {
 	return Store{snapshot: &storeSnapshot{data: s.materialize()}}
 }
@@ -161,10 +198,7 @@ func (s Store) withoutNodes(nodeIDs nodeSet) Store {
 			removed:  true,
 		})
 	}
-	if s.depth > storeOverlayLimit*2 {
-		return s.compact()
-	}
-	return s
+	return s.bounded()
 }
 
 // WithOutput returns a copy of the Store with value written to the conventional
@@ -325,10 +359,7 @@ func (s Store) merge(others ...Store) Store {
 	for _, other := range others {
 		merger.add(other)
 	}
-	if merger.result.depth > storeOverlayLimit*2 {
-		return merger.result.compact()
-	}
-	return merger.result
+	return merger.result.bounded()
 }
 
 // withChanges applies identity-preserving changes in order. It is the low-level
@@ -337,10 +368,7 @@ func (s Store) withChanges(changes []storeChange) Store {
 	for _, change := range changes {
 		s = s.withDelta(change.key, change.cell)
 	}
-	if s.depth > storeOverlayLimit*2 {
-		return s.compact()
-	}
-	return s
+	return s.bounded()
 }
 
 // storeMerger owns the lazy fallback state needed while combining branches.

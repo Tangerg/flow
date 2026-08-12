@@ -239,6 +239,41 @@ func BenchmarkParallelBaseScaling(b *testing.B) {
 	}
 }
 
+// BenchmarkIterationBaseScaling varies the input Store's overlay length, named
+// by the subtest, while holding the element count fixed. Every element derives
+// its own Store from the shared input, so an overlay at the limit is the case
+// where each element would flatten the snapshot separately instead of extending
+// a shared one.
+func BenchmarkIterationBaseScaling(b *testing.B) {
+	ctx := b.Context()
+	items := make([]string, 16)
+	for i := range items {
+		items[i] = "item-" + strconv.Itoa(i)
+	}
+	body := workflow.LeafFunc("body", workflow.Item("rows"),
+		func(_ context.Context, value string) (string, error) { return value, nil })
+	step := workflow.Iteration(workflow.IterationConfig{
+		ID:         "rows",
+		Input:      workflow.Output("source"),
+		Body:       body,
+		BodyOutput: workflow.Output("body"),
+	})
+
+	for _, overlay := range []int{1, 32, 64} {
+		b.Run(strconv.Itoa(overlay), func(b *testing.B) {
+			// The source binding is the overlay's last write, so the padding
+			// supplies the rest of the requested length.
+			input := benchmarkStore(overlay-1).WithOutput("source", items)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				_, _ = step.Run(ctx, input)
+			}
+		})
+	}
+}
+
 func BenchmarkCompileGraphScaling(b *testing.B) {
 	registry := workflow.NewRegistry().MustRegisterNode(
 		"noop",
@@ -297,6 +332,47 @@ func BenchmarkGraphRunScaling(b *testing.B) {
 				}
 			})
 		}
+	}
+}
+
+// BenchmarkGraphRunBaseScaling varies the input Store's overlay length, named by
+// the subtest, over a graph whose nodes are all independent and therefore all
+// ready at once. It is the graph counterpart of BenchmarkParallelBaseScaling:
+// every node derives its input from the shared run input.
+func BenchmarkGraphRunBaseScaling(b *testing.B) {
+	registry := workflow.NewRegistry().MustRegisterNode(
+		"noop",
+		func(spec workflow.NodeSpec) (workflow.Step, error) {
+			return workflow.Leaf(
+				spec.ID,
+				workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
+					return struct{}{}, nil
+				}),
+				flow.NodeFunc[struct{}, struct{}](
+					func(context.Context, struct{}) (struct{}, error) {
+						return struct{}{}, nil
+					},
+				),
+			), nil
+		},
+	)
+	step, err := registry.CompileGraph(benchmarkGraph("wide", 16))
+	if err != nil {
+		b.Fatalf("CompileGraph: %v", err)
+	}
+
+	for _, overlay := range []int{1, 32, 64} {
+		b.Run(strconv.Itoa(overlay), func(b *testing.B) {
+			input := benchmarkStore(overlay)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if _, err := step.Run(b.Context(), input); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 
