@@ -3,6 +3,7 @@ package workflow_test
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Tangerg/flow/workflow"
@@ -103,5 +104,74 @@ func TestWireTypesRoundTripEveryPopulatedField(t *testing.T) {
 				t.Fatalf("round trip changed the value:\n got: %+v\nwant: %+v\nwire: %s", got, original, encoded)
 			}
 		})
+	}
+}
+
+// A member contract reports what the document lacks. Every decoder here that
+// requires a member names it the same way, so one defect in one member does not
+// read differently depending on which type decoded it: JournalKey used to leave
+// an absent id to its identity check, which called it an empty one instead.
+func TestDecodersNameAMissingRequiredMember(t *testing.T) {
+	tests := []struct {
+		name     string
+		document string
+		into     json.Unmarshaler
+		want     string
+	}{
+		{
+			name:     "ref node ID",
+			document: `{"path":"/output"}`,
+			into:     new(workflow.Ref),
+			want:     `ref field "nodeID" is missing`,
+		},
+		{
+			name:     "ref path",
+			document: `{"nodeID":"producer"}`,
+			into:     new(workflow.Ref),
+			want:     `ref field "path" is missing`,
+		},
+		{
+			name:     "scope frame id",
+			document: `{"index":1}`,
+			into:     new(workflow.ScopeFrame),
+			want:     `scope frame field "id" is missing`,
+		},
+		{
+			name:     "journal key id",
+			document: `{"scope":[{"id":"loop"}]}`,
+			into:     new(workflow.JournalKey),
+			want:     `journal key field "id" is missing`,
+		},
+		{
+			name:     "journal record id",
+			document: `{"version":4,"records":[{"value":1}]}`,
+			into:     workflow.NewJournal(),
+			want:     `record field "id" is missing`,
+		},
+		{
+			name:     "journal record value",
+			document: `{"version":4,"records":[{"id":"step"}]}`,
+			into:     workflow.NewJournal(),
+			want:     `record field "value" is missing`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.into.UnmarshalJSON([]byte(test.document))
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("UnmarshalJSON = %v; want a message containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+// An empty required member is a different defect from an absent one and must not
+// be reported as the same thing.
+func TestDecodersDistinguishAnEmptyMemberFromAnAbsentOne(t *testing.T) {
+	key := new(workflow.JournalKey)
+	err := key.UnmarshalJSON([]byte(`{"id":""}`))
+	if err == nil || strings.Contains(err.Error(), "missing") {
+		t.Fatalf("UnmarshalJSON of an empty id = %v; want an invalid-identity error", err)
 	}
 }

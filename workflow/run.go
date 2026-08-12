@@ -134,6 +134,11 @@ func runFrom(ctx context.Context) *runState {
 // only an observer would use. The nil function adapter is disabled just like a
 // nil interface; otherwise it would consume sequence numbers without delivering
 // an event.
+//
+// Check it before building an event whose fields cost something — an elapsed
+// time reads the clock — and not otherwise: [runState.emit] checks it again, so
+// guarding an event that is free to build only adds a branch. That is why the
+// events carrying Elapsed are guarded and the others are not.
 func (r *runState) observing() bool {
 	if r == nil || r.config.Observer == nil {
 		return false

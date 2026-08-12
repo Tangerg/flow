@@ -37,7 +37,15 @@ func (j *JournalKey) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return fmt.Errorf("workflow: unmarshal journal key: %w", err)
 	}
-	if err := (jsonObject(raw)).allow(keyFieldID, keyFieldScope); err != nil {
+	object := jsonObject(raw)
+	if err := object.allow(keyFieldID, keyFieldScope); err != nil {
+		return fmt.Errorf("workflow: unmarshal journal key: %w", err)
+	}
+	// validate below would also reject an absent id, but as an empty one. Naming
+	// the missing member says what the document lacks, and matches what every
+	// other member contract in this package reports, including the same id read
+	// as part of a Journal record.
+	if err := object.require("journal key", keyFieldID); err != nil {
 		return fmt.Errorf("workflow: unmarshal journal key: %w", err)
 	}
 
