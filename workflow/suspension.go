@@ -158,7 +158,7 @@ func (s suspensionTree) collect() (suspensionList, bool) {
 		}
 		// Exact identity preserves a direct wrapper's message below.
 		//
-		//nolint:errorlint,err113 // errors.Is would match wrappers this must not consume.
+		//nolint:errorlint // errors.Is would match wrappers this must not consume.
 		if err == ErrSuspended {
 			return suspensionList{{}}, true
 		}
@@ -178,7 +178,7 @@ func (s suspensionTree) collect() (suspensionList, bool) {
 			// Exact identity distinguishes a wrapper directly around ErrSuspended
 			// from a wrapper whose deeper tree merely contains one.
 			//
-			//nolint:errorlint,err113 // errors.Is cannot tell those shapes apart.
+			//nolint:errorlint // errors.Is cannot tell those shapes apart.
 			if child == ErrSuspended {
 				return suspensionList{{Value: err.Error()}}, true
 			}

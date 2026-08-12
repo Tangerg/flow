@@ -719,7 +719,7 @@ func TestStoreInternals_reportStableFallbacks(t *testing.T) {
 		}
 	}
 
-	var changes []storeChange
+	changes := make([]storeChange, 0, storeOverlayLimit*2+1)
 	base := NewStore()
 	for index := range storeOverlayLimit*2 + 1 {
 		next := base.WithOutput(fmt.Sprintf("node-%d", index), index)

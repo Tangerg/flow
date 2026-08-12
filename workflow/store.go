@@ -180,7 +180,9 @@ func (s Store) withoutNodes(nodeIDs nodeSet) Store {
 		return s
 	}
 	data := s.materialize()
-	owned := make([]storeKey, 0)
+	// A node conventionally owns its Output cell, so the node count is the natural
+	// estimate — closer than the whole Store, which a graph rarely owns entirely.
+	owned := make([]storeKey, 0, len(nodeIDs))
 	for key, current := range data {
 		if _, claimed := nodeIDs[key.nodeID]; claimed && !current.removed {
 			owned = append(owned, key)

@@ -940,7 +940,7 @@ func TestCompileGraph_descriptionPreservesDeclarationOrder(t *testing.T) {
 	if description.Kind != workflow.KindGraph || len(description.Children) != 4 {
 		t.Fatalf("description = %+v; want graph with four nodes", description)
 	}
-	var ids []string
+	ids := make([]string, 0, len(description.Children))
 	for _, child := range description.Children {
 		ids = append(ids, child.ID)
 	}

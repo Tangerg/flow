@@ -131,7 +131,13 @@ func (c *combineExecution[I, A, B, O]) Run(ctx context.Context, task combineTask
 
 // Chain composes any number of same-type nodes in sequence via flow.Then. It is
 // the variadic convenience for the common same-type case; with no nodes it is a
-// cancellation-aware pass-through. With one node it returns that node itself.
+// cancellation-aware pass-through. With one non-nil node it returns that node
+// itself, so wrapping costs nothing.
+//
+// Chain never returns a nil Node. A nil element yields one that reports
+// [flow.ErrNilNode] from Run and from [flow.Validate] instead of an interface nil
+// that would panic when called. With two or more nodes flow.Then already gives
+// that guarantee, and the single-node case matches it.
 func Chain[T any](nodes ...flow.Node[T, T]) flow.Node[T, T] {
 	switch len(nodes) {
 	case 0:
