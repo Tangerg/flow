@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 
 	"github.com/Tangerg/flow/internal/jsonnum"
 )
@@ -37,9 +38,9 @@ type journalDocument struct {
 }
 
 type journalJSONRecord struct {
-	Scope []ScopeFrame    `json:"scope,omitempty"`
-	ID    string          `json:"id"`
-	Value json.RawMessage `json:"value"`
+	Scope []scopeFrameJSON `json:"scope,omitempty"`
+	ID    string           `json:"id"`
+	Value json.RawMessage  `json:"value"`
 }
 
 type journalEntry struct {
@@ -96,16 +97,22 @@ func (j *Journal) MarshalJSON() ([]byte, error) {
 			)
 		}
 		records = append(records, journalJSONRecord{
-			Scope: entry.key.Scope,
+			Scope: scopeWire(entry.key.Scope),
 			ID:    entry.key.ID,
 			Value: encoded,
 		})
 	}
 	for index, record := range records {
-		if _, err := (journalDocument{
-			Version: journalJSONVersion,
-			Records: []journalJSONRecord{record},
-		}).marshal(); err != nil {
+		// Only the value can fail here: the version is a constant, and the scope
+		// and ID were validated by insert before the record existed. Validating it
+		// at the position it will occupy replaces encoding and re-parsing a whole
+		// single-record document per record, and reports the same depth and path.
+		if err := translateJSONError(strictJSON.ValidateFragment(
+			record.Value,
+			journalFieldRecords,
+			strconv.Itoa(index),
+			journalFieldValue,
+		)); err != nil {
 			entry := entries[index]
 			return nil, fmt.Errorf(
 				"workflow: marshal journal record %q in scope %q: %w",
@@ -115,19 +122,14 @@ func (j *Journal) MarshalJSON() ([]byte, error) {
 			)
 		}
 	}
-	// Every record has crossed the complete wire boundary independently. Adding
-	// siblings to the records array cannot increase nesting or introduce a
-	// duplicate object member, so the assembled document is readable too.
+	// Every value has crossed the wire boundary at its in-document depth, and the
+	// members around it are a constant version plus a scope and ID already known
+	// to be valid, so the assembled document is readable too. Adding siblings to
+	// the records array cannot increase nesting or introduce a duplicate member.
 	return (journalDocument{
 		Version: journalJSONVersion,
 		Records: records,
 	}).encode(), nil
-}
-
-// marshal enforces the same recursive boundary as Journal.UnmarshalJSON, so a
-// successful encoding is always structurally readable by this package.
-func (j journalDocument) marshal() ([]byte, error) {
-	return marshalJSON(j)
 }
 
 // encode assembles a document from JSON fragments produced by json.Marshal.

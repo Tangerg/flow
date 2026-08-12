@@ -38,11 +38,33 @@ func (s ScopeFrame) MarshalJSON() ([]byte, error) {
 	if err := s.Validate(); err != nil {
 		return nil, fmt.Errorf("workflow: marshal scope frame: %w", err)
 	}
-	wire := scopeFrameJSON{ID: s.ID}
+	return marshalJSON(s.wire())
+}
+
+// wire returns the frame's canonical wire shape, stating the Indexed-to-index
+// mapping once for both the standalone encoding above and an enclosing document
+// that embeds frames directly.
+func (s ScopeFrame) wire() scopeFrameJSON {
+	frame := scopeFrameJSON{ID: s.ID}
 	if s.Indexed {
-		wire.Index = &s.Index
+		frame.Index = &s.Index
 	}
-	return marshalJSON(wire)
+	return frame
+}
+
+// scopeWire converts a scope whose frames are already known to be valid. A
+// document that embeds the result encodes each frame once, where embedding
+// [ScopeFrame] values instead would re-validate and re-parse every frame through
+// their MarshalJSON. A nil result omits an empty scope member.
+func scopeWire(scope []ScopeFrame) []scopeFrameJSON {
+	if len(scope) == 0 {
+		return nil
+	}
+	frames := make([]scopeFrameJSON, len(scope))
+	for index, frame := range scope {
+		frames[index] = frame.wire()
+	}
+	return frames
 }
 
 // UnmarshalJSON atomically replaces a ScopeFrame from its strict canonical

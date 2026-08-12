@@ -102,6 +102,20 @@ func (Codec) DecodeParsed(data []byte, dst any) error {
 // document contract. Object members are retained exactly once, so schema and
 // typed decoding cannot observe a different document from the caller.
 func (c Codec) Value(data []byte) (any, error) {
+	return c.valueAt(data, nil)
+}
+
+// ValidateFragment checks data as if it appeared at the JSON Pointer path named
+// by at, whose segments are the containers already entered to reach it. Nesting
+// is therefore counted from that position and reported against the same MaxDepth
+// as a whole document, so validating a fragment on its own yields the depth and
+// path a caller would see had the assembled document been validated instead.
+func (c Codec) ValidateFragment(data []byte, at ...string) error {
+	_, err := c.valueAt(data, at)
+	return err
+}
+
+func (c Codec) valueAt(data []byte, at []string) (any, error) {
 	if err := validateUTF8(data); err != nil {
 		return nil, err
 	}
@@ -110,7 +124,14 @@ func (c Codec) Value(data []byte) (any, error) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
-	reader := reader{decoder: decoder, maxDepth: c.MaxDepth}
+	reader := reader{
+		decoder: decoder,
+		// Capping the capacity keeps the walk's appends from writing into the
+		// caller's array beyond the prefix it passed.
+		path:     at[:len(at):len(at)],
+		depth:    len(at),
+		maxDepth: c.MaxDepth,
+	}
 	value, err := reader.read()
 	if err != nil {
 		return nil, err

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -172,5 +173,54 @@ func TestTranslateDepth(t *testing.T) {
 	}
 	if TranslateDepth(nil, sentinel) != nil {
 		t.Fatal("nil error did not pass through")
+	}
+}
+
+// ValidateFragment exists so a caller that already assembled a document from
+// fragments can check one fragment and still report the depth and path the whole
+// document would have produced. Both are checked here, because reporting a
+// reduced limit or a path relative to the fragment would leak the caller's
+// envelope arithmetic into a public message.
+func TestValidateFragmentReportsWholeDocumentDepthAndPath(t *testing.T) {
+	codec := Codec{MaxDepth: 6}
+	nested := func(depth int) []byte {
+		document := "1"
+		for range depth {
+			document = "[" + document + "]"
+		}
+		return []byte(document)
+	}
+
+	// Three containers already entered leave three of the six for the fragment.
+	at := []string{"records", "1", "value"}
+	if err := codec.ValidateFragment(nested(3), at...); err != nil {
+		t.Fatalf("fragment at the remaining budget: %v", err)
+	}
+
+	err := codec.ValidateFragment(nested(4), at...)
+	var depthErr *DepthError
+	if !errors.As(err, &depthErr) {
+		t.Fatalf("fragment past the budget = %v; want a DepthError", err)
+	}
+	if depthErr.Limit != codec.MaxDepth {
+		t.Fatalf("Limit = %d; want the document limit %d", depthErr.Limit, codec.MaxDepth)
+	}
+	if want := "/records/1/value/0/0/0"; depthErr.Path != want {
+		t.Fatalf("Path = %q; want %q", depthErr.Path, want)
+	}
+
+	// The prefix is not written past its own length, so a caller may reuse it.
+	reusable := make([]string, 3, 8)
+	copy(reusable, at)
+	if err := codec.ValidateFragment(nested(3), reusable...); err != nil {
+		t.Fatalf("fragment with a spare-capacity prefix: %v", err)
+	}
+	if !slices.Equal(reusable, at) {
+		t.Fatalf("prefix was modified to %v; want %v", reusable, at)
+	}
+
+	// An empty prefix is the whole-document case Value takes.
+	if err := codec.ValidateFragment(nested(6)); err != nil {
+		t.Fatalf("whole document at the limit: %v", err)
 	}
 }
