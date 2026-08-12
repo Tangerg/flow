@@ -9,6 +9,26 @@ import (
 	"github.com/Tangerg/flow/workflow"
 )
 
+// evaluate runs eval between two cancellation checks, so parent cancellation
+// observed before or during evaluation takes precedence over whatever the
+// expression itself produced. Every adapter in this file shares that rule, so
+// it is stated here rather than reassembled per adapter.
+func evaluate[T any](
+	ctx context.Context,
+	store workflow.Store,
+	eval func(workflow.Store) (T, error),
+) (T, error) {
+	var zero T
+	if err := context.Cause(ctx); err != nil {
+		return zero, err
+	}
+	value, err := eval(store)
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return zero, contextErr
+	}
+	return value, err
+}
+
 // Condition compiles src into a [workflow.Loop] stop condition: the loop ends on
 // the first iteration whose resulting Store makes src true.
 //
@@ -22,22 +42,16 @@ func Condition(src string) (workflow.Condition, error) {
 	if err != nil {
 		return nil, err
 	}
-	return e.LoopCondition(), nil
+	return e.Condition(), nil
 }
 
-// LoopCondition adapts the Expr into a [workflow.Condition]. Parent
-// cancellation observed before or during evaluation takes precedence.
-func (e *Expr) LoopCondition() workflow.Condition {
+// Condition adapts the Expr into a [workflow.Condition], the node shape a
+// [workflow.Loop] checks after each iteration. Parent cancellation observed
+// before or during evaluation takes precedence.
+func (e *Expr) Condition() workflow.Condition {
 	return flow.NodeFunc[workflow.Store, bool](
 		func(ctx context.Context, s workflow.Store) (bool, error) {
-			if err := context.Cause(ctx); err != nil {
-				return false, err
-			}
-			value, err := e.Bool(s)
-			if contextErr := context.Cause(ctx); contextErr != nil {
-				return false, contextErr
-			}
-			return value, err
+			return evaluate(ctx, s, e.Bool)
 		},
 	)
 }
@@ -51,22 +65,16 @@ func Resolver(src string) (workflow.Resolver, error) {
 	if err != nil {
 		return nil, err
 	}
-	return e.BranchResolver(), nil
+	return e.Resolver(), nil
 }
 
-// BranchResolver adapts the Expr into an ordinary Store-to-string Node under
-// the semantic [workflow.Resolver] name. Parent cancellation observed before
-// or during evaluation takes precedence.
-func (e *Expr) BranchResolver() workflow.Resolver {
+// Resolver adapts the Expr into a [workflow.Resolver], the node shape that
+// selects a name for [workflow.Branch] and publishes an outlet for
+// [workflow.Route]. Parent cancellation observed before or during evaluation
+// takes precedence.
+func (e *Expr) Resolver() workflow.Resolver {
 	return flow.NodeFunc[workflow.Store, string](func(ctx context.Context, s workflow.Store) (string, error) {
-		if err := context.Cause(ctx); err != nil {
-			return "", err
-		}
-		value, err := e.String(s)
-		if contextErr := context.Cause(ctx); contextErr != nil {
-			return "", contextErr
-		}
-		return value, err
+		return evaluate(ctx, s, e.String)
 	})
 }
 
@@ -167,13 +175,7 @@ func (switchCompiler) compileCase(index int, spec Case) (compiledCase, error) {
 
 func (s switchResolver) Run(ctx context.Context, store workflow.Store) (string, error) {
 	for _, entry := range s.cases {
-		if err := context.Cause(ctx); err != nil {
-			return "", err
-		}
-		hold, err := entry.when.Bool(store)
-		if contextErr := context.Cause(ctx); contextErr != nil {
-			return "", contextErr
-		}
+		hold, err := evaluate(ctx, store, entry.when.Bool)
 		if err != nil {
 			return "", err
 		}
