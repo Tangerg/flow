@@ -209,15 +209,7 @@ type leafExecution[I, O any] struct {
 }
 
 func (l *leafExecution[I, O]) execute(ctx context.Context) (Store, error) {
-	if err := l.validate(ctx); err != nil {
-		l.run.emit(ctx, Event{
-			Kind: EventFailed,
-			ID:   l.leaf.id,
-			Err:  err,
-		})
-		return l.store, err
-	}
-	if err := context.Cause(ctx); err != nil {
+	if _, err := admitBoundary(ctx, l.leaf.id, l.leaf.Validate()); err != nil {
 		return l.store, err
 	}
 	replayed, ok, err := l.replay(ctx)
@@ -268,19 +260,6 @@ func (l *leafExecution[I, O]) runNode(ctx context.Context, input I) (O, error) {
 		return zero, emissionErr
 	}
 	return output, err
-}
-
-// validate checks the complete visible leaf definition before replay, so a
-// completed Journal record cannot hide an invalid ID, binder, or composed Node.
-// Caller-defined Nodes without a Validate method remain opaque by contract.
-func (l *leafExecution[I, O]) validate(ctx context.Context) error {
-	if err := l.leaf.Validate(); err != nil {
-		return err
-	}
-	if err := l.run.claim(scope(ctx), l.leaf.id); err != nil {
-		return newStepError(ctx, l.leaf.id, OpValidate, err)
-	}
-	return nil
 }
 
 func (l *leafExecution[I, O]) replay(ctx context.Context) (Store, bool, error) {

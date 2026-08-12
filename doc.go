@@ -22,6 +22,14 @@
 // values stored in those collections are retained as-is; they must obey the
 // concurrency contract of the composite that invokes them.
 //
+// Cancellation outranks results. Every composite here checks the context before
+// invoking a child and again before committing what the child returned, so a
+// cause observed at either point is what Run reports — never a result produced
+// alongside it. Cancellation is otherwise cooperative: a Node that ignores its
+// context delays the composite that started it, and a composite that started
+// concurrent work does not return before that work does. Each operation
+// documents what it discards or rolls back when this applies.
+//
 // Errors preserve their causes. Concurrent collection operations report item
 // positions with [IndexError], allowing callers to use errors.Is and errors.As
 // instead of matching strings. Built-in composites validate their complete

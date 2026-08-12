@@ -122,3 +122,26 @@ func (s stepList) describe() []Description {
 	}
 	return descriptions
 }
+
+// admitBoundary performs the admission every named boundary shares: reject an
+// invalid definition, claim the execution identity, and report either failure as
+// a terminal event, because a boundary that is not admitted never reported a
+// start. Validating before replay is deliberate — a completed [Journal] record
+// must not be able to hide an invalid ID, binder, or composed Node.
+//
+// It returns the run for the work that follows, and any cancellation observed
+// once admitted, so no boundary begins work under a cancelled context. A nil run
+// discards the events, which is how a boundary called outside [Run] behaves.
+func admitBoundary(ctx context.Context, id string, invalid error) (*runState, error) {
+	run := runFrom(ctx)
+	if invalid != nil {
+		run.emit(ctx, Event{Kind: EventFailed, ID: id, Err: invalid})
+		return run, invalid
+	}
+	if err := run.claim(scope(ctx), id); err != nil {
+		err = newStepError(ctx, id, OpValidate, err)
+		run.emit(ctx, Event{Kind: EventFailed, ID: id, Err: err})
+		return run, err
+	}
+	return run, context.Cause(ctx)
+}

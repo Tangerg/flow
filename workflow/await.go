@@ -32,17 +32,8 @@ type awaitStep struct {
 }
 
 func (a awaitStep) Run(ctx context.Context, store Store) (Store, error) {
-	run := runFrom(ctx)
-	if err := a.Validate(); err != nil {
-		run.emit(ctx, Event{Kind: EventFailed, ID: a.id, Err: err})
-		return store, err
-	}
-	if err := run.claim(scope(ctx), a.id); err != nil {
-		err := newStepError(ctx, a.id, OpValidate, err)
-		run.emit(ctx, Event{Kind: EventFailed, ID: a.id, Err: err})
-		return store, err
-	}
-	if err := context.Cause(ctx); err != nil {
+	run, err := admitBoundary(ctx, a.id, a.Validate())
+	if err != nil {
 		return store, err
 	}
 	_, resolveErr := Get[any](store, a.ref)

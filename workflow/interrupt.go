@@ -31,17 +31,8 @@ type interruptStep struct {
 }
 
 func (i interruptStep) Run(ctx context.Context, store Store) (Store, error) {
-	run := runFrom(ctx)
-	if err := i.Validate(); err != nil {
-		run.emit(ctx, Event{Kind: EventFailed, ID: i.id, Err: err})
-		return store, err
-	}
-	if err := run.claim(scope(ctx), i.id); err != nil {
-		err := newStepError(ctx, i.id, OpValidate, err)
-		run.emit(ctx, Event{Kind: EventFailed, ID: i.id, Err: err})
-		return store, err
-	}
-	if err := context.Cause(ctx); err != nil {
+	run, err := admitBoundary(ctx, i.id, i.Validate())
+	if err != nil {
 		return store, err
 	}
 	response, replayed, err := run.replay(ctx, scope(ctx), i.id)
