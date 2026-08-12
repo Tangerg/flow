@@ -221,7 +221,7 @@ func TestSpecRoundTripsEveryKind(t *testing.T) {
 				t.Fatalf("Marshal: %v", err)
 			}
 			var decoded workflow.Spec
-			if err := json.Unmarshal(first, &decoded); err != nil {
+			if err = json.Unmarshal(first, &decoded); err != nil {
 				t.Fatalf("Unmarshal of what Marshal produced: %v\nwire: %s", err, first)
 			}
 			if !reflect.DeepEqual(decoded, spec) {
