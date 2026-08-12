@@ -63,6 +63,34 @@ func BenchmarkStoreLookupScaling(b *testing.B) {
 	}
 }
 
+// BenchmarkStoreChangesScaling covers both change-detection paths of the public
+// Store.Changes. A base the receiver descends from takes the overlay fast path
+// and reports a handful of writes; an unrelated base — a separately decoded
+// snapshot, say — falls back to comparing revisions and reports every cell.
+func BenchmarkStoreChangesScaling(b *testing.B) {
+	for _, cells := range []int{64, 1024} {
+		related := benchmarkStore(cells)
+		descendant := related
+		for index := range 4 {
+			descendant = descendant.WithOutput("later-"+strconv.Itoa(index), index)
+		}
+		unrelated := benchmarkStore(cells)
+
+		b.Run(strconv.Itoa(cells)+"/descendant", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				_ = descendant.Changes(related)
+			}
+		})
+		b.Run(strconv.Itoa(cells)+"/unrelated", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				_ = unrelated.Changes(related)
+			}
+		})
+	}
+}
+
 func BenchmarkStoreJSONScaling(b *testing.B) {
 	for _, size := range []int{16, 128, 1024} {
 		store := benchmarkStore(size)

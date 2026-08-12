@@ -304,10 +304,13 @@ func (s Store) changesSince(base Store) []storeChange {
 // tie-breaker. A Store restored from an external snapshot has no original write
 // order to recover; [Store.UnmarshalJSON] assigns its revisions by sorted cell,
 // which makes the resulting order deterministic rather than chronological.
+// Reading the receiver needs no copy, and the result carries no useful capacity
+// hint: a related Store contributes a handful of changes while an unrelated one
+// contributes every cell, so sizing for the latter would over-allocate the case
+// that actually happens.
 func (s Store) changedCells(base storeCells) []storeChange {
-	candidate := s.materialize()
-	changed := make([]storeChange, 0, len(candidate))
-	for identity, next := range candidate {
+	var changed []storeChange
+	for identity, next := range s.cells() {
 		if current, ok := base[identity]; ok && next.revision == current.revision {
 			continue
 		}
