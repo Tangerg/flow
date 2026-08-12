@@ -45,6 +45,9 @@ func (p *pointerEncoder) write(segment string) {
 
 type encodedPointer string
 
+// scan starts a walk over an RFC 6901 pointer, reporting whether e is one. A
+// successful scanner always yields at least one segment: "/" is the pointer to
+// the member named "", so the first [pointerScanner.next] never reports absence.
 func (e encodedPointer) scan() (pointerScanner, bool) {
 	if e == "" || e[0] != '/' {
 		return pointerScanner{}, false

@@ -230,8 +230,10 @@ func (s Store) resolve(ref Ref) (value any, found bool, err error) {
 	if !ok {
 		return nil, false, nil
 	}
-	key, present, valid := pointer.next()
-	if !present || !valid {
+	// A scanned pointer always has a first segment, so only its escaping can be
+	// wrong here.
+	key, _, valid := pointer.next()
+	if !valid {
 		return nil, false, nil
 	}
 	c, ok := s.lookupCell(ref.NodeID, key)
