@@ -42,6 +42,12 @@ type specCompiler struct {
 }
 
 func (s specCompiler) compile(spec Spec) (Step, error) {
+	// Its caller has validated this already; compilation asks again because it
+	// dereferences Body, and asking the same rule keeps the defense from becoming
+	// a second copy of it.
+	if err := spec.requireKindFields(); err != nil {
+		return nil, err
+	}
 	switch spec.Kind {
 	case KindLeaf:
 		return s.compileLeaf(spec)
@@ -66,10 +72,7 @@ func (s specCompiler) compile(spec Spec) (Step, error) {
 	case KindSubgraph:
 		return s.compileSubgraph(spec)
 	default:
-		return nil, spec.fieldError(
-			fieldKind,
-			fmt.Errorf("unknown kind %q", spec.Kind),
-		)
+		return nil, spec.unknownKindError()
 	}
 }
 
@@ -204,12 +207,9 @@ func (n nodeBoundary) validate(step Step) (definedStep, error) {
 }
 
 func (s specCompiler) compileBranch(spec Spec) (Step, error) {
-	resolver, ok := s.registry.lookupResolver(spec.Resolver)
-	if !ok {
-		return nil, spec.fieldError(
-			fieldResolver,
-			fmt.Errorf("unknown resolver %q", spec.Resolver),
-		)
+	resolver, err := s.registry.requireResolver(spec)
+	if err != nil {
+		return nil, err
 	}
 	cases := make(map[string]Step, len(spec.Cases))
 	for _, name := range slices.Sorted(maps.Keys(spec.Cases)) {
@@ -223,18 +223,9 @@ func (s specCompiler) compileBranch(spec Spec) (Step, error) {
 }
 
 func (s specCompiler) compileLoop(spec Spec) (Step, error) {
-	if spec.Body == nil {
-		return nil, spec.fieldError(
-			fieldBody,
-			errors.New("loop body is required"),
-		)
-	}
-	condition, ok := s.registry.lookupCondition(spec.Condition)
-	if !ok {
-		return nil, spec.fieldError(
-			fieldCondition,
-			fmt.Errorf("unknown condition %q", spec.Condition),
-		)
+	condition, err := s.registry.requireCondition(spec)
+	if err != nil {
+		return nil, err
 	}
 	body, err := s.compile(*spec.Body)
 	if err != nil {
@@ -249,23 +240,6 @@ func (s specCompiler) compileLoop(spec Spec) (Step, error) {
 }
 
 func (s specCompiler) compileIteration(spec Spec) (Step, error) {
-	switch {
-	case spec.Input == (Ref{}):
-		return nil, spec.fieldError(
-			fieldInput,
-			errors.New("iteration input is required"),
-		)
-	case spec.Body == nil:
-		return nil, spec.fieldError(
-			fieldBody,
-			errors.New("iteration body is required"),
-		)
-	case spec.BodyOutput == (Ref{}):
-		return nil, spec.fieldError(
-			fieldBodyOutput,
-			errors.New("iteration body output is required"),
-		)
-	}
 	body, err := s.compile(*spec.Body)
 	if err != nil {
 		return nil, locateSpecError(err, fieldBody)
@@ -284,18 +258,6 @@ func (s specCompiler) compileIteration(spec Spec) (Step, error) {
 }
 
 func (s specCompiler) compileSubgraph(spec Spec) (Step, error) {
-	if spec.Body == nil {
-		return nil, spec.fieldError(
-			fieldBody,
-			errors.New("subgraph body is required"),
-		)
-	}
-	if spec.BodyOutput == (Ref{}) {
-		return nil, spec.fieldError(
-			fieldBodyOutput,
-			errors.New("subgraph body output is required"),
-		)
-	}
 	body, err := s.compile(*spec.Body)
 	if err != nil {
 		return nil, locateSpecError(err, fieldBody)

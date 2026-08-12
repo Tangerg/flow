@@ -122,7 +122,7 @@ func (s *subgraphExecution) project(ctx context.Context, inner Store) (Store, er
 			ctx,
 			s.subgraph.id,
 			OpRun,
-			fmt.Errorf("read body output %s: %w", s.subgraph.bodyOutput, err),
+			bodyOutputError(s.subgraph.bodyOutput, err),
 		)
 	}
 	return s.outer.WithOutput(s.subgraph.id, output), nil

@@ -25,26 +25,38 @@ func (r *Ref) UnmarshalJSON(data []byte) error {
 	if r == nil {
 		return errors.New("workflow: unmarshal ref: nil ref")
 	}
-	raw, err := jsonDocument(data).object()
+	next, err := decodeRef(data)
 	if err != nil {
 		return fmt.Errorf("workflow: unmarshal ref: %w", err)
 	}
+	*r = next
+	return nil
+}
+
+// decodeRef reads the strict canonical object. Each return names only its own
+// condition: UnmarshalJSON owns the context, so stating the prefix once there
+// keeps it from being repeated at every failure, and returning a value makes the
+// atomic replacement above the only way the receiver changes.
+func decodeRef(data []byte) (Ref, error) {
+	raw, err := jsonDocument(data).object()
+	if err != nil {
+		return Ref{}, err
+	}
 
 	object := jsonObject(raw)
-	if err := object.allow(refFieldNodeID, refFieldPath); err != nil {
-		return fmt.Errorf("workflow: unmarshal ref: %w", err)
+	if err = object.allow(refFieldNodeID, refFieldPath); err != nil {
+		return Ref{}, err
 	}
-	if err := object.require("ref", refFieldNodeID, refFieldPath); err != nil {
-		return fmt.Errorf("workflow: unmarshal ref: %w", err)
+	if err = object.require("ref", refFieldNodeID, refFieldPath); err != nil {
+		return Ref{}, err
 	}
-	nodeID, ok := object[refFieldNodeID].(string)
-	if !ok {
-		return errors.New("workflow: unmarshal ref: nodeID must be a string")
+	nodeID, err := object.stringMember(refFieldNodeID)
+	if err != nil {
+		return Ref{}, err
 	}
-	path, ok := object[refFieldPath].(string)
-	if !ok {
-		return errors.New("workflow: unmarshal ref: path must be a string")
+	path, err := object.stringMember(refFieldPath)
+	if err != nil {
+		return Ref{}, err
 	}
-	*r = Ref{NodeID: nodeID, Path: path}
-	return nil
+	return Ref{NodeID: nodeID, Path: path}, nil
 }

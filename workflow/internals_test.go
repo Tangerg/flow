@@ -640,72 +640,118 @@ func TestSpecCompiler_defendsItsValidatedInputContract(t *testing.T) {
 	compiler := specCompiler{leafCompiler: leafCompiler{registry: registry.snapshot()}}
 	broken := Spec{Kind: KindLeaf, ID: "broken", Type: "broken"}
 
-	tests := map[string]Spec{
+	tests := map[string]struct {
+		spec Spec
+		want string
+	}{
 		"sequence child": {
-			Kind: KindSequence, Steps: []Spec{broken},
+			spec: Spec{Kind: KindSequence, Steps: []Spec{broken}},
+			want: `at "/steps/0" leaf "broken" field config: build`,
 		},
 		"parallel child": {
-			Kind: KindParallel, Steps: []Spec{broken},
+			spec: Spec{Kind: KindParallel, Steps: []Spec{broken}},
+			want: `at "/steps/0" leaf "broken" field config: build`,
 		},
 		"unknown kind": {
-			Kind: "unknown",
+			spec: Spec{Kind: "unknown"},
+			want: `field kind: unknown kind "unknown"`,
 		},
 		"unknown leaf": {
-			Kind: KindLeaf, ID: "leaf", Type: "missing",
+			spec: Spec{Kind: KindLeaf, ID: "leaf", Type: "missing"},
+			want: `leaf "leaf" field type: unknown node type "missing"`,
 		},
 		"leaf input field": {
-			Kind: KindLeaf, ID: "leaf", Type: "broken",
-			Input: Output("a"),
+			spec: Spec{
+				Kind: KindLeaf, ID: "leaf", Type: "broken",
+				Input: Output("a"),
+			},
+			want: `leaf "leaf" field config: build`,
 		},
 		"unknown resolver": {
-			Kind: KindBranch, ID: "branch", Resolver: "missing",
+			spec: Spec{
+				Kind: KindBranch, ID: "branch", Resolver: "missing",
+				Cases: map[string]Spec{"case": {Kind: KindSequence}},
+			},
+			want: `branch "branch" field resolver: unknown resolver "missing"`,
 		},
 		"branch child": {
-			Kind: KindBranch, ID: "branch", Resolver: "resolver",
-			Cases: map[string]Spec{"case": broken},
+			spec: Spec{
+				Kind: KindBranch, ID: "branch", Resolver: "resolver",
+				Cases: map[string]Spec{"case": broken},
+			},
+			want: `at "/cases/case" leaf "broken" field config: build`,
 		},
 		"missing loop body": {
-			Kind: KindLoop, ID: "loop", Condition: "condition",
+			spec: Spec{Kind: KindLoop, ID: "loop", Condition: "condition"},
+			want: `loop "loop" field body: loop body is required`,
 		},
 		"unknown condition": {
-			Kind: KindLoop, ID: "loop", Body: &Spec{Kind: KindSequence},
-			Condition: "missing",
+			spec: Spec{
+				Kind: KindLoop, ID: "loop", Body: &Spec{Kind: KindSequence},
+				Condition: "missing",
+			},
+			want: `loop "loop" field condition: unknown condition "missing"`,
 		},
 		"loop body": {
-			Kind: KindLoop, ID: "loop", Body: &broken,
-			Condition: "condition",
+			spec: Spec{
+				Kind: KindLoop, ID: "loop", Body: &broken,
+				Condition: "condition",
+			},
+			want: `at "/body" leaf "broken" field config: build`,
 		},
 		"missing iteration input": {
-			Kind: KindIteration, ID: "each",
+			spec: Spec{Kind: KindIteration, ID: "each"},
+			want: `iteration "each" field input: iteration input is required`,
 		},
 		"missing iteration body": {
-			Kind: KindIteration, ID: "each", Input: Output("items"),
+			spec: Spec{Kind: KindIteration, ID: "each", Input: Output("items")},
+			want: `iteration "each" field body: iteration body is required`,
 		},
 		"missing iteration output": {
-			Kind: KindIteration, ID: "each", Input: Output("items"),
-			Body: &Spec{Kind: KindSequence},
+			spec: Spec{
+				Kind: KindIteration, ID: "each", Input: Output("items"),
+				Body: &Spec{Kind: KindSequence},
+			},
+			want: `iteration "each" field bodyOutput: iteration body output is required`,
 		},
 		"iteration body": {
-			Kind: KindIteration, ID: "each", Input: Output("items"),
-			Body: &broken, BodyOutput: Output("value"),
+			spec: Spec{
+				Kind: KindIteration, ID: "each", Input: Output("items"),
+				Body: &broken, BodyOutput: Output("value"),
+			},
+			want: `at "/body" leaf "broken" field config: build`,
 		},
 		"missing subgraph body": {
-			Kind: KindSubgraph, ID: "sub", BodyOutput: Output("value"),
+			spec: Spec{Kind: KindSubgraph, ID: "sub", BodyOutput: Output("value")},
+			want: `subgraph "sub" field body: subgraph body is required`,
 		},
 		"missing subgraph output": {
-			Kind: KindSubgraph, ID: "sub",
-			Body: &Spec{Kind: KindSequence},
+			spec: Spec{
+				Kind: KindSubgraph, ID: "sub",
+				Body: &Spec{Kind: KindSequence},
+			},
+			want: `subgraph "sub" field bodyOutput: subgraph body output is required`,
 		},
 		"subgraph body": {
-			Kind: KindSubgraph, ID: "sub",
-			Body: &broken, BodyOutput: Output("value"),
+			spec: Spec{
+				Kind: KindSubgraph, ID: "sub",
+				Body: &broken, BodyOutput: Output("value"),
+			},
+			want: `at "/body" leaf "broken" field config: build`,
 		},
 	}
 
-	for name, spec := range tests {
+	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			if _, err := compiler.compile(spec); err == nil {
+			// Each case asserts the defense its name describes. Checking only that
+			// an error occurred would let a reordered check pass a case for a
+			// reason that has nothing to do with what it is named for.
+			_, err := compiler.compile(test.spec)
+			if err == nil {
 				t.Fatal("compile unexpectedly succeeded")
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("compile error = %v; want a message containing %q", err, test.want)
 			}
 		})
 	}

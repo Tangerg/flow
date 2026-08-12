@@ -253,9 +253,9 @@ func (j *journalDecoder) decodeRecord(value any) error {
 		return err
 	}
 
-	id, ok := record[journalFieldID].(string)
-	if !ok {
-		return errors.New("id must be a string")
+	id, err := record.stringMember(journalFieldID)
+	if err != nil {
+		return err
 	}
 	scope, err := j.decodeScope(record)
 	if err != nil {

@@ -33,30 +33,41 @@ func (j *JournalKey) UnmarshalJSON(data []byte) error {
 	if j == nil {
 		return errors.New("workflow: unmarshal journal key: nil key")
 	}
-	raw, err := jsonDocument(data).object()
+	next, err := decodeJournalKey(data)
 	if err != nil {
 		return fmt.Errorf("workflow: unmarshal journal key: %w", err)
 	}
+	*j = next
+	return nil
+}
+
+// decodeJournalKey reads the strict canonical object, each return naming only its
+// own condition while UnmarshalJSON owns the context.
+func decodeJournalKey(data []byte) (JournalKey, error) {
+	raw, err := jsonDocument(data).object()
+	if err != nil {
+		return JournalKey{}, err
+	}
+
 	object := jsonObject(raw)
 	if err := object.allow(keyFieldID, keyFieldScope); err != nil {
-		return fmt.Errorf("workflow: unmarshal journal key: %w", err)
+		return JournalKey{}, err
 	}
 	// validate below would also reject an absent id, but as an empty one. Naming
 	// the missing member says what the document lacks, and matches what every
 	// other member contract in this package reports, including the same id read
 	// as part of a Journal record.
 	if err := object.require("journal key", keyFieldID); err != nil {
-		return fmt.Errorf("workflow: unmarshal journal key: %w", err)
+		return JournalKey{}, err
 	}
 
 	var decoded journalKeyJSON
 	if err := jsonDocument(data).decodeParsed(&decoded); err != nil {
-		return fmt.Errorf("workflow: unmarshal journal key: %w", err)
+		return JournalKey{}, err
 	}
 	next := JournalKey(decoded)
 	if err := next.validate(); err != nil {
-		return fmt.Errorf("workflow: unmarshal journal key: %w", err)
+		return JournalKey{}, err
 	}
-	*j = next
-	return nil
+	return next, nil
 }

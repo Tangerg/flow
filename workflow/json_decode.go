@@ -63,6 +63,17 @@ func (j jsonObject) require(kind string, required ...string) error {
 	return nil
 }
 
+// stringMember reads a member that must be a string. Presence is a separate
+// contract — require names an absent member — so this names one that is present
+// with the wrong type.
+func (j jsonObject) stringMember(name string) (string, error) {
+	value, ok := j[name].(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", name)
+	}
+	return value, nil
+}
+
 func (j jsonObject) allow(allowed ...string) error {
 	for _, name := range slices.Sorted(maps.Keys(j)) {
 		if !slices.Contains(allowed, name) {

@@ -209,6 +209,26 @@ func (d *definitionValidator) validateShape(
 	}
 }
 
+// iterationOutputError and subgraphOutputError state each projection failure
+// once. Both the built-in definition and the Spec form of these composites can
+// reject it, and each locates it its own way — by step identity or by wire field
+// — but the condition itself must read identically from either.
+func iterationOutputError(output Ref) error {
+	return fmt.Errorf(
+		"%w: iteration body output %s is not produced by its visible body and is not a valid item or index value",
+		flow.ErrInvalidConfig,
+		output,
+	)
+}
+
+func subgraphOutputError(output Ref) error {
+	return fmt.Errorf(
+		"%w: subgraph body output %s is not produced by its sealed body or inputs",
+		flow.ErrInvalidConfig,
+		output,
+	)
+}
+
 func (s stepDefinition) validateSubgraphOutput() error {
 	outputs := guaranteedOutputs(s.body)
 	if !outputs.known {
@@ -217,13 +237,7 @@ func (s stepDefinition) validateSubgraphOutput() error {
 	if subgraphOutputGuaranteed(s.inputs, outputs, s.bodyOutput) {
 		return nil
 	}
-	return newValidationError(
-		s.id,
-		fmt.Errorf(
-			"%w: subgraph body output %s is not produced by its sealed body or inputs",
-			flow.ErrInvalidConfig,
-			s.bodyOutput,
-		))
+	return newValidationError(s.id, subgraphOutputError(s.bodyOutput))
 }
 
 func (s stepDefinition) validateIterationOutput() error {
@@ -234,13 +248,7 @@ func (s stepDefinition) validateIterationOutput() error {
 	if iterationOutputGuaranteed(s.id, outputs, s.bodyOutput) {
 		return nil
 	}
-	return newValidationError(
-		s.id,
-		fmt.Errorf(
-			"%w: iteration body output %s is not produced by its visible body and is not a valid item or index value",
-			flow.ErrInvalidConfig,
-			s.bodyOutput,
-		))
+	return newValidationError(s.id, iterationOutputError(s.bodyOutput))
 }
 
 // subgraphOutputGuaranteed and iterationOutputGuaranteed are the shared

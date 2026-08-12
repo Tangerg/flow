@@ -53,14 +53,21 @@ type specValidator struct {
 	depth    int
 }
 
+// depthError names the one nesting limit a Spec has, wherever it is reached.
+// Validation and encoding both walk the same tree and both must stop at the same
+// depth for the same stated reason.
+func (s Spec) depthError(depth int) error {
+	return s.fieldError("", fmt.Errorf(
+		"%w: nesting depth %d exceeds limit %d",
+		ErrMaxDepth,
+		depth,
+		MaxNestingDepth,
+	))
+}
+
 func (s *specValidator) validate(spec Spec) error {
 	if s.depth > MaxNestingDepth {
-		return spec.fieldError("", fmt.Errorf(
-			"%w: nesting depth %d exceeds limit %d",
-			ErrMaxDepth,
-			s.depth,
-			MaxNestingDepth,
-		))
+		return spec.depthError(s.depth)
 	}
 
 	var validateVariant func() error
@@ -78,10 +85,7 @@ func (s *specValidator) validate(spec Spec) error {
 	case KindSubgraph:
 		validateVariant = func() error { return s.validateSubgraph(spec) }
 	default:
-		return spec.fieldError(
-			fieldKind,
-			fmt.Errorf("unknown kind %q", spec.Kind),
-		)
+		return spec.unknownKindError()
 	}
 
 	if field := spec.unexpectedField(specKindFields[spec.Kind]); field != "" {
@@ -107,6 +111,77 @@ func (s Spec) validateConstraints() error {
 	return nil
 }
 
+// requireKindFields reports the first field a kind needs and does not have.
+//
+// The rule belongs to validation, but compilation dereferences Body and so has to
+// defend the same requirement rather than trust its caller — see
+// TestSpecCompiler_defendsItsValidatedInputContract. Stating it once here lets
+// both ask instead of keeping two copies of every message that can drift apart.
+func (s Spec) requireKindFields() error {
+	switch s.Kind {
+	case KindBranch:
+		if len(s.Cases) == 0 {
+			return s.fieldError(fieldCases, errors.New("at least one branch case is required"))
+		}
+	case KindLoop:
+		if s.Body == nil {
+			return s.fieldError(fieldBody, errors.New("loop body is required"))
+		}
+	case KindIteration:
+		switch {
+		case s.Input == (Ref{}):
+			return s.fieldError(fieldInput, errors.New("iteration input is required"))
+		case s.Body == nil:
+			return s.fieldError(fieldBody, errors.New("iteration body is required"))
+		case s.BodyOutput == (Ref{}):
+			return s.fieldError(fieldBodyOutput, errors.New("iteration body output is required"))
+		}
+	case KindSubgraph:
+		switch {
+		case s.Body == nil:
+			return s.fieldError(fieldBody, errors.New("subgraph body is required"))
+		case s.BodyOutput == (Ref{}):
+			return s.fieldError(fieldBodyOutput, errors.New("subgraph body output is required"))
+		}
+	default:
+		// Leaf, sequence, and parallel need nothing beyond the fields their kind
+		// is allowed to carry at all.
+	}
+	return nil
+}
+
+// requireResolver and requireCondition resolve a registered name, reporting the
+// same failure for validation and compilation. Compilation needs the value while
+// validation needs only presence, so they share the lookup rather than the
+// message.
+func (r registrySnapshot) requireResolver(spec Spec) (Resolver, error) {
+	resolver, ok := r.lookupResolver(spec.Resolver)
+	if !ok {
+		return nil, spec.fieldError(
+			fieldResolver,
+			fmt.Errorf("unknown resolver %q", spec.Resolver),
+		)
+	}
+	return resolver, nil
+}
+
+func (r registrySnapshot) requireCondition(spec Spec) (Condition, error) {
+	condition, ok := r.lookupCondition(spec.Condition)
+	if !ok {
+		return nil, spec.fieldError(
+			fieldCondition,
+			fmt.Errorf("unknown condition %q", spec.Condition),
+		)
+	}
+	return condition, nil
+}
+
+// unknownKindError is what both the validating and the compiling switch report
+// for a kind neither of them handles.
+func (s Spec) unknownKindError() error {
+	return s.fieldError(fieldKind, fmt.Errorf("unknown kind %q", s.Kind))
+}
+
 func (s *specValidator) validateSteps(specs []Spec) error {
 	child := s.child(s.stepIDs)
 	for index, spec := range specs {
@@ -121,20 +196,14 @@ func (s *specValidator) validateLoop(spec Spec) error {
 	if err := s.claimID(spec); err != nil {
 		return err
 	}
-	if spec.Body == nil {
-		return spec.fieldError(
-			fieldBody,
-			errors.New("loop body is required"),
-		)
+	if err := spec.requireKindFields(); err != nil {
+		return err
 	}
 	if err := validateName("condition name", spec.Condition); err != nil {
 		return spec.fieldError(fieldCondition, err)
 	}
-	if _, ok := s.registry.lookupCondition(spec.Condition); !ok {
-		return spec.fieldError(
-			fieldCondition,
-			fmt.Errorf("unknown condition %q", spec.Condition),
-		)
+	if _, err := s.registry.requireCondition(spec); err != nil {
+		return err
 	}
 	// The loop body runs under a scope derived from the loop ID and iteration
 	// index, so its IDs are local and may be reused outside this loop. Reserve
@@ -179,20 +248,14 @@ func (s *specValidator) validateBranch(spec Spec) error {
 	if err := s.claimID(spec); err != nil {
 		return err
 	}
-	if len(spec.Cases) == 0 {
-		return spec.fieldError(
-			fieldCases,
-			errors.New("at least one branch case is required"),
-		)
+	if err := spec.requireKindFields(); err != nil {
+		return err
 	}
 	if err := validateName("resolver name", spec.Resolver); err != nil {
 		return spec.fieldError(fieldResolver, err)
 	}
-	if _, ok := s.registry.lookupResolver(spec.Resolver); !ok {
-		return spec.fieldError(
-			fieldResolver,
-			fmt.Errorf("unknown resolver %q", spec.Resolver),
-		)
+	if _, err := s.registry.requireResolver(spec); err != nil {
+		return err
 	}
 
 	// At most one case runs, so sibling cases may reuse an ID. Each case is
@@ -217,23 +280,8 @@ func (s *specValidator) validateIteration(spec Spec) error {
 	if err := s.claimID(spec); err != nil {
 		return err
 	}
-	if spec.Input == (Ref{}) {
-		return spec.fieldError(
-			fieldInput,
-			errors.New("iteration input is required"),
-		)
-	}
-	if spec.Body == nil {
-		return spec.fieldError(
-			fieldBody,
-			errors.New("iteration body is required"),
-		)
-	}
-	if spec.BodyOutput == (Ref{}) {
-		return spec.fieldError(
-			fieldBodyOutput,
-			errors.New("iteration body output is required"),
-		)
+	if err := spec.requireKindFields(); err != nil {
+		return err
 	}
 	if err := spec.Input.Validate(); err != nil {
 		return spec.fieldError(fieldInput, err)
@@ -250,14 +298,7 @@ func (s *specValidator) validateIteration(spec Spec) error {
 	}
 	outputs := s.guaranteedOutputs(*spec.Body)
 	if outputs.known && !iterationOutputGuaranteed(spec.ID, outputs, spec.BodyOutput) {
-		return spec.fieldError(
-			fieldBodyOutput,
-			fmt.Errorf(
-				"%w: iteration body output %s is not produced by its visible body and is not a valid item or index value",
-				flow.ErrInvalidConfig,
-				spec.BodyOutput,
-			),
-		)
+		return spec.fieldError(fieldBodyOutput, iterationOutputError(spec.BodyOutput))
 	}
 	return nil
 }
@@ -266,17 +307,8 @@ func (s *specValidator) validateSubgraph(spec Spec) error {
 	if err := s.claimID(spec); err != nil {
 		return err
 	}
-	if spec.Body == nil {
-		return spec.fieldError(
-			fieldBody,
-			errors.New("subgraph body is required"),
-		)
-	}
-	if spec.BodyOutput == (Ref{}) {
-		return spec.fieldError(
-			fieldBodyOutput,
-			errors.New("subgraph body output is required"),
-		)
+	if err := spec.requireKindFields(); err != nil {
+		return err
 	}
 	if err := spec.Inputs.validateSeeds(); err != nil {
 		return spec.fieldError(fieldInputs, err)
@@ -290,14 +322,7 @@ func (s *specValidator) validateSubgraph(spec Spec) error {
 	}
 	outputs := s.guaranteedOutputs(*spec.Body)
 	if outputs.known && !subgraphOutputGuaranteed(spec.Inputs, outputs, spec.BodyOutput) {
-		return spec.fieldError(
-			fieldBodyOutput,
-			fmt.Errorf(
-				"%w: subgraph body output %s is not produced by its sealed body or inputs",
-				flow.ErrInvalidConfig,
-				spec.BodyOutput,
-			),
-		)
+		return spec.fieldError(fieldBodyOutput, subgraphOutputError(spec.BodyOutput))
 	}
 	return nil
 }

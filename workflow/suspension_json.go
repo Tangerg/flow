@@ -43,9 +43,20 @@ func (s *Suspension) UnmarshalJSON(data []byte) error {
 	if s == nil {
 		return errors.New("workflow: unmarshal suspension: nil suspension")
 	}
-	raw, err := jsonDocument(data).object()
+	next, err := decodeSuspension(data)
 	if err != nil {
 		return fmt.Errorf("workflow: unmarshal suspension: %w", err)
+	}
+	*s = next
+	return nil
+}
+
+// decodeSuspension reads the strict canonical object, each return naming only its
+// own condition while UnmarshalJSON owns the context.
+func decodeSuspension(data []byte) (Suspension, error) {
+	raw, err := jsonDocument(data).object()
+	if err != nil {
+		return Suspension{}, err
 	}
 	if err := (jsonObject(raw)).allow(
 		suspensionFieldID,
@@ -53,19 +64,18 @@ func (s *Suspension) UnmarshalJSON(data []byte) error {
 		suspensionFieldAwait,
 		suspensionFieldValue,
 	); err != nil {
-		return fmt.Errorf("workflow: unmarshal suspension: %w", err)
+		return Suspension{}, err
 	}
 
 	var decoded suspensionJSON
 	if err := jsonDocument(data).decodeParsed(&decoded); err != nil {
-		return fmt.Errorf("workflow: unmarshal suspension: %w", err)
+		return Suspension{}, err
 	}
 	next := Suspension(decoded)
 	if err := next.validateIdentity(); err != nil {
-		return fmt.Errorf("workflow: unmarshal suspension: %w", err)
+		return Suspension{}, err
 	}
-	*s = next
-	return nil
+	return next, nil
 }
 
 // validateIdentity checks only fields owned by the engine. An empty ID remains

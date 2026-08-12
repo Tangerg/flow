@@ -157,12 +157,7 @@ func (s *specJSONEncoder) marshal() ([]byte, error) {
 
 func (s *specJSONEncoder) encode(spec Spec) (specJSONOutput, error) {
 	if s.depth > MaxNestingDepth {
-		return specJSONOutput{}, spec.fieldError("", fmt.Errorf(
-			"%w: nesting depth %d exceeds limit %d",
-			ErrMaxDepth,
-			s.depth,
-			MaxNestingDepth,
-		))
+		return specJSONOutput{}, spec.depthError(s.depth)
 	}
 	if field, err := spec.validateJSONText(); err != nil {
 		return specJSONOutput{}, spec.fieldError(field, err)

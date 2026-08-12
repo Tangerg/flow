@@ -202,11 +202,7 @@ func (i *iterationExecution) Run(ctx context.Context, index int) (elementOutcome
 	}
 	value, err := Get[any](result, i.iteration.bodyOutput)
 	if err != nil {
-		return elementOutcome{}, fmt.Errorf(
-			"read body output %s: %w",
-			i.iteration.bodyOutput,
-			err,
-		)
+		return elementOutcome{}, bodyOutputError(i.iteration.bodyOutput, err)
 	}
 	return elementOutcome{value: value}, nil
 }

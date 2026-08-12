@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/Tangerg/flow"
 )
@@ -144,4 +145,11 @@ func admitBoundary(ctx context.Context, id string, invalid error) (*runState, er
 		return run, err
 	}
 	return run, context.Cause(ctx)
+}
+
+// bodyOutputError names a failed read of a composite's body output. Iteration and
+// Subgraph both project one, and the condition reads the same from either even
+// though they report it at different boundaries.
+func bodyOutputError(output Ref, err error) error {
+	return fmt.Errorf("read body output %s: %w", output, err)
 }

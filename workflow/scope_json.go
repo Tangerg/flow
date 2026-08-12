@@ -94,9 +94,9 @@ func (s scopeFrameObject) decode() (ScopeFrame, error) {
 		return ScopeFrame{}, err
 	}
 
-	id, ok := object[scopeFieldID].(string)
-	if !ok {
-		return ScopeFrame{}, errors.New("id must be a string")
+	id, err := object.stringMember(scopeFieldID)
+	if err != nil {
+		return ScopeFrame{}, err
 	}
 	frame := ScopeFrame{ID: id}
 	value, indexed := object[scopeFieldIndex]
