@@ -20,6 +20,21 @@ func (r *Registry) ValidateSpec(spec Spec) error {
 	return r.snapshot().validateSpec(spec)
 }
 
+// specKindFields is the field matrix of [Spec]: which of its fields each kind
+// may populate. Kind itself is always required and never listed. Keeping it here
+// as data rather than inside the dispatch switch shows the whole matrix in one
+// place, and lets TestSpecKindFieldsCoverEverySpecField check it against the
+// Spec struct so a newly added field cannot stay silently unguarded.
+var specKindFields = map[Kind][]string{
+	KindLeaf:      {fieldID, fieldType, fieldConfig, fieldInputs},
+	KindSequence:  {fieldSteps},
+	KindParallel:  {fieldSteps, fieldConcurrency},
+	KindBranch:    {fieldID, fieldResolver, fieldCases},
+	KindLoop:      {fieldID, fieldBody, fieldCondition, fieldMaxIterations},
+	KindIteration: {fieldID, fieldInput, fieldBody, fieldBodyOutput, fieldConcurrency},
+	KindSubgraph:  {fieldID, fieldInputs, fieldBody, fieldBodyOutput},
+}
+
 func (r registrySnapshot) validateSpec(root Spec) error {
 	validator := specValidator{
 		registry: r,
@@ -48,31 +63,19 @@ func (s *specValidator) validate(spec Spec) error {
 		))
 	}
 
-	var (
-		allowedFields   []string
-		validateVariant func() error
-	)
+	var validateVariant func() error
 	switch spec.Kind {
 	case KindLeaf:
-		allowedFields = []string{fieldID, fieldType, fieldConfig, fieldInputs}
 		validateVariant = func() error { return s.validateLeaf(spec) }
-	case KindSequence:
-		allowedFields = []string{fieldSteps}
-		validateVariant = func() error { return s.validateSteps(spec.Steps) }
-	case KindParallel:
-		allowedFields = []string{fieldSteps, fieldConcurrency}
+	case KindSequence, KindParallel:
 		validateVariant = func() error { return s.validateSteps(spec.Steps) }
 	case KindBranch:
-		allowedFields = []string{fieldID, fieldResolver, fieldCases}
 		validateVariant = func() error { return s.validateBranch(spec) }
 	case KindLoop:
-		allowedFields = []string{fieldID, fieldBody, fieldCondition, fieldMaxIterations}
 		validateVariant = func() error { return s.validateLoop(spec) }
 	case KindIteration:
-		allowedFields = []string{fieldID, fieldInput, fieldBody, fieldBodyOutput, fieldConcurrency}
 		validateVariant = func() error { return s.validateIteration(spec) }
 	case KindSubgraph:
-		allowedFields = []string{fieldID, fieldInputs, fieldBody, fieldBodyOutput}
 		validateVariant = func() error { return s.validateSubgraph(spec) }
 	default:
 		return spec.fieldError(
@@ -81,7 +84,7 @@ func (s *specValidator) validate(spec Spec) error {
 		)
 	}
 
-	if field := spec.unexpectedField(allowedFields); field != "" {
+	if field := spec.unexpectedField(specKindFields[spec.Kind]); field != "" {
 		return spec.fieldError(field, fmt.Errorf(
 			"field %q is not valid for a %q spec",
 			field,

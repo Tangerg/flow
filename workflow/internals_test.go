@@ -3,9 +3,11 @@ package workflow
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -967,4 +969,149 @@ func TestValueType_acceptsOnlyPossibleCellPaths(t *testing.T) {
 			t.Fatalf("%q accepts %q = %v; want %v", test.valueType, test.ref.Path, got, test.want)
 		}
 	}
+}
+
+// populatedSpec returns a Spec with every field except Kind set to a non-zero,
+// JSON-valid value. A field whose type has no sample here fails the test rather
+// than quietly escaping the matrix checks below, which is the point: a new Spec
+// field must be accounted for deliberately.
+func populatedSpec(t *testing.T) Spec {
+	t.Helper()
+	inner := Spec{Kind: KindLeaf, ID: "inner", Type: "registered"}
+	samples := map[reflect.Type]any{
+		reflect.TypeFor[string]():          "value",
+		reflect.TypeFor[int]():             1,
+		reflect.TypeFor[json.RawMessage](): json.RawMessage(`{}`),
+		reflect.TypeFor[Ref]():             Output("producer"),
+		reflect.TypeFor[Inputs]():          OneInput(Output("producer")),
+		reflect.TypeFor[[]Spec]():          []Spec{inner},
+		reflect.TypeFor[map[string]Spec](): map[string]Spec{"case": inner},
+		reflect.TypeFor[*Spec]():           &inner,
+	}
+
+	spec := Spec{Kind: KindLeaf}
+	value := reflect.ValueOf(&spec).Elem()
+	for index := range value.NumField() {
+		field := value.Type().Field(index)
+		if field.Name == "Kind" {
+			continue
+		}
+		sample, ok := samples[field.Type]
+		if !ok {
+			t.Fatalf(
+				"Spec field %s has type %s with no sample value; add one so the field matrices are checked against it",
+				field.Name,
+				field.Type,
+			)
+		}
+		value.Field(index).Set(reflect.ValueOf(sample))
+	}
+	return spec
+}
+
+// specMemberNames returns the JSON member name of every Spec field except kind,
+// read from the struct tags. It is the one source of truth the checks below
+// compare against.
+func specMemberNames(t *testing.T) []string {
+	t.Helper()
+	specType := reflect.TypeFor[Spec]()
+	names := make([]string, 0, specType.NumField())
+	for field := range specType.Fields() {
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if name == "" {
+			t.Fatalf("Spec field %s has no JSON member name", field.Name)
+		}
+		if name == fieldKind {
+			continue
+		}
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+// TestSpecFieldMatricesAgreeWithTheSpecStruct pins the three places that must
+// know every Spec field to the struct itself: populatedFields, which decides
+// what "populated" means; specKindFields, which decides what each kind may
+// carry; and the embedded JSON Schema, which decides the same thing on the wire.
+// Nothing else enforces that agreement, and its absence is not inert — a field
+// added to Spec but missing from a matrix is accepted by every kind, and one
+// missing from the schema makes Spec marshal a document it cannot unmarshal.
+func TestSpecFieldMatricesAgreeWithTheSpecStruct(t *testing.T) {
+	want := specMemberNames(t)
+
+	t.Run("populatedFields", func(t *testing.T) {
+		got := populatedSpec(t).populatedFields()
+		slices.Sort(got)
+		if !slices.Equal(got, want) {
+			t.Fatalf("populatedFields() = %v; want every Spec field %v", got, want)
+		}
+	})
+
+	t.Run("specKindFields union", func(t *testing.T) {
+		union := make(map[string]struct{}, len(want))
+		for _, fields := range specKindFields {
+			for _, field := range fields {
+				union[field] = struct{}{}
+			}
+		}
+		if got := slices.Sorted(maps.Keys(union)); !slices.Equal(got, want) {
+			t.Fatalf("specKindFields covers %v; want every Spec field %v", got, want)
+		}
+	})
+
+	t.Run("wire schema per kind", func(t *testing.T) {
+		for kind, members := range specSchemaKindMembers(t) {
+			got := slices.Sorted(maps.Keys(members))
+			expected := slices.Sorted(slices.Values(specKindFields[kind]))
+			if !slices.Equal(got, expected) {
+				t.Fatalf(
+					"schema allows %v for kind %q; specKindFields allows %v",
+					got,
+					kind,
+					expected,
+				)
+			}
+		}
+	})
+}
+
+// specSchemaKindMembers reads the per-kind member sets out of the embedded Spec
+// JSON Schema. Each kind's definition is the object whose kind property is
+// pinned to a const, so the set is discovered rather than restated here.
+func specSchemaKindMembers(t *testing.T) map[Kind]map[string]any {
+	t.Helper()
+	var document struct {
+		Defs map[string]struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(specSchemaJSON, &document); err != nil {
+		t.Fatalf("decode embedded spec schema: %v", err)
+	}
+
+	byKind := make(map[Kind]map[string]any, len(specKindFields))
+	for _, definition := range document.Defs {
+		raw, ok := definition.Properties[fieldKind]
+		if !ok {
+			continue
+		}
+		var pinned struct {
+			Const string `json:"const"`
+		}
+		if err := json.Unmarshal(raw, &pinned); err != nil || pinned.Const == "" {
+			continue
+		}
+		members := make(map[string]any, len(definition.Properties))
+		for member := range definition.Properties {
+			if member != fieldKind {
+				members[member] = nil
+			}
+		}
+		byKind[Kind(pinned.Const)] = members
+	}
+	if len(byKind) != len(specKindFields) {
+		t.Fatalf("schema defines %d kinds; specKindFields has %d", len(byKind), len(specKindFields))
+	}
+	return byKind
 }
