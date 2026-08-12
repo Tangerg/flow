@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"cmp"
+	"iter"
 	"maps"
 	"slices"
 	"sync/atomic"
@@ -179,24 +180,24 @@ func (s Store) withoutNodes(nodeIDs nodeSet) Store {
 	if len(nodeIDs) == 0 {
 		return s
 	}
-	data := s.materialize()
 	// A node conventionally owns its Output cell, so the node count is the natural
 	// estimate — closer than the whole Store, which a graph rarely owns entirely.
-	owned := make([]storeKey, 0, len(nodeIDs))
-	for key, current := range data {
+	owned := make([]storeChange, 0, len(nodeIDs))
+	for key, current := range s.cells() {
 		if _, claimed := nodeIDs[key.nodeID]; claimed && !current.removed {
-			owned = append(owned, key)
+			owned = append(owned, storeChange{key: key, cell: current})
 		}
 	}
 	if len(owned) == 0 {
 		return s
 	}
-	slices.SortFunc(owned, storeKey.compare)
-	for _, key := range owned {
-		current := data[key]
-		s = s.withDelta(key, cell{
+	slices.SortFunc(owned, func(left, right storeChange) int {
+		return left.key.compare(right.key)
+	})
+	for _, current := range owned {
+		s = s.withDelta(current.key, cell{
 			revision: revisionCounter.Add(1),
-			lineage:  current.lineage,
+			lineage:  current.cell.lineage,
 			removed:  true,
 		})
 	}
@@ -442,6 +443,50 @@ func (s Store) lookupRecord(identity storeKey) (cell, bool) {
 	}
 	c, ok := s.snapshot.data[identity]
 	return c, ok
+}
+
+// cells iterates the Store's complete cell records, newest overlay write first
+// and shadowing the snapshot, including the private removal markers that
+// [Store.materialize] also reports. Use it to read the whole Store without
+// copying it: the only set it allocates is bounded by the overlay length rather
+// than by the number of cells.
+func (s Store) cells() iter.Seq2[storeKey, cell] {
+	return func(yield func(storeKey, cell) bool) {
+		if s.snapshot == nil && s.delta == nil {
+			return
+		}
+		if s.delta == nil {
+			// Nothing shadows the snapshot, so no tracking set is needed.
+			for key, record := range s.snapshot.data {
+				if !yield(key, record) {
+					return
+				}
+			}
+			return
+		}
+
+		shadowed := make(map[storeKey]struct{}, s.depth)
+		for delta := s.delta; delta != nil; delta = delta.parent {
+			if _, seen := shadowed[delta.key]; seen {
+				continue
+			}
+			shadowed[delta.key] = struct{}{}
+			if !yield(delta.key, delta.cell) {
+				return
+			}
+		}
+		if s.snapshot == nil {
+			return
+		}
+		for key, record := range s.snapshot.data {
+			if _, seen := shadowed[key]; seen {
+				continue
+			}
+			if !yield(key, record) {
+				return
+			}
+		}
+	}
 }
 
 // materialize returns a mutable copy of the Store's complete flat cell-record

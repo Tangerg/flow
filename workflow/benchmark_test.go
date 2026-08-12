@@ -335,11 +335,14 @@ func BenchmarkGraphRunScaling(b *testing.B) {
 	}
 }
 
-// BenchmarkGraphRunBaseScaling varies the input Store's overlay length, named by
-// the subtest, over a graph whose nodes are all independent and therefore all
-// ready at once. It is the graph counterpart of BenchmarkParallelBaseScaling:
-// every node derives its input from the shared run input.
-func BenchmarkGraphRunBaseScaling(b *testing.B) {
+// BenchmarkGraphRunInputScaling varies the number of cells in the input Store,
+// named by the subtest, over a graph whose nodes are all independent and
+// therefore all ready at once. Two costs scale on this axis. Up to
+// storeOverlayLimit the count is also the overlay length, so 64 is the fan-out
+// cliff where every node would otherwise flatten the snapshot separately. Beyond
+// it the count drives the per-run whole-Store work of clearing the graph's own
+// namespace, which a large store makes the dominant term.
+func BenchmarkGraphRunInputScaling(b *testing.B) {
 	registry := workflow.NewRegistry().MustRegisterNode(
 		"noop",
 		func(spec workflow.NodeSpec) (workflow.Step, error) {
@@ -361,9 +364,14 @@ func BenchmarkGraphRunBaseScaling(b *testing.B) {
 		b.Fatalf("CompileGraph: %v", err)
 	}
 
-	for _, overlay := range []int{1, 32, 64} {
-		b.Run(strconv.Itoa(overlay), func(b *testing.B) {
-			input := benchmarkStore(overlay)
+	for _, cells := range []int{1, 64, 1024} {
+		b.Run(strconv.Itoa(cells), func(b *testing.B) {
+			input := benchmarkStore(cells)
+			// A re-run: the graph owns cells to clear rather than none, which is
+			// the path a resumed or repeated graph actually takes.
+			for index := range 16 {
+				input = input.WithOutput("node-"+strconv.Itoa(index), index)
+			}
 
 			b.ReportAllocs()
 			b.ResetTimer()

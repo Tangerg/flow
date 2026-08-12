@@ -1115,3 +1115,67 @@ func specSchemaKindMembers(t *testing.T) map[Kind]map[string]any {
 	}
 	return byKind
 }
+
+// TestStoreCells_reportsEveryLiveRecordAndHonorsAnEarlyStop covers the iterator
+// contract that withoutNodes, its only caller, does not exercise: a caller may
+// stop in either half of the traversal, and stopping must not run the rest.
+func TestStoreCells_reportsEveryLiveRecordAndHonorsAnEarlyStop(t *testing.T) {
+	const writes = storeOverlayLimit + 3
+
+	// Writing past the limit leaves a snapshot behind, and the writes after that
+	// form the overlay, so the fixture has both halves.
+	store := NewStore()
+	for index := range writes {
+		store = store.WithOutput(fmt.Sprintf("node-%02d", index), index)
+	}
+	// Rewriting one cell makes the overlay shadow a snapshot record.
+	store = store.WithOutput("node-00", "rewritten")
+	if store.snapshot == nil || store.delta == nil {
+		t.Fatalf(
+			"fixture has snapshot %t, overlay %t; want both halves",
+			store.snapshot != nil,
+			store.delta != nil,
+		)
+	}
+
+	seen := make(map[storeKey]cell, writes)
+	for key, record := range store.cells() {
+		if _, duplicate := seen[key]; duplicate {
+			t.Fatalf("cell %v reported twice", key)
+		}
+		seen[key] = record
+	}
+	if len(seen) != writes {
+		t.Fatalf("cells reported %d records; want %d", len(seen), writes)
+	}
+	if got := seen[storeKey{nodeID: "node-00", key: outputKey}].value; got != "rewritten" {
+		t.Fatalf("shadowed cell = %v; want the overlay value", got)
+	}
+
+	for _, test := range []struct {
+		name  string
+		store Store
+		after int
+	}{
+		{name: "in the overlay", store: store, after: 1},
+		{name: "in the snapshot", store: store, after: store.depth + 1},
+		{name: "with no overlay", store: store.compact(), after: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			count := 0
+			for range test.store.cells() {
+				count++
+				if count == test.after {
+					break
+				}
+			}
+			if count != test.after {
+				t.Fatalf("stopped after %d records; want %d", count, test.after)
+			}
+		})
+	}
+
+	for range (Store{}).cells() {
+		t.Fatal("the zero Store reported a cell")
+	}
+}
