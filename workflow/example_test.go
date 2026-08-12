@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
@@ -373,6 +374,52 @@ func ExampleInterrupt() {
 	// Output:
 	// {"question":"publish?","actions":["approve","reject"]}
 	// {true} <nil>
+}
+
+// This example shows the three things an Iteration has to agree on: the
+// collection it reads, how the body reads one element, and which value it
+// collects. Item names the element and ItemIndex its position, both scoped to
+// the iteration ID; BodyOutput selects what each element contributes to the
+// collected slice, published under the iteration ID.
+func ExampleIteration() {
+	label := workflow.Leaf(
+		"label",
+		// Bind both the element and its position from the iteration's scope.
+		workflow.BinderFunc[string](func(store workflow.Store) (string, error) {
+			name, err := workflow.Get[string](store, workflow.Item("rows"))
+			if err != nil {
+				return "", err
+			}
+			index, err := workflow.Get[int](store, workflow.ItemIndex("rows"))
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%d:%s", index, name), nil
+		}),
+		flow.NodeFunc[string, string](func(_ context.Context, value string) (string, error) {
+			return strings.ToUpper(value), nil
+		}),
+	)
+
+	rows := workflow.Iteration(workflow.IterationConfig{
+		ID:         "rows",
+		Input:      workflow.Output("source"),
+		Body:       label,
+		BodyOutput: workflow.Output("label"),
+		// Zero would run every element at once; two bounds the fan-out.
+		Concurrency: 2,
+	})
+
+	in := workflow.NewStore().WithOutput("source", []string{"ada", "grace"})
+	out, err := rows.Run(context.Background(), in)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	// Results are collected in element order regardless of completion order.
+	labels, err := workflow.Get[[]string](out, workflow.Output("rows"))
+	fmt.Println(labels, err)
+	// Output: [0:ADA 1:GRACE] <nil>
 }
 
 // This example shows that a branch waiting on one side does not cancel the other.
