@@ -1,9 +1,6 @@
 package workflow
 
-import (
-	"context"
-	"slices"
-)
+import "context"
 
 type graphNodeState uint8
 
@@ -61,7 +58,7 @@ func (g *graphExecution) run(ctx context.Context) (Store, error) {
 
 	// Every node's input derives from this one, and ready nodes run concurrently.
 	g.input = g.input.sharedBase()
-	g.counts = slices.Clone(g.graph.dependencyCounts)
+	g.counts = inDegrees(g.graph.dependencyNodeIndexes)
 	g.states = make([]graphNodeState, len(g.graph.steps))
 	g.changes = make([][]storeChange, len(g.graph.steps))
 	g.ready = make([]int, 0, len(g.graph.steps))

@@ -73,7 +73,6 @@ func (g graphPlan) validateBuiltOutputs(graph Graph, outputs map[string]bool) er
 
 type graphStep struct {
 	steps                 stepList
-	dependencyCounts      []int
 	dependencyNodeIndexes [][]int
 	dependentNodeIndexes  [][]int
 	nodeIDs               nodeSet
@@ -94,7 +93,6 @@ func compiledGraph(plan graphPlan, steps stepList, limit int) Step {
 	}
 	return graphStep{
 		steps:                 steps,
-		dependencyCounts:      slices.Clone(plan.dependencyCounts),
 		dependencyNodeIndexes: cloneIndexes(plan.dependencyNodeIndexes),
 		dependentNodeIndexes:  cloneIndexes(plan.dependentNodeIndexes),
 		nodeIDs:               nodeIDs,

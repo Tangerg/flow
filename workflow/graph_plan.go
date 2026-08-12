@@ -15,7 +15,6 @@ func (g Graph) plan() (graphPlan, error) {
 		graph: g,
 		plan: graphPlan{
 			nodesByID:             make(map[string]GraphNode, len(g.Nodes)),
-			dependencyCounts:      make([]int, len(g.Nodes)),
 			dependencyNodeIndexes: make([][]int, len(g.Nodes)),
 			dependentNodeIndexes:  make([][]int, len(g.Nodes)),
 		},
@@ -28,9 +27,20 @@ func (g Graph) plan() (graphPlan, error) {
 // remains on graphPlanner and cannot leak into validation or compilation.
 type graphPlan struct {
 	nodesByID             map[string]GraphNode
-	dependencyCounts      []int
 	dependencyNodeIndexes [][]int
 	dependentNodeIndexes  [][]int
+}
+
+// inDegrees returns how many dependencies each node has. It is the length of that
+// node's dependency list, derived here rather than counted alongside it so the two
+// cannot disagree. Every caller mutates its own copy anyway: planning consumes it
+// to detect a cycle, and each run consumes it to schedule.
+func inDegrees(dependencies [][]int) []int {
+	counts := make([]int, len(dependencies))
+	for index, list := range dependencies {
+		counts[index] = len(list)
+	}
+	return counts
 }
 
 // graphPlanner owns the indexes and counters mutated during one planning pass.
@@ -268,7 +278,6 @@ func (n *nodeConnector) connectDependency(
 		return nil
 	}
 	n.connected[dependency] = struct{}{}
-	n.planner.plan.dependencyCounts[n.nodeIndex]++
 	n.planner.plan.dependencyNodeIndexes[n.nodeIndex] = append(
 		n.planner.plan.dependencyNodeIndexes[n.nodeIndex],
 		dependencyIndex,
@@ -309,7 +318,7 @@ func graphNodePath(index int) string {
 func (g *graphPlanner) validateAcyclic() error {
 	// Kahn's algorithm validates the graph in O(V+E). It works on a copy because
 	// the original counts are the immutable execution plan reused by every run.
-	dependencyCounts := slices.Clone(g.plan.dependencyCounts)
+	dependencyCounts := inDegrees(g.plan.dependencyNodeIndexes)
 	ready := make([]int, 0, len(g.graph.Nodes))
 	for nodeIndex, count := range dependencyCounts {
 		if count == 0 {

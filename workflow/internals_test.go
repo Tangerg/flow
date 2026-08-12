@@ -1225,3 +1225,86 @@ func TestStoreCells_reportsEveryLiveRecordAndHonorsAnEarlyStop(t *testing.T) {
 		t.Fatal("the zero Store reported a cell")
 	}
 }
+
+// TestGraphPlanAdjacencyListsAreTransposes pins what connectDependency maintains
+// by hand: it appends to a node's dependency list and to the dependency's
+// dependent list in the same breath, so the two must describe the same edges from
+// opposite ends. The scheduler reads one to decide when a node is ready and the
+// other to decide whom completing it releases, so a one-sided edge would either
+// deadlock a run or start a node early. In-degrees are no longer stored, but the
+// derivation is checked here too, since the scheduler counts down from it.
+func TestGraphPlanAdjacencyListsAreTransposes(t *testing.T) {
+	shapes := map[string]Graph{
+		"empty":  {},
+		"single": {Nodes: []GraphNode{{ID: "a", Type: "n"}}},
+		"chain": {Nodes: []GraphNode{
+			{ID: "a", Type: "n"},
+			{ID: "b", Type: "n", Inputs: OneInput(Output("a"))},
+			{ID: "c", Type: "n", Inputs: OneInput(Output("b"))},
+		}},
+		"diamond": {Nodes: []GraphNode{
+			{ID: "a", Type: "n"},
+			{ID: "b", Type: "n", Inputs: OneInput(Output("a"))},
+			{ID: "c", Type: "n", DependsOn: []string{"a"}},
+			{ID: "d", Type: "n", Inputs: OneInput(Output("b")), DependsOn: []string{"c"}},
+		}},
+		"gate and input from one node": {Nodes: []GraphNode{
+			{ID: "route", Type: "n"},
+			{ID: "b", Type: "n", Inputs: OneInput(Output("route")), When: []Gate{When("route", "yes")}},
+		}},
+		"external seed": {Nodes: []GraphNode{
+			{ID: "a", Type: "n", Inputs: OneInput(Output("outside"))},
+		}},
+	}
+
+	for name, graph := range shapes {
+		t.Run(name, func(t *testing.T) {
+			plan, err := graph.plan()
+			if err != nil {
+				t.Fatalf("plan: %v", err)
+			}
+			nodes := len(graph.Nodes)
+			if len(plan.dependencyNodeIndexes) != nodes || len(plan.dependentNodeIndexes) != nodes {
+				t.Fatalf(
+					"lists sized %d and %d; want %d",
+					len(plan.dependencyNodeIndexes),
+					len(plan.dependentNodeIndexes),
+					nodes,
+				)
+			}
+
+			edges := make(map[[2]int]struct{})
+			for node, dependencies := range plan.dependencyNodeIndexes {
+				if slices.Contains(dependencies, node) {
+					t.Fatalf("node %d depends on itself", node)
+				}
+				for _, dependency := range dependencies {
+					edge := [2]int{dependency, node}
+					if _, duplicate := edges[edge]; duplicate {
+						t.Fatalf("edge %v recorded twice", edge)
+					}
+					edges[edge] = struct{}{}
+				}
+			}
+			for dependency, dependents := range plan.dependentNodeIndexes {
+				for _, node := range dependents {
+					edge := [2]int{dependency, node}
+					if _, present := edges[edge]; !present {
+						t.Fatalf("dependent edge %v has no matching dependency", edge)
+					}
+					delete(edges, edge)
+				}
+			}
+			if len(edges) != 0 {
+				t.Fatalf("%d dependency edges have no matching dependent", len(edges))
+			}
+
+			counts := inDegrees(plan.dependencyNodeIndexes)
+			for node, dependencies := range plan.dependencyNodeIndexes {
+				if counts[node] != len(dependencies) {
+					t.Fatalf("in-degree of %d = %d; want %d", node, counts[node], len(dependencies))
+				}
+			}
+		})
+	}
+}
