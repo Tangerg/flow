@@ -79,7 +79,7 @@ func TestJournalKey_JSONBoundaryIsStrictLosslessAndAtomic(t *testing.T) {
 		"duplicate identity":  []byte(`{"id":"first","id":"second"}`),
 		"invalid UTF-8":       {'{', '"', 'i', 'd', '"', ':', '"', 0xff, '"', '}'},
 		"unpaired surrogate":  []byte(`{"id":"\ud800"}`),
-		"invalid scope":       []byte(`{"id":"wait","scope":[{"id":"loop","index":1}]}`),
+		"invalid scope index": []byte(`{"id":"wait","scope":[{"id":"loop","index":-1}]}`),
 		"unknown scope field": []byte(`{"id":"wait","scope":[{"id":"loop","extra":1}]}`),
 		"null":                []byte(`null`),
 		"array":               []byte(`[]`),
@@ -446,7 +446,7 @@ func TestJournal_rejectsInvalidScopeFrames(t *testing.T) {
 
 func TestJournal_scopeIndexesArePortableAcrossWordSizes(t *testing.T) {
 	const beyondUint32 = uint64(1) << 32
-	document := []byte(`{"version":3,"records":[{"scope":[{"id":"items","indexed":true,"index":4294967296}],"id":"step","value":true}]}`)
+	document := []byte(`{"version":4,"records":[{"scope":[{"id":"items","index":4294967296}],"id":"step","value":true}]}`)
 	journal := workflow.NewJournal()
 	if err := json.Unmarshal(document, journal); err != nil {
 		t.Fatalf("Unmarshal 64-bit scope index: %v", err)
@@ -499,7 +499,7 @@ func TestJournal_enforcesOneSharedDepthLimit(t *testing.T) {
 	}
 
 	document, marshalErr := json.Marshal(map[string]any{
-		"version": 3,
+		"version": 4,
 		"records": []any{map[string]any{
 			"id": "rejected", "scope": tooDeep, "value": true,
 		}},
@@ -625,12 +625,12 @@ func TestJournal_jsonFormatIsVersionedAndRejectsDuplicateKeys(t *testing.T) {
 	if marshalErr != nil {
 		t.Fatalf("Marshal: %v", marshalErr)
 	}
-	if got, want := string(empty), `{"version":3,"records":[]}`; got != want {
+	if got, want := string(empty), `{"version":4,"records":[]}`; got != want {
 		t.Fatalf("empty Journal JSON = %s; want %s", got, want)
 	}
 
 	journal := workflow.NewJournal()
-	duplicate := []byte(`{"version":3,"records":[
+	duplicate := []byte(`{"version":4,"records":[
 		{"scope":[{"id":"a/b"}],"id":"c","value":1},
 		{"scope":[{"id":"a/b"}],"id":"c","value":2}
 	]}`)
@@ -659,40 +659,55 @@ func TestJournal_jsonFormatIsVersionedAndRejectsDuplicateKeys(t *testing.T) {
 	if marshalErr != nil {
 		t.Fatalf("Marshal structured scopes: %v", marshalErr)
 	}
-	if got, want := string(encoded), `{"version":3,"records":[{"scope":[{"id":"same"}],"id":"ordinary","value":1},{"scope":[{"id":"same","indexed":true}],"id":"indexed","value":2}]}`; got != want {
+	if got, want := string(encoded), `{"version":4,"records":[{"scope":[{"id":"same"}],"id":"ordinary","value":1},{"scope":[{"id":"same","index":0}],"id":"indexed","value":2}]}`; got != want {
 		t.Fatalf("structured Journal JSON = %s; want %s", got, want)
 	}
 	journal.Reset()
 	for _, data := range [][]byte{
 		[]byte(`[]`),
-		[]byte(`{"version":"3","records":[]}`),
-		[]byte(`{"version":3.5,"records":[]}`),
-		[]byte(`{"version":3,"version":3,"records":[]}`),
-		[]byte(`{"version":2,"records":[]}`),
-		[]byte(`{"version":3}`),
-		[]byte(`{"version":3,"records":null}`),
-		[]byte(`{"version":3,"records":[],"extra":true}`),
-		[]byte(`{"version":3,"records":[null]}`),
-		[]byte(`{"version":3,"records":[{"value":1}]}`),
-		[]byte(`{"version":3,"records":[{"id":1,"value":1}]}`),
-		[]byte(`{"version":3,"records":[{"id":"","value":1}]}`),
-		[]byte(`{"version":3,"records":[{"id":"a"}]}`),
-		[]byte(`{"version":3,"records":[{"scope":null,"id":"a","value":1}]}`),
-		[]byte(`{"version":3,"records":[{"scope":[1],"id":"a","value":1}]}`),
-		[]byte(`{"version":3,"records":[{"scope":[{}],"id":"a","value":1}]}`),
-		[]byte(`{"version":3,"records":[{"scope":[{"id":1}],"id":"a","value":1}]}`),
-		[]byte(`{"version":3,"records":[{"scope":[{"id":""}],"id":"a","value":1}]}`),
-		[]byte(`{"version":3,"records":[{"scope":[{"id":"s","extra":1}],"id":"a","value":1}]}`),
-		[]byte(`{"version":3,"records":[{"scope":[{"id":"s","indexed":"yes"}],"id":"a","value":1}]}`),
-		[]byte(`{"version":3,"records":[{"scope":[{"id":"s","index":0}],"id":"a","value":1}]}`),
-		[]byte(`{"version":3,"records":[{"scope":[{"id":"s","indexed":true,"index":"0"}],"id":"a","value":1}]}`),
-		[]byte(`{"version":3,"records":[{"scope":[{"id":"s","indexed":true,"index":0.5}],"id":"a","value":1}]}`),
-		[]byte(`{"version":3,"records":[{"scope":[{"id":"s","indexed":true,"index":999999999999999999999999999}],"id":"a","value":1}]}`),
-		[]byte(`{"version":3,"records":[{"scope":[{"id":"s","indexed":true,"index":-1}],"id":"a","value":1}]}`),
-		[]byte(`{"version":3,"records":[{"id":"\ud800","value":1}]}`),
+		[]byte(`{"version":"4","records":[]}`),
+		[]byte(`{"version":4.5,"records":[]}`),
+		[]byte(`{"version":4,"version":4,"records":[]}`),
+		[]byte(`{"version":5,"records":[]}`),
+		[]byte(`{"version":4}`),
+		[]byte(`{"version":4,"records":null}`),
+		[]byte(`{"version":4,"records":[],"extra":true}`),
+		[]byte(`{"version":4,"records":[null]}`),
+		[]byte(`{"version":4,"records":[{"value":1}]}`),
+		[]byte(`{"version":4,"records":[{"id":1,"value":1}]}`),
+		[]byte(`{"version":4,"records":[{"id":"","value":1}]}`),
+		[]byte(`{"version":4,"records":[{"id":"a"}]}`),
+		[]byte(`{"version":4,"records":[{"scope":null,"id":"a","value":1}]}`),
+		[]byte(`{"version":4,"records":[{"scope":[1],"id":"a","value":1}]}`),
+		[]byte(`{"version":4,"records":[{"scope":[{}],"id":"a","value":1}]}`),
+		[]byte(`{"version":4,"records":[{"scope":[{"id":1}],"id":"a","value":1}]}`),
+		[]byte(`{"version":4,"records":[{"scope":[{"id":""}],"id":"a","value":1}]}`),
+		[]byte(`{"version":4,"records":[{"scope":[{"id":"s","extra":1}],"id":"a","value":1}]}`),
+		[]byte(`{"version":4,"records":[{"scope":[{"id":"s","indexed":true}],"id":"a","value":1}]}`),
+		[]byte(`{"version":4,"records":[{"scope":[{"id":"s","index":"0"}],"id":"a","value":1}]}`),
+		[]byte(`{"version":4,"records":[{"scope":[{"id":"s","index":0.5}],"id":"a","value":1}]}`),
+		[]byte(`{"version":4,"records":[{"scope":[{"id":"s","index":999999999999999999999999999}],"id":"a","value":1}]}`),
+		[]byte(`{"version":4,"records":[{"scope":[{"id":"s","index":-1}],"id":"a","value":1}]}`),
+		[]byte(`{"version":4,"records":[{"id":"\ud800","value":1}]}`),
 	} {
 		if err := json.Unmarshal(data, journal); err == nil {
 			t.Fatalf("invalid Journal JSON decoded: %s", data)
+		}
+	}
+}
+
+func TestJournal_rejectsEveryPreviousWireVersion(t *testing.T) {
+	journal := workflow.NewJournal()
+	if err := journal.Record(workflow.JournalKey{ID: "kept"}, true); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	for version := 1; version < 4; version++ {
+		document := []byte(`{"version":` + strconv.Itoa(version) + `,"records":[]}`)
+		if err := json.Unmarshal(document, journal); err == nil {
+			t.Errorf("Journal wire version %d unexpectedly decoded", version)
+		}
+		if keys := journal.Keys(); !equalJournalKeys(keys, []workflow.JournalKey{{ID: "kept"}}) {
+			t.Fatalf("failed version %d decode changed Journal: %+v", version, keys)
 		}
 	}
 }
@@ -703,11 +718,11 @@ func TestJournal_unmarshalAcceptsMathematicalIntegerSpellings(t *testing.T) {
 		want     uint64
 	}{
 		"decimal version and exponent index": {
-			document: `{"version":3.0,"records":[{"scope":[{"id":"s","indexed":true,"index":1e0}],"id":"a","value":true}]}`,
+			document: `{"version":4.0,"records":[{"scope":[{"id":"s","index":1e0}],"id":"a","value":true}]}`,
 			want:     1,
 		},
 		"exponent version and decimal max uint64": {
-			document: `{"version":3e0,"records":[{"scope":[{"id":"s","indexed":true,"index":18446744073709551615.0}],"id":"a","value":true}]}`,
+			document: `{"version":4e0,"records":[{"scope":[{"id":"s","index":18446744073709551615.0}],"id":"a","value":true}]}`,
 			want:     ^uint64(0),
 		},
 	}
@@ -739,11 +754,11 @@ func TestJournal_versionDiagnosticsAreMachineIndependent(t *testing.T) {
 // wire contract to ordinary struct decoding.
 func TestJournal_unmarshalRejectsNoncanonicalAndCaseCollidingMembers(t *testing.T) {
 	tests := []string{
-		`{"version":3,"reCords":[]}`,
-		`{"version":3,"records":[],"Records":[{"id":"a","value":1}]}`,
-		`{"version":3,"records":[{"id":"a","vAlue":1}]}`,
-		`{"version":3,"records":[{"id":"a","value":1,"Value":2}]}`,
-		`{"version":3,"records":[{"scope":[],"Scope":[{"id":"changed"}],"id":"a","value":1}]}`,
+		`{"version":4,"reCords":[]}`,
+		`{"version":4,"records":[],"Records":[{"id":"a","value":1}]}`,
+		`{"version":4,"records":[{"id":"a","vAlue":1}]}`,
+		`{"version":4,"records":[{"id":"a","value":1,"Value":2}]}`,
+		`{"version":4,"records":[{"scope":[],"Scope":[{"id":"changed"}],"id":"a","value":1}]}`,
 	}
 	for _, data := range tests {
 		journal := workflow.NewJournal()
@@ -762,7 +777,7 @@ func TestJournal_unmarshalRejectsNoncanonicalAndCaseCollidingMembers(t *testing.
 func TestJournal_unmarshalSeparatesRecordedNilFromAbsentValue(t *testing.T) {
 	journal := workflow.NewJournal()
 	if err := json.Unmarshal(
-		[]byte(`{"version":3,"records":[{"id":"a","value":null}]}`),
+		[]byte(`{"version":4,"records":[{"id":"a","value":null}]}`),
 		journal,
 	); err != nil {
 		t.Fatalf("Unmarshal explicit null: %v", err)
@@ -771,11 +786,11 @@ func TestJournal_unmarshalSeparatesRecordedNilFromAbsentValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	if got, want := string(encoded), `{"version":3,"records":[{"id":"a","value":null}]}`; got != want {
+	if got, want := string(encoded), `{"version":4,"records":[{"id":"a","value":null}]}`; got != want {
 		t.Fatalf("round trip = %s; want %s", got, want)
 	}
 	if err := json.Unmarshal(
-		[]byte(`{"version":3,"records":[{"id":"a"}]}`),
+		[]byte(`{"version":4,"records":[{"id":"a"}]}`),
 		workflow.NewJournal(),
 	); err == nil {
 		t.Fatal("record without a value unexpectedly decoded")
@@ -865,7 +880,7 @@ func TestJournal_recordRejectsNonUTF8Identities(t *testing.T) {
 
 func TestJournal_unmarshalIsAtomic(t *testing.T) {
 	journal := workflow.NewJournal()
-	if err := json.Unmarshal([]byte(`{"version":3,"records":[{"id":"a","value":1}]}`), journal); err != nil {
+	if err := json.Unmarshal([]byte(`{"version":4,"records":[{"id":"a","value":1}]}`), journal); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	if err := json.Unmarshal([]byte(`{"b":`), journal); err == nil {

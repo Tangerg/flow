@@ -204,9 +204,11 @@
 // they made. A resolver that is not a pure function of the Store cannot send a
 // resumed run down the other branch. Both a [Store] and a Journal serialize; the
 // Journal uses versioned records with structured scopes, so the run that
-// resumes need not be the process that started. Recording an Interrupt response
-// under its ID and scope makes repeated instances independently resumable without
-// positional matching or delimiter-encoded keys.
+// resumes need not be the process that started. Its decoder accepts only the
+// current wire version; applications migrate or discard older checkpoints
+// before decoding them. Recording an Interrupt response under its ID and scope
+// makes repeated instances independently resumable without positional matching
+// or delimiter-encoded keys.
 //
 // Suspension awareness lives in this package's composites. The generic
 // combinators in flow and flowx know nothing about a Store, so they apply their

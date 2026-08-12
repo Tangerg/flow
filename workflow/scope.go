@@ -17,12 +17,16 @@ import (
 // Construct values with keyed fields. An ordinary frame leaves Indexed false
 // and Index zero; an indexed frame sets Indexed true and Index to its invocation
 // index. Index is uint64 so persisted Journal identity is independent of the
-// machine word size. Scope, Event, Chunk, Suspension, and JournalKey expose
+// machine word size. Its canonical JSON object contains id and, only for an
+// indexed frame, index; member presence preserves an indexed zero without a
+// redundant boolean. Scope, Event, Chunk, Suspension, and JournalKey expose
 // frames as immutable values.
+//
+//nolint:recvcheck // UnmarshalJSON requires a pointer receiver.
 type ScopeFrame struct {
-	ID      string `json:"id"`
-	Indexed bool   `json:"indexed,omitempty"`
-	Index   uint64 `json:"index,omitempty"`
+	ID      string
+	Indexed bool
+	Index   uint64
 }
 
 // String returns a compact display form: ordinary frames use ID and indexed

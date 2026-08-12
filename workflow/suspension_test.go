@@ -897,7 +897,7 @@ func TestSuspension_JSONBoundaryIsStrictAndAtomic(t *testing.T) {
 		"invalid UTF-8":       {'{', '"', 'i', 'd', '"', ':', '"', 0xff, '"', '}'},
 		"unpaired surrogate":  []byte(`{"id":"\ud800"}`),
 		"scope without ID":    []byte(`{"scope":[{"id":"loop"}]}`),
-		"invalid scope":       []byte(`{"id":"wait","scope":[{"id":"loop","index":1}]}`),
+		"invalid scope":       []byte(`{"id":"wait","scope":[{"id":"loop","index":-1}]}`),
 		"invalid await":       []byte(`{"id":"wait","await":{"nodeID":"source","path":"output"}}`),
 		"unknown scope field": []byte(`{"id":"wait","scope":[{"id":"loop","extra":1}]}`),
 	}
@@ -1403,9 +1403,9 @@ func TestSuspend_journaledDecisionOfTheWrongTypeIsReported(t *testing.T) {
 	journal := workflow.NewJournal()
 	// A journal from a different definition could hold anything under these keys.
 	// A loop records one decision per iteration, so its key carries the scope.
-	if err := json.Unmarshal([]byte(`{"version":3,"records":[
+	if err := json.Unmarshal([]byte(`{"version":4,"records":[
 		{"id":"route","value":"not-a-case"},
-		{"scope":[{"id":"repeat","indexed":true}],"id":"repeat","value":"not-a-bool"}
+		{"scope":[{"id":"repeat","index":0}],"id":"repeat","value":"not-a-bool"}
 	]}`), journal); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}

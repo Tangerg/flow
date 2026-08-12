@@ -138,13 +138,19 @@ Suspension application values decode into JSON-domain values, with numbers kept
 as `json.Number`; use a typed application envelope when the original concrete
 Go type matters.
 
-The Journal v3 document encodes scope as structured frame objects and the
-decoder rejects any other wire version. Keep the flow module version with
-durable run records and test upgrades against representative archived Journals.
-Version and scope-index numbers are read by mathematical value, so integral
-decimal and exponent spellings are equivalent; a scope index must fit `uint64`.
-This wire contract is separate from the workflow-definition version: compatible
-bytes cannot make renamed steps or changed control flow safe to resume.
+The Journal v4 document encodes scope as structured frame objects. An ordinary
+frame is `{"id":"subgraph"}`; a repeated invocation is
+`{"id":"loop","index":0}`. Presence of `index` carries the distinction, so
+there is no second boolean that can contradict it. Version and scope-index
+numbers are read by mathematical value, so integral decimal and exponent
+spellings are equivalent; a scope index must fit `uint64`.
+
+The decoder accepts only v4. It does not contain compatibility readers or
+migration paths for older documents. Keep the flow module version with durable
+run records, then migrate or discard archived Journals before passing them to a
+new engine version. This wire contract is separate from the workflow-definition
+version: compatible bytes cannot make renamed steps or changed control flow safe
+to resume.
 
 A nil `*Journal` means resumption is disabled and encodes as JSON `null`. An
 allocated zero-value Journal encodes as an empty versioned checkpoint. Persist

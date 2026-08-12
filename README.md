@@ -240,9 +240,11 @@ Store and Journal JSON are persistence values, not an application run record.
 Persist the application run ID, active waits, authorization and status, the
 workflow-definition version, and the flow module version separately. A Journal
 document carries its own wire-format version and unsupported versions are
-rejected. `Suspension` and `JournalKey` provide strict, atomic JSON for the wait
-identity and callback correlation data stored in that run record. Admit only
-one active `Run` for a logical execution; Journal locking
+rejected. The decoder reads only the current wire version; applications must
+migrate or discard older checkpoints before passing them to the engine.
+`Suspension` and `JournalKey` provide strict, atomic JSON for the wait identity
+and callback correlation data stored in that run record. Admit only one active
+`Run` for a logical execution; Journal locking
 protects concurrent branches inside that run but is not a distributed lease for
 competing runs.
 

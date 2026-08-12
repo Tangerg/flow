@@ -168,11 +168,13 @@ func FuzzStoreJSON(f *testing.F) {
 // FuzzJournalJSON checks the same properties for a Journal, which carries a run's
 // recorded results across a restart.
 func FuzzJournalJSON(f *testing.F) {
+	f.Add([]byte(`{"version":4,"records":[]}`))
+	f.Add([]byte(`{"version":4,"records":[{"id":"a","value":1}]}`))
+	f.Add([]byte(`{"version":4,"records":[{"scope":[{"id":"iter","index":0}],"id":"el","value":{"n":1}}]}`))
+	f.Add([]byte(`{"version":4,"records":[{"scope":[{"id":"loop","index":0}],"id":"loop","value":true},{"id":"route","value":"case"}]}`))
+	f.Add([]byte(`{"version":4,"records":[{"scope":[{"id":"a/b"}],"id":"c","value":1},{"scope":[{"id":"a"}],"id":"b/c","value":2}]}`))
 	f.Add([]byte(`{"version":3,"records":[]}`))
-	f.Add([]byte(`{"version":3,"records":[{"id":"a","value":1}]}`))
-	f.Add([]byte(`{"version":3,"records":[{"scope":[{"id":"iter","indexed":true}],"id":"el","value":{"n":1}}]}`))
-	f.Add([]byte(`{"version":3,"records":[{"scope":[{"id":"loop","indexed":true}],"id":"loop","value":true},{"id":"route","value":"case"}]}`))
-	f.Add([]byte(`{"version":3,"records":[{"scope":[{"id":"a/b"}],"id":"c","value":1},{"scope":[{"id":"a"}],"id":"b/c","value":2}]}`))
+	f.Add([]byte(`{"version":4,"records":[{"scope":[{"id":"iter","indexed":true}],"id":"el","value":1}]}`))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		journal := workflow.NewJournal()
@@ -205,7 +207,7 @@ func FuzzJournalJSON(f *testing.F) {
 func FuzzResumeIdentityJSON(f *testing.F) {
 	for _, seed := range [][]byte{
 		[]byte(`{"id":"wait"}`),
-		[]byte(`{"id":"wait","scope":[{"id":"items","indexed":true,"index":2}],"value":{"n":9007199254740993}}`),
+		[]byte(`{"id":"wait","scope":[{"id":"items","index":2}],"value":{"n":9007199254740993}}`),
 		[]byte(`{"id":"wait","await":{"nodeID":"approval","path":"/output"}}`),
 		[]byte(`{"id":"first","id":"second"}`),
 		[]byte(`{"unknown":true}`),
@@ -255,6 +257,55 @@ func FuzzResumeIdentityJSON(f *testing.F) {
 		reencoded, err := json.Marshal(restored)
 		if err != nil || !bytes.Equal(reencoded, encoded) {
 			t.Fatalf("JournalKey encoding is not idempotent: %s, %s, %v", encoded, reencoded, err)
+		}
+	})
+}
+
+// FuzzScopeFrameJSON targets the frame grammar directly. Journal, JournalKey,
+// and Suspension reach the same decoder, but only through a surrounding
+// document, so mutation rarely explores the index member itself. A frame also
+// carries the Indexed and Index invariant that makes an accepted value
+// re-encodable, which no enclosing type restates.
+func FuzzScopeFrameJSON(f *testing.F) {
+	for _, seed := range []string{
+		`{"id":"loop"}`,
+		`{"id":"loop","index":0}`,
+		`{"id":"loop","index":18446744073709551615}`,
+		`{"id":"loop","index":1e0}`,
+		`{"id":"loop","indexed":true}`,
+		`{"id":"loop","index":-1}`,
+		`{"id":"first","id":"second"}`,
+		`{"id":""}`,
+	} {
+		f.Add([]byte(seed))
+	}
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		frame := workflow.ScopeFrame{ID: "sentinel", Indexed: true, Index: 7}
+		before := frame
+		if err := json.Unmarshal(data, &frame); err != nil {
+			if frame != before {
+				t.Fatalf("failed ScopeFrame decode changed destination: %#v", frame)
+			}
+			return
+		}
+		if err := frame.Validate(); err != nil {
+			t.Fatalf("accepted ScopeFrame is invalid: %v", err)
+		}
+		encoded, err := json.Marshal(frame)
+		if err != nil {
+			t.Fatalf("accepted ScopeFrame cannot be marshaled: %v", err)
+		}
+		var restored workflow.ScopeFrame
+		if decodeErr := json.Unmarshal(encoded, &restored); decodeErr != nil {
+			t.Fatalf("encoded ScopeFrame cannot be decoded: %v", decodeErr)
+		}
+		if restored != frame {
+			t.Fatalf("ScopeFrame round trip = %#v; want %#v", restored, frame)
+		}
+		reencoded, err := json.Marshal(restored)
+		if err != nil || !bytes.Equal(reencoded, encoded) {
+			t.Fatalf("ScopeFrame encoding is not idempotent: %s, %s, %v", encoded, reencoded, err)
 		}
 	})
 }

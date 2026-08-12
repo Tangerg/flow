@@ -4,7 +4,7 @@ This roadmap records unresolved engine work and decisions. Current behavior
 belongs in package documentation and tutorials; released compatibility history
 belongs in the [changelog](../CHANGELOG.md).
 
-Last reviewed: 2026-08-09.
+Last reviewed: 2026-08-11.
 
 ## Direction
 
@@ -31,19 +31,15 @@ The remaining work is stabilization:
 1. Exercise conditional Graphs, dependency-driven execution, streaming,
    resumption, and sealed Subgraphs in real downstream programs before freezing
    the exported API.
-2. Decide and document Journal wire-format compatibility. The current v3
-   decoder accepts only v3; before the first stable release, choose whether
-   later releases will read selected older versions or require an application
-   migration step.
-3. Treat workflow-definition compatibility separately from Journal wire
+2. Treat workflow-definition compatibility separately from Journal wire
    compatibility. Applications must version definitions and must not resume a
    Journal against changed IDs, scopes, wiring, or control flow without an
    explicit migration policy.
-4. Run compatibility analysis on every exported change and document migrations
+3. Run compatibility analysis on every exported change and document migrations
    between actual releases.
-5. Keep formatting, tests, race detection, vet, lint, fuzzing, and
+4. Keep formatting, tests, race detection, vet, lint, fuzzing, and
    vulnerability checks green.
-6. Review generic methods only after the module adopts a Go version that ships
+5. Review generic methods only after the module adopts a Go version that ships
    them. Keep package-level generic functions unless a method is clearly
    simpler for callers.
 
@@ -99,6 +95,32 @@ iteration, and subgraph.
 Neither is a strict superset. Keep both public forms and share internal
 execution concepts only where their semantics are identical.
 
+### A Graph stays acyclic
+
+`Graph` rejects cycles, and that is a design decision rather than a missing
+feature. Graph execution is dependency-driven: a node starts as soon as every
+declared dependency completes, without waiting for unrelated branches. A node
+inside a cycle can never satisfy that condition, so a cyclic engine must
+instead evaluate a frontier, synchronize, and evaluate the next one. Adopting
+top-level cycles would therefore replace dependency-driven dispatch with
+superstep barriers for every graph, including the acyclic ones.
+
+Express repetition inside a node instead:
+
+- Bounded repetition over a known collection or condition uses `Iteration` or
+  `Loop`, which the engine journals per invocation through indexed scope
+  frames.
+- Open-ended repetition, such as an agent that decides when it is finished,
+  belongs inside one typed node. The node owns its own loop and, if it must
+  survive suspension, its own checkpoint value. The engine sees one boundary
+  and journals one result.
+
+The second case is a real limit, not a workaround: the engine offers no
+per-round checkpoint for a node-internal loop, and no accumulating write. A
+node that needs those owns them. Revisit only if applications repeatedly build
+the same checkpoint shape by hand, and prefer giving a node somewhere to keep
+private state across suspension over admitting cycles into the graph.
+
 ### Persistence is a value boundary
 
 Store and Journal are serializable values. The engine does not define
@@ -113,6 +135,14 @@ opaque, so guessing which of their input cells to erase would be unsound.
 An application chooses where to persist values, how to identify and authorize a
 run, when to wake it, and how to coordinate ownership. Those systems consume
 the engine; the engine does not depend on speculative provider abstractions.
+
+Journal wire compatibility is deliberately exact. A decoder accepts only its
+current version and never embeds migration logic for earlier documents. A wire
+change increments the version; applications migrate or discard durable
+checkpoints before handing them to the new engine. This keeps replay code on one
+canonical representation and makes accidental cross-version resumption fail
+closed. Workflow-definition compatibility remains a separate application
+decision.
 
 Journal size grows with recorded execution boundaries. A loop of `n`
 iterations whose body completes `m` journaled boundaries records `O(n*m)`

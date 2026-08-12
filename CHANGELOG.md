@@ -58,10 +58,13 @@ being presented as migrations from a version that was never published.
   caller-defined Binders, Steps, and repeated composites.
 - Suspension as a third outcome through `Await`, `Interrupt`, and `Suspend`,
   with structured waits and checkpoint-and-restart Journal replay.
-- JSON persistence for Store and Journal values. Journal wire version 3 uses
-  structured scope-aware identities and fixed-width indexes; `WithScope` and
-  `WithScopeIndex` let caller-defined composites preserve those identities, and
-  `ScopeFrame.Validate` lets them reject invalid zero-invocation definitions.
+- JSON persistence for Store and Journal values. Journal wire version 4 uses
+  structured scope-aware identities; a scope frame's optional `index` member
+  distinguishes repeated invocations without a redundant boolean.
+  `WithScope` and `WithScopeIndex` let caller-defined composites preserve those
+  identities, and `ScopeFrame.Validate` lets them reject invalid
+  zero-invocation definitions. The decoder accepts only the current wire
+  version; applications migrate durable checkpoints before upgrading.
 - Typed streaming producers through `StreamFunc` and a run-scoped,
   backpressure-aware `Emitter`.
 - Run-scoped lifecycle observation, ordered events and chunks, and Store write

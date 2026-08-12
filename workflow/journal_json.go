@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 
 	"github.com/Tangerg/flow/internal/jsonnum"
@@ -15,12 +14,15 @@ var (
 	_ json.Unmarshaler = (*Journal)(nil)
 )
 
+// Journal wire members are named here rather than reused from the definition
+// diagnostic vocabulary. A checkpoint document is a versioned compatibility
+// contract, so renaming a definition error path must not silently change bytes
+// that persisted runs already hold. The two vocabularies agreeing on a spelling
+// is a coincidence, not a dependency.
 const (
-	journalJSONVersion = 3
+	journalJSONVersion = 4
 
 	journalFieldID      = "id"
-	journalFieldIndex   = "index"
-	journalFieldIndexed = "indexed"
 	journalFieldRecords = "records"
 	journalFieldScope   = "scope"
 	journalFieldValue   = "value"
@@ -45,30 +47,7 @@ type journalEntry struct {
 	value any
 }
 
-// journalObject is one object in the versioned Journal wire format. It owns the
-// canonical-member contract, leaving journalDecoder responsible only for
-// building record state.
-type journalObject map[string]any
-
-func (j journalObject) require(kind string, required ...string) error {
-	for _, name := range required {
-		if _, present := j[name]; !present {
-			return fmt.Errorf("%s field %q is missing", kind, name)
-		}
-	}
-	return nil
-}
-
-func (j journalObject) allow(allowed ...string) error {
-	for _, name := range slices.Sorted(maps.Keys(j)) {
-		if !slices.Contains(allowed, name) {
-			return fmt.Errorf("unknown field %q", name)
-		}
-	}
-	return nil
-}
-
-// journalDecoder owns the wire contract of Journal version 3. It reads the
+// journalDecoder owns the wire contract of Journal version 4. It reads the
 // ordinary JSON domain produced by jsonDocument exactly once, so member names
 // retain JSON's case-sensitive meaning instead of being folded by struct
 // decoding. A versioned checkpoint accepts only its canonical field names:
@@ -178,7 +157,7 @@ func (j *journalNode) appendEntries(scope []ScopeFrame, entries *[]journalEntry)
 }
 
 // UnmarshalJSON atomically replaces the Journal's records. On failure the
-// receiver is unchanged. Version 3 accepts only the canonical lower-case member
+// receiver is unchanged. Version 4 accepts only the canonical lower-case member
 // names written by [Journal.MarshalJSON]; alternate casing is rejected so two
 // spellings cannot be folded onto one field. Invalid Unicode text is rejected
 // rather than silently replaced.
@@ -188,8 +167,9 @@ func (j *journalNode) appendEntries(scope []ScopeFrame, entries *[]journalEntry)
 // the type the reading step asks for when that type has a faithful JSON round
 // trip. Version and scope-index fields use mathematical JSON integer semantics:
 // equivalent decimal and exponent spellings are accepted, while an index must
-// fit uint64. Call UnmarshalJSON between runs, not while a Run is using the
-// Journal.
+// fit uint64. Only the current wire version is accepted; applications must
+// migrate or discard older checkpoints before decoding them. Call UnmarshalJSON
+// between runs, not while a Run is using the Journal.
 func (j *Journal) UnmarshalJSON(data []byte) error {
 	if j == nil {
 		return errors.New("workflow: unmarshal journal: nil journal")
@@ -218,7 +198,7 @@ func (j *journalDecoder) decode(data []byte) error {
 	if !ok {
 		return errors.New("document must be an object")
 	}
-	document := journalObject(raw)
+	document := jsonObject(raw)
 	if fieldErr := document.allow(journalFieldVersion, journalFieldRecords); fieldErr != nil {
 		return fieldErr
 	}
@@ -263,7 +243,7 @@ func (j *journalDecoder) decodeRecord(value any) error {
 	if !ok {
 		return errors.New("must be an object")
 	}
-	record := journalObject(raw)
+	record := jsonObject(raw)
 	if err := record.allow(journalFieldScope, journalFieldID, journalFieldValue); err != nil {
 		return err
 	}
@@ -294,7 +274,7 @@ func (j *journalDecoder) decodeRecord(value any) error {
 	return nil
 }
 
-func (j *journalDecoder) decodeScope(record journalObject) ([]ScopeFrame, error) {
+func (j *journalDecoder) decodeScope(record jsonObject) ([]ScopeFrame, error) {
 	value, present := record[journalFieldScope]
 	if !present {
 		return nil, nil
@@ -308,65 +288,17 @@ func (j *journalDecoder) decodeScope(record journalObject) ([]ScopeFrame, error)
 	}
 	scope := make([]ScopeFrame, len(values))
 	for index, value := range values {
-		frame, err := j.decodeScopeFrame(value)
+		raw, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("scope frame %d: must be an object", index)
+		}
+		frame, err := (scopeFrameObject(raw)).decode()
 		if err != nil {
 			return nil, fmt.Errorf("scope frame %d: %w", index, err)
 		}
 		scope[index] = frame
 	}
 	return scope, nil
-}
-
-func (j *journalDecoder) decodeScopeFrame(value any) (ScopeFrame, error) {
-	raw, ok := value.(map[string]any)
-	if !ok {
-		return ScopeFrame{}, errors.New("must be an object")
-	}
-	object := journalObject(raw)
-	if err := object.allow(
-		journalFieldID,
-		journalFieldIndexed,
-		journalFieldIndex,
-	); err != nil {
-		return ScopeFrame{}, err
-	}
-	if err := object.require("scope frame", journalFieldID); err != nil {
-		return ScopeFrame{}, err
-	}
-
-	id, ok := object[journalFieldID].(string)
-	if !ok {
-		return ScopeFrame{}, errors.New("id must be a string")
-	}
-	frame := ScopeFrame{ID: id}
-	if value, present := object[journalFieldIndexed]; present {
-		indexed, ok := value.(bool)
-		if !ok {
-			return ScopeFrame{}, errors.New("indexed must be a boolean")
-		}
-		frame.Indexed = indexed
-	}
-	if value, present := object[journalFieldIndex]; present {
-		if !frame.Indexed {
-			return ScopeFrame{}, errors.New("index requires indexed")
-		}
-		number, ok := value.(json.Number)
-		if !ok {
-			return ScopeFrame{}, errors.New("index must be an integer")
-		}
-		parsed, err := jsonnum.ParseInteger(number.String())
-		switch {
-		case errors.Is(err, jsonnum.ErrRange):
-			return ScopeFrame{}, fmt.Errorf("index %s exceeds uint64", number)
-		case err != nil || parsed.Negative:
-			return ScopeFrame{}, fmt.Errorf("index must be a non-negative integer, got %s", number)
-		}
-		frame.Index = parsed.Magnitude
-	}
-	if err := frame.Validate(); err != nil {
-		return ScopeFrame{}, err
-	}
-	return frame, nil
 }
 
 func (j *journalNode) setRevision(revision uint64) {

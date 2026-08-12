@@ -33,11 +33,12 @@ record the public release shape in [CHANGELOG.md](../CHANGELOG.md). Do not turn
 intermediate pre-release refactors into migrations from a version users could
 not install.
 
-If a release changes the Journal wire format, decide before tagging whether the
-new decoder reads the previous format or applications must migrate persisted
-documents. Test the supported path with archived Journal fixtures. This is
-separate from workflow-definition compatibility, which remains an application
-responsibility.
+If a release changes the Journal wire format, increment its version and treat
+the change as breaking. The engine decoder reads only the current format;
+applications must migrate or discard persisted documents before passing them
+to the new release. Test both canonical round trips and rejection of archived
+versions. This is separate from workflow-definition compatibility, which
+remains an application responsibility.
 
 ## 3. Prepare release notes
 

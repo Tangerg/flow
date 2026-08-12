@@ -57,6 +57,100 @@ func TestScopeFrame_Validate(t *testing.T) {
 	}
 }
 
+func TestScopeFrame_JSONIsCanonicalAndLossless(t *testing.T) {
+	tests := map[string]struct {
+		frame workflow.ScopeFrame
+		wire  string
+	}{
+		"ordinary": {
+			frame: workflow.ScopeFrame{ID: "subgraph"},
+			wire:  `{"id":"subgraph"}`,
+		},
+		"indexed zero": {
+			frame: workflow.ScopeFrame{ID: "loop", Indexed: true},
+			wire:  `{"id":"loop","index":0}`,
+		},
+		"indexed maximum": {
+			frame: workflow.ScopeFrame{ID: "loop", Indexed: true, Index: ^uint64(0)},
+			wire:  `{"id":"loop","index":18446744073709551615}`,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			encoded, err := json.Marshal(test.frame)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			if got := string(encoded); got != test.wire {
+				t.Fatalf("Marshal = %s; want %s", got, test.wire)
+			}
+
+			var restored workflow.ScopeFrame
+			if err := json.Unmarshal(encoded, &restored); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if restored != test.frame {
+				t.Fatalf("round trip = %+v; want %+v", restored, test.frame)
+			}
+		})
+	}
+
+	var exponent workflow.ScopeFrame
+	if err := json.Unmarshal([]byte(`{"id":"loop","index":1e0}`), &exponent); err != nil {
+		t.Fatalf("Unmarshal mathematical integer: %v", err)
+	}
+	if want := (workflow.ScopeFrame{ID: "loop", Indexed: true, Index: 1}); exponent != want {
+		t.Fatalf("mathematical integer frame = %+v; want %+v", exponent, want)
+	}
+}
+
+func TestScopeFrame_JSONBoundaryIsStrictAndAtomic(t *testing.T) {
+	invalid := map[string][]byte{
+		"null":                []byte(`null`),
+		"array":               []byte(`[]`),
+		"missing ID":          []byte(`{"index":0}`),
+		"non-string ID":       []byte(`{"id":1}`),
+		"empty ID":            []byte(`{"id":""}`),
+		"invalid UTF-8":       {'{', '"', 'i', 'd', '"', ':', '"', 0xff, '"', '}'},
+		"unpaired surrogate":  []byte(`{"id":"\ud800"}`),
+		"unknown field":       []byte(`{"id":"loop","extra":true}`),
+		"duplicate ID":        []byte(`{"id":"first","id":"second"}`),
+		"duplicate index":     []byte(`{"id":"loop","index":0,"index":1}`),
+		"legacy indexed flag": []byte(`{"id":"loop","indexed":true}`),
+		"string index":        []byte(`{"id":"loop","index":"0"}`),
+		"fractional index":    []byte(`{"id":"loop","index":0.5}`),
+		"negative index":      []byte(`{"id":"loop","index":-1}`),
+		"index out of range":  []byte(`{"id":"loop","index":18446744073709551616}`),
+	}
+	for name, data := range invalid {
+		t.Run(name, func(t *testing.T) {
+			frame := workflow.ScopeFrame{ID: "kept", Indexed: true, Index: 7}
+			if err := json.Unmarshal(data, &frame); err == nil {
+				t.Fatal("Unmarshal unexpectedly succeeded")
+			}
+			if want := (workflow.ScopeFrame{ID: "kept", Indexed: true, Index: 7}); frame != want {
+				t.Fatalf("failed Unmarshal changed receiver to %+v; want %+v", frame, want)
+			}
+		})
+	}
+
+	for name, frame := range map[string]workflow.ScopeFrame{
+		"invalid ID":            {ID: string([]byte{0xff})},
+		"index without Indexed": {ID: "loop", Index: 1},
+	} {
+		t.Run("marshal "+name, func(t *testing.T) {
+			if _, err := json.Marshal(frame); err == nil {
+				t.Fatal("Marshal unexpectedly succeeded")
+			}
+		})
+	}
+
+	var frame *workflow.ScopeFrame
+	if err := frame.UnmarshalJSON([]byte(`{"id":"loop"}`)); err == nil {
+		t.Fatal("nil receiver UnmarshalJSON unexpectedly succeeded")
+	}
+}
+
 func TestTopLevelScopeDiagnosticsNameTheRoot(t *testing.T) {
 	journal := workflow.NewJournal()
 	key := workflow.JournalKey{ID: "step"}
