@@ -1,6 +1,8 @@
 package workflow_test
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -43,7 +45,9 @@ func TestStructuredErrorFormatting(t *testing.T) {
 		{name: "graph path node field", err: &workflow.GraphError{Path: "/nodes/1", NodeID: "a", Field: "type", Err: workflow.ErrUnknownNodeType}, want: `graph at "/nodes/1" node "a" field type`},
 		{name: "graph node", err: &workflow.GraphError{NodeID: "a", Err: workflow.ErrInvalidGraph}, want: `node "a":`},
 		{name: "graph field", err: &workflow.GraphError{Field: "nodes", Err: workflow.ErrInvalidGraph}, want: "field nodes:"},
-		{name: "whole graph", err: &workflow.GraphError{Err: workflow.ErrCycle}, want: "graph: workflow: graph cycle"},
+		// The location and the condition each appear once: the wrapper
+		// identifies this package, so the sentinel does not repeat it.
+		{name: "whole graph", err: &workflow.GraphError{Err: workflow.ErrCycle}, want: "workflow: graph: graph cycle"},
 		{name: "spec", err: &workflow.SpecError{Path: "/steps/0", Kind: workflow.KindLeaf, ID: "a", Field: "type", Err: workflow.ErrUnknownNodeType}, want: `spec at "/steps/0" leaf "a" field type`},
 		{name: "spec nil cause", err: &workflow.SpecError{}, want: "spec: <nil>"},
 	}
@@ -121,4 +125,82 @@ func TestSpecError(t *testing.T) {
 		!errors.As(err, &specErr) || specErr.ID != "same" || specErr.Field != "id" {
 		t.Fatalf("err = %v; want invalid-spec duplicate step SpecError", err)
 	}
+}
+
+// Every error this package surfaces names it exactly once. The structured error
+// types and the top-level guards supply that prefix, so a sentinel must not
+// carry one of its own; a cause from another package keeps its prefix, which is
+// what marks a kernel failure inside a workflow error.
+func TestSurfacedErrorsNamePackageExactlyOnce(t *testing.T) {
+	registry := workflow.NewRegistry()
+	registry.MustRegisterNode("n", workflow.Factory(
+		func(struct{}) (flow.Node[int, int], error) {
+			return flow.NodeFunc[int, int](
+				func(_ context.Context, value int) (int, error) { return value, nil },
+			), nil
+		},
+	))
+	journal := workflow.NewJournal()
+	if err := journal.Record(workflow.JournalKey{ID: "a"}, 1); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	cyclic := workflow.Graph{Nodes: []workflow.GraphNode{
+		{ID: "a", Type: "n", Inputs: workflow.OneInput(workflow.Output("b"))},
+		{ID: "b", Type: "n", Inputs: workflow.OneInput(workflow.Output("a"))},
+	}}
+
+	errs := map[string]error{
+		"journal conflict": journal.Record(workflow.JournalKey{ID: "a"}, 1),
+		"missing value": func() error {
+			_, err := workflow.Get[int](workflow.NewStore(), workflow.Output("x"))
+			return err
+		}(),
+		"type mismatch": func() error {
+			_, err := workflow.Get[int](workflow.NewStore().WithOutput("x", "s"), workflow.Output("x"))
+			return err
+		}(),
+		"duplicate registration": registry.RegisterNode("n", func(workflow.NodeSpec) (workflow.Step, error) {
+			return nil, nil
+		}),
+		"nil factory":       workflow.NewRegistry().RegisterNode("n", nil),
+		"graph cycle":       registry.ValidateGraph(cyclic),
+		"unknown node type": registry.ValidateGraph(workflow.Graph{Nodes: []workflow.GraphNode{{ID: "a", Type: "?"}}}),
+		"unwired port": registry.ValidateGraph(workflow.Graph{Nodes: []workflow.GraphNode{
+			{ID: "a", Type: "n", Inputs: workflow.OneInput(workflow.Ref{})},
+		}}),
+		"invalid spec": registry.ValidateSpec(workflow.Spec{Kind: workflow.KindSequence, Type: "x"}),
+		"unknown spec node type": registry.ValidateSpec(workflow.Spec{
+			Kind: workflow.KindLeaf, ID: "x", Type: "?",
+		}),
+		"bad graph JSON":    workflow.ValidateGraphJSON([]byte(`{"nodes":[`)),
+		"bad journal wire":  json.Unmarshal([]byte(`{"version":1,"records":[]}`), workflow.NewJournal()),
+		"nil journal key":   (*workflow.JournalKey)(nil).UnmarshalJSON([]byte(`{"id":"a"}`)),
+		"nil scope frame":   (*workflow.ScopeFrame)(nil).UnmarshalJSON([]byte(`{"id":"a"}`)),
+		"nil step to Run":   runError(t, nil),
+		"nil loop body":     runError(t, workflow.Loop(workflow.LoopConfig{ID: "l", Body: nil})),
+		"duplicate step ID": runError(t, workflow.Sequence(passthrough("same"), passthrough("same"))),
+	}
+
+	for name, err := range errs {
+		t.Run(name, func(t *testing.T) {
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			message := err.Error()
+			if got := strings.Count(message, "workflow:"); got != 1 {
+				t.Fatalf("names %q %d times, want exactly 1: %s", "workflow:", got, message)
+			}
+		})
+	}
+}
+
+func runError(t *testing.T, step workflow.Step) error {
+	t.Helper()
+	_, err := workflow.Run(t.Context(), step, workflow.NewStore(), workflow.RunConfig{})
+	return err
+}
+
+func passthrough(id string) workflow.Step {
+	return workflow.LeafFunc(id, workflow.Output("seed"),
+		func(_ context.Context, value int) (int, error) { return value, nil })
 }

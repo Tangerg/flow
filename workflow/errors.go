@@ -15,35 +15,40 @@ var ErrNilStep error = nilStepError{}
 
 type nilStepError struct{}
 
-func (nilStepError) Error() string { return "workflow: nil step" }
+func (nilStepError) Error() string { return "nil step" }
 
 func (nilStepError) Is(target error) bool { return target == flow.ErrNilNode }
 
 // ErrInvalidStepID is returned when a named workflow step has an empty ID or
 // one that cannot be represented as UTF-8 across workflow boundaries.
-var ErrInvalidStepID = errors.New("workflow: invalid step ID")
+var ErrInvalidStepID = errors.New("invalid step ID")
 
 // Stable sentinel errors returned by Store lookup, Journal mutation,
 // registration, and definition validation. Use [errors.Is] rather than matching
 // their text.
+//
+// Each text names only the condition. Every path that surfaces one wraps it in
+// an error that already identifies this package and the failing location, so a
+// prefix here would repeat that. A cause from another package keeps its own
+// prefix, which is what distinguishes a kernel failure inside a workflow error.
 var (
-	ErrNotFound              = errors.New("workflow: value not found")
-	ErrTypeMismatch          = errors.New("workflow: value type mismatch")
-	ErrMaxDepth              = errors.New("workflow: maximum nesting depth exceeded")
-	ErrInvalidRegistration   = errors.New("workflow: invalid registration")
-	ErrDuplicateRegistration = errors.New("workflow: duplicate registration")
-	ErrInvalidGraph          = errors.New("workflow: invalid graph")
-	ErrDuplicateNode         = errors.New("workflow: duplicate graph node")
-	ErrCycle                 = errors.New("workflow: graph cycle")
-	ErrUnknownNode           = errors.New("workflow: unknown graph node")
-	ErrUnknownNodeType       = errors.New("workflow: unknown node type")
-	ErrIncompatibleType      = errors.New("workflow: incompatible value type")
-	ErrInvalidSpec           = errors.New("workflow: invalid spec")
-	ErrDuplicateStep         = errors.New("workflow: duplicate step")
-	ErrJournalConflict       = errors.New("workflow: journal record already exists")
-	ErrMissingPort           = errors.New("workflow: unwired input port")
-	ErrUnknownPort           = errors.New("workflow: unknown input port")
-	ErrUnknownOutlet         = errors.New("workflow: unknown outlet")
+	ErrNotFound              = errors.New("value not found")
+	ErrTypeMismatch          = errors.New("value type mismatch")
+	ErrMaxDepth              = errors.New("maximum nesting depth exceeded")
+	ErrInvalidRegistration   = errors.New("invalid registration")
+	ErrDuplicateRegistration = errors.New("duplicate registration")
+	ErrInvalidGraph          = errors.New("invalid graph")
+	ErrDuplicateNode         = errors.New("duplicate graph node")
+	ErrCycle                 = errors.New("graph cycle")
+	ErrUnknownNode           = errors.New("unknown graph node")
+	ErrUnknownNodeType       = errors.New("unknown node type")
+	ErrIncompatibleType      = errors.New("incompatible value type")
+	ErrInvalidSpec           = errors.New("invalid spec")
+	ErrDuplicateStep         = errors.New("duplicate step")
+	ErrJournalConflict       = errors.New("journal record already exists")
+	ErrMissingPort           = errors.New("unwired input port")
+	ErrUnknownPort           = errors.New("unknown input port")
+	ErrUnknownOutlet         = errors.New("unknown outlet")
 )
 
 // MaxNestingDepth is the maximum nesting accepted at recursive workflow

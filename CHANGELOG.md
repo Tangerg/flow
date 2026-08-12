@@ -78,6 +78,12 @@ being presented as migrations from a version that was never published.
   carry those fields; the `flow` config still defines what a shared setting
   means. `Sequence` remains variadic, and steps without children keep positional
   parameters. The JSON `Spec` and `Graph` forms are unchanged.
+- An error names this package exactly once. The structured error types and the
+  top-level guards supply that prefix, so the sentinels carry only the condition
+  they describe: `workflow: ref x#/output: value not found` rather than
+  repeating `workflow:` in the cause. A cause from another package keeps its own
+  prefix, which is what marks a kernel failure inside a workflow error. Match
+  sentinels with `errors.Is`; their text is not part of the contract.
 - Every persisted wire type names its members exactly. `Ref`, `ScopeFrame`,
   `JournalKey`, `Suspension`, and the Journal document reject unknown,
   duplicate, and case-folded members, so an alternate spelling cannot satisfy a

@@ -79,7 +79,9 @@ type runState struct {
 // so every child invocation shares one identity boundary.
 func Run(ctx context.Context, step Step, in Store, cfg RunConfig) (Store, error) {
 	if isNilNode(step) {
-		return in, ErrNilStep
+		// The sentinel names only the condition, and there is no step identity
+		// to report here, so Run supplies the context itself.
+		return in, fmt.Errorf("workflow: run: %w", ErrNilStep)
 	}
 	if _, builtIn := step.(definedStep); !builtIn {
 		if err := validateDefinition(step); err != nil {
