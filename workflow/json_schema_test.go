@@ -413,9 +413,9 @@ func TestCanonicalDefinitionsHaveOneGoAndJSONValidationContract(t *testing.T) {
 		MustRegisterResolver("pick", flow.NodeFunc[workflow.Store, string](
 			func(context.Context, workflow.Store) (string, error) { return "case", nil },
 		)).
-		MustRegisterCondition("done", func(context.Context, int, workflow.Store) (bool, error) {
+		MustRegisterCondition("done", flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) {
 			return true, nil
-		})
+		}))
 
 	specs := map[string]workflow.Spec{
 		"leaf": {
@@ -550,7 +550,7 @@ func TestCompileDefinitionJSONAcceptsSchemaIntegralRepresentations(t *testing.T)
 	}`)
 	registry := workflow.NewRegistry().MustRegisterCondition(
 		"done",
-		func(_ context.Context, _ int, _ workflow.Store) (bool, error) { return true, nil },
+		flow.NodeFunc[workflow.Store, bool](func(_ context.Context, _ workflow.Store) (bool, error) { return true, nil }),
 	)
 	if err := workflow.ValidateSpecJSON(specData); err != nil {
 		t.Fatalf("ValidateSpecJSON: %v", err)
@@ -676,9 +676,9 @@ func TestCompileSpecJSONAcceptsEveryKind(t *testing.T) {
 		MustRegisterResolver("pick", resolverNode(func(context.Context, workflow.Store) (string, error) {
 			return "yes", nil
 		})).
-		MustRegisterCondition("done", func(context.Context, int, workflow.Store) (bool, error) {
+		MustRegisterCondition("done", flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) {
 			return true, nil
-		})
+		}))
 
 	tests := map[string]string{
 		"leaf": `{

@@ -119,7 +119,7 @@ func TestReplayBoundaries_resampleCancellationAfterLookup(t *testing.T) {
 	t.Run("loop decision", func(t *testing.T) {
 		ctx := withConfig(newCancelOnCheckContext(t.Context(), 1, cause), RunConfig{})
 		execution := loopExecution{loop: loopStep{config: LoopConfig{ID: "loop"}}, run: runFrom(ctx)}
-		_, err := execution.stop(ctx, 0, NewStore())
+		_, err := execution.stop(ctx, NewStore())
 		if !errors.Is(err, cause) {
 			t.Fatalf("stop error = %v; want cancellation", err)
 		}
@@ -152,13 +152,13 @@ func TestLoopStop_resamplesCancellationAfterJournalRecord(t *testing.T) {
 			execution := loopExecution{
 				loop: loopStep{config: LoopConfig{
 					ID: "loop",
-					Done: func(context.Context, int, Store) (bool, error) {
+					Done: flow.NodeFunc[Store, bool](func(context.Context, Store) (bool, error) {
 						return true, nil
-					},
+					}),
 				}},
 				run: runFrom(ctx),
 			}
-			stop, err := execution.stop(ctx, 0, NewStore())
+			stop, err := execution.stop(ctx, NewStore())
 			if !errors.Is(err, cause) || stop {
 				t.Fatalf("stop = %t, error = %v; want cancellation", stop, err)
 			}
@@ -671,9 +671,9 @@ func TestSpecCompiler_defendsItsValidatedInputContract(t *testing.T) {
 		MustRegisterResolver("resolver", flow.NodeFunc[Store, string](func(context.Context, Store) (string, error) {
 			return "", nil
 		})).
-		MustRegisterCondition("condition", func(context.Context, int, Store) (bool, error) {
+		MustRegisterCondition("condition", flow.NodeFunc[Store, bool](func(context.Context, Store) (bool, error) {
 			return false, nil
-		})
+		}))
 	compiler := specCompiler{leafCompiler: leafCompiler{registry: registry.snapshot()}}
 	broken := Spec{Kind: KindLeaf, ID: "broken", Type: "broken"}
 

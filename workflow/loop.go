@@ -15,8 +15,9 @@ type LoopConfig struct {
 	ID string
 	// Body runs once per iteration, threading the Store through.
 	Body Step
-	// Done is checked after each iteration and receives the zero-based
-	// iteration index with the Store that iteration produced.
+	// Done is checked after each iteration and receives the Store that
+	// iteration produced. It runs inside the iteration's indexed scope, so
+	// [Scope] reports the zero-based iteration index when a decision needs it.
 	Done Condition
 	// MaxIterations caps the number of iterations. Zero uses
 	// [flow.DefaultMaxIterations]; negative values are invalid.
@@ -80,8 +81,8 @@ func (l loopStep) validate() error {
 	if isNilNode(l.config.Body) {
 		return &StepError{ID: l.config.ID, Op: OpValidate, Err: ErrNilStep}
 	}
-	if l.config.Done == nil {
-		return &StepError{ID: l.config.ID, Op: OpValidate, Err: flow.ErrNilFunc}
+	if err := validateNode(l.config.Done); err != nil {
+		return &StepError{ID: l.config.ID, Op: OpValidate, Err: err}
 	}
 	// The kernel owns the meaning of the iteration cap, so its config validates
 	// the value this one carries rather than restating the rule.
@@ -153,7 +154,7 @@ func (l *loopExecution) advance(ctx context.Context, iteration int) (bool, error
 		return false, err
 	}
 
-	stop, err := l.stop(body.childContext(ctx), iteration, next)
+	stop, err := l.stop(body.childContext(ctx), next)
 	if contextErr := context.Cause(ctx); contextErr != nil {
 		return false, contextErr
 	}
@@ -169,7 +170,7 @@ func (l *loopExecution) advance(ctx context.Context, iteration int) (bool, error
 
 // stop returns whether the loop ends after this iteration, reusing the recorded
 // decision when the run is resuming.
-func (l *loopExecution) stop(ctx context.Context, iter int, s Store) (bool, error) {
+func (l *loopExecution) stop(ctx context.Context, s Store) (bool, error) {
 	if err := l.run.claim(scope(ctx), l.loop.config.ID); err != nil {
 		return false, newStepError(ctx, l.loop.config.ID, OpValidate, err)
 	}
@@ -193,7 +194,7 @@ func (l *loopExecution) stop(ctx context.Context, iter int, s Store) (bool, erro
 		)
 	}
 
-	stop, err := l.loop.config.Done(ctx, iter, s)
+	stop, err := l.loop.config.Done.Run(ctx, s)
 	if contextErr := context.Cause(ctx); contextErr != nil {
 		return false, contextErr
 	}

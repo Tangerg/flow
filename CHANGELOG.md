@@ -56,6 +56,15 @@ being presented as migrations from a version that was never published.
   JSON round trip cannot silently rename steps, ports, references, or routes.
 - `Ref.Validate` and `ScopeFrame.Validate` expose the same definition checks to
   caller-defined Binders, Steps, and repeated composites.
+- `Condition` is `flow.Node[Store, bool]`, matching `Resolver`'s
+  `flow.Node[Store, string]`, so the two decision shapes differ only in what
+  they return. A condition composes with `Then`, `Map`, and the other typed
+  helpers, is validated at registration like a resolver, and may implement the
+  optional `Validate` convention. It no longer receives an iteration index
+  parameter: a condition runs inside its iteration's indexed scope, so `Scope`
+  reports that index when a decision needs it. Registering a nil condition now
+  reports `flow.ErrNilNode` rather than `flow.ErrNilFunc`, because a
+  `NodeFactory` is the only registered kind that is still a bare function.
 - Composite steps have one construction shape. `Branch`, `Loop`, `Iteration`,
   and `Subgraph` each take a single `Config` struct that owns every field,
   including ID and body, so a composite is never configured half positionally

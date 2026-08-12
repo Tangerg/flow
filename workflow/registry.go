@@ -1,7 +1,6 @@
 package workflow
 
 import (
-	"context"
 	"encoding/json"
 	"maps"
 	"slices"
@@ -92,11 +91,17 @@ type NodeFactory func(NodeSpec) (Step, error)
 // be registered and reused directly. Adapt a function with [flow.NodeFunc].
 type Resolver = flow.Node[Store, string]
 
-// Condition decides whether a [Loop] should stop after an iteration. It may
-// return an error when the condition cannot be evaluated from the current
+// Condition is the typed node shape that decides whether a [Loop] should stop
+// after an iteration. Like [Resolver] it is an alias rather than a second
+// execution protocol, so the two decision shapes differ only in what they
+// return. Adapt a function with [flow.NodeFunc].
+//
+// A condition runs inside the iteration's indexed scope, so [Scope] reports the
+// zero-based iteration index in its last frame when a decision depends on it.
+// It may return an error when the condition cannot be evaluated from the current
 // Store. It must be safe for concurrent use by concurrent runs of the same
 // compiled definition.
-type Condition func(ctx context.Context, iter int, s Store) (bool, error)
+type Condition = flow.Node[Store, bool]
 
 // Registry holds the named building blocks that a [Spec] refers to: node
 // types, branch resolvers, and loop conditions.
@@ -189,16 +194,19 @@ func (r *Registry) MustRegisterResolver(name string, resolver Resolver) *Registr
 	return r
 }
 
-// RegisterCondition registers a loop condition under a name.
+// RegisterCondition registers a loop condition under a name. The Condition may
+// be an ordinary or composed flow.Node. Its complete visible definition is
+// validated at registration, so Registry validation cannot accept a name whose
+// implementation is already invalid.
 func (r *Registry) RegisterCondition(name string, condition Condition) error {
 	if err := validateRegistrationName(registrationCondition, name); err != nil {
 		return err
 	}
-	if condition == nil {
+	if err := validateNode(condition); err != nil {
 		return &RegistrationError{
 			Kind: registrationCondition,
 			Name: name,
-			Err:  flow.ErrNilFunc,
+			Err:  err,
 		}
 	}
 	r.mu.Lock()

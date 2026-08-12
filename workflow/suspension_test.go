@@ -724,10 +724,10 @@ func TestSuspend_loopResumesAtTheWaitingIteration(t *testing.T) {
 		runs.Add(1)
 		return x + 1, nil
 	}))
-	done := func(_ context.Context, _ int, s workflow.Store) (bool, error) {
+	done := flow.NodeFunc[workflow.Store, bool](func(_ context.Context, s workflow.Store) (bool, error) {
 		v, err := workflow.Get[int](s, workflow.Output("tick"))
 		return err == nil && v >= 4, nil
-	}
+	})
 
 	journal := workflow.NewJournal()
 	loop := workflow.Loop(workflow.LoopConfig{ID: "loop", Body: body, Done: done})
@@ -1395,9 +1395,9 @@ func TestSuspend_loopDecisionIsJournaled(t *testing.T) {
 	}), flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil }))
 	// Says "keep going" once, then "stop" — a condition that is not a function of
 	// the Store at all.
-	flaky := func(context.Context, int, workflow.Store) (bool, error) {
+	flaky := flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) {
 		return checks.Add(1) > 1, nil
-	}
+	})
 
 	journal := workflow.NewJournal()
 	loop := workflow.Loop(workflow.LoopConfig{ID: "loop", Body: body, Done: flaky})
@@ -1445,7 +1445,7 @@ func TestSuspend_journaledDecisionOfTheWrongTypeIsReported(t *testing.T) {
 	loop := workflow.Loop(workflow.LoopConfig{
 		ID:   "repeat",
 		Body: body,
-		Done: func(context.Context, int, workflow.Store) (bool, error) { return true, nil },
+		Done: flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) { return true, nil }),
 	})
 
 	_, err = runJournal(loop, workflow.NewStore(), journal)

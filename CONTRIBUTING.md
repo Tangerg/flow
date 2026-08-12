@@ -60,6 +60,12 @@ go test ./example -run Example -v
 - Keep definition rendering optional and derived in `workflow/diagram`.
 - Keep one named-port shape for workflow data edges; unary nodes use
   `workflow.DefaultInput`.
+- Express a value the engine computes from a Store as `flow.Node[Store, T]`
+  rather than a bespoke function type. `Step`, `Resolver`, and `Condition` are
+  aliases for that shape, so they compose with the typed helpers, share one
+  validation path, and need no second execution protocol. Do not add a
+  parameter that the execution context already carries: a repeated boundary
+  publishes its index through the scope, which `Scope` reports.
 - Keep one construction shape per category of workflow step. A composite that
   contains other steps and names itself takes exactly one `Config` struct that
   owns every field, including its ID and body: `Branch`, `Loop`, `Iteration`,

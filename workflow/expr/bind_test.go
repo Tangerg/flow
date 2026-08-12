@@ -38,7 +38,7 @@ func TestCondition(t *testing.T) {
 	}
 
 	for value, want := range map[int]bool{2: false, 3: true, 4: true} {
-		stop, err := condition(t.Context(), 0, store("loop.output", value))
+		stop, err := condition.Run(t.Context(), store("loop.output", value))
 		if err != nil {
 			t.Fatalf("condition(%d): %v", value, err)
 		}
@@ -54,7 +54,7 @@ func TestCondition_reportsEvaluationFailureRatherThanFalse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Condition: %v", err)
 	}
-	if _, err := condition(t.Context(), 0, workflow.NewStore()); !errors.Is(err, expr.ErrUndefined) {
+	if _, err := condition.Run(t.Context(), workflow.NewStore()); !errors.Is(err, expr.ErrUndefined) {
 		t.Fatalf("err = %v; want ErrUndefined", err)
 	}
 }
@@ -64,7 +64,7 @@ func TestCondition_rejectsNonBoolean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Condition: %v", err)
 	}
-	if _, err := condition(t.Context(), 0, store("n.output", 1)); !errors.Is(err, expr.ErrType) {
+	if _, err := condition.Run(t.Context(), store("n.output", 1)); !errors.Is(err, expr.ErrType) {
 		t.Fatalf("err = %v; want ErrType", err)
 	}
 }
@@ -90,7 +90,7 @@ func TestExpressionAdapters_preferCancellationDuringEvaluation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = condition(ctx, 0, store("value.output", cancellationJSON{
+		_, err = condition.Run(ctx, store("value.output", cancellationJSON{
 			cancel: cancel, cause: cause, encoded: `{"flag":true}`,
 		}))
 		if !errors.Is(err, cause) {
@@ -103,7 +103,7 @@ func TestExpressionAdapters_preferCancellationDuringEvaluation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := condition(alreadyCanceled(t), 0, workflow.NewStore()); !errors.Is(err, cause) {
+		if _, err := condition.Run(alreadyCanceled(t), workflow.NewStore()); !errors.Is(err, cause) {
 			t.Fatalf("condition error = %v; want cancellation cause", err)
 		}
 	})

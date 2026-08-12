@@ -126,7 +126,7 @@ func TestCompileGraphCallsFactoriesOutsideTheRegistryLock(t *testing.T) {
 		// probe: calling application code under Registry's lock would deadlock.
 		if err := registry.RegisterCondition(
 			"registered-during-build",
-			func(context.Context, int, workflow.Store) (bool, error) { return true, nil },
+			flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) { return true, nil }),
 		); err != nil {
 			return nil, err
 		}
@@ -638,9 +638,9 @@ func TestRegistry_reportsInvalidResolverAndConditionRegistrations(t *testing.T) 
 		resolver,
 		flow.NodeFunc[string, string](nil),
 	)
-	condition := workflow.Condition(func(context.Context, int, workflow.Store) (bool, error) {
+	condition := workflow.Condition(flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) {
 		return false, nil
-	})
+	}))
 
 	invalid := string([]byte{0xff})
 	for name, register := range map[string]func(*workflow.Registry) error{
@@ -697,24 +697,30 @@ func TestRegistry_reportsInvalidResolverAndConditionRegistrations(t *testing.T) 
 		!errors.Is(err, flow.ErrNilNode) {
 		t.Fatalf("composed resolver error = %v; want registration and nil-node categories", err)
 	}
+	// A Condition is the same node shape as a Resolver, so it reports the same
+	// category for an absent implementation.
+	err = workflow.NewRegistry().RegisterCondition("condition", nil)
+	if !errors.Is(err, workflow.ErrInvalidRegistration) ||
+		!errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("nil condition error = %v; want registration and nil-node categories", err)
+	}
+	err = workflow.NewRegistry().RegisterCondition(
+		"condition",
+		flow.NodeFunc[workflow.Store, bool](nil),
+	)
+	if !errors.Is(err, workflow.ErrInvalidRegistration) ||
+		!errors.Is(err, flow.ErrNilNode) {
+		t.Fatalf("typed nil condition error = %v; want registration and nil-node categories", err)
+	}
 }
 
+// NodeFactory is the only registered kind that is a bare function rather than a
+// node, so it is the only one whose absence reports flow.ErrNilFunc.
 func TestRegistry_preservesNilFunctionRegistrationCauses(t *testing.T) {
-	for name, register := range map[string]func(*workflow.Registry) error{
-		"node factory": func(registry *workflow.Registry) error {
-			return registry.RegisterNode("node", nil)
-		},
-		"condition": func(registry *workflow.Registry) error {
-			return registry.RegisterCondition("condition", nil)
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			err := register(workflow.NewRegistry())
-			if !errors.Is(err, workflow.ErrInvalidRegistration) ||
-				!errors.Is(err, flow.ErrNilFunc) {
-				t.Fatalf("registration error = %v; want registration and nil-function categories", err)
-			}
-		})
+	err := workflow.NewRegistry().RegisterNode("node", nil)
+	if !errors.Is(err, workflow.ErrInvalidRegistration) ||
+		!errors.Is(err, flow.ErrNilFunc) {
+		t.Fatalf("registration error = %v; want registration and nil-function categories", err)
 	}
 }
 
@@ -725,9 +731,9 @@ func TestValidateSpec_rejectsNonUTF8DefinitionIdentity(t *testing.T) {
 		MustRegisterResolver("pick", resolverNode(func(context.Context, workflow.Store) (string, error) {
 			return "case", nil
 		})).
-		MustRegisterCondition("done", func(context.Context, int, workflow.Store) (bool, error) {
+		MustRegisterCondition("done", flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) {
 			return true, nil
-		})
+		}))
 	body := workflow.Spec{Kind: workflow.KindSequence}
 	tests := map[string]struct {
 		spec  workflow.Spec
@@ -796,9 +802,9 @@ func TestRegistry_mustRegisterPanics(t *testing.T) {
 			}))
 		},
 		"condition": func() {
-			workflow.NewRegistry().MustRegisterCondition("", func(context.Context, int, workflow.Store) (bool, error) {
+			workflow.NewRegistry().MustRegisterCondition("", flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) {
 				return false, nil
-			})
+			}))
 		},
 	}
 	for name, run := range tests {
@@ -1083,9 +1089,9 @@ func TestValidateSpec_rejectsEveryStructuralBoundary(t *testing.T) {
 		MustRegisterResolver("pick", resolverNode(func(context.Context, workflow.Store) (string, error) {
 			return "case", nil
 		})).
-		MustRegisterCondition("done", func(context.Context, int, workflow.Store) (bool, error) {
+		MustRegisterCondition("done", flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) {
 			return true, nil
-		})
+		}))
 	leaf := func(id string) workflow.Spec {
 		return workflow.Spec{Kind: workflow.KindLeaf, ID: id, Type: "addN"}
 	}

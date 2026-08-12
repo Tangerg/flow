@@ -183,7 +183,7 @@ func TestDescriptionLabelBelongsToTheParentRelationship(t *testing.T) {
 
 func TestDescribe_everyCompositeReportsItsID(t *testing.T) {
 	yes := resolverNode(func(context.Context, workflow.Store) (string, error) { return "yes", nil })
-	stop := func(context.Context, int, workflow.Store) (bool, error) { return true, nil }
+	stop := flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) { return true, nil })
 
 	steps := map[workflow.Kind]workflow.Step{
 		workflow.KindLeaf: leafStep("leaf"),
@@ -235,7 +235,7 @@ func TestDescribe_everyCompositeReportsItsID(t *testing.T) {
 
 func TestBranchAndLoop_requireAnID(t *testing.T) {
 	yes := resolverNode(func(context.Context, workflow.Store) (string, error) { return "yes", nil })
-	stop := func(context.Context, int, workflow.Store) (bool, error) { return true, nil }
+	stop := flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) { return true, nil })
 	body := workflow.Leaf("b", workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
 
@@ -276,7 +276,7 @@ func TestBranchAndLoop_propagateDecisionErrors(t *testing.T) {
 	_, err = workflow.Loop(workflow.LoopConfig{
 		ID:   "repeat",
 		Body: body,
-		Done: func(context.Context, int, workflow.Store) (bool, error) { return false, boom },
+		Done: flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) { return false, boom }),
 	}).
 		Run(t.Context(), workflow.NewStore())
 	if !errors.As(err, &stepErr) || stepErr.ID != "repeat" || !errors.Is(err, boom) {
@@ -292,9 +292,9 @@ func TestBranchAndLoop_propagateDecisionErrors(t *testing.T) {
 		t.Fatalf("branch err = %v; want a suspension naming route", err)
 	}
 
-	_, err = workflow.Loop(workflow.LoopConfig{ID: "repeat", Body: body, Done: func(context.Context, int, workflow.Store) (bool, error) {
+	_, err = workflow.Loop(workflow.LoopConfig{ID: "repeat", Body: body, Done: flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) {
 		return false, workflow.Suspend("deciding needs a person")
-	}}).
+	})}).
 		Run(t.Context(), workflow.NewStore())
 	if suspensions := workflow.Suspensions(err); len(suspensions) != 1 || suspensions[0].ID != "repeat" {
 		t.Fatalf("loop err = %v; want a suspension naming repeat", err)

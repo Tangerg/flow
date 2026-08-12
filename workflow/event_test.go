@@ -242,7 +242,14 @@ func TestEvents_scopeDistinguishesLoopIterations(t *testing.T) {
 		workflow.BinderFunc[int](func(workflow.Store) (int, error) { count++; return count, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
-	done := func(_ context.Context, iter int, _ workflow.Store) (bool, error) { return iter >= 2, nil }
+	// A condition runs inside the iteration's indexed scope, which is where a
+	// decision that depends on the iteration index reads it from.
+	done := flow.NodeFunc[workflow.Store, bool](
+		func(ctx context.Context, _ workflow.Store) (bool, error) {
+			frames := workflow.Scope(ctx)
+			return frames[len(frames)-1].Index >= 2, nil
+		},
+	)
 
 	var scopes []string
 	cfg := workflow.RunConfig{Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {

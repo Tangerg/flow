@@ -333,9 +333,9 @@ func TestCompositesHonorCallerDefinedValidation(t *testing.T) {
 	resolver := resolverNode(func(context.Context, workflow.Store) (string, error) {
 		return "case", nil
 	})
-	condition := func(context.Context, int, workflow.Store) (bool, error) {
+	condition := flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) {
 		return true, nil
-	}
+	})
 	tests := map[string]func(workflow.Step) workflow.Step{
 		"sequence": func(body workflow.Step) workflow.Step {
 			return workflow.Sequence(body)

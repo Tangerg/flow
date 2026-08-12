@@ -12,10 +12,11 @@ import (
 // Condition compiles src into a [workflow.Loop] stop condition: the loop ends on
 // the first iteration whose resulting Store makes src true.
 //
-// The expression sees only the Store, not the iteration index; cap the number of
-// iterations with workflow.LoopConfig.MaxIterations instead. An expression that
-// cannot be evaluated returns an error rather than false, so a broken condition
-// is never mistaken for "keep looping".
+// An expression reads the Store, which is the whole input a [workflow.Condition]
+// receives; cap the number of iterations with workflow.LoopConfig.MaxIterations
+// rather than writing a rule over the iteration index. An expression that cannot
+// be evaluated returns an error rather than false, so a broken condition is
+// never mistaken for "keep looping".
 func Condition(src string) (workflow.Condition, error) {
 	e, err := Parse(src)
 	if err != nil {
@@ -27,16 +28,18 @@ func Condition(src string) (workflow.Condition, error) {
 // LoopCondition adapts the Expr into a [workflow.Condition]. Parent
 // cancellation observed before or during evaluation takes precedence.
 func (e *Expr) LoopCondition() workflow.Condition {
-	return func(ctx context.Context, _ int, s workflow.Store) (bool, error) {
-		if err := context.Cause(ctx); err != nil {
-			return false, err
-		}
-		value, err := e.Bool(s)
-		if contextErr := context.Cause(ctx); contextErr != nil {
-			return false, contextErr
-		}
-		return value, err
-	}
+	return flow.NodeFunc[workflow.Store, bool](
+		func(ctx context.Context, s workflow.Store) (bool, error) {
+			if err := context.Cause(ctx); err != nil {
+				return false, err
+			}
+			value, err := e.Bool(s)
+			if contextErr := context.Cause(ctx); contextErr != nil {
+				return false, contextErr
+			}
+			return value, err
+		},
+	)
 }
 
 // Resolver compiles src into a [workflow.Branch] resolver that returns the
