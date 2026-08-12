@@ -326,7 +326,7 @@ func TestGraph_cancellationBeforeAdmissionPreservesInput(t *testing.T) {
 	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
 		ID:     "owned",
 		Type:   "copy",
-		Inputs: workflow.DefaultInput(workflow.Output("seed")),
+		Inputs: workflow.OneInput(workflow.Output("seed")),
 	}}})
 	if err != nil {
 		t.Fatalf("CompileGraph: %v", err)

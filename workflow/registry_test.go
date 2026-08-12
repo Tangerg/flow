@@ -58,7 +58,7 @@ func lateBoundNodeSpecFactory() workflow.NodeFactory {
 }
 
 func TestCompileSpec_ownsTheFactoryDefinitionSnapshot(t *testing.T) {
-	inputs := workflow.DefaultInput(workflow.Output("start"))
+	inputs := workflow.OneInput(workflow.Output("start"))
 	config := json.RawMessage(`{"n":1}`)
 	spec := workflow.Spec{
 		Kind:   workflow.KindLeaf,
@@ -284,7 +284,7 @@ func TestRegistry_factorySuspensionIsAnInvalidDefinition(t *testing.T) {
 	for name, factory := range factories {
 		t.Run(name, func(t *testing.T) {
 			registry := workflow.NewRegistry().MustRegisterNode("broken", factory)
-			inputs := workflow.DefaultInput(workflow.Output("external"))
+			inputs := workflow.OneInput(workflow.Output("external"))
 
 			t.Run("Graph", func(t *testing.T) {
 				_, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
@@ -379,7 +379,7 @@ func TestRegistry_rejectsSchemaOutputMismatchAtCompilation(t *testing.T) {
 				Inputs: workflow.OnePort(workflow.TypeAny),
 				Output: workflow.TypeAny,
 			},
-			inputs: workflow.DefaultInput(workflow.Output("external")),
+			inputs: workflow.OneInput(workflow.Output("external")),
 		},
 		"schema hides produced output": {
 			factory: workflow.InterruptFactory(),
@@ -1259,7 +1259,7 @@ func TestValidateSpec_registeredZeroInputSchemaRejectsWiring(t *testing.T) {
 		Kind:   workflow.KindLeaf,
 		ID:     "source",
 		Type:   "source",
-		Inputs: workflow.DefaultInput(workflow.Output("external")),
+		Inputs: workflow.OneInput(workflow.Output("external")),
 	})
 	if !errors.Is(err, workflow.ErrUnknownPort) {
 		t.Fatalf("ValidateSpec error = %v; want ErrUnknownPort", err)
@@ -1338,7 +1338,7 @@ func TestRegistry_concurrentCompilationSharesOnlyImmutableRegistrations(t *testi
 	graph := workflow.Graph{Nodes: []workflow.GraphNode{{
 		ID:     "add",
 		Type:   "add",
-		Inputs: workflow.DefaultInput(workflow.Output("seed")),
+		Inputs: workflow.OneInput(workflow.Output("seed")),
 		Config: json.RawMessage(`{"n":1}`),
 	}}}
 	ctx := t.Context()

@@ -102,12 +102,12 @@ func TestMermaid_keepsExternalIdentitySeparateFromItsDisplayLabel(t *testing.T) 
 		{
 			ID:     "first",
 			Type:   "sink",
-			Inputs: workflow.DefaultInput(workflow.At("a", "b#", "c")),
+			Inputs: workflow.OneInput(workflow.At("a", "b#", "c")),
 		},
 		{
 			ID:     "second",
 			Type:   "sink",
-			Inputs: workflow.DefaultInput(workflow.At("a#/b", "c")),
+			Inputs: workflow.OneInput(workflow.At("a#/b", "c")),
 		},
 	}}
 
@@ -126,7 +126,7 @@ func TestMermaid_keepsDeclarationTargetsSeparateFromDuplicateIDs(t *testing.T) {
 		{
 			ID:     "duplicate",
 			Type:   "second",
-			Inputs: workflow.DefaultInput(workflow.Output("external")),
+			Inputs: workflow.OneInput(workflow.Output("external")),
 		},
 	}}
 

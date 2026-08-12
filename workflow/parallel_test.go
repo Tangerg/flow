@@ -266,11 +266,11 @@ func TestParallel_preservesACompiledGraphsCellOwnership(t *testing.T) {
 	graph, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
 		{
 			ID: "route", Type: "route",
-			Inputs: workflow.DefaultInput(workflow.Output("start")),
+			Inputs: workflow.OneInput(workflow.Output("start")),
 		},
 		{
 			ID: "target", Type: "target",
-			Inputs: workflow.DefaultInput(workflow.Output("start")),
+			Inputs: workflow.OneInput(workflow.Output("start")),
 			When:   []workflow.Gate{workflow.When("route", "selected")},
 		},
 	}})
@@ -313,7 +313,7 @@ func TestParallel_graphOwnershipSurvivesPersistedSuspension(t *testing.T) {
 		{ID: "route", Type: "route"},
 		{
 			ID: "target", Type: "target",
-			Inputs: workflow.DefaultInput(workflow.Output("start")),
+			Inputs: workflow.OneInput(workflow.Output("start")),
 			When:   []workflow.Gate{workflow.When("route", "selected")},
 		},
 	}})

@@ -158,13 +158,13 @@ graph := workflow.Graph{Concurrency: 2, Nodes: []workflow.GraphNode{
 	{
 		ID:     "twice",
 		Type:   "multiply",
-		Inputs: workflow.DefaultInput(workflow.Output("start")),
+		Inputs: workflow.OneInput(workflow.Output("start")),
 		Config: json.RawMessage(`{"value":2}`),
 	},
 	{
 		ID:     "plusTen",
 		Type:   "add",
-		Inputs: workflow.DefaultInput(workflow.Output("start")),
+		Inputs: workflow.OneInput(workflow.Output("start")),
 		Config: json.RawMessage(`{"value":10}`),
 	},
 	{
@@ -178,7 +178,7 @@ graph := workflow.Graph{Concurrency: 2, Nodes: []workflow.GraphNode{
 }}
 ```
 
-`DefaultInput(ref)` constructs the same one-entry `Inputs` map used by every
+`OneInput(ref)` constructs the same one-entry `Inputs` map used by every
 edge; it is not an alternate input field. Use an `Inputs` literal when a node
 has several ports.
 

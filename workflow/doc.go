@@ -49,7 +49,7 @@
 //
 // A node names each value it reads: [Inputs] wires port names to references, and
 // a [NodeSchema] declares the ports a node type expects along with their types.
-// A unary node uses [DefaultInput] to wire [DefaultPort]; it is not a second,
+// A unary node uses [OneInput] to wire [DefaultPort]; it is not a second,
 // unnamed edge shape. Naming inputs is what keeps the data flow visible to the
 // layer above. The flat [Graph] derives its execution order from the wired
 // ports, and a registered [NodeSchema] lets [Registry.ValidateGraph] report both

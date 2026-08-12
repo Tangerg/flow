@@ -187,14 +187,14 @@ func TestGraphMarshalReportsEveryLosslessEncodingBoundary(t *testing.T) {
 		"input node": {
 			node: workflow.GraphNode{
 				ID: "node", Type: "type",
-				Inputs: workflow.DefaultInput(workflow.Output(invalid)),
+				Inputs: workflow.OneInput(workflow.Output(invalid)),
 			},
 			field: "inputs",
 		},
 		"input path": {
 			node: workflow.GraphNode{
 				ID: "node", Type: "type",
-				Inputs: workflow.DefaultInput(workflow.Ref{NodeID: "source", Path: invalid}),
+				Inputs: workflow.OneInput(workflow.Ref{NodeID: "source", Path: invalid}),
 			},
 			field: "inputs",
 		},
@@ -420,14 +420,14 @@ func TestCanonicalDefinitionsHaveOneGoAndJSONValidationContract(t *testing.T) {
 	specs := map[string]workflow.Spec{
 		"leaf": {
 			Kind: workflow.KindLeaf, ID: "leaf", Type: "add",
-			Inputs: workflow.DefaultInput(workflow.Output("seed")),
+			Inputs: workflow.OneInput(workflow.Output("seed")),
 		},
 		"sequence": {Kind: workflow.KindSequence},
 		"parallel": {
 			Kind: workflow.KindParallel, Concurrency: 2,
 			Steps: []workflow.Spec{{
 				Kind: workflow.KindLeaf, ID: "leaf", Type: "add",
-				Inputs: workflow.DefaultInput(workflow.Output("seed")),
+				Inputs: workflow.OneInput(workflow.Output("seed")),
 			}},
 		},
 		"branch": {
@@ -443,7 +443,7 @@ func TestCanonicalDefinitionsHaveOneGoAndJSONValidationContract(t *testing.T) {
 			Input: workflow.Output("items"), BodyOutput: workflow.Output("element"),
 			Body: &workflow.Spec{
 				Kind: workflow.KindLeaf, ID: "element", Type: "add",
-				Inputs: workflow.DefaultInput(workflow.Item("each")),
+				Inputs: workflow.OneInput(workflow.Item("each")),
 			},
 		},
 		"subgraph": {
@@ -452,7 +452,7 @@ func TestCanonicalDefinitionsHaveOneGoAndJSONValidationContract(t *testing.T) {
 			BodyOutput: workflow.Output("inner"),
 			Body: &workflow.Spec{
 				Kind: workflow.KindLeaf, ID: "inner", Type: "add",
-				Inputs: workflow.DefaultInput(workflow.Output("seed")),
+				Inputs: workflow.OneInput(workflow.Output("seed")),
 			},
 		},
 	}
@@ -478,13 +478,13 @@ func TestCanonicalDefinitionsHaveOneGoAndJSONValidationContract(t *testing.T) {
 		"empty": {},
 		"single": {Nodes: []workflow.GraphNode{{
 			ID: "first", Type: "add",
-			Inputs: workflow.DefaultInput(workflow.Output("seed")),
+			Inputs: workflow.OneInput(workflow.Output("seed")),
 		}}},
 		"dependency": {
 			Concurrency: 2,
 			Nodes: []workflow.GraphNode{
-				{ID: "first", Type: "add", Inputs: workflow.DefaultInput(workflow.Output("seed"))},
-				{ID: "second", Type: "add", Inputs: workflow.DefaultInput(workflow.Output("first"))},
+				{ID: "first", Type: "add", Inputs: workflow.OneInput(workflow.Output("seed"))},
+				{ID: "second", Type: "add", Inputs: workflow.OneInput(workflow.Output("first"))},
 			},
 		},
 	}

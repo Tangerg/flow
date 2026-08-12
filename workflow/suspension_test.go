@@ -1202,7 +1202,7 @@ func TestValidationErrorsCannotBecomeSuspensions(t *testing.T) {
 		})
 		_, err := factory(workflow.NodeSpec{
 			ID:     "node",
-			Inputs: workflow.DefaultInput(workflow.Output("seed")),
+			Inputs: workflow.OneInput(workflow.Output("seed")),
 		})
 		assertInvalid(t, err, calls)
 	})

@@ -144,11 +144,11 @@ func TestCompileGraph_routesOnPersistentJSONString(t *testing.T) {
 	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
 		{
 			ID: "route", Type: "route",
-			Inputs: workflow.DefaultInput(workflow.Output("start")),
+			Inputs: workflow.OneInput(workflow.Output("start")),
 		},
 		{
 			ID: "target", Type: "target",
-			Inputs: workflow.DefaultInput(workflow.Output("start")),
+			Inputs: workflow.OneInput(workflow.Output("start")),
 			When:   []workflow.Gate{workflow.When("route", "��")},
 		},
 	}})
@@ -214,7 +214,7 @@ func TestCompileGraph_rejectsOpaqueFactoryStepBeforeGating(t *testing.T) {
 		{
 			ID:     "route",
 			Type:   "route",
-			Inputs: workflow.DefaultInput(workflow.Output("start")),
+			Inputs: workflow.OneInput(workflow.Output("start")),
 		},
 		{
 			ID:   "target",
@@ -693,17 +693,17 @@ func TestCompileGraph_triggerAnyWaitsForEveryRoutingSource(t *testing.T) {
 		{
 			ID:     "match",
 			Type:   "match",
-			Inputs: workflow.DefaultInput(workflow.Output("start")),
+			Inputs: workflow.OneInput(workflow.Output("start")),
 		},
 		{
 			ID:     "wait",
 			Type:   "wait",
-			Inputs: workflow.DefaultInput(workflow.Output("start")),
+			Inputs: workflow.OneInput(workflow.Output("start")),
 		},
 		{
 			ID:     "target",
 			Type:   "target",
-			Inputs: workflow.DefaultInput(workflow.Output("start")),
+			Inputs: workflow.OneInput(workflow.Output("start")),
 			When: []workflow.Gate{
 				workflow.When("match", "yes"),
 				workflow.When("wait", "yes"),

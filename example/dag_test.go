@@ -77,12 +77,12 @@ func Example_dag() {
 	graph := workflow.Graph{Concurrency: 2, Nodes: []workflow.GraphNode{
 		{
 			ID: "twice", Type: "multiply",
-			Inputs: workflow.DefaultInput(workflow.Output("start")),
+			Inputs: workflow.OneInput(workflow.Output("start")),
 			Config: json.RawMessage(`{"value":2}`),
 		},
 		{
 			ID: "plusTen", Type: "add",
-			Inputs: workflow.DefaultInput(workflow.Output("start")),
+			Inputs: workflow.OneInput(workflow.Output("start")),
 			Config: json.RawMessage(`{"value":10}`),
 		},
 		{

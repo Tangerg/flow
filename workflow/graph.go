@@ -14,7 +14,7 @@ import (
 // those inferred dependencies. An input may reference an external seed Store
 // value; every explicit DependsOn entry must name a graph node.
 //
-// A single-input node uses [DefaultInput] to wire [DefaultPort] like every other
+// A single-input node uses [OneInput] to wire [DefaultPort] like every other
 // named port. When gates execution on routing outputs; nil and empty slices both
 // mean no gates. Its zero Trigger requires every declared gate, while
 // [TriggerAny] requires at least one. Every gate source remains a dependency:

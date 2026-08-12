@@ -59,7 +59,7 @@ go test ./example -run Example -v
 - Keep the expression language optional in `workflow/expr`.
 - Keep definition rendering optional and derived in `workflow/diagram`.
 - Keep one named-port shape for workflow data edges; unary nodes use
-  `workflow.DefaultInput`.
+  `workflow.OneInput`.
 - Express a value the engine computes from a Store as `flow.Node[Store, T]`
   rather than a bespoke function type. `Step`, `Resolver`, and `Condition` are
   aliases for that shape, so they compose with the typed helpers, share one

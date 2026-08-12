@@ -93,9 +93,8 @@ func TestValidateGraph_rejectsImpossibleNestedOutputPaths(t *testing.T) {
 				{
 					ID:   "target",
 					Type: "consumer",
-					Inputs: workflow.DefaultInput(
-						workflow.Output("source").Child(test.child),
-					),
+					Inputs: workflow.OneInput(
+						workflow.Output("source").Child(test.child)),
 				},
 			}}
 
@@ -155,8 +154,8 @@ func TestValidateGraph_unregisteredProducerSchemaIsAny(t *testing.T) {
 			Output: workflow.TypeString,
 		})
 	graph := workflow.Graph{Nodes: []workflow.GraphNode{
-		{ID: "source", Type: "source", Inputs: workflow.DefaultInput(workflow.Output("external"))},
-		{ID: "target", Type: "target", Inputs: workflow.DefaultInput(workflow.Output("source"))},
+		{ID: "source", Type: "source", Inputs: workflow.OneInput(workflow.Output("external"))},
+		{ID: "target", Type: "target", Inputs: workflow.OneInput(workflow.Output("source"))},
 	}}
 
 	if err := registry.ValidateGraph(graph); err != nil {
@@ -174,8 +173,8 @@ func TestValidateGraph_rejectsDataEdgeFromNodeWithoutOutput(t *testing.T) {
 			Output: workflow.TypeAny,
 		})
 	graph := workflow.Graph{Nodes: []workflow.GraphNode{
-		{ID: "wait", Type: "wait", Inputs: workflow.DefaultInput(workflow.Output("external"))},
-		{ID: "target", Type: "target", Inputs: workflow.DefaultInput(workflow.Output("wait"))},
+		{ID: "wait", Type: "wait", Inputs: workflow.OneInput(workflow.Output("external"))},
+		{ID: "target", Type: "target", Inputs: workflow.OneInput(workflow.Output("wait"))},
 	}}
 
 	err := registry.ValidateGraph(graph)
@@ -189,8 +188,8 @@ func TestValidateGraph_rejectsInternalCellOutsideNodeOutput(t *testing.T) {
 		MustRegisterNode("source", addN()).
 		MustRegisterNode("target", addN())
 	graph := workflow.Graph{Nodes: []workflow.GraphNode{
-		{ID: "source", Type: "source", Inputs: workflow.DefaultInput(workflow.Output("external"))},
-		{ID: "target", Type: "target", Inputs: workflow.DefaultInput(workflow.At("source", "private"))},
+		{ID: "source", Type: "source", Inputs: workflow.OneInput(workflow.Output("external"))},
+		{ID: "target", Type: "target", Inputs: workflow.OneInput(workflow.At("source", "private"))},
 	}}
 
 	err := registry.ValidateGraph(graph)
@@ -206,7 +205,7 @@ func TestValidateGraph_registeredZeroInputSchemaRejectsWiring(t *testing.T) {
 	graph := workflow.Graph{Nodes: []workflow.GraphNode{{
 		ID:     "source",
 		Type:   "source",
-		Inputs: workflow.DefaultInput(workflow.Output("external")),
+		Inputs: workflow.OneInput(workflow.Output("external")),
 	}}}
 
 	err := registry.ValidateGraph(graph)

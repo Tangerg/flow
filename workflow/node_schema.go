@@ -32,7 +32,8 @@ const (
 // references.
 type Ports map[string]ValueType
 
-// OnePort returns the Ports of a node with a single input on [DefaultPort].
+// OnePort returns the Ports of a node with a single input on [DefaultPort]. It
+// is the schema-side counterpart of [OneInput].
 func OnePort(t ValueType) Ports { return Ports{DefaultPort: t} }
 
 // NodeSchema describes a registered node type for validation and tooling.

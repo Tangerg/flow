@@ -38,18 +38,18 @@ appearing after restart.
 graph := workflow.Graph{Nodes: []workflow.GraphNode{
 	{
 		ID: "route", Type: "route",
-		Inputs: workflow.DefaultInput(workflow.Output("score")),
+		Inputs: workflow.OneInput(workflow.Output("score")),
 	},
 	{
 		ID: "approve", Type: "decision",
-		Inputs: workflow.DefaultInput(workflow.Output("score")),
+		Inputs: workflow.OneInput(workflow.Output("score")),
 		When: []workflow.Gate{
 			workflow.When("route", "approve"),
 		},
 	},
 	{
 		ID: "review", Type: "decision",
-		Inputs: workflow.DefaultInput(workflow.Output("score")),
+		Inputs: workflow.OneInput(workflow.Output("score")),
 		When: []workflow.Gate{
 			workflow.When("route", "review"),
 		},

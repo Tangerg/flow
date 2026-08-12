@@ -21,10 +21,10 @@ const DefaultPort = "in"
 // references through its config is invisible to both.
 type Inputs map[string]Ref
 
-// DefaultInput returns an Inputs value with ref wired to [DefaultPort], the
-// conventional single input. It is the concise form of the same named-port map,
-// not a second wiring shape.
-func DefaultInput(ref Ref) Inputs { return Inputs{DefaultPort: ref} }
+// OneInput returns the Inputs of a node with a single input on [DefaultPort]. It
+// is the concise form of the same named-port map, not a second wiring shape, and
+// is the wiring-side counterpart of [OnePort].
+func OneInput(ref Ref) Inputs { return Inputs{DefaultPort: ref} }
 
 // Ref returns the reference wired to port. The bool reports whether the port is
 // wired.

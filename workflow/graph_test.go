@@ -169,7 +169,7 @@ func TestCompileGraph_emptyGraphIsAnIdentity(t *testing.T) {
 }
 
 func TestCompileGraph_ownsTheFactoryDefinitionSnapshot(t *testing.T) {
-	inputs := workflow.DefaultInput(workflow.Output("start"))
+	inputs := workflow.OneInput(workflow.Output("start"))
 	config := json.RawMessage(`{"n":1}`)
 	graph := workflow.Graph{Nodes: []workflow.GraphNode{{
 		ID:     "node",
@@ -389,7 +389,7 @@ func TestCompileGraph_nodesSeeOnlyDeclaredDependencies(t *testing.T) {
 			{
 				ID:     "middle",
 				Type:   "copy",
-				Inputs: workflow.DefaultInput(workflow.Output("unrelated")),
+				Inputs: workflow.OneInput(workflow.Output("unrelated")),
 			},
 			{
 				ID:        "reader",
@@ -442,12 +442,12 @@ func TestCompileGraph_rejectsExplicitDependencyAlreadyImpliedByGate(t *testing.T
 		{
 			ID:     "route",
 			Type:   "route",
-			Inputs: workflow.DefaultInput(workflow.Output("start")),
+			Inputs: workflow.OneInput(workflow.Output("start")),
 		},
 		{
 			ID:        "target",
 			Type:      "target",
-			Inputs:    workflow.DefaultInput(workflow.Output("start")),
+			Inputs:    workflow.OneInput(workflow.Output("start")),
 			When:      []workflow.Gate{workflow.When("route", "yes")},
 			DependsOn: []string{"route"},
 		},
@@ -547,12 +547,12 @@ func TestCompileGraph_rejectsDataFromAFactoryBoundaryWithoutOutput(t *testing.T)
 		{
 			ID:     "approval",
 			Type:   "wait",
-			Inputs: workflow.DefaultInput(workflow.Output("external")),
+			Inputs: workflow.OneInput(workflow.Output("external")),
 		},
 		{
 			ID:     "consumer",
 			Type:   "use",
-			Inputs: workflow.DefaultInput(workflow.Output("approval")),
+			Inputs: workflow.OneInput(workflow.Output("approval")),
 		},
 	}}
 
@@ -798,14 +798,14 @@ func TestValidateGraph_rejectsNonUTF8DefinitionIdentity(t *testing.T) {
 		"reference node ID": {
 			graph: workflow.Graph{Nodes: []workflow.GraphNode{{
 				ID: "node", Type: "node",
-				Inputs: workflow.DefaultInput(workflow.Output(invalid)),
+				Inputs: workflow.OneInput(workflow.Output(invalid)),
 			}}},
 			field: "inputs",
 		},
 		"reference path": {
 			graph: workflow.Graph{Nodes: []workflow.GraphNode{{
 				ID: "node", Type: "node",
-				Inputs: workflow.DefaultInput(workflow.Ref{NodeID: "seed", Path: "/" + invalid}),
+				Inputs: workflow.OneInput(workflow.Ref{NodeID: "seed", Path: "/" + invalid}),
 			}}},
 			field: "inputs",
 		},
@@ -876,12 +876,12 @@ func TestGraph_inputsIncludePotentialReadsOfConditionalNodes(t *testing.T) {
 		{
 			ID:     "route",
 			Type:   "router",
-			Inputs: workflow.DefaultInput(workflow.Output("start")),
+			Inputs: workflow.OneInput(workflow.Output("start")),
 		},
 		{
 			ID:     "decline",
 			Type:   "message",
-			Inputs: workflow.DefaultInput(input),
+			Inputs: workflow.OneInput(input),
 			When:   []workflow.Gate{workflow.When("route", "declined")},
 		},
 	}}

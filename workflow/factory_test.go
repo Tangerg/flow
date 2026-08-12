@@ -71,7 +71,7 @@ func TestFactories_rejectWhitespaceOnlyConfig(t *testing.T) {
 		"await": func() error {
 			_, err := workflow.AwaitFactory()(workflow.NodeSpec{
 				ID:     "wait",
-				Inputs: workflow.DefaultInput(workflow.Output("input")),
+				Inputs: workflow.OneInput(workflow.Output("input")),
 				Config: config,
 			})
 			return err
