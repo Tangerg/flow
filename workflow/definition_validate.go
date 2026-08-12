@@ -69,8 +69,17 @@ func (s stepDefinition) nodeBoundary() bool {
 	}
 }
 
+// definitionValidator tracks the execution identities one definition claims. Its
+// zero value is the empty state.
+//
+// The common definition names a single boundary — a leaf validates itself this
+// way on every execution — and one claim cannot collide with anything, so the
+// first ID stays inline and no set is allocated to hold it. firstID doubles as
+// the presence flag: [validateStepID] rejects an empty ID and always runs before
+// a claim, so the empty string cannot be one.
 type definitionValidator struct {
-	ids definitionIDs
+	firstID string
+	ids     definitionIDs
 }
 
 // validateDefinition checks local construction and the static shape visible
@@ -123,7 +132,6 @@ func normalizeDefinitionError(source string, err error) error {
 }
 
 func (d *definitionValidator) validate(step Step) error {
-	d.ids = newDefinitionIDs()
 	return d.validateStep(step, 0)
 }
 
@@ -167,9 +175,7 @@ func (d *definitionValidator) validateShape(
 		// A loop body is scoped by loop ID and iteration index. Its IDs do not
 		// collide with the surrounding workflow or another loop body. The loop
 		// ID remains reserved because its stop decision uses the same scope.
-		bodyValidator := definitionValidator{
-			ids: newDefinitionIDs(definition.id),
-		}
+		bodyValidator := definitionValidator{firstID: definition.id}
 		return bodyValidator.validateStep(definition.body, depth+1)
 	case definitionIteration:
 		if err := d.claim(definition.id); err != nil {
@@ -177,7 +183,7 @@ func (d *definitionValidator) validateShape(
 		}
 		// Each element inherits the outer Store but has its own Journal scope and
 		// publishes only the collected iteration output.
-		bodyValidator := definitionValidator{ids: newDefinitionIDs()}
+		bodyValidator := definitionValidator{}
 		if err := bodyValidator.validateStep(definition.body, depth+1); err != nil {
 			return err
 		}
@@ -188,7 +194,7 @@ func (d *definitionValidator) validateShape(
 		}
 		// A subgraph body has an isolated Store and a scope derived from the
 		// subgraph ID, so its execution identities are local to that instance.
-		bodyValidator := definitionValidator{ids: newDefinitionIDs()}
+		bodyValidator := definitionValidator{}
 		if err := bodyValidator.validateStep(definition.body, depth+1); err != nil {
 			return err
 		}
@@ -381,21 +387,44 @@ func (d *definitionValidator) validateCases(
 	// Only one case runs. Cases may reuse IDs with one another, but every case
 	// must remain conflict-free with the path before the branch and with steps
 	// that follow it.
+	claimed := d.claimedIDs()
 	introduced := newDefinitionIDs()
 	for _, name := range slices.Sorted(maps.Keys(cases)) {
-		caseValidator := definitionValidator{ids: d.ids.clone()}
+		caseValidator := definitionValidator{ids: claimed.clone()}
 		if err := caseValidator.validateStep(cases[name], depth); err != nil {
 			return err
 		}
-		introduced.addAll(d.ids.additions(caseValidator.ids))
+		introduced.addAll(claimed.additions(caseValidator.claimedIDs()))
 	}
-	d.ids.addAll(introduced)
+	claimed.addAll(introduced)
 	return nil
 }
 
+// claimedIDs returns the claimed identities as a set, materializing an inline
+// first claim. Only branch cases need one, to clone and diff against, and the
+// branch has claimed its own ID by then — so either the set already exists or
+// firstID holds that ID, and staying inline would save nothing.
+func (d *definitionValidator) claimedIDs() definitionIDs {
+	if d.ids == nil {
+		d.ids = newDefinitionIDs(d.firstID)
+	}
+	return d.ids
+}
+
+// claim records id as taken, reporting a conflict with one already claimed. The
+// caller has validated id, so it is never empty.
 func (d *definitionValidator) claim(id string) error {
-	if !d.ids.claim(id) {
+	switch {
+	case d.ids != nil:
+		if !d.ids.claim(id) {
+			return newValidationError(id, ErrDuplicateStep)
+		}
+	case d.firstID == "":
+		d.firstID = id
+	case d.firstID == id:
 		return newValidationError(id, ErrDuplicateStep)
+	default:
+		d.ids = newDefinitionIDs(d.firstID, id)
 	}
 	return nil
 }
