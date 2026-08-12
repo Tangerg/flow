@@ -1061,3 +1061,72 @@ func TestInterruptFactory_rejectsInputsAndInvalidConfig(t *testing.T) {
 		t.Fatalf("duplicate config error = %v; want ErrInvalidConfig", err)
 	}
 }
+
+// Len returns a counter kept beside the record tree, and Keys walks the tree.
+// Five places maintain that counter — Record, Forget, Reset, UnmarshalJSON, and
+// the decoder that fills it — so the two can only agree by discipline. They must:
+// Len is what a caller checks before persisting, and Keys is what it enumerates,
+// so a drift would either hide recorded work or claim work that is not there.
+func TestJournal_LenAgreesWithKeys(t *testing.T) {
+	loop := workflow.ScopeFrame{ID: "loop", Indexed: true, Index: 1}
+	key := func(id string, scope ...workflow.ScopeFrame) workflow.JournalKey {
+		return workflow.JournalKey{ID: id, Scope: scope}
+	}
+	assert := func(t *testing.T, label string, journal *workflow.Journal, want int) {
+		t.Helper()
+		keys := journal.Keys()
+		if journal.Len() != want || len(keys) != want {
+			t.Fatalf("%s: Len = %d, Keys = %d; want %d", label, journal.Len(), len(keys), want)
+		}
+	}
+
+	journal := workflow.NewJournal()
+	assert(t, "empty", journal, 0)
+	for _, k := range []workflow.JournalKey{key("a"), key("b", loop), key("c", loop)} {
+		if err := journal.Record(k, 1); err != nil {
+			t.Fatalf("Record %v: %v", k, err)
+		}
+	}
+	assert(t, "three records", journal, 3)
+
+	// A rejected write must not count.
+	if err := journal.Record(key("a"), 2); err == nil {
+		t.Fatal("re-recording the same identity unexpectedly succeeded")
+	}
+	assert(t, "after a conflicting Record", journal, 3)
+
+	// Nor may a Forget that removes nothing: a missing ID, the right ID in the
+	// wrong scope, and the right ID with its scope omitted.
+	for _, k := range []workflow.JournalKey{key("missing"), key("a", loop), key("b")} {
+		if err := journal.Forget(k); err != nil {
+			t.Fatalf("Forget %v: %v", k, err)
+		}
+	}
+	assert(t, "after futile Forgets", journal, 3)
+
+	if err := journal.Forget(key("b", loop)); err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
+	assert(t, "after a real Forget", journal, 2)
+	if err := journal.Forget(key("b", loop)); err != nil {
+		t.Fatalf("Forget again: %v", err)
+	}
+	assert(t, "after Forgetting the same key twice", journal, 2)
+
+	encoded, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var restored workflow.Journal
+	if err := json.Unmarshal(encoded, &restored); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	assert(t, "after a round trip that followed a Forget", &restored, 2)
+
+	restored.Reset()
+	assert(t, "after Reset", &restored, 0)
+	if err := restored.Record(key("d"), 4); err != nil {
+		t.Fatalf("Record after Reset: %v", err)
+	}
+	assert(t, "after Reset then Record", &restored, 1)
+}
