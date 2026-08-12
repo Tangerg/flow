@@ -460,6 +460,40 @@ func BenchmarkJournalDeepTraversal(b *testing.B) {
 	}
 }
 
+// BenchmarkJournalRecordScaling varies the number of records at a realistic
+// shallow scope. BenchmarkJournalDeepTraversal varies scope depth with a single
+// record, so the per-record cost of crossing the wire boundary — which a checkpoint
+// pays for the whole journal every time it is persisted — is only visible here.
+func BenchmarkJournalRecordScaling(b *testing.B) {
+	for _, records := range []int{64, 1024} {
+		journal := workflow.NewJournal()
+		for index := range records {
+			key := workflow.JournalKey{
+				ID:    "step-" + strconv.Itoa(index),
+				Scope: []workflow.ScopeFrame{{ID: "loop", Indexed: true, Index: uint64(index % 8)}},
+			}
+			if err := journal.Record(key, index); err != nil {
+				b.Fatalf("Record setup: %v", err)
+			}
+		}
+
+		b.Run(strconv.Itoa(records)+"/marshal", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, err := json.Marshal(journal); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+		b.Run(strconv.Itoa(records)+"/keys", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				_ = journal.Keys()
+			}
+		})
+	}
+}
+
 func benchmarkIncrement(id, input string) workflow.Step {
 	return workflow.Leaf(
 		id,
