@@ -7,18 +7,28 @@ import (
 	"github.com/Tangerg/flow"
 )
 
-// LoopConfig is [flow.LoopConfig] under the workflow package's semantic name.
-// Both loop forms therefore share one iteration-limit and zero-value contract.
-type LoopConfig = flow.LoopConfig
+// LoopConfig configures [Loop]. ID, Body, and Done are required; a zero
+// MaxIterations uses [flow.DefaultMaxIterations], matching [flow.LoopConfig].
+type LoopConfig struct {
+	// ID names the loop in the Journal and in [Describe]. It must be unique
+	// among steps that can run in the same execution.
+	ID string
+	// Body runs once per iteration, threading the Store through.
+	Body Step
+	// Done is checked after each iteration and receives the zero-based
+	// iteration index with the Store that iteration produced.
+	Done Condition
+	// MaxIterations caps the number of iterations. Zero uses
+	// [flow.DefaultMaxIterations]; negative values are invalid.
+	MaxIterations int
+}
 
-// Loop runs body repeatedly, threading the Store through each iteration, until
-// done reports true (checked after each run), ctx is cancelled, or the iteration
-// cap is reached. done receives the zero-based iteration index and the Store
-// produced by that iteration. A zero [LoopConfig] uses
-// [flow.DefaultMaxIterations].
+// Loop runs [LoopConfig.Body] repeatedly, threading the Store through each
+// iteration, until [LoopConfig.Done] reports true (checked after each run), ctx
+// is cancelled, or the iteration cap is reached.
 //
-// Because body runs more than once, each iteration adds an indexed scope frame
-// with the loop ID and iteration index. That lets an observer tell iterations
+// Because the body runs more than once, each iteration adds an indexed scope
+// frame with the loop ID and iteration index. That lets an observer tell iterations
 // apart and a [Journal] resume in the middle of one.
 //
 // Each iteration's stop decision is recorded in the Journal and reused on a run
@@ -31,18 +41,14 @@ type LoopConfig = flow.LoopConfig
 // precedence before an iteration commits and retains that prior Store. Reaching
 // the iteration cap returns a [StepError] wrapping [flow.ErrMaxIterations].
 //
-// id names the loop for those records and for [Describe]; it must be unique among
-// steps that can run in the same execution. An empty or non-UTF-8 ID, nil body,
-// or nil condition is rejected before the body runs.
-func Loop(id string, body Step, done Condition, cfg LoopConfig) Step {
-	return loopStep{id: id, body: body, done: done, config: cfg}
+// An empty or non-UTF-8 ID, nil Body, nil Done, or negative MaxIterations is
+// rejected before the body runs.
+func Loop(cfg LoopConfig) Step {
+	return loopStep{config: cfg}
 }
 
 // loopStep is the [Step] produced by [Loop].
 type loopStep struct {
-	id     string
-	body   Step
-	done   Condition
 	config LoopConfig
 }
 
@@ -52,10 +58,10 @@ func (l loopStep) Run(ctx context.Context, s Store) (Store, error) {
 		return s, err
 	}
 	if err := validateChildScope(scope(ctx)); err != nil {
-		return s, newStepError(ctx, l.id, OpValidate, err)
+		return s, newStepError(ctx, l.config.ID, OpValidate, err)
 	}
-	if err := runFrom(ctx).claim(scope(ctx), l.id); err != nil {
-		return s, newStepError(ctx, l.id, OpValidate, err)
+	if err := runFrom(ctx).claim(scope(ctx), l.config.ID); err != nil {
+		return s, newStepError(ctx, l.config.ID, OpValidate, err)
 	}
 
 	execution := loopExecution{
@@ -68,18 +74,20 @@ func (l loopStep) Run(ctx context.Context, s Store) (Store, error) {
 }
 
 func (l loopStep) validate() error {
-	if err := validateStepID(l.id); err != nil {
-		return &StepError{ID: l.id, Op: OpValidate, Err: err}
+	if err := validateStepID(l.config.ID); err != nil {
+		return &StepError{ID: l.config.ID, Op: OpValidate, Err: err}
 	}
-	if isNilNode(l.body) {
-		return &StepError{ID: l.id, Op: OpValidate, Err: ErrNilStep}
+	if isNilNode(l.config.Body) {
+		return &StepError{ID: l.config.ID, Op: OpValidate, Err: ErrNilStep}
 	}
-	if l.done == nil {
-		return &StepError{ID: l.id, Op: OpValidate, Err: flow.ErrNilFunc}
+	if l.config.Done == nil {
+		return &StepError{ID: l.config.ID, Op: OpValidate, Err: flow.ErrNilFunc}
 	}
-	if err := l.config.Validate(); err != nil {
+	// The kernel owns the meaning of the iteration cap, so its config validates
+	// the value this one carries rather than restating the rule.
+	if err := (flow.LoopConfig{MaxIterations: l.config.MaxIterations}).Validate(); err != nil {
 		return &StepError{
-			ID:  l.id,
+			ID:  l.config.ID,
 			Op:  OpValidate,
 			Err: err,
 		}
@@ -123,7 +131,7 @@ func (l *loopExecution) runIterations(ctx context.Context) (Store, error) {
 	}
 	return l.current, newStepError(
 		ctx,
-		l.loop.id,
+		l.loop.config.ID,
 		OpRun,
 		fmt.Errorf("%w: limit %d", flow.ErrMaxIterations, l.limit),
 	)
@@ -133,7 +141,7 @@ func (l *loopExecution) runIterations(ctx context.Context) (Store, error) {
 // succeed. A suspension deliberately promotes next before returning, preserving
 // the waiting body's writes; every other error keeps the previous current.
 func (l *loopExecution) advance(ctx context.Context, iteration int) (bool, error) {
-	body := (scopedStep{step: l.loop.body}).indexed(l.loop.id, iteration)
+	body := (scopedStep{step: l.loop.config.Body}).indexed(l.loop.config.ID, iteration)
 	next, err := body.run(ctx, l.current)
 	if contextErr := context.Cause(ctx); contextErr != nil {
 		return false, contextErr
@@ -162,10 +170,10 @@ func (l *loopExecution) advance(ctx context.Context, iteration int) (bool, error
 // stop returns whether the loop ends after this iteration, reusing the recorded
 // decision when the run is resuming.
 func (l *loopExecution) stop(ctx context.Context, iter int, s Store) (bool, error) {
-	if err := l.run.claim(scope(ctx), l.loop.id); err != nil {
-		return false, newStepError(ctx, l.loop.id, OpValidate, err)
+	if err := l.run.claim(scope(ctx), l.loop.config.ID); err != nil {
+		return false, newStepError(ctx, l.loop.config.ID, OpValidate, err)
 	}
-	recorded, replayed, err := l.run.replay(ctx, scope(ctx), l.loop.id)
+	recorded, replayed, err := l.run.replay(ctx, scope(ctx), l.loop.config.ID)
 	if err != nil {
 		return false, err
 	}
@@ -175,7 +183,7 @@ func (l *loopExecution) stop(ctx context.Context, iter int, s Store) (bool, erro
 		}
 		return false, newStepError(
 			ctx,
-			l.loop.id,
+			l.loop.config.ID,
 			OpRun,
 			fmt.Errorf(
 				"%w: journaled loop decision has type %T; want bool",
@@ -185,30 +193,30 @@ func (l *loopExecution) stop(ctx context.Context, iter int, s Store) (bool, erro
 		)
 	}
 
-	stop, err := l.loop.done(ctx, iter, s)
+	stop, err := l.loop.config.Done(ctx, iter, s)
 	if contextErr := context.Cause(ctx); contextErr != nil {
 		return false, contextErr
 	}
 	if err != nil {
 		if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
-			return false, suspensions.identify(l.loop.id, scope(ctx)).err()
+			return false, suspensions.identify(l.loop.config.ID, scope(ctx)).err()
 		}
-		return false, newStepError(ctx, l.loop.id, OpRun, err)
+		return false, newStepError(ctx, l.loop.config.ID, OpRun, err)
 	}
-	journalErr := l.run.journal().record(scope(ctx), l.loop.id, stop)
+	journalErr := l.run.journal().record(scope(ctx), l.loop.config.ID, stop)
 	if contextErr := context.Cause(ctx); contextErr != nil {
 		return false, contextErr
 	}
 	if journalErr != nil {
-		return false, newStepError(ctx, l.loop.id, OpRun, journalErr)
+		return false, newStepError(ctx, l.loop.config.ID, OpRun, journalErr)
 	}
 	return stop, nil
 }
 
 func (l loopStep) Describe() Description {
-	return Description{ID: l.id, Kind: KindLoop, Children: []Description{describe(l.body)}}
+	return Description{ID: l.config.ID, Kind: KindLoop, Children: []Description{describe(l.config.Body)}}
 }
 
 func (l loopStep) definition() stepDefinition {
-	return stepDefinition{kind: definitionLoop, id: l.id, body: l.body}
+	return stepDefinition{kind: definitionLoop, id: l.config.ID, body: l.config.Body}
 }

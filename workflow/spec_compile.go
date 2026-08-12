@@ -56,7 +56,7 @@ func (s specCompiler) compile(spec Spec) (Step, error) {
 		if err != nil {
 			return nil, err
 		}
-		return Parallel(steps, ParallelConfig{Concurrency: spec.Concurrency}), nil
+		return Parallel(ParallelConfig{Steps: steps, Concurrency: spec.Concurrency}), nil
 	case KindBranch:
 		return s.compileBranch(spec)
 	case KindLoop:
@@ -219,7 +219,7 @@ func (s specCompiler) compileBranch(spec Spec) (Step, error) {
 		}
 		cases[name] = step
 	}
-	return Branch(spec.ID, resolver, cases), nil
+	return Branch(BranchConfig{ID: spec.ID, Resolve: resolver, Cases: cases}), nil
 }
 
 func (s specCompiler) compileLoop(spec Spec) (Step, error) {
@@ -240,12 +240,12 @@ func (s specCompiler) compileLoop(spec Spec) (Step, error) {
 	if err != nil {
 		return nil, locateSpecError(err, fieldBody)
 	}
-	return Loop(
-		spec.ID,
-		body,
-		condition,
-		LoopConfig{MaxIterations: spec.MaxIterations},
-	), nil
+	return Loop(LoopConfig{
+		ID:            spec.ID,
+		Body:          body,
+		Done:          condition,
+		MaxIterations: spec.MaxIterations,
+	}), nil
 }
 
 func (s specCompiler) compileIteration(spec Spec) (Step, error) {

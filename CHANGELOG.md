@@ -56,6 +56,15 @@ being presented as migrations from a version that was never published.
   JSON round trip cannot silently rename steps, ports, references, or routes.
 - `Ref.Validate` and `ScopeFrame.Validate` expose the same definition checks to
   caller-defined Binders, Steps, and repeated composites.
+- Composite steps have one construction shape. `Branch`, `Loop`, `Iteration`,
+  and `Subgraph` each take a single `Config` struct that owns every field,
+  including ID and body, so a composite is never configured half positionally
+  and half through a config. `Parallel` takes `ParallelConfig{Steps,
+  Concurrency}`. `LoopConfig` and `ParallelConfig` are workflow structs rather
+  than aliases of `flow.LoopConfig` and `flow.MapConfig`, which is what let them
+  carry those fields; the `flow` config still defines what a shared setting
+  means. `Sequence` remains variadic, and steps without children keep positional
+  parameters. The JSON `Spec` and `Graph` forms are unchanged.
 - Every persisted wire type names its members exactly. `Ref`, `ScopeFrame`,
   `JournalKey`, `Suspension`, and the Journal document reject unknown,
   duplicate, and case-folded members, so an alternate spelling cannot satisfy a

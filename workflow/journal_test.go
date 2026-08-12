@@ -932,7 +932,7 @@ func TestJournal_concurrentBranchesRecordSafely(t *testing.T) {
 	journal := workflow.NewJournal()
 	cfg := workflow.RunConfig{Journal: journal}
 	if _, err := workflow.Run(t.Context(),
-		workflow.Parallel(steps, workflow.ParallelConfig{}), workflow.NewStore(), cfg); err != nil {
+		workflow.Parallel(workflow.ParallelConfig{Steps: steps}), workflow.NewStore(), cfg); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if journal.Len() != branches {

@@ -7,9 +7,15 @@ import (
 	"github.com/Tangerg/flow"
 )
 
-// ParallelConfig is [flow.MapConfig] under the workflow package's semantic
-// name. Both concurrent fan-out forms therefore share one limit contract.
-type ParallelConfig = flow.MapConfig
+// ParallelConfig configures [Parallel]. A zero Concurrency runs every branch
+// concurrently, matching [flow.MapConfig].
+type ParallelConfig struct {
+	// Steps are the branches to run concurrently on the same input Store.
+	Steps []Step
+	// Concurrency caps the number of concurrent branches. Zero is unbounded;
+	// negative values are invalid.
+	Concurrency int
+}
 
 // Parallel runs every branch concurrently on the same input Store and merges
 // their resulting Stores into one. Because the Store structure is persistent,
@@ -39,8 +45,11 @@ type ParallelConfig = flow.MapConfig
 // Before running, it rejects nil branches and duplicate IDs in steps built by
 // this package. Built-in steps hidden inside caller-defined steps validate and
 // claim their identities when invoked.
-func Parallel(branches []Step, cfg ParallelConfig) Step {
-	return parallelStep{branches: stepList(slices.Clone(branches)), limit: cfg.Concurrency}
+func Parallel(cfg ParallelConfig) Step {
+	return parallelStep{
+		branches: stepList(slices.Clone(cfg.Steps)),
+		limit:    cfg.Concurrency,
+	}
 }
 
 // parallelStep is the [Step] produced by [Parallel].

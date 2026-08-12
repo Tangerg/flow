@@ -431,10 +431,10 @@ func TestBranch_parentCancellationWinsAtEveryCallBoundary(t *testing.T) {
 		ctx, cancel := context.WithCancelCause(t.Context())
 		cancel(cause)
 		called := false
-		step := workflow.Branch("branch", resolverNode(func(context.Context, workflow.Store) (string, error) {
+		step := workflow.Branch(workflow.BranchConfig{ID: "branch", Resolve: resolverNode(func(context.Context, workflow.Store) (string, error) {
 			called = true
 			return "case", nil
-		}), map[string]workflow.Step{"case": workflow.Sequence()})
+		}), Cases: map[string]workflow.Step{"case": workflow.Sequence()}})
 
 		_, err := step.Run(ctx, workflow.NewStore())
 		if !errors.Is(err, cause) || called {
@@ -446,15 +446,15 @@ func TestBranch_parentCancellationWinsAtEveryCallBoundary(t *testing.T) {
 		ctx, cancel := context.WithCancelCause(t.Context())
 		caseCalled := false
 		journal := workflow.NewJournal()
-		step := workflow.Branch("branch", resolverNode(func(context.Context, workflow.Store) (string, error) {
+		step := workflow.Branch(workflow.BranchConfig{ID: "branch", Resolve: resolverNode(func(context.Context, workflow.Store) (string, error) {
 			cancel(cause)
 			return "", errors.New("resolver failed")
-		}), map[string]workflow.Step{
+		}), Cases: map[string]workflow.Step{
 			"case": flow.NodeFunc[workflow.Store, workflow.Store](func(context.Context, workflow.Store) (workflow.Store, error) {
 				caseCalled = true
 				return workflow.NewStore(), nil
 			}),
-		})
+		}})
 
 		_, err := workflow.Run(ctx, step, workflow.NewStore(), workflow.RunConfig{Journal: journal})
 		if !errors.Is(err, cause) || caseCalled || journal.Len() != 0 {
@@ -465,14 +465,14 @@ func TestBranch_parentCancellationWinsAtEveryCallBoundary(t *testing.T) {
 	t.Run("during case", func(t *testing.T) {
 		ctx, cancel := context.WithCancelCause(t.Context())
 		input := workflow.NewStore().WithOutput("seed", 1)
-		step := workflow.Branch("branch", resolverNode(func(context.Context, workflow.Store) (string, error) {
+		step := workflow.Branch(workflow.BranchConfig{ID: "branch", Resolve: resolverNode(func(context.Context, workflow.Store) (string, error) {
 			return "case", nil
-		}), map[string]workflow.Step{
+		}), Cases: map[string]workflow.Step{
 			"case": flow.NodeFunc[workflow.Store, workflow.Store](func(_ context.Context, store workflow.Store) (workflow.Store, error) {
 				cancel(cause)
 				return store.WithOutput("partial", 1), nil
 			}),
-		})
+		}})
 
 		output, err := step.Run(ctx, input)
 		if !errors.Is(err, cause) {

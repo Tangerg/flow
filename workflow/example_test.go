@@ -84,10 +84,10 @@ func ExampleSequence() {
 
 	pipeline := workflow.Sequence(
 		add("load", "input", 1),
-		workflow.Parallel([]workflow.Step{
+		workflow.Parallel(workflow.ParallelConfig{Steps: []workflow.Step{
 			add("save", "load", 10),
 			add("audit", "load", 100),
-		}, workflow.ParallelConfig{}),
+		}}),
 	)
 
 	out, err := pipeline.Run(context.Background(), workflow.NewStore().WithOutput("input", 1))
@@ -386,7 +386,7 @@ func ExampleParallel_suspension() {
 
 	journal := workflow.NewJournal()
 	cfg := workflow.RunConfig{Journal: journal}
-	both := workflow.Parallel([]workflow.Step{report, sign}, workflow.ParallelConfig{})
+	both := workflow.Parallel(workflow.ParallelConfig{Steps: []workflow.Step{report, sign}})
 
 	paused, err := workflow.Run(context.Background(), both,
 		workflow.NewStore().WithOutput("start", 21), cfg)

@@ -1152,10 +1152,9 @@ func TestStreamFunc_parallelStreamsShareRunSequence(t *testing.T) {
 			),
 		)
 	}
-	step := workflow.Parallel(
-		[]workflow.Step{makeStep("left"), makeStep("right")},
-		workflow.ParallelConfig{},
-	)
+	step := workflow.Parallel(workflow.ParallelConfig{
+		Steps: []workflow.Step{makeStep("left"), makeStep("right")},
+	})
 
 	var mu sync.Mutex
 	seqs := make(map[uint64]struct{})

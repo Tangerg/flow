@@ -443,7 +443,7 @@ func TestSuspend_parallelLetsSiblingsFinish(t *testing.T) {
 	waiting := workflow.Await("waiting", workflow.Output("approval"))
 
 	journal := workflow.NewJournal()
-	p := workflow.Parallel([]workflow.Step{slow, waiting}, workflow.ParallelConfig{})
+	p := workflow.Parallel(workflow.ParallelConfig{Steps: []workflow.Step{slow, waiting}})
 
 	out, runErr := runJournal(p, workflow.NewStore().WithOutput("start", 1), journal)
 	if !errors.Is(runErr, workflow.ErrSuspended) {
@@ -471,11 +471,11 @@ func TestSuspend_parallelLetsSiblingsFinish(t *testing.T) {
 }
 
 func TestSuspend_parallelReportsEverySuspension(t *testing.T) {
-	p := workflow.Parallel([]workflow.Step{
+	p := workflow.Parallel(workflow.ParallelConfig{Steps: []workflow.Step{
 		workflow.Await("first", workflow.Output("a")),
 		workflow.Await("second", workflow.Output("b")),
 		workflow.Await("third", workflow.Output("c")),
-	}, workflow.ParallelConfig{})
+	}})
 
 	_, err := p.Run(t.Context(), workflow.NewStore())
 	if !errors.Is(err, workflow.ErrSuspended) {
@@ -502,15 +502,16 @@ func TestSuspend_nestedParallelPreservesSuspensionsAndCompletedWork(t *testing.T
 		workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) { return value, nil }),
 	)
-	inner := workflow.Parallel([]workflow.Step{
+	inner := workflow.Parallel(workflow.ParallelConfig{Steps: []workflow.Step{
 		completed,
 		workflow.Await("a", workflow.Output("input-a")),
 		workflow.Await("b", workflow.Output("input-b")),
-	}, workflow.ParallelConfig{})
-	outer := workflow.Parallel([]workflow.Step{
+	}})
+
+	outer := workflow.Parallel(workflow.ParallelConfig{Steps: []workflow.Step{
 		inner,
 		workflow.Await("c", workflow.Output("input-c")),
-	}, workflow.ParallelConfig{})
+	}})
 
 	out, err := outer.Run(t.Context(), workflow.NewStore())
 	if !errors.Is(err, workflow.ErrSuspended) {
@@ -530,10 +531,11 @@ func TestSuspend_nestedParallelPreservesSuspensionsAndCompletedWork(t *testing.T
 }
 
 func TestSuspend_iterationPreservesNestedSuspensions(t *testing.T) {
-	body := workflow.Parallel([]workflow.Step{
+	body := workflow.Parallel(workflow.ParallelConfig{Steps: []workflow.Step{
 		workflow.Await("a", workflow.Output("input-a")),
 		workflow.Await("b", workflow.Output("input-b")),
-	}, workflow.ParallelConfig{})
+	}})
+
 	iteration := workflow.Iteration(workflow.IterationConfig{
 		ID:         "iter",
 		Input:      workflow.Output("items"),
@@ -559,10 +561,10 @@ func TestSuspend_parallelStillFailsFastOnRealErrors(t *testing.T) {
 	bad := workflow.Leaf("bad", workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 0, nil }),
 		flow.NodeFunc[int, int](func(context.Context, int) (int, error) { return 0, boom }))
 
-	_, err := workflow.Parallel([]workflow.Step{
+	_, err := workflow.Parallel(workflow.ParallelConfig{Steps: []workflow.Step{
 		workflow.Await("waiting", workflow.Output("approval")),
 		bad,
-	}, workflow.ParallelConfig{}).
+	}}).
 		Run(t.Context(), workflow.NewStore())
 
 	if !errors.Is(err, boom) {
@@ -579,7 +581,7 @@ func TestSuspend_joinedFailureIsNotClassifiedAsPureSuspension(t *testing.T) {
 		return s, errors.Join(workflow.Suspend("waiting"), boom)
 	})
 
-	_, err := workflow.Parallel([]workflow.Step{mixed}, workflow.ParallelConfig{}).
+	_, err := workflow.Parallel(workflow.ParallelConfig{Steps: []workflow.Step{mixed}}).
 		Run(t.Context(), workflow.NewStore())
 	var indexErr *flow.IndexError
 	if !errors.As(err, &indexErr) || indexErr.Index != 0 || !errors.Is(err, boom) {
@@ -728,7 +730,7 @@ func TestSuspend_loopResumesAtTheWaitingIteration(t *testing.T) {
 	}
 
 	journal := workflow.NewJournal()
-	loop := workflow.Loop("loop", body, done, workflow.LoopConfig{})
+	loop := workflow.Loop(workflow.LoopConfig{ID: "loop", Body: body, Done: done})
 
 	if _, err := runJournal(loop, workflow.NewStore(), journal); !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("err = %v; want ErrSuspended", err)
@@ -1140,10 +1142,8 @@ func TestValidationErrorsCannotBecomeSuspensions(t *testing.T) {
 			return err
 		},
 		"nested caller-defined step": func(step workflow.Step) error {
-			_, err := workflow.Parallel(
-				[]workflow.Step{step},
-				workflow.ParallelConfig{},
-			).Run(t.Context(), workflow.NewStore())
+			_, err := workflow.Parallel(workflow.ParallelConfig{Steps: []workflow.Step{step}}).
+				Run(t.Context(), workflow.NewStore())
 			return err
 		},
 	} {
@@ -1347,10 +1347,11 @@ func TestSuspend_branchDecisionIsJournaled(t *testing.T) {
 			flow.NodeFunc[string, string](func(_ context.Context, x string) (string, error) { return x, nil }))
 	}
 	pipeline := workflow.Sequence(
-		workflow.Branch("route", flaky, map[string]workflow.Step{
+		workflow.Branch(workflow.BranchConfig{ID: "route", Resolve: flaky, Cases: map[string]workflow.Step{
 			"first":  label("first"),
 			"second": label("second"),
-		}),
+		}}),
+
 		workflow.Await("gate", workflow.Output("approval")),
 	)
 
@@ -1399,7 +1400,7 @@ func TestSuspend_loopDecisionIsJournaled(t *testing.T) {
 	}
 
 	journal := workflow.NewJournal()
-	loop := workflow.Loop("loop", body, flaky, workflow.LoopConfig{})
+	loop := workflow.Loop(workflow.LoopConfig{ID: "loop", Body: body, Done: flaky})
 
 	if _, err := runJournal(loop, workflow.NewStore(), journal); !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("first run err = %v; want ErrSuspended", err)
@@ -1427,9 +1428,12 @@ func TestSuspend_journaledDecisionOfTheWrongTypeIsReported(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	// A recorded string that names no case is a plain no-case error.
-	branch := workflow.Branch("route",
-		resolverNode(func(context.Context, workflow.Store) (string, error) { return "a", nil }),
-		map[string]workflow.Step{"a": leafStep("a")})
+	branch := workflow.Branch(workflow.BranchConfig{
+		ID:      "route",
+		Resolve: resolverNode(func(context.Context, workflow.Store) (string, error) { return "a", nil }),
+		Cases:   map[string]workflow.Step{"a": leafStep("a")},
+	})
+
 	_, err := runJournal(branch, workflow.NewStore(), journal)
 	if !errors.Is(err, flow.ErrNoCase) {
 		t.Fatalf("branch err = %v; want ErrNoCase", err)
@@ -1438,9 +1442,12 @@ func TestSuspend_journaledDecisionOfTheWrongTypeIsReported(t *testing.T) {
 	// A recorded value of the wrong type is reported rather than ignored.
 	body := workflow.Leaf("b", workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
-	loop := workflow.Loop("repeat", body,
-		func(context.Context, int, workflow.Store) (bool, error) { return true, nil },
-		workflow.LoopConfig{})
+	loop := workflow.Loop(workflow.LoopConfig{
+		ID:   "repeat",
+		Body: body,
+		Done: func(context.Context, int, workflow.Store) (bool, error) { return true, nil },
+	})
+
 	_, err = runJournal(loop, workflow.NewStore(), journal)
 	if !errors.Is(err, workflow.ErrTypeMismatch) {
 		t.Fatalf("loop err = %v; want ErrTypeMismatch", err)

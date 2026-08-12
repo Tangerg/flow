@@ -9,8 +9,19 @@ import (
 	"github.com/Tangerg/flow"
 )
 
-// Branch routes the Store to one of several steps. It runs resolve to pick a
-// branch name from the Store, then runs the step registered under that name. If
+// BranchConfig configures [Branch]. Every field is required.
+type BranchConfig struct {
+	// ID names the branch in the Journal and in [Describe]. It must be unique
+	// among steps that can run in the same execution.
+	ID string
+	// Resolve picks a case name from the Store.
+	Resolve Resolver
+	// Cases are the steps to choose from, keyed by the name Resolve returns.
+	Cases map[string]Step
+}
+
+// Branch routes the Store to one of several steps. It runs [BranchConfig.Resolve] to pick
+// a branch name from the Store, then runs the step registered under that name. If
 // resolve yields a name with no matching case, Run fails (see flow.ErrNoCase).
 // Resolver is a flow.Node[Store, string], so typed composition can produce the
 // decision without a resolver-specific execution protocol.
@@ -29,11 +40,13 @@ import (
 // ordinary failure or suspension. Parent cancellation observed when the case
 // returns takes precedence and retains the Store from before the case instead.
 //
-// id names the branch for that record and for [Describe]; it must be unique
-// among steps that can run in the same execution. Describe lists cases by name,
-// independent of map iteration order.
-func Branch(id string, resolve Resolver, cases map[string]Step) Step {
-	return branchStep{id: id, resolve: resolve, cases: maps.Clone(cases)}
+// Describe lists cases by name, independent of map iteration order.
+func Branch(cfg BranchConfig) Step {
+	return branchStep{
+		id:      cfg.ID,
+		resolve: cfg.Resolve,
+		cases:   maps.Clone(cfg.Cases),
+	}
 }
 
 // branchStep is the [Step] produced by [Branch].

@@ -252,7 +252,7 @@ func TestEvents_scopeDistinguishesLoopIterations(t *testing.T) {
 	})}
 
 	if _, err := workflow.Run(t.Context(),
-		workflow.Loop("loop", body, done, workflow.LoopConfig{}),
+		workflow.Loop(workflow.LoopConfig{ID: "loop", Body: body, Done: done}),
 		workflow.NewStore(), cfg); err != nil {
 		t.Fatalf("run: %v", err)
 	}

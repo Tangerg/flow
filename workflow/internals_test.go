@@ -118,7 +118,7 @@ func TestReplayBoundaries_resampleCancellationAfterLookup(t *testing.T) {
 
 	t.Run("loop decision", func(t *testing.T) {
 		ctx := withConfig(newCancelOnCheckContext(t.Context(), 1, cause), RunConfig{})
-		execution := loopExecution{loop: loopStep{id: "loop"}, run: runFrom(ctx)}
+		execution := loopExecution{loop: loopStep{config: LoopConfig{ID: "loop"}}, run: runFrom(ctx)}
 		_, err := execution.stop(ctx, 0, NewStore())
 		if !errors.Is(err, cause) {
 			t.Fatalf("stop error = %v; want cancellation", err)
@@ -150,12 +150,12 @@ func TestLoopStop_resamplesCancellationAfterJournalRecord(t *testing.T) {
 			}
 
 			execution := loopExecution{
-				loop: loopStep{
-					id: "loop",
-					done: func(context.Context, int, Store) (bool, error) {
+				loop: loopStep{config: LoopConfig{
+					ID: "loop",
+					Done: func(context.Context, int, Store) (bool, error) {
 						return true, nil
 					},
-				},
+				}},
 				run: runFrom(ctx),
 			}
 			stop, err := execution.stop(ctx, 0, NewStore())
@@ -173,16 +173,13 @@ func TestBranch_resamplesCancellationBeforeCaseAdmission(t *testing.T) {
 	cause := errors.New("cancel after decision")
 	for _, cancelAt := range []int{4, 5} {
 		caseCalled := false
-		step := Branch(
-			"branch",
-			flow.NodeFunc[Store, string](func(context.Context, Store) (string, error) { return "selected", nil }),
-			map[string]Step{
-				"selected": opaqueTestStepFunc(func(context.Context, Store) (Store, error) {
-					caseCalled = true
-					return Store{}, nil
-				}),
-			},
-		)
+		step := Branch(BranchConfig{ID: "branch", Resolve: flow.NodeFunc[Store, string](func(context.Context, Store) (string, error) { return "selected", nil }), Cases: map[string]Step{
+			"selected": opaqueTestStepFunc(func(context.Context, Store) (Store, error) {
+				caseCalled = true
+				return Store{}, nil
+			}),
+		}})
+
 		ctx := newCancelOnCheckContext(t.Context(), cancelAt, cause)
 		_, err := step.Run(ctx, NewStore())
 		if !errors.Is(err, cause) || caseCalled {
@@ -326,16 +323,12 @@ func TestJournalCommitErrorsDoNotHideParentCancellation(t *testing.T) {
 		ctx := withConfig(newCancelOnCheckContext(t.Context(), 4, cause), RunConfig{
 			Journal: journal,
 		})
-		step := Branch(
-			"route",
-			flow.NodeFunc[Store, string](func(context.Context, Store) (string, error) {
-				if err := journal.Record(JournalKey{ID: "route"}, "case"); err != nil {
-					return "", err
-				}
-				return "case", nil
-			}),
-			map[string]Step{"case": Interrupt("result", nil)},
-		)
+		step := Branch(BranchConfig{ID: "route", Resolve: flow.NodeFunc[Store, string](func(context.Context, Store) (string, error) {
+			if err := journal.Record(JournalKey{ID: "route"}, "case"); err != nil {
+				return "", err
+			}
+			return "case", nil
+		}), Cases: map[string]Step{"case": Interrupt("result", nil)}})
 
 		if _, err := step.Run(ctx, NewStore()); !errors.Is(err, cause) {
 			t.Fatalf("Run error = %v; want cancellation cause", err)
@@ -437,7 +430,7 @@ func TestGuaranteedOutputsModelsEveryBuiltInShape(t *testing.T) {
 		},
 		{
 			name: "loop body",
-			step: loopStep{body: produces},
+			step: loopStep{config: LoopConfig{Body: produces}},
 			want: []string{"value"}, known: true,
 		},
 		{

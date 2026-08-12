@@ -205,16 +205,14 @@ func TestScopeFrame_distinguishesIndexedInvocationFromLiteralID(t *testing.T) {
 		Body:       body(),
 		BodyOutput: workflow.Output("work"),
 	})
-	repeated := workflow.Loop(
-		"repeat",
-		body(),
-		func(context.Context, int, workflow.Store) (bool, error) { return true, nil },
-		workflow.LoopConfig{},
-	)
-	pipeline := workflow.Parallel(
-		[]workflow.Step{literal, repeated},
-		workflow.ParallelConfig{},
-	)
+	repeated := workflow.Loop(workflow.LoopConfig{
+		ID:   "repeat",
+		Body: body(),
+		Done: func(context.Context, int, workflow.Store) (bool, error) { return true, nil },
+	})
+
+	pipeline := workflow.Parallel(workflow.ParallelConfig{Steps: []workflow.Step{literal, repeated}})
+
 	journal := workflow.NewJournal()
 	_, err := workflow.Run(
 		t.Context(),
@@ -324,12 +322,11 @@ func TestScopedComposites_rejectAnOverDepthChildScopeBeforeWork(t *testing.T) {
 	}{
 		{
 			name: "loop",
-			step: workflow.Loop(
-				"loop",
-				body,
-				func(context.Context, int, workflow.Store) (bool, error) { return true, nil },
-				workflow.LoopConfig{},
-			),
+			step: workflow.Loop(workflow.LoopConfig{
+				ID:   "loop",
+				Body: body,
+				Done: func(context.Context, int, workflow.Store) (bool, error) { return true, nil },
+			}),
 		},
 		{
 			name: "iteration",

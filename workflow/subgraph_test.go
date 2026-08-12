@@ -82,7 +82,7 @@ func TestSubgraph_reusesOneBodyUnderIndependentScopes(t *testing.T) {
 			return input + 1, nil
 		},
 	)
-	step := workflow.Parallel([]workflow.Step{
+	step := workflow.Parallel(workflow.ParallelConfig{Steps: []workflow.Step{
 		workflow.Subgraph(workflow.SubgraphConfig{
 			ID: "left", Inputs: workflow.Inputs{"value": workflow.Output("a")},
 			Body: body, BodyOutput: workflow.Output("inner"),
@@ -91,7 +91,7 @@ func TestSubgraph_reusesOneBodyUnderIndependentScopes(t *testing.T) {
 			ID: "right", Inputs: workflow.Inputs{"value": workflow.Output("b")},
 			Body: body, BodyOutput: workflow.Output("inner"),
 		}),
-	}, workflow.ParallelConfig{})
+	}})
 
 	output, err := step.Run(
 		t.Context(),
@@ -378,17 +378,14 @@ func TestSubgraph_visibleOutputMustExistOnEveryBranch(t *testing.T) {
 			return 1, nil
 		}),
 	)
-	body := workflow.Branch(
-		"route",
-		resolverNode(func(context.Context, workflow.Store) (string, error) {
-			resolverRan = true
-			return "a", nil
-		}),
-		map[string]workflow.Step{
-			"a": output,
-			"z": workflow.Sequence(),
-		},
-	)
+	body := workflow.Branch(workflow.BranchConfig{ID: "route", Resolve: resolverNode(func(context.Context, workflow.Store) (string, error) {
+		resolverRan = true
+		return "a", nil
+	}), Cases: map[string]workflow.Step{
+		"a": output,
+		"z": workflow.Sequence(),
+	}})
+
 	step := workflow.Subgraph(workflow.SubgraphConfig{
 		ID:         "sub",
 		Body:       body,
@@ -431,11 +428,12 @@ func TestSubgraph_acceptsGuaranteedVisibleOutputs(t *testing.T) {
 				}),
 			)
 		}
-		body := workflow.Branch(
-			"route",
-			resolverNode(func(context.Context, workflow.Store) (string, error) { return "yes", nil }),
-			map[string]workflow.Step{"yes": leaf(1), "no": leaf(2)},
-		)
+		body := workflow.Branch(workflow.BranchConfig{
+			ID:      "route",
+			Resolve: resolverNode(func(context.Context, workflow.Store) (string, error) { return "yes", nil }),
+			Cases:   map[string]workflow.Step{"yes": leaf(1), "no": leaf(2)},
+		})
+
 		step := workflow.Subgraph(workflow.SubgraphConfig{
 			ID: "sub", Body: body, BodyOutput: workflow.Output("result"),
 		})

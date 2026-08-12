@@ -38,10 +38,14 @@ decision := func(id, message string) workflow.Step {
 	)
 }
 
-route := workflow.Branch("route", resolve, map[string]workflow.Step{
-	"review": decision("review", "manual review"),
-	"revise": decision("revise", "request changes"),
-	"accept": decision("accept", "auto accept"),
+route := workflow.Branch(workflow.BranchConfig{
+	ID:      "route",
+	Resolve: resolve,
+	Cases: map[string]workflow.Step{
+		"review": decision("review", "manual review"),
+		"revise": decision("revise", "request changes"),
+		"accept": decision("accept", "auto accept"),
+	},
 })
 ```
 

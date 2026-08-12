@@ -60,6 +60,16 @@ go test ./example -run Example -v
 - Keep definition rendering optional and derived in `workflow/diagram`.
 - Keep one named-port shape for workflow data edges; unary nodes use
   `workflow.DefaultInput`.
+- Keep one construction shape per category of workflow step. A composite that
+  contains other steps and names itself takes exactly one `Config` struct that
+  owns every field, including its ID and body: `Branch`, `Loop`, `Iteration`,
+  and `Subgraph`. Do not split a composite's inputs between positional
+  parameters and a config, and do not alias a `flow` config as a workflow one,
+  which prevents the workflow form from carrying its own fields. `Sequence`
+  stays variadic because it has no settings, and a step with no children keeps
+  positional parameters: `Leaf`, `Await`, `Interrupt`, `Route`. Delegate the
+  meaning of a shared setting to the `flow` config that defines it rather than
+  restating the rule.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out
