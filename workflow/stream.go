@@ -133,6 +133,11 @@ type emissionKey struct{}
 // StreamFunc values with different C types; Chunk is their heterogeneous run
 // boundary.
 type emissionSession struct {
+	// mu is held across the Emitter call on purpose: that is what serializes
+	// delivery for the invocation and keeps Index monotonic, which the Emitter
+	// contract promises and warns about. Unlike Journal's lock, it guards no state
+	// another step needs, so spanning application code costs nothing but the
+	// documented backpressure.
 	mu      sync.Mutex
 	run     *runState
 	cancel  context.CancelCauseFunc
