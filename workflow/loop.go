@@ -7,7 +7,7 @@ import (
 	"github.com/Tangerg/flow"
 )
 
-// LoopConfig configures [Loop]. ID, Body, and Done are required; a zero
+// LoopConfig configures [Loop]. ID, Body, and Condition are required; a zero
 // MaxIterations uses [flow.DefaultMaxIterations], matching [flow.LoopConfig].
 type LoopConfig struct {
 	// ID names the loop in the Journal and in [Describe]. It must be unique
