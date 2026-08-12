@@ -59,9 +59,7 @@ func (s Store) jsonDocument() storeJSONDocument {
 			document.put(identity, cell)
 		}
 	}
-	for _, delta := range s.deltasOldestFirst() {
-		document.put(delta.key, delta.cell)
-	}
+	s.delta.applyOverlay(document.put)
 	return document
 }
 

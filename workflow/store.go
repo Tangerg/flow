@@ -504,9 +504,9 @@ func (s Store) materialize() storeCells {
 		maps.Copy(data, s.snapshot.data)
 	}
 
-	for _, write := range s.deltasOldestFirst() {
-		data[write.key] = write.cell
-	}
+	s.delta.applyOverlay(func(key storeKey, record cell) {
+		data[key] = record
+	})
 	return data
 }
 
@@ -517,11 +517,14 @@ func (s storeKey) compare(other storeKey) int {
 	return cmp.Compare(s.key, other.key)
 }
 
-func (s Store) deltasOldestFirst() []*storeDelta {
-	changes := make([]*storeDelta, 0, s.depth)
-	for delta := s.delta; delta != nil; delta = delta.parent {
-		changes = append(changes, delta)
+// applyOverlay replays the overlay in write order, so the newest write to a cell
+// lands last and wins. The chain runs newest first, so reaching the oldest write
+// means recursing before writing; [storeOverlayLimit] bounds the chain and the
+// recursion with it. A nil receiver is the empty overlay.
+func (d *storeDelta) applyOverlay(write func(storeKey, cell)) {
+	if d == nil {
+		return
 	}
-	slices.Reverse(changes)
-	return changes
+	d.parent.applyOverlay(write)
+	write(d.key, d.cell)
 }
