@@ -11,7 +11,7 @@ import (
 // Ref points at a value in the [Store]: a node ID plus an RFC 6901 JSON Pointer
 // under it. The first pointer segment is the key written by that node; further
 // segments index into nested data.
-type Ref struct {
+type Ref struct { //nolint:recvcheck // UnmarshalJSON requires a pointer receiver.
 	NodeID string `json:"nodeID"`
 	Path   string `json:"path"`
 }

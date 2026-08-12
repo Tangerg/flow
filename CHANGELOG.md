@@ -56,6 +56,12 @@ being presented as migrations from a version that was never published.
   JSON round trip cannot silently rename steps, ports, references, or routes.
 - `Ref.Validate` and `ScopeFrame.Validate` expose the same definition checks to
   caller-defined Binders, Steps, and repeated composites.
+- Every persisted wire type names its members exactly. `Ref`, `ScopeFrame`,
+  `JournalKey`, `Suspension`, and the Journal document reject unknown,
+  duplicate, and case-folded members, so an alternate spelling cannot satisfy a
+  field and two spellings of one member cannot let document order decide which
+  value survives. This matters most for `Suspension` and `JournalKey`, which
+  applications persist in their own run records outside any schema.
 - Suspension as a third outcome through `Await`, `Interrupt`, and `Suspend`,
   with structured waits and checkpoint-and-restart Journal replay.
 - JSON persistence for Store and Journal values. Journal wire version 4 uses

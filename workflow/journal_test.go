@@ -83,6 +83,16 @@ func TestJournalKey_JSONBoundaryIsStrictLosslessAndAtomic(t *testing.T) {
 		"unknown scope field": []byte(`{"id":"wait","scope":[{"id":"loop","extra":1}]}`),
 		"null":                []byte(`null`),
 		"array":               []byte(`[]`),
+		// A persisted key names its members exactly, so encoding/json's case
+		// folding cannot satisfy id or scope with another spelling, and a
+		// colliding pair cannot let member order pick the surviving value.
+		"folded identity":    []byte(`{"ID":"wait"}`),
+		"folded scope":       []byte(`{"id":"wait","SCOPE":[{"id":"loop"}]}`),
+		"colliding identity": []byte(`{"id":"first","ID":"second"}`),
+		// Canonical members can still describe an unusable key, so identity is
+		// validated after decoding rather than inferred from member presence.
+		"empty identity":         []byte(`{"id":""}`),
+		"scope without identity": []byte(`{"scope":[{"id":"loop"}]}`),
 	}
 	for name, data := range invalid {
 		t.Run(name, func(t *testing.T) {

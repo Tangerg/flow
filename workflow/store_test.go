@@ -120,6 +120,51 @@ func TestRef_Validate(t *testing.T) {
 	}
 }
 
+// A Ref is decoded inside definitions, which a JSON Schema also checks, and
+// inside a persisted Suspension, which nothing else checks. Its member contract
+// therefore belongs to the type rather than to encoding/json, whose case folding
+// would accept an alternate spelling and let a colliding pair depend on order.
+func TestRef_JSONBoundaryIsStrictAndAtomic(t *testing.T) {
+	invalid := map[string]string{
+		"folded node ID":     `{"NODEID":"step","path":"/output"}`,
+		"folded path":        `{"nodeID":"step","PATH":"/output"}`,
+		"colliding node ID":  `{"nodeID":"first","NODEID":"second"}`,
+		"missing node ID":    `{"path":"/output"}`,
+		"missing path":       `{"nodeID":"step"}`,
+		"unknown member":     `{"nodeID":"step","path":"/output","extra":1}`,
+		"duplicate node ID":  `{"nodeID":"first","nodeID":"second"}`,
+		"node ID not a text": `{"nodeID":1,"path":"/output"}`,
+		"path not a text":    `{"nodeID":"step","path":1}`,
+		"array":              `[]`,
+		"null":               `null`,
+	}
+	for name, document := range invalid {
+		t.Run(name, func(t *testing.T) {
+			kept := workflow.Output("kept")
+			target := kept
+			if err := json.Unmarshal([]byte(document), &target); err == nil {
+				t.Fatal("Unmarshal unexpectedly succeeded")
+			}
+			if target != kept {
+				t.Fatalf("failed Unmarshal changed receiver to %+v; want %+v", target, kept)
+			}
+		})
+	}
+
+	var canonical workflow.Ref
+	if err := json.Unmarshal([]byte(`{"nodeID":"step","path":"/output"}`), &canonical); err != nil {
+		t.Fatalf("Unmarshal canonical Ref: %v", err)
+	}
+	if canonical != workflow.Output("step") {
+		t.Fatalf("decoded Ref = %+v; want %+v", canonical, workflow.Output("step"))
+	}
+
+	var nilRef *workflow.Ref
+	if err := nilRef.UnmarshalJSON([]byte(`{"nodeID":"step","path":"/output"}`)); err == nil {
+		t.Fatal("nil receiver UnmarshalJSON unexpectedly succeeded")
+	}
+}
+
 func TestStore_LookupRejectsMalformedJSONPointers(t *testing.T) {
 	store := workflow.NewStore().WithOutput("step", 1)
 	for _, path := range []string{"", "output", "/output/~", "/output/~2"} {

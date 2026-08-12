@@ -7,6 +7,16 @@ import (
 
 type suspensionJSON Suspension
 
+// A persisted wait names its own members. Case folding would be worst here:
+// "VALUE" satisfies the application-owned value, so two spellings could collapse
+// onto one field and member order would decide which survives.
+const (
+	suspensionFieldID    = "id"
+	suspensionFieldScope = "scope"
+	suspensionFieldAwait = "await"
+	suspensionFieldValue = "value"
+)
+
 // MarshalJSON encodes a Suspension without allowing engine-owned identity to
 // change across JSON. Value remains application-owned: encoding/json chooses
 // its representation, after which the complete document is checked for
@@ -23,14 +33,26 @@ func (s Suspension) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON atomically replaces a Suspension from one strict JSON object.
-// Unknown or duplicate members, invalid Unicode, excessive nesting, and
-// malformed engine identity are rejected. Application values decode into the
-// lossless JSON domain, including json.Number rather than float64.
+// Unknown, duplicate, and noncanonical members, invalid Unicode, excessive
+// nesting, and malformed engine identity are rejected. Only the canonical
+// lower-case member names are accepted: value is application-owned, so a second
+// spelling of it must not be able to replace the persisted payload. Application
+// values decode into the lossless JSON domain, including json.Number rather than
+// float64.
 func (s *Suspension) UnmarshalJSON(data []byte) error {
 	if s == nil {
 		return errors.New("workflow: unmarshal suspension: nil suspension")
 	}
-	if _, err := jsonDocument(data).object(); err != nil {
+	raw, err := jsonDocument(data).object()
+	if err != nil {
+		return fmt.Errorf("workflow: unmarshal suspension: %w", err)
+	}
+	if err := (jsonObject(raw)).allow(
+		suspensionFieldID,
+		suspensionFieldScope,
+		suspensionFieldAwait,
+		suspensionFieldValue,
+	); err != nil {
 		return fmt.Errorf("workflow: unmarshal suspension: %w", err)
 	}
 

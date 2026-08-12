@@ -900,6 +900,23 @@ func TestSuspension_JSONBoundaryIsStrictAndAtomic(t *testing.T) {
 		"invalid scope":       []byte(`{"id":"wait","scope":[{"id":"loop","index":-1}]}`),
 		"invalid await":       []byte(`{"id":"wait","await":{"nodeID":"source","path":"output"}}`),
 		"unknown scope field": []byte(`{"id":"wait","scope":[{"id":"loop","extra":1}]}`),
+		// A persisted wait must not depend on encoding/json's case folding. Each
+		// alternate spelling below would otherwise satisfy a real field, and the
+		// colliding pairs would let member order decide which value survives.
+		"folded identity":       []byte(`{"ID":"wait"}`),
+		"folded scope":          []byte(`{"id":"wait","SCOPE":[{"id":"loop"}]}`),
+		"folded await":          []byte(`{"id":"wait","AWAIT":{"nodeID":"s","path":"/output"}}`),
+		"folded value":          []byte(`{"id":"wait","VALUE":1}`),
+		"colliding identity":    []byte(`{"id":"first","ID":"second"}`),
+		"colliding value":       []byte(`{"id":"wait","value":1,"VALUE":2}`),
+		"folded await nodeID":   []byte(`{"id":"wait","await":{"NODEID":"s","path":"/output"}}`),
+		"folded await path":     []byte(`{"id":"wait","await":{"nodeID":"s","PATH":"/output"}}`),
+		"unknown await field":   []byte(`{"id":"wait","await":{"nodeID":"s","path":"/output","x":1}}`),
+		"await without nodeID":  []byte(`{"id":"wait","await":{"path":"/output"}}`),
+		"await without path":    []byte(`{"id":"wait","await":{"nodeID":"s"}}`),
+		"await nodeID not text": []byte(`{"id":"wait","await":{"nodeID":1,"path":"/output"}}`),
+		"await path not text":   []byte(`{"id":"wait","await":{"nodeID":"s","path":1}}`),
+		"await not an object":   []byte(`{"id":"wait","await":[]}`),
 	}
 	for name, data := range invalid {
 		t.Run(name, func(t *testing.T) {
