@@ -129,11 +129,8 @@ func (s *subgraphExecution) project(ctx context.Context, inner Store) (Store, er
 }
 
 func (s subgraphStep) validate() error {
-	if err := validateStepID(s.id); err != nil {
-		return newValidationError(s.id, err)
-	}
-	if isNilNode(s.body) {
-		return newValidationError(s.id, ErrNilStep)
+	if err := validateBody(s.id, s.body); err != nil {
+		return err
 	}
 	if err := s.inputs.validateSeeds(); err != nil {
 		return newValidationError(

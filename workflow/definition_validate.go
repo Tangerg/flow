@@ -91,6 +91,20 @@ func validateNode[I, O any](node flow.Node[I, O]) error {
 	return normalizeDefinitionError("validation", flow.Validate(node))
 }
 
+// validateBody checks what every named composite holding exactly one body
+// shares: a usable execution identity and a present body. [Loop], [Iteration],
+// and [Subgraph] each add their own checks after it, so the shared requirement
+// is stated once instead of reappearing in each of them.
+func validateBody(id string, body Step) error {
+	if err := validateStepID(id); err != nil {
+		return newValidationError(id, err)
+	}
+	if isNilNode(body) {
+		return newValidationError(id, ErrNilStep)
+	}
+	return nil
+}
+
 // normalizeDefinitionError keeps every definition-construction extension point
 // on the same side of the execution boundary. Suspension is meaningful only
 // after a run has begun; a validator or factory returning one has produced an

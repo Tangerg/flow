@@ -75,11 +75,8 @@ func (l loopStep) Run(ctx context.Context, s Store) (Store, error) {
 }
 
 func (l loopStep) validate() error {
-	if err := validateStepID(l.config.ID); err != nil {
-		return newValidationError(l.config.ID, err)
-	}
-	if isNilNode(l.config.Body) {
-		return newValidationError(l.config.ID, ErrNilStep)
+	if err := validateBody(l.config.ID, l.config.Body); err != nil {
+		return err
 	}
 	if err := validateNode(l.config.Condition); err != nil {
 		return newValidationError(l.config.ID, err)

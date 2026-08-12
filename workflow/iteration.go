@@ -150,11 +150,8 @@ func (i *iterationExecution) execute(ctx context.Context) (Store, error) {
 }
 
 func (i iterationStep) validate() error {
-	if err := validateStepID(i.id); err != nil {
-		return newValidationError(i.id, err)
-	}
-	if isNilNode(i.body) {
-		return newValidationError(i.id, ErrNilStep)
+	if err := validateBody(i.id, i.body); err != nil {
+		return err
 	}
 	if err := (flow.MapConfig{Concurrency: i.limit}).Validate(); err != nil {
 		return newValidationError(
