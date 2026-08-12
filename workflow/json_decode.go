@@ -1,7 +1,6 @@
 package workflow
 
 import (
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -74,14 +73,5 @@ func (j jsonObject) allow(allowed ...string) error {
 }
 
 func translateJSONError(err error) error {
-	var depthErr *jsondoc.DepthError
-	if !errors.As(err, &depthErr) {
-		return err
-	}
-	return fmt.Errorf(
-		"%w at %s: depth exceeds limit %d",
-		ErrMaxDepth,
-		depthErr.Path,
-		depthErr.Limit,
-	)
+	return jsondoc.TranslateDepth(err, ErrMaxDepth)
 }

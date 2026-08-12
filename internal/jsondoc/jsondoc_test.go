@@ -3,6 +3,7 @@ package jsondoc
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -138,5 +139,38 @@ func TestReader_reportsMalformedContainers(t *testing.T) {
 	memberReader := reader{decoder: json.NewDecoder(strings.NewReader(`"`))}
 	if _, err := memberReader.readMemberName(); err == nil {
 		t.Fatal("readMemberName accepted a truncated string")
+	}
+}
+
+func TestTranslateDepth(t *testing.T) {
+	sentinel := errors.New("caller: too deep")
+
+	depth := &DepthError{Path: "/a/b", Limit: 3}
+	translated := TranslateDepth(depth, sentinel)
+	if !errors.Is(translated, sentinel) {
+		t.Fatalf("translated = %v; want the caller's sentinel", translated)
+	}
+	// The caller's prefix survives, and this package's name does not appear.
+	for _, want := range []string{"caller: too deep", "/a/b", "limit 3"} {
+		if !strings.Contains(translated.Error(), want) {
+			t.Fatalf("message %q lacks %q", translated, want)
+		}
+	}
+	if strings.Contains(translated.Error(), "jsondoc") {
+		t.Fatalf("message %q names this internal package", translated)
+	}
+
+	// A wrapped DepthError is still recognized.
+	if wrapped := TranslateDepth(fmt.Errorf("outer: %w", depth), sentinel); !errors.Is(wrapped, sentinel) {
+		t.Fatalf("wrapped = %v; want the caller's sentinel", wrapped)
+	}
+
+	// Any other error passes through untouched.
+	other := errors.New("unrelated")
+	if got := TranslateDepth(other, sentinel); !errors.Is(got, other) || errors.Is(got, sentinel) {
+		t.Fatalf("passthrough = %v; want the original error", got)
+	}
+	if TranslateDepth(nil, sentinel) != nil {
+		t.Fatal("nil error did not pass through")
 	}
 }

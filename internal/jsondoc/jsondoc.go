@@ -39,6 +39,25 @@ func (d *DepthError) Error() string {
 	return fmt.Sprintf("JSON nesting at %s exceeds limit %d", d.Path, d.Limit)
 }
 
+// TranslateDepth rewrites a [DepthError] as sentinel, keeping the failing path
+// and limit, and returns any other error unchanged. The caller supplies the
+// sentinel so the message carries its own package's prefix: this package is an
+// implementation detail and must not appear in a public error. Stating the
+// rewrite here keeps every boundary that shares one depth limit from also
+// sharing a copy of its diagnostic.
+func TranslateDepth(err error, sentinel error) error {
+	var depthErr *DepthError
+	if !errors.As(err, &depthErr) {
+		return err
+	}
+	return fmt.Errorf(
+		"%w at %s: depth exceeds limit %d",
+		sentinel,
+		depthErr.Path,
+		depthErr.Limit,
+	)
+}
+
 // Validate checks data without retaining its decoded value.
 func (c Codec) Validate(data []byte) error {
 	_, err := c.Value(data)

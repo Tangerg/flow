@@ -80,16 +80,7 @@ func decodeJSONObject(data []byte, dst any) error {
 }
 
 func translateJSONError(err error) error {
-	var depthErr *jsondoc.DepthError
-	if !errors.As(err, &depthErr) {
-		return err
-	}
-	return fmt.Errorf(
-		"%w at %s: depth exceeds limit %d",
-		workflow.ErrMaxDepth,
-		depthErr.Path,
-		depthErr.Limit,
-	)
+	return jsondoc.TranslateDepth(err, workflow.ErrMaxDepth)
 }
 
 func (b Bindings) validateJSONText() error {
