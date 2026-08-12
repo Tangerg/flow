@@ -93,6 +93,16 @@ go test ./example -run Example -v
   `BenchmarkParallelBaseScaling`, `BenchmarkIterationBaseScaling`, and
   `BenchmarkGraphRunBaseScaling` vary the input overlay length so a new fan-out
   site that skips this shows up as an allocation cliff at the limit.
+- State a wire member set once where you can. `expr` encodes and decodes through
+  the same struct tags, so its members cannot drift. `workflow` states some sets
+  twice on purpose: an explicit member list, or the embedded JSON Schema, rejects
+  unknown, duplicate, and case-folded members, which `encoding/json` cannot. A
+  second statement therefore has to be pinned, not trusted — a field added to one
+  side alone yields a value that marshals to a document it then rejects. Add a
+  type with a second statement to `TestWireTypesRoundTripEveryPopulatedField`,
+  and keep a kind-discriminated one such as `Spec` in
+  `TestSpecFieldMatricesAgreeWithTheSpecStruct`. Both derive what they expect by
+  reflecting over the struct, so neither becomes another list to maintain.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out
