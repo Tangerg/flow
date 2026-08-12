@@ -65,6 +65,10 @@ being presented as migrations from a version that was never published.
   reports that index when a decision needs it. Registering a nil condition now
   reports `flow.ErrNilNode` rather than `flow.ErrNilFunc`, because a
   `NodeFactory` is the only registered kind that is still a bare function.
+- A concept has one name across the JSON `Spec` and the Go config that builds
+  the same step: `LoopConfig.Condition` and `BranchConfig.Resolver` replace
+  `Done` and `Resolve`, so every field of a loop, branch, parallel, iteration,
+  or subgraph config is spelled the way the wire format spells it.
 - Composite steps have one construction shape. `Branch`, `Loop`, `Iteration`,
   and `Subgraph` each take a single `Config` struct that owns every field,
   including ID and body, so a composite is never configured half positionally

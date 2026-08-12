@@ -32,7 +32,7 @@ func Example_rules() {
 			},
 		)
 	}
-	route := workflow.Branch(workflow.BranchConfig{ID: "route", Resolve: resolve, Cases: map[string]workflow.Step{
+	route := workflow.Branch(workflow.BranchConfig{ID: "route", Resolver: resolve, Cases: map[string]workflow.Step{
 		"review": decision("review", "manual review"),
 		"revise": decision("revise", "request changes"),
 		"accept": decision("accept", "auto accept"),

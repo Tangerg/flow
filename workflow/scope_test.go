@@ -206,9 +206,9 @@ func TestScopeFrame_distinguishesIndexedInvocationFromLiteralID(t *testing.T) {
 		BodyOutput: workflow.Output("work"),
 	})
 	repeated := workflow.Loop(workflow.LoopConfig{
-		ID:   "repeat",
-		Body: body(),
-		Done: flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) { return true, nil }),
+		ID:        "repeat",
+		Body:      body(),
+		Condition: flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) { return true, nil }),
 	})
 
 	pipeline := workflow.Parallel(workflow.ParallelConfig{Steps: []workflow.Step{literal, repeated}})
@@ -323,9 +323,9 @@ func TestScopedComposites_rejectAnOverDepthChildScopeBeforeWork(t *testing.T) {
 		{
 			name: "loop",
 			step: workflow.Loop(workflow.LoopConfig{
-				ID:   "loop",
-				Body: body,
-				Done: flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) { return true, nil }),
+				ID:        "loop",
+				Body:      body,
+				Condition: flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) { return true, nil }),
 			}),
 		},
 		{

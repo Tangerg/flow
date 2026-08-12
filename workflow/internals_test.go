@@ -152,7 +152,7 @@ func TestLoopStop_resamplesCancellationAfterJournalRecord(t *testing.T) {
 			execution := loopExecution{
 				loop: loopStep{config: LoopConfig{
 					ID: "loop",
-					Done: flow.NodeFunc[Store, bool](func(context.Context, Store) (bool, error) {
+					Condition: flow.NodeFunc[Store, bool](func(context.Context, Store) (bool, error) {
 						return true, nil
 					}),
 				}},
@@ -173,7 +173,7 @@ func TestBranch_resamplesCancellationBeforeCaseAdmission(t *testing.T) {
 	cause := errors.New("cancel after decision")
 	for _, cancelAt := range []int{4, 5} {
 		caseCalled := false
-		step := Branch(BranchConfig{ID: "branch", Resolve: flow.NodeFunc[Store, string](func(context.Context, Store) (string, error) { return "selected", nil }), Cases: map[string]Step{
+		step := Branch(BranchConfig{ID: "branch", Resolver: flow.NodeFunc[Store, string](func(context.Context, Store) (string, error) { return "selected", nil }), Cases: map[string]Step{
 			"selected": opaqueTestStepFunc(func(context.Context, Store) (Store, error) {
 				caseCalled = true
 				return Store{}, nil
@@ -323,7 +323,7 @@ func TestJournalCommitErrorsDoNotHideParentCancellation(t *testing.T) {
 		ctx := withConfig(newCancelOnCheckContext(t.Context(), 4, cause), RunConfig{
 			Journal: journal,
 		})
-		step := Branch(BranchConfig{ID: "route", Resolve: flow.NodeFunc[Store, string](func(context.Context, Store) (string, error) {
+		step := Branch(BranchConfig{ID: "route", Resolver: flow.NodeFunc[Store, string](func(context.Context, Store) (string, error) {
 			if err := journal.Record(JournalKey{ID: "route"}, "case"); err != nil {
 				return "", err
 			}

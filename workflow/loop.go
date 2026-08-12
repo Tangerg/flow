@@ -15,17 +15,17 @@ type LoopConfig struct {
 	ID string
 	// Body runs once per iteration, threading the Store through.
 	Body Step
-	// Done is checked after each iteration and receives the Store that
+	// Condition is checked after each iteration and receives the Store that
 	// iteration produced. It runs inside the iteration's indexed scope, so
 	// [Scope] reports the zero-based iteration index when a decision needs it.
-	Done Condition
+	Condition Condition
 	// MaxIterations caps the number of iterations. Zero uses
 	// [flow.DefaultMaxIterations]; negative values are invalid.
 	MaxIterations int
 }
 
 // Loop runs [LoopConfig.Body] repeatedly, threading the Store through each
-// iteration, until [LoopConfig.Done] reports true (checked after each run), ctx
+// iteration, until [LoopConfig.Condition] reports true (checked after each run), ctx
 // is cancelled, or the iteration cap is reached.
 //
 // Because the body runs more than once, each iteration adds an indexed scope
@@ -42,8 +42,8 @@ type LoopConfig struct {
 // precedence before an iteration commits and retains that prior Store. Reaching
 // the iteration cap returns a [StepError] wrapping [flow.ErrMaxIterations].
 //
-// An empty or non-UTF-8 ID, nil Body, nil Done, or negative MaxIterations is
-// rejected before the body runs.
+// An empty or non-UTF-8 ID, nil Body, nil Condition, or negative MaxIterations
+// is rejected before the body runs.
 func Loop(cfg LoopConfig) Step {
 	return loopStep{config: cfg}
 }
@@ -81,7 +81,7 @@ func (l loopStep) validate() error {
 	if isNilNode(l.config.Body) {
 		return newValidationError(l.config.ID, ErrNilStep)
 	}
-	if err := validateNode(l.config.Done); err != nil {
+	if err := validateNode(l.config.Condition); err != nil {
 		return newValidationError(l.config.ID, err)
 	}
 	// The kernel owns the meaning of the iteration cap, so its config validates
@@ -192,7 +192,7 @@ func (l *loopExecution) stop(ctx context.Context, s Store) (bool, error) {
 		)
 	}
 
-	stop, err := l.loop.config.Done.Run(ctx, s)
+	stop, err := l.loop.config.Condition.Run(ctx, s)
 	if contextErr := context.Cause(ctx); contextErr != nil {
 		return false, contextErr
 	}

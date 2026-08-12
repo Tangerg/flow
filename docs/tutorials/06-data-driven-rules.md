@@ -40,7 +40,7 @@ decision := func(id, message string) workflow.Step {
 
 route := workflow.Branch(workflow.BranchConfig{
 	ID:      "route",
-	Resolve: resolve,
+	Resolver: resolve,
 	Cases: map[string]workflow.Step{
 		"review": decision("review", "manual review"),
 		"revise": decision("revise", "request changes"),

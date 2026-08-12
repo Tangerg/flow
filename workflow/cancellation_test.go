@@ -431,7 +431,7 @@ func TestBranch_parentCancellationWinsAtEveryCallBoundary(t *testing.T) {
 		ctx, cancel := context.WithCancelCause(t.Context())
 		cancel(cause)
 		called := false
-		step := workflow.Branch(workflow.BranchConfig{ID: "branch", Resolve: resolverNode(func(context.Context, workflow.Store) (string, error) {
+		step := workflow.Branch(workflow.BranchConfig{ID: "branch", Resolver: resolverNode(func(context.Context, workflow.Store) (string, error) {
 			called = true
 			return "case", nil
 		}), Cases: map[string]workflow.Step{"case": workflow.Sequence()}})
@@ -446,7 +446,7 @@ func TestBranch_parentCancellationWinsAtEveryCallBoundary(t *testing.T) {
 		ctx, cancel := context.WithCancelCause(t.Context())
 		caseCalled := false
 		journal := workflow.NewJournal()
-		step := workflow.Branch(workflow.BranchConfig{ID: "branch", Resolve: resolverNode(func(context.Context, workflow.Store) (string, error) {
+		step := workflow.Branch(workflow.BranchConfig{ID: "branch", Resolver: resolverNode(func(context.Context, workflow.Store) (string, error) {
 			cancel(cause)
 			return "", errors.New("resolver failed")
 		}), Cases: map[string]workflow.Step{
@@ -465,7 +465,7 @@ func TestBranch_parentCancellationWinsAtEveryCallBoundary(t *testing.T) {
 	t.Run("during case", func(t *testing.T) {
 		ctx, cancel := context.WithCancelCause(t.Context())
 		input := workflow.NewStore().WithOutput("seed", 1)
-		step := workflow.Branch(workflow.BranchConfig{ID: "branch", Resolve: resolverNode(func(context.Context, workflow.Store) (string, error) {
+		step := workflow.Branch(workflow.BranchConfig{ID: "branch", Resolver: resolverNode(func(context.Context, workflow.Store) (string, error) {
 			return "case", nil
 		}), Cases: map[string]workflow.Step{
 			"case": flow.NodeFunc[workflow.Store, workflow.Store](func(_ context.Context, store workflow.Store) (workflow.Store, error) {

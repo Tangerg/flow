@@ -14,14 +14,14 @@ type BranchConfig struct {
 	// ID names the branch in the Journal and in [Describe]. It must be unique
 	// among steps that can run in the same execution.
 	ID string
-	// Resolve picks a case name from the Store.
-	Resolve Resolver
-	// Cases are the steps to choose from, keyed by the name Resolve returns.
+	// Resolver picks a case name from the Store.
+	Resolver Resolver
+	// Cases are the steps to choose from, keyed by the name Resolver returns.
 	Cases map[string]Step
 }
 
-// Branch routes the Store to one of several steps. It runs [BranchConfig.Resolve] to pick
-// a branch name from the Store, then runs the step registered under that name. If
+// Branch routes the Store to one of several steps. It runs [BranchConfig.Resolver] to
+// pick a branch name from the Store, then runs the step registered under that name. If
 // resolve yields a name with no matching case, Run fails (see flow.ErrNoCase).
 // Resolver is a flow.Node[Store, string], so typed composition can produce the
 // decision without a resolver-specific execution protocol.
@@ -44,7 +44,7 @@ type BranchConfig struct {
 func Branch(cfg BranchConfig) Step {
 	return branchStep{
 		id:      cfg.ID,
-		resolve: cfg.Resolve,
+		resolve: cfg.Resolver,
 		cases:   maps.Clone(cfg.Cases),
 	}
 }

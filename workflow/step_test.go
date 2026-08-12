@@ -345,13 +345,13 @@ func TestCompositesHonorCallerDefinedValidation(t *testing.T) {
 		},
 		"branch": func(body workflow.Step) workflow.Step {
 			return workflow.Branch(workflow.BranchConfig{
-				ID:      "branch",
-				Resolve: resolver,
-				Cases:   map[string]workflow.Step{"case": body},
+				ID:       "branch",
+				Resolver: resolver,
+				Cases:    map[string]workflow.Step{"case": body},
 			})
 		},
 		"loop": func(body workflow.Step) workflow.Step {
-			return workflow.Loop(workflow.LoopConfig{ID: "loop", Body: body, Done: condition})
+			return workflow.Loop(workflow.LoopConfig{ID: "loop", Body: body, Condition: condition})
 		},
 		"iteration": func(body workflow.Step) workflow.Step {
 			return workflow.Iteration(workflow.IterationConfig{

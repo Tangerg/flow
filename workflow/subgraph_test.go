@@ -378,7 +378,7 @@ func TestSubgraph_visibleOutputMustExistOnEveryBranch(t *testing.T) {
 			return 1, nil
 		}),
 	)
-	body := workflow.Branch(workflow.BranchConfig{ID: "route", Resolve: resolverNode(func(context.Context, workflow.Store) (string, error) {
+	body := workflow.Branch(workflow.BranchConfig{ID: "route", Resolver: resolverNode(func(context.Context, workflow.Store) (string, error) {
 		resolverRan = true
 		return "a", nil
 	}), Cases: map[string]workflow.Step{
@@ -429,9 +429,9 @@ func TestSubgraph_acceptsGuaranteedVisibleOutputs(t *testing.T) {
 			)
 		}
 		body := workflow.Branch(workflow.BranchConfig{
-			ID:      "route",
-			Resolve: resolverNode(func(context.Context, workflow.Store) (string, error) { return "yes", nil }),
-			Cases:   map[string]workflow.Step{"yes": leaf(1), "no": leaf(2)},
+			ID:       "route",
+			Resolver: resolverNode(func(context.Context, workflow.Store) (string, error) { return "yes", nil }),
+			Cases:    map[string]workflow.Step{"yes": leaf(1), "no": leaf(2)},
 		})
 
 		step := workflow.Subgraph(workflow.SubgraphConfig{

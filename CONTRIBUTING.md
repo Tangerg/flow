@@ -60,6 +60,12 @@ go test ./example -run Example -v
 - Keep definition rendering optional and derived in `workflow/diagram`.
 - Keep one named-port shape for workflow data edges; unary nodes use
   `workflow.OneInput`.
+- Give a concept the same name in the JSON `Spec` and in the Go config that
+  builds the same step, so the two forms map mechanically. The types differ —
+  `Spec.Body` is a nested `Spec` while `LoopConfig.Body` is a `Step`, and
+  `Spec.Condition` is a registered name while `LoopConfig.Condition` is the node
+  — but the field name should not. Naming a field after its type, as in
+  `Inputs Inputs`, is preferred over inventing a synonym.
 - Express a value the engine computes from a Store as `flow.Node[Store, T]`
   rather than a bespoke function type. `Step`, `Resolver`, and `Condition` are
   aliases for that shape, so they compose with the typed helpers, share one

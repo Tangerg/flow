@@ -135,9 +135,9 @@ func TestDescribe_streamFuncUsesLeafBoundary(t *testing.T) {
 
 func TestBranchDescriptionPreservesIDAndCaseLabel(t *testing.T) {
 	step := workflow.Branch(workflow.BranchConfig{
-		ID:      "route",
-		Resolve: resolverNode(func(context.Context, workflow.Store) (string, error) { return "yes", nil }),
-		Cases:   map[string]workflow.Step{"yes": leafStep("actual-id")},
+		ID:       "route",
+		Resolver: resolverNode(func(context.Context, workflow.Store) (string, error) { return "yes", nil }),
+		Cases:    map[string]workflow.Step{"yes": leafStep("actual-id")},
 	})
 
 	d := workflow.Describe(step)
@@ -147,7 +147,7 @@ func TestBranchDescriptionPreservesIDAndCaseLabel(t *testing.T) {
 }
 
 func TestBranchDescriptionOrdersCasesByName(t *testing.T) {
-	step := workflow.Branch(workflow.BranchConfig{ID: "route", Resolve: resolverNode(func(context.Context, workflow.Store) (string, error) { return "a", nil }), Cases: map[string]workflow.Step{
+	step := workflow.Branch(workflow.BranchConfig{ID: "route", Resolver: resolverNode(func(context.Context, workflow.Store) (string, error) { return "a", nil }), Cases: map[string]workflow.Step{
 		"z": leafStep("last"),
 		"a": leafStep("first"),
 		"m": leafStep("middle"),
@@ -170,9 +170,9 @@ func TestDescriptionLabelBelongsToTheParentRelationship(t *testing.T) {
 	}
 
 	branch := workflow.Branch(workflow.BranchConfig{
-		ID:      "route",
-		Resolve: resolverNode(func(context.Context, workflow.Store) (string, error) { return "approved", nil }),
-		Cases:   map[string]workflow.Step{"approved": wait},
+		ID:       "route",
+		Resolver: resolverNode(func(context.Context, workflow.Store) (string, error) { return "approved", nil }),
+		Cases:    map[string]workflow.Step{"approved": wait},
 	})
 
 	description := workflow.Describe(branch)
@@ -188,14 +188,14 @@ func TestDescribe_everyCompositeReportsItsID(t *testing.T) {
 	steps := map[workflow.Kind]workflow.Step{
 		workflow.KindLeaf: leafStep("leaf"),
 		workflow.KindBranch: workflow.Branch(workflow.BranchConfig{
-			ID:      "branch",
-			Resolve: yes,
-			Cases:   map[string]workflow.Step{"yes": leafStep("y")},
+			ID:       "branch",
+			Resolver: yes,
+			Cases:    map[string]workflow.Step{"yes": leafStep("y")},
 		}),
 		workflow.KindLoop: workflow.Loop(workflow.LoopConfig{
-			ID:   "loop",
-			Body: leafStep("body"),
-			Done: stop,
+			ID:        "loop",
+			Body:      leafStep("body"),
+			Condition: stop,
 		}),
 		workflow.KindAwait:     workflow.Await("await", workflow.Output("x")),
 		workflow.KindInterrupt: workflow.Interrupt("interrupt", "continue?"),
@@ -241,11 +241,11 @@ func TestBranchAndLoop_requireAnID(t *testing.T) {
 
 	for kind, step := range map[string]workflow.Step{
 		"branch": workflow.Branch(workflow.BranchConfig{
-			ID:      "",
-			Resolve: yes,
-			Cases:   map[string]workflow.Step{"yes": leafStep("y")},
+			ID:       "",
+			Resolver: yes,
+			Cases:    map[string]workflow.Step{"yes": leafStep("y")},
 		}),
-		"loop": workflow.Loop(workflow.LoopConfig{ID: "", Body: body, Done: stop}),
+		"loop": workflow.Loop(workflow.LoopConfig{ID: "", Body: body, Condition: stop}),
 	} {
 		t.Run(kind, func(t *testing.T) {
 			_, err := step.Run(t.Context(), workflow.NewStore())
@@ -263,9 +263,9 @@ func TestBranchAndLoop_propagateDecisionErrors(t *testing.T) {
 
 	// A resolver or condition that fails is a step error naming the composite.
 	_, err := workflow.Branch(workflow.BranchConfig{
-		ID:      "route",
-		Resolve: resolverNode(func(context.Context, workflow.Store) (string, error) { return "", boom }),
-		Cases:   map[string]workflow.Step{"a": leafStep("a")},
+		ID:       "route",
+		Resolver: resolverNode(func(context.Context, workflow.Store) (string, error) { return "", boom }),
+		Cases:    map[string]workflow.Step{"a": leafStep("a")},
 	}).
 		Run(t.Context(), workflow.NewStore())
 	var stepErr *workflow.StepError
@@ -274,9 +274,9 @@ func TestBranchAndLoop_propagateDecisionErrors(t *testing.T) {
 	}
 
 	_, err = workflow.Loop(workflow.LoopConfig{
-		ID:   "repeat",
-		Body: body,
-		Done: flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) { return false, boom }),
+		ID:        "repeat",
+		Body:      body,
+		Condition: flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) { return false, boom }),
 	}).
 		Run(t.Context(), workflow.NewStore())
 	if !errors.As(err, &stepErr) || stepErr.ID != "repeat" || !errors.Is(err, boom) {
@@ -284,7 +284,7 @@ func TestBranchAndLoop_propagateDecisionErrors(t *testing.T) {
 	}
 
 	// A resolver or condition may also suspend, which is not a step error.
-	_, err = workflow.Branch(workflow.BranchConfig{ID: "route", Resolve: resolverNode(func(context.Context, workflow.Store) (string, error) {
+	_, err = workflow.Branch(workflow.BranchConfig{ID: "route", Resolver: resolverNode(func(context.Context, workflow.Store) (string, error) {
 		return "", workflow.Suspend("routing needs a person")
 	}), Cases: map[string]workflow.Step{"a": leafStep("a")}}).
 			Run(t.Context(), workflow.NewStore())
@@ -292,7 +292,7 @@ func TestBranchAndLoop_propagateDecisionErrors(t *testing.T) {
 		t.Fatalf("branch err = %v; want a suspension naming route", err)
 	}
 
-	_, err = workflow.Loop(workflow.LoopConfig{ID: "repeat", Body: body, Done: flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) {
+	_, err = workflow.Loop(workflow.LoopConfig{ID: "repeat", Body: body, Condition: flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) {
 		return false, workflow.Suspend("deciding needs a person")
 	})}).
 		Run(t.Context(), workflow.NewStore())

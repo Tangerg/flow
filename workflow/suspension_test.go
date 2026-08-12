@@ -730,7 +730,7 @@ func TestSuspend_loopResumesAtTheWaitingIteration(t *testing.T) {
 	})
 
 	journal := workflow.NewJournal()
-	loop := workflow.Loop(workflow.LoopConfig{ID: "loop", Body: body, Done: done})
+	loop := workflow.Loop(workflow.LoopConfig{ID: "loop", Body: body, Condition: done})
 
 	if _, err := runJournal(loop, workflow.NewStore(), journal); !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("err = %v; want ErrSuspended", err)
@@ -1347,7 +1347,7 @@ func TestSuspend_branchDecisionIsJournaled(t *testing.T) {
 			flow.NodeFunc[string, string](func(_ context.Context, x string) (string, error) { return x, nil }))
 	}
 	pipeline := workflow.Sequence(
-		workflow.Branch(workflow.BranchConfig{ID: "route", Resolve: flaky, Cases: map[string]workflow.Step{
+		workflow.Branch(workflow.BranchConfig{ID: "route", Resolver: flaky, Cases: map[string]workflow.Step{
 			"first":  label("first"),
 			"second": label("second"),
 		}}),
@@ -1400,7 +1400,7 @@ func TestSuspend_loopDecisionIsJournaled(t *testing.T) {
 	})
 
 	journal := workflow.NewJournal()
-	loop := workflow.Loop(workflow.LoopConfig{ID: "loop", Body: body, Done: flaky})
+	loop := workflow.Loop(workflow.LoopConfig{ID: "loop", Body: body, Condition: flaky})
 
 	if _, err := runJournal(loop, workflow.NewStore(), journal); !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("first run err = %v; want ErrSuspended", err)
@@ -1429,9 +1429,9 @@ func TestSuspend_journaledDecisionOfTheWrongTypeIsReported(t *testing.T) {
 	}
 	// A recorded string that names no case is a plain no-case error.
 	branch := workflow.Branch(workflow.BranchConfig{
-		ID:      "route",
-		Resolve: resolverNode(func(context.Context, workflow.Store) (string, error) { return "a", nil }),
-		Cases:   map[string]workflow.Step{"a": leafStep("a")},
+		ID:       "route",
+		Resolver: resolverNode(func(context.Context, workflow.Store) (string, error) { return "a", nil }),
+		Cases:    map[string]workflow.Step{"a": leafStep("a")},
 	})
 
 	_, err := runJournal(branch, workflow.NewStore(), journal)
@@ -1443,9 +1443,9 @@ func TestSuspend_journaledDecisionOfTheWrongTypeIsReported(t *testing.T) {
 	body := workflow.Leaf("b", workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
 	loop := workflow.Loop(workflow.LoopConfig{
-		ID:   "repeat",
-		Body: body,
-		Done: flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) { return true, nil }),
+		ID:        "repeat",
+		Body:      body,
+		Condition: flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) { return true, nil }),
 	})
 
 	_, err = runJournal(loop, workflow.NewStore(), journal)

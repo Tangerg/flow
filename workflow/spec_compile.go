@@ -219,7 +219,7 @@ func (s specCompiler) compileBranch(spec Spec) (Step, error) {
 		}
 		cases[name] = step
 	}
-	return Branch(BranchConfig{ID: spec.ID, Resolve: resolver, Cases: cases}), nil
+	return Branch(BranchConfig{ID: spec.ID, Resolver: resolver, Cases: cases}), nil
 }
 
 func (s specCompiler) compileLoop(spec Spec) (Step, error) {
@@ -243,7 +243,7 @@ func (s specCompiler) compileLoop(spec Spec) (Step, error) {
 	return Loop(LoopConfig{
 		ID:            spec.ID,
 		Body:          body,
-		Done:          condition,
+		Condition:     condition,
 		MaxIterations: spec.MaxIterations,
 	}), nil
 }
