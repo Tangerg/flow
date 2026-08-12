@@ -86,12 +86,7 @@ func (g graphJSONEncoder) marshal() ([]byte, error) {
 	for index, node := range g.graph.Nodes {
 		field, err := node.validateJSONText()
 		if err != nil {
-			return nil, &GraphError{
-				Path:   graphNodePath(index),
-				NodeID: node.ID,
-				Field:  field,
-				Err:    err,
-			}
+			return nil, locateNode(index, node).fieldError(field, err)
 		}
 	}
 	encoded, err := marshalJSON(graphJSONFields(g.graph))

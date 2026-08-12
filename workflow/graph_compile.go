@@ -30,12 +30,7 @@ func (r registrySnapshot) compileGraph(graph Graph) (Step, error) {
 	for index, node := range graph.Nodes {
 		step, field, err := (leafCompiler{registry: r}).compile(node.nodeSpec())
 		if err != nil {
-			return nil, &GraphError{
-				Path:   graphNodePath(index),
-				NodeID: node.ID,
-				Field:  field,
-				Err:    err,
-			}
+			return nil, locateNode(index, node).fieldError(field, err)
 		}
 		if len(node.When) > 0 {
 			step = r.gate(node, plan, step)
@@ -65,17 +60,12 @@ func (g graphPlan) validateBuiltOutputs(graph Graph, outputs map[string]bool) er
 			if _, internal := g.nodesByID[ref.NodeID]; !internal || outputs[ref.NodeID] {
 				continue
 			}
-			return &GraphError{
-				Path:   graphNodePath(index),
-				NodeID: node.ID,
-				Field:  fieldInputs,
-				Err: fmt.Errorf(
-					"%w: input port %q reads %s from a node whose factory produces no output",
-					ErrIncompatibleType,
-					port,
-					ref,
-				),
-			}
+			return locateNode(index, node).fieldError(fieldInputs, fmt.Errorf(
+				"%w: input port %q reads %s from a node whose factory produces no output",
+				ErrIncompatibleType,
+				port,
+				ref,
+			))
 		}
 	}
 	return nil

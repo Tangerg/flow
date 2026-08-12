@@ -44,8 +44,7 @@ type graphPlanner struct {
 // separate from graphPlanner makes the node-local routing rules independent of
 // dependency indexing.
 type gateValidator struct {
-	path    string
-	nodeID  string
+	nodeLocation
 	trigger Trigger
 	gates   []Gate
 	seen    map[Gate]struct{}
@@ -76,43 +75,29 @@ func (g *graphPlanner) build() (graphPlan, error) {
 
 func (g *graphPlanner) indexNodes() error {
 	for index, node := range g.graph.Nodes {
-		path := graphNodePath(index)
+		location := locateNode(index, node)
 		if err := validateStepID(node.ID); err != nil {
+			// An unusable ID cannot name the node it belongs to, so the location
+			// stays the document path alone.
 			return &GraphError{
-				Path:  path,
+				Path:  location.path,
 				Field: fieldID,
 				Err:   err,
 			}
 		}
 		if err := validateName("node type", node.Type); err != nil {
-			return &GraphError{
-				Path:   path,
-				NodeID: node.ID,
-				Field:  fieldType,
-				Err:    err,
-			}
+			return location.fieldError(fieldType, err)
 		}
 		if _, duplicate := g.plan.nodesByID[node.ID]; duplicate {
-			return &GraphError{
-				Path:   path,
-				NodeID: node.ID,
-				Field:  fieldID,
-				Err:    ErrDuplicateNode,
-			}
+			return location.fieldError(fieldID, ErrDuplicateNode)
 		}
 		if err := node.Inputs.validatePorts(); err != nil {
-			return &GraphError{
-				Path:   path,
-				NodeID: node.ID,
-				Field:  fieldInputs,
-				Err:    err,
-			}
+			return location.fieldError(fieldInputs, err)
 		}
 		gates := gateValidator{
-			path:    path,
-			nodeID:  node.ID,
-			trigger: node.Trigger,
-			gates:   node.When,
+			nodeLocation: location,
+			trigger:      node.Trigger,
+			gates:        node.When,
 		}
 		if err := gates.validate(); err != nil {
 			return err
@@ -180,24 +165,14 @@ func (g *gateValidator) validateGate(gate Gate) error {
 	return nil
 }
 
-func (g *gateValidator) fieldError(field string, err error) error {
-	return &GraphError{
-		Path:   g.path,
-		NodeID: g.nodeID,
-		Field:  field,
-		Err:    err,
-	}
-}
-
 func (g *graphPlanner) connectNodes() error {
 	for nodeIndex, node := range g.graph.Nodes {
 		connector := nodeConnector{
-			planner:   g,
-			nodeIndex: nodeIndex,
-			path:      graphNodePath(nodeIndex),
-			nodeID:    node.ID,
-			connected: make(map[string]struct{}),
-			explicit:  make(map[string]struct{}, len(node.DependsOn)),
+			nodeLocation: locateNode(nodeIndex, node),
+			planner:      g,
+			nodeIndex:    nodeIndex,
+			connected:    make(map[string]struct{}),
+			explicit:     make(map[string]struct{}, len(node.DependsOn)),
 		}
 		if err := connector.connect(node); err != nil {
 			return err
@@ -210,10 +185,9 @@ func (g *graphPlanner) connectNodes() error {
 // arrive through data, routing, or DependsOn, but it is inserted into the plan
 // once; explicit duplicates remain errors because they are definition typos.
 type nodeConnector struct {
+	nodeLocation
 	planner   *graphPlanner
 	nodeIndex int
-	path      string
-	nodeID    string
 	connected map[string]struct{}
 	explicit  map[string]struct{}
 }
@@ -302,10 +276,23 @@ func (n *nodeConnector) connectDependency(
 	return nil
 }
 
-func (n *nodeConnector) fieldError(field string, err error) error {
+// nodeLocation is where in a Graph document a diagnostic belongs: the JSON
+// Pointer to the node and the node's own ID. Every graph error carries both, so
+// they travel together and build the error together instead of being assembled
+// field by field at each site.
+type nodeLocation struct {
+	path   string
+	nodeID string
+}
+
+func locateNode(index int, node GraphNode) nodeLocation {
+	return nodeLocation{path: graphNodePath(index), nodeID: node.ID}
+}
+
+func (l nodeLocation) fieldError(field string, err error) error {
 	return &GraphError{
-		Path:   n.path,
-		NodeID: n.nodeID,
+		Path:   l.path,
+		NodeID: l.nodeID,
 		Field:  field,
 		Err:    err,
 	}

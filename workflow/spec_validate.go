@@ -276,6 +276,22 @@ func (s *specValidator) validateBranch(spec Spec) error {
 	return nil
 }
 
+// validateOwnBody checks the reference the composite will project and then
+// validates a body that runs in its own identity namespace, mirroring
+// definitionValidator.validateOwnBody for the Spec form. An iteration element
+// keeps the outer Store snapshot under an indexed Journal scope while a subgraph
+// body is sealed, but neither inherits the surrounding step IDs.
+func (s *specValidator) validateOwnBody(spec Spec) error {
+	if err := spec.BodyOutput.Validate(); err != nil {
+		return spec.fieldError(fieldBodyOutput, err)
+	}
+	bodyValidator := s.child(newDefinitionIDs())
+	if err := bodyValidator.validate(*spec.Body); err != nil {
+		return locateSpecError(err, fieldBody)
+	}
+	return nil
+}
+
 func (s *specValidator) validateIteration(spec Spec) error {
 	if err := s.claimID(spec); err != nil {
 		return err
@@ -286,15 +302,8 @@ func (s *specValidator) validateIteration(spec Spec) error {
 	if err := spec.Input.Validate(); err != nil {
 		return spec.fieldError(fieldInput, err)
 	}
-	if err := spec.BodyOutput.Validate(); err != nil {
-		return spec.fieldError(fieldBodyOutput, err)
-	}
-	// Each element gets its own Store snapshot and indexed Journal scope. The
-	// snapshot retains outer cells; Iteration isolates writes between elements,
-	// not the body namespace.
-	bodyValidator := s.child(newDefinitionIDs())
-	if err := bodyValidator.validate(*spec.Body); err != nil {
-		return locateSpecError(err, fieldBody)
+	if err := s.validateOwnBody(spec); err != nil {
+		return err
 	}
 	outputs := s.guaranteedOutputs(*spec.Body)
 	if outputs.known && !iterationOutputGuaranteed(spec.ID, outputs, spec.BodyOutput) {
@@ -313,12 +322,8 @@ func (s *specValidator) validateSubgraph(spec Spec) error {
 	if err := spec.Inputs.validateSeeds(); err != nil {
 		return spec.fieldError(fieldInputs, err)
 	}
-	if err := spec.BodyOutput.Validate(); err != nil {
-		return spec.fieldError(fieldBodyOutput, err)
-	}
-	bodyValidator := s.child(newDefinitionIDs())
-	if err := bodyValidator.validate(*spec.Body); err != nil {
-		return locateSpecError(err, fieldBody)
+	if err := s.validateOwnBody(spec); err != nil {
+		return err
 	}
 	outputs := s.guaranteedOutputs(*spec.Body)
 	if outputs.known && !subgraphOutputGuaranteed(spec.Inputs, outputs, spec.BodyOutput) {
@@ -360,29 +365,11 @@ func (s *specValidator) guaranteedOutputs(spec Spec) outputGuarantee {
 }
 
 func (s *specValidator) guaranteedStepOutputs(specs []Spec) outputGuarantee {
-	outputs := knownOutputs()
-	for _, spec := range specs {
-		outputs = outputs.union(s.guaranteedOutputs(spec))
-	}
-	return outputs
+	return unionOutputs(specs, s.guaranteedOutputs)
 }
 
 func (s *specValidator) guaranteedCaseOutputs(cases map[string]Spec) outputGuarantee {
-	var common outputGuarantee
-	first := true
-	for _, name := range slices.Sorted(maps.Keys(cases)) {
-		outputs := s.guaranteedOutputs(cases[name])
-		if first {
-			common = outputs
-			first = false
-			continue
-		}
-		common = common.intersection(outputs)
-	}
-	if first {
-		return knownOutputs()
-	}
-	return common
+	return intersectOutputs(cases, s.guaranteedOutputs)
 }
 
 func (s *specValidator) child(stepIDs definitionIDs) specValidator {

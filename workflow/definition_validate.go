@@ -178,24 +178,12 @@ func (d *definitionValidator) validateShape(
 		bodyValidator := definitionValidator{firstID: definition.id}
 		return bodyValidator.validateStep(definition.body, depth+1)
 	case definitionIteration:
-		if err := d.claim(definition.id); err != nil {
-			return err
-		}
-		// Each element inherits the outer Store but has its own Journal scope and
-		// publishes only the collected iteration output.
-		bodyValidator := definitionValidator{}
-		if err := bodyValidator.validateStep(definition.body, depth+1); err != nil {
+		if err := d.validateOwnBody(definition, depth); err != nil {
 			return err
 		}
 		return definition.validateIterationOutput()
 	case definitionSubgraph:
-		if err := d.claim(definition.id); err != nil {
-			return err
-		}
-		// A subgraph body has an isolated Store and a scope derived from the
-		// subgraph ID, so its execution identities are local to that instance.
-		bodyValidator := definitionValidator{}
-		if err := bodyValidator.validateStep(definition.body, depth+1); err != nil {
+		if err := d.validateOwnBody(definition, depth); err != nil {
 			return err
 		}
 		return definition.validateSubgraphOutput()
@@ -227,6 +215,19 @@ func subgraphOutputError(output Ref) error {
 		flow.ErrInvalidConfig,
 		output,
 	)
+}
+
+// validateOwnBody claims the composite's identity and validates a body that runs
+// in its own identity namespace. An iteration element inherits the outer Store but
+// has its own Journal scope; a subgraph body has an isolated Store scoped by the
+// subgraph ID. Neither inherits the surrounding step IDs, which is what separates
+// them from a loop body — a loop keeps its own ID reserved for the stop decision.
+func (d *definitionValidator) validateOwnBody(definition stepDefinition, depth int) error {
+	if err := d.claim(definition.id); err != nil {
+		return err
+	}
+	bodyValidator := definitionValidator{}
+	return bodyValidator.validateStep(definition.body, depth+1)
 }
 
 func (s stepDefinition) validateSubgraphOutput() error {
@@ -318,6 +319,39 @@ func (o outputGuarantee) intersection(other outputGuarantee) outputGuarantee {
 	return outputGuarantee{nodes: nodes, known: true}
 }
 
+// unionOutputs is what running every element guarantees, and intersectOutputs is
+// what running exactly one of them guarantees. The two rules belong to sequence
+// and branch respectively, and both the built-in definition tree and the Spec
+// document fold them over their own element type, so the rules live here once and
+// the callers supply only how an element is measured.
+func unionOutputs[T any](elements []T, outputsOf func(T) outputGuarantee) outputGuarantee {
+	outputs := knownOutputs()
+	for _, element := range elements {
+		outputs = outputs.union(outputsOf(element))
+	}
+	return outputs
+}
+
+func intersectOutputs[T any](cases map[string]T, outputsOf func(T) outputGuarantee) outputGuarantee {
+	var common outputGuarantee
+	first := true
+	for _, name := range slices.Sorted(maps.Keys(cases)) {
+		outputs := outputsOf(cases[name])
+		if first {
+			common = outputs
+			first = false
+			continue
+		}
+		common = common.intersection(outputs)
+	}
+	if first {
+		// No case can omit a cell it never had the chance to produce. A branch
+		// with no cases is rejected on its own; it is not this fold's concern.
+		return knownOutputs()
+	}
+	return common
+}
+
 // guaranteedOutputs returns the conventional output cells that a successful
 // built-in definition must add, independently of the Store it receives. The
 // guarantee is unknown at an opaque caller-defined boundary or a conditional
@@ -351,29 +385,11 @@ func guaranteedOutputs(step Step) outputGuarantee {
 }
 
 func guaranteedStepListOutputs(steps stepList) outputGuarantee {
-	outputs := knownOutputs()
-	for _, step := range steps {
-		outputs = outputs.union(guaranteedOutputs(step))
-	}
-	return outputs
+	return unionOutputs(steps, guaranteedOutputs)
 }
 
 func guaranteedBranchOutputs(cases map[string]Step) outputGuarantee {
-	var common outputGuarantee
-	first := true
-	for _, name := range slices.Sorted(maps.Keys(cases)) {
-		outputs := guaranteedOutputs(cases[name])
-		if first {
-			common = outputs
-			first = false
-			continue
-		}
-		common = common.intersection(outputs)
-	}
-	if first {
-		return knownOutputs()
-	}
-	return common
+	return intersectOutputs(cases, guaranteedOutputs)
 }
 
 func (d *definitionValidator) validateSteps(

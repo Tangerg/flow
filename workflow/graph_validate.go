@@ -46,39 +46,24 @@ func (g graphValidator) validateNodes(nodes []GraphNode) error {
 }
 
 func (g graphValidator) validateNode(index int, node GraphNode) error {
-	path := graphNodePath(index)
+	location := locateNode(index, node)
 	if _, ok := g.registry.lookupNode(node.Type); !ok {
-		return &GraphError{
-			Path:   path,
-			NodeID: node.ID,
-			Field:  fieldType,
-			Err:    fmt.Errorf("%w %q", ErrUnknownNodeType, node.Type),
-		}
+		return location.fieldError(fieldType, fmt.Errorf("%w %q", ErrUnknownNodeType, node.Type))
 	}
 
 	registered, schemaKnown := g.registry.lookupNodeSchema(node.Type)
 	if err := registered.validateConfig(node.Config); err != nil {
-		return &GraphError{
-			Path:   path,
-			NodeID: node.ID,
-			Field:  fieldConfig,
-			Err:    err,
-		}
+		return location.fieldError(fieldConfig, err)
 	}
-	if err := g.validateOutputRefs(path, node); err != nil {
+	if err := g.validateOutputRefs(location, node); err != nil {
 		return err
 	}
 	if schemaKnown {
 		if err := registered.schema.validateInputs(node.Inputs, g.producerOutput); err != nil {
-			return &GraphError{
-				Path:   path,
-				NodeID: node.ID,
-				Field:  fieldInputs,
-				Err:    err,
-			}
+			return location.fieldError(fieldInputs, err)
 		}
 	}
-	return g.validateGates(path, node)
+	return g.validateGates(location, node)
 }
 
 func (g graphValidator) producerOutput(ref Ref) (ValueType, bool) {
@@ -106,7 +91,7 @@ func (g graphValidator) producerOutput(ref Ref) (ValueType, bool) {
 // not make an impossible Store cell appear at run time. When schema metadata is
 // absent, CompileGraph performs the corresponding output-presence check against
 // the concrete boundary returned by the NodeFactory.
-func (g graphValidator) validateOutputRefs(path string, node GraphNode) error {
+func (g graphValidator) validateOutputRefs(location nodeLocation, node GraphNode) error {
 	for _, port := range node.Inputs.PortNames() {
 		ref := node.Inputs[port]
 		producer, internal := g.plan.nodesByID[ref.NodeID]
@@ -114,83 +99,58 @@ func (g graphValidator) validateOutputRefs(path string, node GraphNode) error {
 			continue
 		}
 		if !ref.withinOutput() {
-			return &GraphError{
-				Path:   path,
-				NodeID: node.ID,
-				Field:  fieldInputs,
-				Err: fmt.Errorf(
-					"%w: input port %q reads %s outside the producer's output",
-					ErrIncompatibleType,
-					port,
-					ref,
-				),
-			}
+			return location.fieldError(fieldInputs, fmt.Errorf(
+				"%w: input port %q reads %s outside the producer's output",
+				ErrIncompatibleType,
+				port,
+				ref,
+			))
 		}
 		registered, known := g.registry.lookupNodeSchema(producer.Type)
 		if known && registered.schema.Output == "" {
-			return &GraphError{
-				Path:   path,
-				NodeID: node.ID,
-				Field:  fieldInputs,
-				Err: fmt.Errorf(
-					"%w: input port %q reads %s from node type %q, which declares no output",
-					ErrIncompatibleType,
-					port,
-					ref,
-					producer.Type,
-				),
-			}
+			return location.fieldError(fieldInputs, fmt.Errorf(
+				"%w: input port %q reads %s from node type %q, which declares no output",
+				ErrIncompatibleType,
+				port,
+				ref,
+				producer.Type,
+			))
 		}
 		if known && !registered.schema.Output.acceptsCellPath(
 			ref,
 			producer.ID,
 			outputKey,
 		) {
-			return &GraphError{
-				Path:   path,
-				NodeID: node.ID,
-				Field:  fieldInputs,
-				Err: fmt.Errorf(
-					"%w: input port %q reads %s, which cannot resolve within output type %q",
-					ErrIncompatibleType,
-					port,
-					ref,
-					registered.schema.Output,
-				),
-			}
+			return location.fieldError(fieldInputs, fmt.Errorf(
+				"%w: input port %q reads %s, which cannot resolve within output type %q",
+				ErrIncompatibleType,
+				port,
+				ref,
+				registered.schema.Output,
+			))
 		}
 	}
 	return nil
 }
 
-func (g graphValidator) validateGates(path string, node GraphNode) error {
+func (g graphValidator) validateGates(location nodeLocation, node GraphNode) error {
 	for _, gate := range node.When {
 		source := g.plan.nodesByID[gate.NodeID]
 		registered, ok := g.registry.lookupNodeSchema(source.Type)
 		if !ok || len(registered.schema.Outlets) == 0 {
-			return &GraphError{
-				Path:   path,
-				NodeID: node.ID,
-				Field:  fieldWhen,
-				Err: fmt.Errorf(
-					"routing node %q type %q declares no outlets",
-					gate.NodeID,
-					source.Type,
-				),
-			}
+			return location.fieldError(fieldWhen, fmt.Errorf(
+				"routing node %q type %q declares no outlets",
+				gate.NodeID,
+				source.Type,
+			))
 		}
 		if !slices.Contains(registered.schema.Outlets, gate.Outlet) {
-			return &GraphError{
-				Path:   path,
-				NodeID: node.ID,
-				Field:  fieldWhen,
-				Err: fmt.Errorf(
-					"%w %q on routing node %q",
-					ErrUnknownOutlet,
-					gate.Outlet,
-					gate.NodeID,
-				),
-			}
+			return location.fieldError(fieldWhen, fmt.Errorf(
+				"%w %q on routing node %q",
+				ErrUnknownOutlet,
+				gate.Outlet,
+				gate.NodeID,
+			))
 		}
 	}
 	return nil

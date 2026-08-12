@@ -437,6 +437,26 @@ func (b binaryOperator) applyString(left, right string) (any, error) {
 
 // applyInt keeps integer arithmetic exact. Like Go, it wraps on overflow.
 func (b binaryOperator) applyInt(left, right int64) (any, error) {
+	return applyIntegral(b, left, right)
+}
+
+// applyIntegral is the arithmetic both integer widths perform identically. It
+// wraps on overflow as Go does, and takes a remainder, which is the one operator
+// whose meaning depends on the numeric kind. A method cannot take a type
+// parameter, so the operator arrives as an argument.
+func applyIntegral[T int64 | uint64](b binaryOperator, left, right T) (any, error) {
+	if b.Token == token.REM {
+		if right == 0 {
+			return nil, ErrDivideByZero
+		}
+		return left % right, nil
+	}
+	return applyDividable(b, left, right)
+}
+
+// applyDividable is the arithmetic every numeric kind performs the same way.
+// Its callers have already taken token.REM, the only operator they disagree on.
+func applyDividable[T int64 | uint64 | float64](b binaryOperator, left, right T) (any, error) {
 	switch b.Token {
 	case token.ADD:
 		return left + right, nil
@@ -444,16 +464,11 @@ func (b binaryOperator) applyInt(left, right int64) (any, error) {
 		return left - right, nil
 	case token.MUL:
 		return left * right, nil
-	case token.QUO:
+	default: // token.QUO; compilation rejects every other operator.
 		if right == 0 {
 			return nil, ErrDivideByZero
 		}
 		return left / right, nil
-	default: // token.REM; compilation rejects every other operator.
-		if right == 0 {
-			return nil, ErrDivideByZero
-		}
-		return left % right, nil
 	}
 }
 
@@ -500,42 +515,14 @@ func (o operand) integer() (integerOperand, bool) {
 }
 
 func (b binaryOperator) applyUint(left, right uint64) (any, error) {
-	switch b.Token {
-	case token.ADD:
-		return left + right, nil
-	case token.SUB:
-		return left - right, nil
-	case token.MUL:
-		return left * right, nil
-	case token.QUO:
-		if right == 0 {
-			return nil, ErrDivideByZero
-		}
-		return left / right, nil
-	default: // token.REM; compilation rejects every other operator.
-		if right == 0 {
-			return nil, ErrDivideByZero
-		}
-		return left % right, nil
-	}
+	return applyIntegral(b, left, right)
 }
 
 func (b binaryOperator) applyFloat(left, right float64) (any, error) {
-	switch b.Token {
-	case token.ADD:
-		return left + right, nil
-	case token.SUB:
-		return left - right, nil
-	case token.MUL:
-		return left * right, nil
-	case token.QUO:
-		if right == 0 {
-			return nil, ErrDivideByZero
-		}
-		return left / right, nil
-	default: // token.REM; compilation rejects every other operator.
+	if b.Token == token.REM {
 		return nil, fmt.Errorf("%w: %% wants two integers", ErrType)
 	}
+	return applyDividable(b, left, right)
 }
 
 func (o operand) asFloat() (float64, bool) {

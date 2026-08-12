@@ -89,12 +89,7 @@ func (j *Journal) MarshalJSON() ([]byte, error) {
 	for _, entry := range entries {
 		encoded, err := json.Marshal(entry.value)
 		if err != nil {
-			return nil, fmt.Errorf(
-				"workflow: marshal journal record %q in scope %q: %w",
-				entry.key.ID,
-				formatScope(entry.key.Scope),
-				err,
-			)
+			return nil, recordError(entry, err)
 		}
 		records = append(records, journalJSONRecord{
 			Scope: scopeWire(entry.key.Scope),
@@ -113,13 +108,7 @@ func (j *Journal) MarshalJSON() ([]byte, error) {
 			strconv.Itoa(index),
 			journalFieldValue,
 		)); err != nil {
-			entry := entries[index]
-			return nil, fmt.Errorf(
-				"workflow: marshal journal record %q in scope %q: %w",
-				entry.key.ID,
-				formatScope(entry.key.Scope),
-				err,
-			)
+			return nil, recordError(entries[index], err)
 		}
 	}
 	// Every value has crossed the wire boundary at its in-document depth, and the
@@ -130,6 +119,18 @@ func (j *Journal) MarshalJSON() ([]byte, error) {
 		Version: journalJSONVersion,
 		Records: records,
 	}).encode(), nil
+}
+
+// recordError names a failure while writing one record, locating it by the
+// identity the record was stored under rather than by its position, which the
+// document does not fix until the records are sorted.
+func recordError(entry journalEntry, err error) error {
+	return fmt.Errorf(
+		"workflow: marshal journal record %q in scope %q: %w",
+		entry.key.ID,
+		formatScope(entry.key.Scope),
+		err,
+	)
 }
 
 // encode assembles a document from JSON fragments produced by json.Marshal.

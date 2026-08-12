@@ -139,28 +139,32 @@ func (l *loopExecution) runIterations(ctx context.Context) (Store, error) {
 func (l *loopExecution) advance(ctx context.Context, iteration int) (bool, error) {
 	body := (scopedStep{step: l.loop.config.Body}).indexed(l.loop.config.ID, iteration)
 	next, err := body.run(ctx, l.current)
-	if contextErr := context.Cause(ctx); contextErr != nil {
-		return false, contextErr
-	}
-	if err != nil {
-		if SuspendedOnly(err) {
-			l.current = next
-		}
-		return false, err
+	if outcomeErr := l.admit(ctx, next, err); outcomeErr != nil {
+		return false, outcomeErr
 	}
 
 	stop, err := l.stop(body.childContext(ctx), next)
+	if outcomeErr := l.admit(ctx, next, err); outcomeErr != nil {
+		return false, outcomeErr
+	}
+	l.current = next
+	return stop, nil
+}
+
+// admit applies what both halves of an iteration do with their outcome: parent
+// cancellation outranks it, and a suspension promotes next so the waiting body's
+// writes survive while any other error leaves the previous value in place.
+func (l *loopExecution) admit(ctx context.Context, next Store, err error) error {
 	if contextErr := context.Cause(ctx); contextErr != nil {
-		return false, contextErr
+		return contextErr
 	}
 	if err != nil {
 		if SuspendedOnly(err) {
 			l.current = next
 		}
-		return false, err
+		return err
 	}
-	l.current = next
-	return stop, nil
+	return nil
 }
 
 // stop returns whether the loop ends after this iteration, reusing the recorded
