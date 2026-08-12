@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/Tangerg/flow"
+	"github.com/Tangerg/flow/internal/ctxtest"
 	jschema "github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 )
@@ -34,46 +35,6 @@ func (definitionFixture) validate() error                           { return nil
 func (definitionFixture) Describe() Description                     { return Description{} }
 func (d definitionFixture) definition() stepDefinition              { return d.shape }
 
-// cancelOnCheckContext makes cancellation occur at a specific admission check.
-// It is a valid Context after that check: Done closes before Err returns the
-// cause. This lets boundary tests exercise otherwise microscopic races without
-// sleeps or scheduler assumptions.
-type cancelOnCheckContext struct {
-	context.Context //nolint:containedctx // A custom Context must retain its parent.
-	done            chan struct{}
-	cause           error
-	cancelAt        int
-	checks          int
-}
-
-func newCancelOnCheckContext(
-	parent context.Context,
-	cancelAt int,
-	cause error,
-) *cancelOnCheckContext {
-	return &cancelOnCheckContext{
-		Context:  parent,
-		done:     make(chan struct{}),
-		cause:    cause,
-		cancelAt: cancelAt,
-	}
-}
-
-func (c *cancelOnCheckContext) Done() <-chan struct{} { return c.done }
-
-func (c *cancelOnCheckContext) Err() error {
-	c.checks++
-	if c.checks < c.cancelAt {
-		return nil
-	}
-	select {
-	case <-c.done:
-	default:
-		close(c.done)
-	}
-	return c.cause
-}
-
 func TestReplayBoundaries_resampleCancellationAfterLookup(t *testing.T) {
 	cause := errors.New("cancel during replay lookup")
 
@@ -87,7 +48,7 @@ func TestReplayBoundaries_resampleCancellationAfterLookup(t *testing.T) {
 				return Store{}, nil
 			}),
 		)
-		ctx := newCancelOnCheckContext(t.Context(), 2, cause)
+		ctx := ctxtest.CancelAtCheck(t.Context(), 2, cause)
 		output, err := step.Run(ctx, NewStore())
 		_, published := output.Lookup(Output("leaf"))
 		if !errors.Is(err, cause) || called || published {
@@ -96,7 +57,7 @@ func TestReplayBoundaries_resampleCancellationAfterLookup(t *testing.T) {
 	})
 
 	t.Run("interrupt", func(t *testing.T) {
-		ctx := newCancelOnCheckContext(t.Context(), 2, cause)
+		ctx := ctxtest.CancelAtCheck(t.Context(), 2, cause)
 		_, err := Interrupt("wait", "request").Run(ctx, NewStore())
 		if !errors.Is(err, cause) || SuspendedOnly(err) {
 			t.Fatalf("Run error = %v; want cancellation, not suspension", err)
@@ -104,7 +65,7 @@ func TestReplayBoundaries_resampleCancellationAfterLookup(t *testing.T) {
 	})
 
 	t.Run("branch decision", func(t *testing.T) {
-		ctx := withConfig(newCancelOnCheckContext(t.Context(), 1, cause), RunConfig{})
+		ctx := withConfig(ctxtest.CancelAtCheck(t.Context(), 1, cause), RunConfig{})
 		execution := branchExecution{
 			branch: branchStep{id: "branch"},
 			input:  NewStore(),
@@ -117,7 +78,7 @@ func TestReplayBoundaries_resampleCancellationAfterLookup(t *testing.T) {
 	})
 
 	t.Run("loop decision", func(t *testing.T) {
-		ctx := withConfig(newCancelOnCheckContext(t.Context(), 1, cause), RunConfig{})
+		ctx := withConfig(ctxtest.CancelAtCheck(t.Context(), 1, cause), RunConfig{})
 		execution := loopExecution{loop: loopStep{config: LoopConfig{ID: "loop"}}, run: runFrom(ctx)}
 		_, err := execution.stop(ctx, NewStore())
 		if !errors.Is(err, cause) {
@@ -139,7 +100,7 @@ func TestLoopStop_resamplesCancellationAfterJournalRecord(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			journal := NewJournal()
-			cancelCtx := newCancelOnCheckContext(t.Context(), 3, cause)
+			cancelCtx := ctxtest.CancelAtCheck(t.Context(), 3, cause)
 			ctx := withConfig(cancelCtx, RunConfig{Journal: journal})
 			if test.conflict {
 				// Add the conflicting record after the run snapshot so replay does
@@ -180,7 +141,7 @@ func TestBranch_resamplesCancellationBeforeCaseAdmission(t *testing.T) {
 			}),
 		}})
 
-		ctx := newCancelOnCheckContext(t.Context(), cancelAt, cause)
+		ctx := ctxtest.CancelAtCheck(t.Context(), cancelAt, cause)
 		_, err := step.Run(ctx, NewStore())
 		if !errors.Is(err, cause) || caseCalled {
 			t.Fatalf("check %d: Run error = %v, case called = %t; want cancellation before case", cancelAt, err, caseCalled)
@@ -207,7 +168,7 @@ func TestGatedStep_resamplesCancellationAroundBypassCommit(t *testing.T) {
 	store := NewStore().WithOutput("route", "no")
 
 	for _, cancelAt := range []int{1, 2, 3, 4, 5} {
-		ctx := newCancelOnCheckContext(t.Context(), cancelAt, cause)
+		ctx := ctxtest.CancelAtCheck(t.Context(), cancelAt, cause)
 		if _, err := step.Run(ctx, store); !errors.Is(err, cause) {
 			t.Fatalf("cancel check %d error = %v; want cancellation", cancelAt, err)
 		}
@@ -275,7 +236,7 @@ func TestGatedStep_resamplesCancellationAfterBypassEvent(t *testing.T) {
 
 func TestLeaf_resamplesCancellationAfterJournalCommit(t *testing.T) {
 	cause := errors.New("cancel after journal commit")
-	ctx := withConfig(newCancelOnCheckContext(t.Context(), 1, cause), RunConfig{
+	ctx := withConfig(ctxtest.CancelAtCheck(t.Context(), 1, cause), RunConfig{
 		Journal: NewJournal(),
 	})
 	execution := leafExecution[struct{}, int]{
@@ -304,7 +265,7 @@ func TestJournalCommitErrorsDoNotHideParentCancellation(t *testing.T) {
 		if err := journal.Record(JournalKey{ID: "leaf"}, 1); err != nil {
 			t.Fatalf("Record: %v", err)
 		}
-		ctx := withConfig(newCancelOnCheckContext(t.Context(), 1, cause), RunConfig{
+		ctx := withConfig(ctxtest.CancelAtCheck(t.Context(), 1, cause), RunConfig{
 			Journal: journal,
 		})
 		execution := leafExecution[struct{}, int]{
@@ -320,7 +281,7 @@ func TestJournalCommitErrorsDoNotHideParentCancellation(t *testing.T) {
 
 	t.Run("branch", func(t *testing.T) {
 		journal := NewJournal()
-		ctx := withConfig(newCancelOnCheckContext(t.Context(), 4, cause), RunConfig{
+		ctx := withConfig(ctxtest.CancelAtCheck(t.Context(), 4, cause), RunConfig{
 			Journal: journal,
 		})
 		step := Branch(BranchConfig{ID: "route", Resolver: flow.NodeFunc[Store, string](func(context.Context, Store) (string, error) {
@@ -344,7 +305,7 @@ func TestParallelMerge_resamplesParentCancellation(t *testing.T) {
 	})
 
 	t.Run("one branch", func(t *testing.T) {
-		ctx := newCancelOnCheckContext(t.Context(), 2, cause)
+		ctx := ctxtest.CancelAtCheck(t.Context(), 2, cause)
 		output, err := (parallelStep{branches: stepList{branch}}).runOne(ctx, input)
 		if !errors.Is(err, cause) {
 			t.Fatalf("runOne error = %v; want cancellation cause", err)
@@ -357,7 +318,7 @@ func TestParallelMerge_resamplesParentCancellation(t *testing.T) {
 	t.Run("many branches", func(t *testing.T) {
 		for _, cancelAt := range []int{2, 4} {
 			t.Run(fmt.Sprintf("check %d", cancelAt), func(t *testing.T) {
-				ctx := newCancelOnCheckContext(t.Context(), cancelAt, cause)
+				ctx := ctxtest.CancelAtCheck(t.Context(), cancelAt, cause)
 				output, err := (parallelStep{branches: stepList{branch, branch}}).runMany(ctx, input)
 				if !errors.Is(err, cause) {
 					t.Fatalf("runMany error = %v; want cancellation cause", err)
@@ -377,7 +338,7 @@ func TestIterationCollect_resamplesParentCancellation(t *testing.T) {
 
 	for _, cancelAt := range []int{1, 2, 3} {
 		t.Run(fmt.Sprintf("check %d", cancelAt), func(t *testing.T) {
-			ctx := newCancelOnCheckContext(t.Context(), cancelAt, cause)
+			ctx := ctxtest.CancelAtCheck(t.Context(), cancelAt, cause)
 			execution := iterationExecution{
 				iteration: iterationStep{id: "items"},
 				input:     input,

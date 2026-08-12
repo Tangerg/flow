@@ -7,46 +7,8 @@ import (
 
 	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/flowx"
+	"github.com/Tangerg/flow/internal/ctxtest"
 )
-
-// cancelOnCheckContext closes its Done channel when Err reaches cancelAt. It
-// makes the microscopic boundary between a completed fan-out and merge
-// admission deterministic without sleeps or scheduler assumptions.
-type cancelOnCheckContext struct {
-	context.Context //nolint:containedctx // A custom Context must retain its parent.
-	done            chan struct{}
-	cause           error
-	cancelAt        int
-	checks          int
-}
-
-func newCancelOnCheckContext(
-	parent context.Context,
-	cancelAt int,
-	cause error,
-) *cancelOnCheckContext {
-	return &cancelOnCheckContext{
-		Context:  parent,
-		done:     make(chan struct{}),
-		cause:    cause,
-		cancelAt: cancelAt,
-	}
-}
-
-func (c *cancelOnCheckContext) Done() <-chan struct{} { return c.done }
-
-func (c *cancelOnCheckContext) Err() error {
-	c.checks++
-	if c.checks < c.cancelAt {
-		return nil
-	}
-	select {
-	case <-c.done:
-	default:
-		close(c.done)
-	}
-	return c.cause
-}
 
 func TestFanOut(t *testing.T) {
 	nodes := []flow.Node[int, int]{
@@ -337,7 +299,7 @@ func TestCombine_parentCancellationDuringMergeWins(t *testing.T) {
 
 func TestCombine_parentCancellationBeforeMergeWins(t *testing.T) {
 	cause := errors.New("stop before merge")
-	ctx := newCancelOnCheckContext(t.Context(), 2, cause)
+	ctx := ctxtest.CancelAtCheck(t.Context(), 2, cause)
 	merged := false
 	node := flowx.Combine(
 		flow.NodeFunc[int, int](func(context.Context, int) (int, error) { return 1, nil }),
