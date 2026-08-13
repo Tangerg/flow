@@ -24,18 +24,24 @@ var (
 // cell keys must be valid UTF-8 so their identities survive the JSON boundary
 // unchanged.
 func (s Store) MarshalJSON() ([]byte, error) {
-	document := s.jsonDocument()
-	if err := document.validateNames(); err != nil {
-		return nil, fmt.Errorf("workflow: marshal store: %w", err)
-	}
-	if err := document.encodeValues(); err != nil {
-		return nil, fmt.Errorf("workflow: marshal store: %w", err)
-	}
-	encoded, err := document.marshal()
+	encoded, err := s.jsonDocument().encode()
 	if err != nil {
 		return nil, fmt.Errorf("workflow: marshal store: %w", err)
 	}
 	return encoded, nil
+}
+
+// encode runs the store wire format's three stages in order: names must cross
+// the boundary unchanged, application values are marshaled exactly once, and
+// the assembled document must stay inside the recursive-input limit.
+func (s storeJSONDocument) encode() ([]byte, error) {
+	if err := s.validateNames(); err != nil {
+		return nil, err
+	}
+	if err := s.encodeValues(); err != nil {
+		return nil, err
+	}
+	return s.marshal()
 }
 
 type storeJSONDocument map[string]map[string]any

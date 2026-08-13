@@ -22,14 +22,18 @@ const (
 // its representation, after which the complete document is checked for
 // ambiguity and the engine's recursive-input limit.
 func (s Suspension) MarshalJSON() ([]byte, error) {
-	if err := s.validateIdentity(); err != nil {
-		return nil, fmt.Errorf("workflow: marshal suspension: %w", err)
-	}
-	encoded, err := marshalJSON(suspensionJSON(s))
+	encoded, err := s.encode()
 	if err != nil {
 		return nil, fmt.Errorf("workflow: marshal suspension: %w", err)
 	}
 	return encoded, nil
+}
+
+func (s Suspension) encode() ([]byte, error) {
+	if err := s.validateIdentity(); err != nil {
+		return nil, err
+	}
+	return marshalJSON(suspensionJSON(s))
 }
 
 // UnmarshalJSON atomically replaces a Suspension from one strict JSON object.

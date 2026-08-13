@@ -73,16 +73,20 @@ func (s *ScopeFrame) UnmarshalJSON(data []byte) error {
 	if s == nil {
 		return errors.New("workflow: unmarshal scope frame: nil frame")
 	}
-	object, err := jsonDocument(data).object()
-	if err != nil {
-		return fmt.Errorf("workflow: unmarshal scope frame: %w", err)
-	}
-	next, err := (scopeFrameObject(object)).decode()
+	next, err := decodeScopeFrame(data)
 	if err != nil {
 		return fmt.Errorf("workflow: unmarshal scope frame: %w", err)
 	}
 	*s = next
 	return nil
+}
+
+func decodeScopeFrame(data []byte) (ScopeFrame, error) {
+	object, err := jsonDocument(data).object()
+	if err != nil {
+		return ScopeFrame{}, err
+	}
+	return scopeFrameObject(object).decode()
 }
 
 func (s scopeFrameObject) decode() (ScopeFrame, error) {

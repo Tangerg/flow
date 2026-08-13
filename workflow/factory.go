@@ -22,17 +22,29 @@ import (
 // binding strategy.
 func Factory[C, I, O any](build func(C) (flow.Node[I, O], error)) NodeFactory {
 	return BindFactory(func(_ C, inputs Inputs) (Binder[I], error) {
-		for _, port := range inputs.PortNames() {
-			if port != DefaultPort {
-				return nil, fmt.Errorf("%w %q", ErrUnknownPort, port)
-			}
-		}
-		ref, ok := inputs.Default()
-		if !ok {
-			return nil, fmt.Errorf("%w %q", ErrMissingPort, DefaultPort)
+		ref, err := defaultPortRef(inputs)
+		if err != nil {
+			return nil, err
 		}
 		return From[I](ref), nil
 	}, build)
+}
+
+// defaultPortRef enforces the wiring contract every built-in factory that reads
+// exactly one input shares: only [DefaultPort] may be wired, and it must be.
+// Stating it once keeps those factories from disagreeing about which sentinel
+// names which mistake.
+func defaultPortRef(inputs Inputs) (Ref, error) {
+	for _, port := range inputs.PortNames() {
+		if port != DefaultPort {
+			return Ref{}, fmt.Errorf("%w %q", ErrUnknownPort, port)
+		}
+	}
+	ref, ok := inputs.Default()
+	if !ok {
+		return Ref{}, fmt.Errorf("%w %q", ErrMissingPort, DefaultPort)
+	}
+	return ref, nil
 }
 
 // BindFactory adapts a typed node constructor that reads several input ports

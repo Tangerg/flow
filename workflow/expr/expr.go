@@ -362,24 +362,35 @@ func (c *compiler) nodeID(index ast.Expr) (string, error) {
 func (c *compiler) indexSegment(index ast.Expr) (string, error) {
 	lit, ok := index.(*ast.BasicLit)
 	if !ok {
-		return "", c.unsupported(index, "index must be an integer or string literal")
+		return "", c.unusableIndex(index)
 	}
 	switch lit.Kind {
 	case token.INT:
-		index, err := strconv.ParseInt(lit.Value, 0, 64)
+		value, err := strconv.ParseInt(lit.Value, 0, 64)
 		if err != nil {
-			return "", c.errorAt(lit, fmt.Errorf("%w: index %s: %w", ErrSyntax, lit.Value, err))
+			return "", c.malformedIndex(lit, err)
 		}
-		return strconv.FormatInt(index, 10), nil
+		return strconv.FormatInt(value, 10), nil
 	case token.STRING:
-		s, err := strconv.Unquote(lit.Value)
+		segment, err := strconv.Unquote(lit.Value)
 		if err != nil {
-			return "", c.errorAt(lit, fmt.Errorf("%w: index %s: %w", ErrSyntax, lit.Value, err))
+			return "", c.malformedIndex(lit, err)
 		}
-		return s, nil
+		return segment, nil
 	default:
-		return "", c.unsupported(lit, "index must be an integer or string literal")
+		return "", c.unusableIndex(lit)
 	}
+}
+
+// unusableIndex reports an index that is not a literal this package can read.
+// An expression and a literal of the wrong kind fail for the same reason, so
+// they say so in one sentence rather than two copies of it.
+func (c *compiler) unusableIndex(node ast.Node) error {
+	return c.unsupported(node, "index must be an integer or string literal")
+}
+
+func (c *compiler) malformedIndex(lit *ast.BasicLit, cause error) error {
+	return c.errorAt(lit, fmt.Errorf("%w: index %s: %w", ErrSyntax, lit.Value, cause))
 }
 
 func (c *compiler) compileUnary(n *ast.UnaryExpr) (evalFunc, error) {

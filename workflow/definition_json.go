@@ -136,14 +136,18 @@ func (n GraphNode) validateJSONText() (string, error) {
 		}
 	}
 	for index, gate := range n.When {
-		if err := validateText(nameGateSource, gate.NodeID); err != nil {
-			return fieldWhen, fmt.Errorf("gate %d: %w", index, err)
-		}
-		if err := validateText(nameGateOutlet, gate.Outlet); err != nil {
+		if err := gate.validateJSONText(); err != nil {
 			return fieldWhen, fmt.Errorf("gate %d: %w", index, err)
 		}
 	}
 	return "", nil
+}
+
+func (g Gate) validateJSONText() error {
+	if err := validateText(nameGateSource, g.NodeID); err != nil {
+		return err
+	}
+	return validateText(nameGateOutlet, g.Outlet)
 }
 
 func (s *specJSONEncoder) marshal() ([]byte, error) {
@@ -380,40 +384,46 @@ func decodeSpecJSON(data []byte) (Spec, error) {
 // Go int without a float64 round trip. An absent or null member produces the
 // zero value, matching encoding/json on a freshly allocated destination.
 func decodeDefinitionInt(field string, data json.RawMessage) (int, error) {
+	converted, err := decodeInt(data)
+	if err != nil {
+		return 0, fmt.Errorf("json field %s: %w", field, err)
+	}
+	return converted, nil
+}
+
+// decodeInt states only what is wrong with the member; decodeDefinitionInt
+// names which member it was.
+func decodeInt(data json.RawMessage) (int, error) {
 	if len(data) == 0 {
 		return 0, nil
 	}
 	value, err := jsonDocument(data).value()
 	if err != nil {
-		return 0, fmt.Errorf("json field %s: %w", field, err)
+		return 0, err
 	}
 	if value == nil {
 		return 0, nil
 	}
 	number, ok := value.(json.Number)
 	if !ok {
-		return 0, fmt.Errorf(
-			"json field %s: expected integer, got %s",
-			field,
-			jsondoc.Kind(value),
-		)
+		return 0, fmt.Errorf("expected integer, got %s", jsondoc.Kind(value))
 	}
 	integer, err := jsonnum.ParseInteger(number.String())
 	// jsonDocument already proved the JSON number grammar, so ParseInteger can
 	// report only a fractional value or an out-of-range magnitude here.
 	if errors.Is(err, jsonnum.ErrFractional) {
-		return 0, fmt.Errorf("json field %s: %s is not an integer", field, number)
+		return 0, fmt.Errorf("%s is not an integer", number)
 	}
-	if err != nil {
-		return 0, fmt.Errorf("json field %s: integer %s overflows int", field, number)
+	// A magnitude jsonnum rejects and one strconv.Atoi rejects are the same
+	// condition seen at two widths: the value does not fit this platform's int.
+	if err == nil {
+		decimal := strconv.FormatUint(integer.Magnitude, 10)
+		if integer.Negative {
+			decimal = "-" + decimal
+		}
+		if converted, convertErr := strconv.Atoi(decimal); convertErr == nil {
+			return converted, nil
+		}
 	}
-	decimal := strconv.FormatUint(integer.Magnitude, 10)
-	if integer.Negative {
-		decimal = "-" + decimal
-	}
-	converted, err := strconv.Atoi(decimal)
-	if err != nil {
-		return 0, fmt.Errorf("json field %s: integer %s overflows int", field, number)
-	}
-	return converted, nil
+	return 0, fmt.Errorf("integer %s overflows int", number)
 }

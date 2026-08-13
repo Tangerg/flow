@@ -89,17 +89,12 @@ func (a awaitStep) definition() stepDefinition {
 //	// {"id":"approval","type":"await","inputs":{"in":{"nodeID":"inbox","path":"/decision"}}}
 func AwaitFactory() NodeFactory {
 	return func(spec NodeSpec) (Step, error) {
-		for _, port := range spec.Inputs.PortNames() {
-			if port != DefaultPort {
-				return nil, fmt.Errorf("%w %q", ErrUnknownPort, port)
-			}
+		ref, err := defaultPortRef(spec.Inputs)
+		if err != nil {
+			return nil, err
 		}
 		if len(spec.Config) > 0 {
 			return nil, fmt.Errorf("%w: await config must be omitted", flow.ErrInvalidConfig)
-		}
-		ref, ok := spec.Inputs.Default()
-		if !ok {
-			return nil, fmt.Errorf("%w %q", ErrMissingPort, DefaultPort)
 		}
 		return Await(spec.ID, ref), nil
 	}
