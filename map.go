@@ -92,25 +92,15 @@ func (f fanOut) run(parent context.Context) error {
 	if f.count <= 0 {
 		return context.Cause(parent)
 	}
+	// A single call is scheduled by the same rules as a sequential run; it takes
+	// that path to skip an errgroup it would never use, not because one element
+	// is admitted or cancelled differently.
 	switch {
-	case f.count == 1:
-		return f.runOne(parent)
-	case f.limit == 1:
+	case f.count == 1 || f.limit == 1:
 		return f.runSequential(parent)
 	default:
 		return f.runConcurrent(parent)
 	}
-}
-
-func (f fanOut) runOne(parent context.Context) error {
-	if err := context.Cause(parent); err != nil {
-		return err
-	}
-	err := f.call(parent, 0)
-	if parentErr := context.Cause(parent); parentErr != nil {
-		return parentErr
-	}
-	return err
 }
 
 func (f fanOut) runSequential(parent context.Context) error {

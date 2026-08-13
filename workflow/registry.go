@@ -171,19 +171,7 @@ func (r *Registry) MustRegisterNode(nodeType string, factory NodeFactory) *Regis
 // validated at registration, so Registry validation cannot accept a name whose
 // implementation is already invalid.
 func (r *Registry) RegisterResolver(name string, resolver Resolver) error {
-	if err := validateRegistrationName(registrationResolver, name); err != nil {
-		return err
-	}
-	if err := validateNode(resolver); err != nil {
-		return &RegistrationError{
-			Kind: registrationResolver,
-			Name: name,
-			Err:  err,
-		}
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.resolvers.add(registrationResolver, name, resolver)
+	return registerDecision(r, &r.resolvers, registrationResolver, name, resolver)
 }
 
 // MustRegisterResolver is like [Registry.RegisterResolver] but panics on error.
@@ -199,19 +187,41 @@ func (r *Registry) MustRegisterResolver(name string, resolver Resolver) *Registr
 // validated at registration, so Registry validation cannot accept a name whose
 // implementation is already invalid.
 func (r *Registry) RegisterCondition(name string, condition Condition) error {
-	if err := validateRegistrationName(registrationCondition, name); err != nil {
+	return registerDecision(r, &r.conditions, registrationCondition, name, condition)
+}
+
+// MustRegisterCondition is like [Registry.RegisterCondition] but panics on
+// error.
+func (r *Registry) MustRegisterCondition(name string, condition Condition) *Registry {
+	if err := r.RegisterCondition(name, condition); err != nil {
+		panic(err)
+	}
+	return r
+}
+
+// registerDecision registers one of the two decision shapes. [Resolver] and
+// [Condition] differ only in what they return, so they are admitted the same
+// way: check the name, then the node's complete visible definition, then claim
+// the name under the Registry lock.
+func registerDecision[O any](
+	r *Registry,
+	table *registrationTable[flow.Node[Store, O]],
+	kind, name string,
+	node flow.Node[Store, O],
+) error {
+	if err := validateRegistrationName(kind, name); err != nil {
 		return err
 	}
-	if err := validateNode(condition); err != nil {
+	if err := validateNode(node); err != nil {
 		return &RegistrationError{
-			Kind: registrationCondition,
+			Kind: kind,
 			Name: name,
 			Err:  err,
 		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.conditions.add(registrationCondition, name, condition)
+	return table.add(kind, name, node)
 }
 
 func validateRegistrationName(kind, name string) error {
@@ -227,15 +237,6 @@ func validateRegistrationName(kind, name string) error {
 		}
 	}
 	return nil
-}
-
-// MustRegisterCondition is like [Registry.RegisterCondition] but panics on
-// error.
-func (r *Registry) MustRegisterCondition(name string, condition Condition) *Registry {
-	if err := r.RegisterCondition(name, condition); err != nil {
-		panic(err)
-	}
-	return r
 }
 
 // snapshot returns one immutable logical view for a multi-stage validation or
