@@ -463,12 +463,11 @@ func (c *compiler) compileCall(n *ast.CallExpr) (evalFunc, error) {
 	if !ok {
 		return nil, c.unsupported(n.Fun, "call target must be a builtin name")
 	}
-	if len(n.Args) != 1 || n.Ellipsis != token.NoPos {
-		return nil, c.errorAt(n, fmt.Errorf("%w: %s takes exactly one argument", ErrUnsupported, name.Name))
-	}
-
 	switch name.Name {
 	case "has":
+		if err := c.oneArgument(n, name.Name); err != nil {
+			return nil, err
+		}
 		// has reports whether a reference resolves, so it needs the reference
 		// itself rather than making absence an evaluation error. Other read
 		// failures still propagate: malformed data is not the same as no data.
@@ -488,6 +487,9 @@ func (c *compiler) compileCall(n *ast.CallExpr) (evalFunc, error) {
 			}
 		}, nil
 	case "len":
+		if err := c.oneArgument(n, name.Name); err != nil {
+			return nil, err
+		}
 		arg, err := c.compile(n.Args[0])
 		if err != nil {
 			return nil, err
@@ -502,6 +504,16 @@ func (c *compiler) compileCall(n *ast.CallExpr) (evalFunc, error) {
 	default:
 		return nil, c.errorAt(n, fmt.Errorf("%w: unknown function %q; expr provides has and len", ErrUnsupported, name.Name))
 	}
+}
+
+// oneArgument checks the arity of a call this package recognizes. Its caller
+// matches the name first: reporting an arity for a function that does not exist
+// would describe a signature the caller cannot use.
+func (c *compiler) oneArgument(n *ast.CallExpr, name string) error {
+	if len(n.Args) != 1 || n.Ellipsis != token.NoPos {
+		return c.errorAt(n, fmt.Errorf("%w: %s takes exactly one argument", ErrUnsupported, name))
+	}
+	return nil
 }
 
 func (e evalFunc) bool(s workflow.Store, op token.Token) (bool, error) {

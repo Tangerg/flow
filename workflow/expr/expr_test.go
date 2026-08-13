@@ -875,3 +875,26 @@ func TestError_reportsPosition(t *testing.T) {
 		t.Fatalf("Error = %q; want it to quote the source", exprErr.Error())
 	}
 }
+
+// A call is checked by name before arity. Reporting how many arguments a
+// function takes describes a signature, which a function that does not exist does
+// not have — so the same unknown name must not read as a real function used
+// wrongly just because the argument count happens to differ.
+func TestParse_reportsAnUnknownFunctionBeforeItsArity(t *testing.T) {
+	for _, src := range []string{"nope()", "nope(1)", "nope(1, 2)"} {
+		t.Run(src, func(t *testing.T) {
+			_, err := expr.Parse(src)
+			if err == nil || !strings.Contains(err.Error(), `unknown function "nope"`) {
+				t.Fatalf("Parse(%q) = %v; want an unknown-function error", src, err)
+			}
+		})
+	}
+	for _, src := range []string{"len()", "len(1, 2)", "has(a.output, b.output)"} {
+		t.Run(src, func(t *testing.T) {
+			_, err := expr.Parse(src)
+			if err == nil || !strings.Contains(err.Error(), "takes exactly one argument") {
+				t.Fatalf("Parse(%q) = %v; want an arity error", src, err)
+			}
+		})
+	}
+}
