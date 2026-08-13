@@ -79,9 +79,9 @@ func (s specCompiler) compile(spec Spec) (Step, error) {
 // CompileSpecJSON validates data against [SpecJSONSchema], strictly unmarshals
 // it into a Spec, and compiles it.
 func (r *Registry) CompileSpecJSON(data []byte) (Step, error) {
-	spec, err := decodeSpecDocument(jsonDocument(data))
+	spec, err := decodeSpecDocument(data)
 	if err != nil {
-		return nil, &SpecError{Field: fieldJSON, Err: err}
+		return nil, specJSONError(err)
 	}
 	return r.CompileSpec(spec)
 }

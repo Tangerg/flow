@@ -99,7 +99,7 @@ func (g graphJSONEncoder) marshal() ([]byte, error) {
 	}
 	encoded, err := marshalJSON(graphJSONFields(g.graph))
 	if err != nil {
-		return nil, &GraphError{Field: fieldJSON, Err: err}
+		return nil, graphJSONError(err)
 	}
 	return encoded, nil
 }
