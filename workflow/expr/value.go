@@ -74,6 +74,9 @@ func (o operand) normalized() any {
 	}
 }
 
+// normalized leaves a value unsigned only above MaxInt64, where no int64 can
+// hold it. Comparison reads that invariant instead of restating it: an unsigned
+// operand is always the larger side of a signed comparison.
 func (u unsignedNumber) normalized() any {
 	if u > math.MaxInt64 {
 		return uint64(u)

@@ -25,6 +25,9 @@ func TestParseInteger(t *testing.T) {
 		{text: "4200e-2", want: jsonnum.Integer{Magnitude: 42}},
 		{text: "4.2e1", want: jsonnum.Integer{Magnitude: 42}},
 		{text: "1e2", want: jsonnum.Integer{Magnitude: 100}},
+		// JSON spells the exponent with either case, so both reach the same parse.
+		{text: "1E2", want: jsonnum.Integer{Magnitude: 100}},
+		{text: "12E-1", err: jsonnum.ErrFractional},
 		{text: "18446744073709551615.0", want: jsonnum.Integer{Magnitude: math.MaxUint64}},
 		{text: "", err: jsonnum.ErrSyntax},
 		{text: "-", err: jsonnum.ErrSyntax},
