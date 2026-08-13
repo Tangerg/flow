@@ -1337,6 +1337,41 @@ func TestRegistry_concurrentRegistrationIsRaceFree(t *testing.T) {
 	wg.Wait()
 }
 
+// TestRegistry_registrationDuringCompilationIsRaceFree covers the interleaving the
+// two tests around it leave out: one goroutine registers while another compiles.
+// A snapshot is what makes that safe -- it copies the tables under the lock, so a
+// compile reads entries nobody can still be writing. Reading the live tables
+// instead is a concurrent map access, and neither registering nor compiling on its
+// own can reach it.
+func TestRegistry_registrationDuringCompilationIsRaceFree(t *testing.T) {
+	registry := workflow.NewRegistry().MustRegisterNode("add", addN())
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{{
+		ID:     "add",
+		Type:   "add",
+		Inputs: workflow.OneInput(workflow.Output("seed")),
+		Config: json.RawMessage(`{"n":1}`),
+	}}}
+
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	for index := range 16 {
+		workers.Go(func() {
+			<-start
+			if err := registry.RegisterNode(fmt.Sprintf("late-%d", index), addN()); err != nil {
+				t.Errorf("RegisterNode: %v", err)
+			}
+		})
+		workers.Go(func() {
+			<-start
+			if _, err := registry.CompileGraph(graph); err != nil {
+				t.Errorf("CompileGraph: %v", err)
+			}
+		})
+	}
+	close(start)
+	workers.Wait()
+}
+
 func TestRegistry_concurrentCompilationSharesOnlyImmutableRegistrations(t *testing.T) {
 	registry := workflow.NewRegistry().
 		MustRegisterNode("add", addN()).

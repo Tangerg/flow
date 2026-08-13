@@ -38,6 +38,7 @@ linters:
     - forcetypeassert
     - gocheckcompilerdirectives
     - gochecksumtype
+    - gocognit
     - goconst
     - gocritic
     - godoclint
@@ -56,6 +57,7 @@ linters:
     - mnd
     - modernize
     - nakedret
+    - nestif
     - nilerr
     - nilnesserr
     - nilnil
@@ -91,6 +93,13 @@ linters:
         # identifying fields first, then configuration. Reordering for padding
         # would trade that for a few bytes per value.
         - fieldalignment
+
+    gocognit:
+      # The default threshold. A function past it is usually several rules in one
+      # body, which is a naming problem before it is a formatting one: the two
+      # tests that first exceeded it were each holding three unrelated rules, and
+      # splitting them by rule brought every function in the module under 30.
+      min-complexity: 30
 
     exhaustive:
       # A default case handles the remaining values by construction here: the

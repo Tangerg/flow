@@ -9,6 +9,39 @@ import (
 	"github.com/Tangerg/flow/workflow"
 )
 
+// fuzzJSONIdentity holds one wire type to the boundary a restart needs: a rejected
+// document leaves the destination exactly as it was, and an accepted one re-encodes
+// to the bytes it decoded from. Four types below own that rule and each used to
+// state it again, in two different shapes; what a type adds on top of it -- being
+// valid, or round-tripping to an identical value -- stays at its own call site.
+//
+// It returns what was decoded and what re-decoding that produced, so a comparable
+// type can compare them, and reports whether the document was accepted at all.
+func fuzzJSONIdentity[T any](t *testing.T, what string, data []byte, sentinel T) (T, T, bool) {
+	t.Helper()
+	decoded := sentinel
+	var restored T
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		if !reflect.DeepEqual(decoded, sentinel) {
+			t.Fatalf("failed %s decode changed destination: %#v", what, decoded)
+		}
+		return sentinel, restored, false
+	}
+
+	encoded, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatalf("accepted %s cannot be marshaled: %v", what, err)
+	}
+	if decodeErr := json.Unmarshal(encoded, &restored); decodeErr != nil {
+		t.Fatalf("encoded %s cannot be decoded: %v", what, decodeErr)
+	}
+	reencoded, err := json.Marshal(restored)
+	if err != nil || !bytes.Equal(reencoded, encoded) {
+		t.Fatalf("%s encoding is not idempotent: %s, %s, %v", what, encoded, reencoded, err)
+	}
+	return decoded, restored, true
+}
+
 func FuzzStoreLookupPath(f *testing.F) {
 	f.Add("/output/items/0/name")
 	f.Add("")
@@ -128,25 +161,9 @@ func FuzzStoreJSON(f *testing.F) {
 	f.Add([]byte(`null`))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		var store workflow.Store
-		if err := json.Unmarshal(data, &store); err != nil {
+		store, _, accepted := fuzzJSONIdentity(t, "Store", data, workflow.NewStore().WithOutput("sentinel", "kept"))
+		if !accepted {
 			return
-		}
-
-		again, marshalErr := json.Marshal(store)
-		if marshalErr != nil {
-			t.Fatalf("a decoded Store failed to marshal: %v", marshalErr)
-		}
-		var second workflow.Store
-		if err := json.Unmarshal(again, &second); err != nil {
-			t.Fatalf("re-decoding a marshalled Store failed: %v", err)
-		}
-		third, marshalErr := json.Marshal(second)
-		if marshalErr != nil {
-			t.Fatalf("marshal is not stable: %v", marshalErr)
-		}
-		if string(again) != string(third) {
-			t.Fatalf("round trip is not idempotent:\n%s\n%s", again, third)
 		}
 
 		// Every typed read must come back as a value or an error.
@@ -177,6 +194,8 @@ func FuzzJournalJSON(f *testing.F) {
 	f.Add([]byte(`{"version":4,"records":[{"scope":[{"id":"iter","indexed":true}],"id":"el","value":1}]}`))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
+		// A Journal is reached through a pointer with a constructor, so it decodes
+		// into one the caller made rather than into a fresh T.
 		journal := workflow.NewJournal()
 		if err := json.Unmarshal(data, journal); err != nil {
 			return
@@ -196,7 +215,7 @@ func FuzzJournalJSON(f *testing.F) {
 		if stableErr != nil {
 			t.Fatalf("marshal is not stable: %v", stableErr)
 		}
-		if string(again) != string(third) {
+		if !bytes.Equal(again, third) {
 			t.Fatalf("round trip is not idempotent:\n%s\n%s", again, third)
 		}
 	})
@@ -217,47 +236,14 @@ func FuzzResumeIdentityJSON(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		suspension := workflow.Suspension{ID: "sentinel", Value: "kept"}
-		beforeSuspension := suspension
-		if err := json.Unmarshal(data, &suspension); err != nil {
-			if !reflect.DeepEqual(suspension, beforeSuspension) {
-				t.Fatalf("failed Suspension decode changed destination: %#v", suspension)
-			}
-		} else {
-			encoded, err := json.Marshal(suspension)
-			if err != nil {
-				t.Fatalf("accepted Suspension cannot be marshaled: %v", err)
-			}
-			var restored workflow.Suspension
-			if decodeErr := json.Unmarshal(encoded, &restored); decodeErr != nil {
-				t.Fatalf("encoded Suspension cannot be decoded: %v", decodeErr)
-			}
-			reencoded, err := json.Marshal(restored)
-			if err != nil || !bytes.Equal(reencoded, encoded) {
-				t.Fatalf("Suspension encoding is not idempotent: %s, %s, %v", encoded, reencoded, err)
-			}
-		}
-
-		key := workflow.JournalKey{ID: "sentinel", Scope: []workflow.ScopeFrame{{ID: "outer"}}}
-		beforeKey := key
-		if err := json.Unmarshal(data, &key); err != nil {
-			if !reflect.DeepEqual(key, beforeKey) {
-				t.Fatalf("failed JournalKey decode changed destination: %#v", key)
-			}
-			return
-		}
-		encoded, err := json.Marshal(key)
-		if err != nil {
-			t.Fatalf("accepted JournalKey cannot be marshaled: %v", err)
-		}
-		var restored workflow.JournalKey
-		if decodeErr := json.Unmarshal(encoded, &restored); decodeErr != nil {
-			t.Fatalf("encoded JournalKey cannot be decoded: %v", decodeErr)
-		}
-		reencoded, err := json.Marshal(restored)
-		if err != nil || !bytes.Equal(reencoded, encoded) {
-			t.Fatalf("JournalKey encoding is not idempotent: %s, %s, %v", encoded, reencoded, err)
-		}
+		// The same document is offered to both types: a wait and the key that
+		// resumes it cross the boundary as separate documents, and neither may
+		// accept one shaped for the other without re-encoding it as itself.
+		fuzzJSONIdentity(t, "Suspension", data, workflow.Suspension{ID: "sentinel", Value: "kept"})
+		fuzzJSONIdentity(t, "JournalKey", data, workflow.JournalKey{
+			ID:    "sentinel",
+			Scope: []workflow.ScopeFrame{{ID: "outer"}},
+		})
 	})
 }
 
@@ -281,31 +267,23 @@ func FuzzScopeFrameJSON(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		frame := workflow.ScopeFrame{ID: "sentinel", Indexed: true, Index: 7}
-		before := frame
-		if err := json.Unmarshal(data, &frame); err != nil {
-			if frame != before {
-				t.Fatalf("failed ScopeFrame decode changed destination: %#v", frame)
-			}
+		frame, restored, accepted := fuzzJSONIdentity(
+			t,
+			"ScopeFrame",
+			data,
+			workflow.ScopeFrame{ID: "sentinel", Indexed: true, Index: 7},
+		)
+		if !accepted {
 			return
 		}
+		// A frame adds two promises to the shared rule: an accepted one satisfies
+		// its own invariant, and being comparable, it round-trips to the same value
+		// rather than merely to the same bytes.
 		if err := frame.Validate(); err != nil {
 			t.Fatalf("accepted ScopeFrame is invalid: %v", err)
 		}
-		encoded, err := json.Marshal(frame)
-		if err != nil {
-			t.Fatalf("accepted ScopeFrame cannot be marshaled: %v", err)
-		}
-		var restored workflow.ScopeFrame
-		if decodeErr := json.Unmarshal(encoded, &restored); decodeErr != nil {
-			t.Fatalf("encoded ScopeFrame cannot be decoded: %v", decodeErr)
-		}
 		if restored != frame {
 			t.Fatalf("ScopeFrame round trip = %#v; want %#v", restored, frame)
-		}
-		reencoded, err := json.Marshal(restored)
-		if err != nil || !bytes.Equal(reencoded, encoded) {
-			t.Fatalf("ScopeFrame encoding is not idempotent: %s, %s, %v", encoded, reencoded, err)
 		}
 	})
 }

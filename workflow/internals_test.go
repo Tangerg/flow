@@ -904,120 +904,143 @@ func TestStoreChanges_orderSurvivesCompaction(t *testing.T) {
 	}
 }
 
-func TestGraphDecorators_preserveDefinitionAndStoreBoundaries(t *testing.T) {
-	t.Run("empty graph namespace", func(t *testing.T) {
-		store := NewStore().WithOutput("external", 1)
-		if got := store.withoutNodes(nil); got != store {
-			t.Fatal("empty node set changed the Store")
-		}
-		nodes := nodeSet{"node": {}}
-		if got := (Store{}).withoutNodes(nodes); got != (Store{}) {
-			t.Fatalf("empty Store changed to %+v", got)
-		}
-		if got := store.withoutNodes(nodes); got != store {
-			t.Fatal("unrelated node set changed the Store")
-		}
-		externalSnapshot := store.compact()
-		if got := externalSnapshot.withoutNodes(nodes); got != externalSnapshot {
-			t.Fatal("unrelated node set changed a snapshotted Store")
-		}
-		for name, owned := range map[string]Store{
-			"overlay":  NewStore().WithOutput("node", 1),
-			"snapshot": NewStore().WithOutput("node", 1).compact(),
-		} {
-			t.Run(name, func(t *testing.T) {
-				cleared := owned.withoutNodes(nodes)
-				if _, present := cleared.Lookup(Output("node")); present {
-					t.Fatal("cleared Store retained the internal node")
-				}
-				if _, present := owned.merge(cleared).Lookup(Output("node")); present {
-					t.Fatal("namespace removal did not survive Store merging")
-				}
-				if changes := cleared.Changes(owned); len(changes) != 0 {
-					t.Fatalf("Changes exposed private namespace removals: %v", changes)
-				}
-				encoded, err := cleared.MarshalJSON()
-				if err != nil || string(encoded) != `{}` {
-					t.Fatalf("MarshalJSON = %s, %v; want {}, nil", encoded, err)
-				}
-			})
-		}
+// withoutNodes is the graph decorator's Store boundary: a compiled Graph clears
+// its own node namespace from the input so a rerun cannot read a previous
+// attempt's outputs. The three tests below separate what that has to hold -- it
+// changes nothing it does not own, it removes the namespace from every Store
+// representation, and the removal keeps behaving like a write.
+func TestStoreWithoutNodes_changesNothingItDoesNotOwn(t *testing.T) {
+	store := NewStore().WithOutput("external", 1)
+	if got := store.withoutNodes(nil); got != store {
+		t.Fatal("empty node set changed the Store")
+	}
+	nodes := nodeSet{"node": {}}
+	if got := (Store{}).withoutNodes(nodes); got != (Store{}) {
+		t.Fatalf("empty Store changed to %+v", got)
+	}
+	if got := store.withoutNodes(nodes); got != store {
+		t.Fatal("unrelated node set changed the Store")
+	}
+	externalSnapshot := store.compact()
+	if got := externalSnapshot.withoutNodes(nodes); got != externalSnapshot {
+		t.Fatal("unrelated node set changed a snapshotted Store")
+	}
+}
 
-		base := NewStore().WithOutput("node", 1)
-		cleared := base.
-			WithOutput("node", 2).
-			WithOutput("node", 3).
-			withoutNodes(nodes).
-			compact()
-		if _, present := base.merge(cleared).Lookup(Output("node")); present {
-			t.Fatal("compaction lost a namespace removal's Store lineage")
-		}
+// A Store is either an overlay over a base or a flattened snapshot, and removal
+// has to reach the namespace through both. Whichever it is, the removal must not
+// read as a change to the caller: it is the decorator's own bookkeeping.
+func TestStoreWithoutNodes_removesTheNamespaceFromEveryRepresentation(t *testing.T) {
+	nodes := nodeSet{"node": {}}
+	for name, owned := range map[string]Store{
+		"overlay":  NewStore().WithOutput("node", 1),
+		"snapshot": NewStore().WithOutput("node", 1).compact(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			cleared := owned.withoutNodes(nodes)
+			if _, present := cleared.Lookup(Output("node")); present {
+				t.Fatal("cleared Store retained the internal node")
+			}
+			if _, present := owned.merge(cleared).Lookup(Output("node")); present {
+				t.Fatal("namespace removal did not survive Store merging")
+			}
+			if changes := cleared.Changes(owned); len(changes) != 0 {
+				t.Fatalf("Changes exposed private namespace removals: %v", changes)
+			}
+			encoded, err := cleared.MarshalJSON()
+			if err != nil || string(encoded) != `{}` {
+				t.Fatalf("MarshalJSON = %s, %v; want {}, nil", encoded, err)
+			}
+		})
+	}
+}
 
-		unrelated := NewStore().WithOutput("node", 4)
-		merged := unrelated.merge(cleared)
-		if value, err := Get[int](merged, Output("node")); err != nil || value != 4 {
-			t.Fatalf("unrelated Store value = %d, %v; private removal leaked across lineages", value, err)
-		}
+// A removal is a write, so it carries a revision and a lineage and merges by the
+// same rules: it survives compaction, applies only to the lineage it removed, and
+// loses to a later write while beating an earlier one.
+func TestStoreWithoutNodes_removalMergesLikeTheWriteItIs(t *testing.T) {
+	nodes := nodeSet{"node": {}}
+	base := NewStore().WithOutput("node", 1)
+	cleared := base.
+		WithOutput("node", 2).
+		WithOutput("node", 3).
+		withoutNodes(nodes).
+		compact()
+	if _, present := base.merge(cleared).Lookup(Output("node")); present {
+		t.Fatal("compaction lost a namespace removal's Store lineage")
+	}
 
-		removed := base.withoutNodes(nodes)
-		written := base.WithOutput("node", 5)
-		if value, err := Get[int](base.merge(removed, written), Output("node")); err != nil || value != 5 {
-			t.Fatalf("later write = %d, %v; want 5, nil", value, err)
-		}
-		if value, present := base.merge(written, removed).Lookup(Output("node")); present {
-			t.Fatalf("later namespace cleanup left value %v", value)
-		}
+	unrelated := NewStore().WithOutput("node", 4)
+	merged := unrelated.merge(cleared)
+	if value, err := Get[int](merged, Output("node")); err != nil || value != 4 {
+		t.Fatalf("unrelated Store value = %d, %v; private removal leaked across lineages", value, err)
+	}
 
-		large := NewStore()
-		for index := range storeOverlayLimit*2 + 1 {
-			large = large.WithCell("node", fmt.Sprintf("key-%03d", index), index)
-		}
-		cleared = large.withoutNodes(nodes)
-		if cleared.depth != 0 {
-			t.Fatalf("large namespace cleanup depth = %d; want compacted snapshot", cleared.depth)
-		}
-		if encoded, err := cleared.MarshalJSON(); err != nil || string(encoded) != `{}` {
-			t.Fatalf("large cleanup MarshalJSON = %s, %v; want {}, nil", encoded, err)
-		}
-	})
+	removed := base.withoutNodes(nodes)
+	written := base.WithOutput("node", 5)
+	if value, err := Get[int](base.merge(removed, written), Output("node")); err != nil || value != 5 {
+		t.Fatalf("later write = %d, %v; want 5, nil", value, err)
+	}
+	if value, present := base.merge(written, removed).Lookup(Output("node")); present {
+		t.Fatalf("later namespace cleanup left value %v", value)
+	}
 
-	t.Run("gated definition depth", func(t *testing.T) {
-		var step definedStep = interruptStep{id: "inner"}
-		for range MaxNestingDepth + 1 {
-			step = Sequence(step).(definedStep)
-		}
-		step = gated(
-			[]compiledGate{{
-				Gate:    When("route", "yes"),
-				outlets: []string{"yes"},
-			}},
-			TriggerAll,
-			step,
-		)
-		validator := definitionValidator{}
-		if err := validator.validate(step); !errors.Is(err, ErrMaxDepth) {
-			t.Fatalf("error = %v; want ErrMaxDepth", err)
-		}
-	})
+	// Past the overlay limit the removal is written into a compacted snapshot
+	// instead of onto an overlay, which is the other half of the same rule.
+	large := NewStore()
+	for index := range storeOverlayLimit*2 + 1 {
+		large = large.WithCell("node", fmt.Sprintf("key-%03d", index), index)
+	}
+	cleared = large.withoutNodes(nodes)
+	if cleared.depth != 0 {
+		t.Fatalf("large namespace cleanup depth = %d; want compacted snapshot", cleared.depth)
+	}
+	if encoded, err := cleared.MarshalJSON(); err != nil || string(encoded) != `{}` {
+		t.Fatalf("large cleanup MarshalJSON = %s, %v; want {}, nil", encoded, err)
+	}
+}
 
-	t.Run("bypass reserves execution identity", func(t *testing.T) {
-		step := gated(
-			[]compiledGate{{
-				Gate:    When("route", "yes"),
-				outlets: []string{"yes", "no"},
-			}},
-			TriggerAll,
-			interruptStep{id: "target"},
-		)
-		ctx := withConfig(t.Context(), RunConfig{})
-		store := NewStore().WithOutput("route", "no")
-		if _, err := step.Run(ctx, store); err != nil {
-			t.Fatalf("first bypass: %v", err)
-		}
-		if _, err := step.Run(ctx, store); !errors.Is(err, ErrDuplicateStep) {
-			t.Fatalf("second bypass error = %v; want ErrDuplicateStep", err)
-		}
-	})
+// A gate wraps a step without hiding it: the definition it decorates is still
+// reached by validation, so a body too deep to run is rejected through the gate.
+func TestGatedStep_validatesTheDefinitionItWraps(t *testing.T) {
+	var step definedStep = interruptStep{id: "inner"}
+	for range MaxNestingDepth + 1 {
+		step = Sequence(step).(definedStep)
+	}
+	step = gated(
+		[]compiledGate{{
+			Gate:    When("route", "yes"),
+			outlets: []string{"yes"},
+		}},
+		TriggerAll,
+		step,
+	)
+	validator := definitionValidator{}
+	if err := validator.validate(step); !errors.Is(err, ErrMaxDepth) {
+		t.Fatalf("error = %v; want ErrMaxDepth", err)
+	}
+}
+
+// A bypassed step still consumed its identity: it reached its boundary and decided
+// not to run, which is an outcome, not an absence. Reaching it twice is the
+// duplicate the run rejects.
+func TestGatedStep_bypassReservesExecutionIdentity(t *testing.T) {
+	step := gated(
+		[]compiledGate{{
+			Gate:    When("route", "yes"),
+			outlets: []string{"yes", "no"},
+		}},
+		TriggerAll,
+		interruptStep{id: "target"},
+	)
+	ctx := withConfig(t.Context(), RunConfig{})
+	store := NewStore().WithOutput("route", "no")
+	if _, err := step.Run(ctx, store); err != nil {
+		t.Fatalf("first bypass: %v", err)
+	}
+	if _, err := step.Run(ctx, store); !errors.Is(err, ErrDuplicateStep) {
+		t.Fatalf("second bypass error = %v; want ErrDuplicateStep", err)
+	}
 }
 
 func TestGraphCall_doesNotEnterStepAfterCancellation(t *testing.T) {
@@ -1354,6 +1377,68 @@ func TestStoreCells_reportsEveryLiveRecordAndHonorsAnEarlyStop(t *testing.T) {
 	}
 }
 
+// uniqueDependencyEdges reads the dependency lists as a set of edges, which is
+// only a set if no node depends on itself and no edge is recorded twice -- either
+// would make the scheduler's countdown reach zero at the wrong time.
+func uniqueDependencyEdges(t *testing.T, plan graphPlan) map[[2]int]struct{} {
+	t.Helper()
+	edges := make(map[[2]int]struct{})
+	for node, dependencies := range plan.dependencyNodeIndexes {
+		if slices.Contains(dependencies, node) {
+			t.Fatalf("node %d depends on itself", node)
+		}
+		for _, dependency := range dependencies {
+			edge := [2]int{dependency, node}
+			if _, duplicate := edges[edge]; duplicate {
+				t.Fatalf("edge %v recorded twice", edge)
+			}
+			edges[edge] = struct{}{}
+		}
+	}
+	return edges
+}
+
+func assertOneListEntryPerNode(t *testing.T, plan graphPlan, nodes int) {
+	t.Helper()
+	if len(plan.dependencyNodeIndexes) != nodes || len(plan.dependentNodeIndexes) != nodes {
+		t.Fatalf(
+			"lists sized %d and %d; want %d",
+			len(plan.dependencyNodeIndexes),
+			len(plan.dependentNodeIndexes),
+			nodes,
+		)
+	}
+}
+
+// assertEachListIsTheOther consumes the dependency edges from the dependent side.
+// Every dependent edge must find one, and none may be left over: that is what
+// makes the two lists the same edges read from opposite ends.
+func assertEachListIsTheOther(t *testing.T, plan graphPlan, edges map[[2]int]struct{}) {
+	t.Helper()
+	for dependency, dependents := range plan.dependentNodeIndexes {
+		for _, node := range dependents {
+			edge := [2]int{dependency, node}
+			if _, present := edges[edge]; !present {
+				t.Fatalf("dependent edge %v has no matching dependency", edge)
+			}
+			delete(edges, edge)
+		}
+	}
+	if len(edges) != 0 {
+		t.Fatalf("%d dependency edges have no matching dependent", len(edges))
+	}
+}
+
+func assertInDegreesCountDependencies(t *testing.T, plan graphPlan) {
+	t.Helper()
+	counts := inDegrees(plan.dependencyNodeIndexes)
+	for node, dependencies := range plan.dependencyNodeIndexes {
+		if counts[node] != len(dependencies) {
+			t.Fatalf("in-degree of %d = %d; want %d", node, counts[node], len(dependencies))
+		}
+	}
+}
+
 // TestGraphPlanAdjacencyListsAreTransposes pins what connectDependency maintains
 // by hand: it appends to a node's dependency list and to the dependency's
 // dependent list in the same breath, so the two must describe the same edges from
@@ -1391,48 +1476,9 @@ func TestGraphPlanAdjacencyListsAreTransposes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("plan: %v", err)
 			}
-			nodes := len(graph.Nodes)
-			if len(plan.dependencyNodeIndexes) != nodes || len(plan.dependentNodeIndexes) != nodes {
-				t.Fatalf(
-					"lists sized %d and %d; want %d",
-					len(plan.dependencyNodeIndexes),
-					len(plan.dependentNodeIndexes),
-					nodes,
-				)
-			}
-
-			edges := make(map[[2]int]struct{})
-			for node, dependencies := range plan.dependencyNodeIndexes {
-				if slices.Contains(dependencies, node) {
-					t.Fatalf("node %d depends on itself", node)
-				}
-				for _, dependency := range dependencies {
-					edge := [2]int{dependency, node}
-					if _, duplicate := edges[edge]; duplicate {
-						t.Fatalf("edge %v recorded twice", edge)
-					}
-					edges[edge] = struct{}{}
-				}
-			}
-			for dependency, dependents := range plan.dependentNodeIndexes {
-				for _, node := range dependents {
-					edge := [2]int{dependency, node}
-					if _, present := edges[edge]; !present {
-						t.Fatalf("dependent edge %v has no matching dependency", edge)
-					}
-					delete(edges, edge)
-				}
-			}
-			if len(edges) != 0 {
-				t.Fatalf("%d dependency edges have no matching dependent", len(edges))
-			}
-
-			counts := inDegrees(plan.dependencyNodeIndexes)
-			for node, dependencies := range plan.dependencyNodeIndexes {
-				if counts[node] != len(dependencies) {
-					t.Fatalf("in-degree of %d = %d; want %d", node, counts[node], len(dependencies))
-				}
-			}
+			assertOneListEntryPerNode(t, plan, len(graph.Nodes))
+			assertEachListIsTheOther(t, plan, uniqueDependencyEdges(t, plan))
+			assertInDegreesCountDependencies(t, plan)
 		})
 	}
 }
