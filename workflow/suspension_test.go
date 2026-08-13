@@ -1289,6 +1289,35 @@ func TestJoinSuspensions_normalizesAndCopies(t *testing.T) {
 	}
 }
 
+// TestJoinSuspensions_ordersByIDThenScope pins the two links before the one the
+// test below covers, and it has to supply them out of order to do it. Every other
+// ordering test feeds suspensions that arrive sorted already -- an iteration
+// collects its elements by index -- and a stable sort leaves those alone whether the
+// scope is compared or not.
+func TestJoinSuspensions_ordersByIDThenScope(t *testing.T) {
+	scoped := func(id string, index uint64) *workflow.Suspension {
+		return &workflow.Suspension{ID: id, Scope: indexedScope("items", index)}
+	}
+
+	// The ID decides before the scope: read the other way round, the deeper index
+	// would put "b" first.
+	identity := workflow.Suspensions(workflow.JoinSuspensions(scoped("b", 0), scoped("a", 1)))
+	if len(identity) != 2 || identity[0].ID != "a" || identity[1].ID != "b" {
+		t.Fatalf("Suspensions = %+v; want a before b", identity)
+	}
+
+	// Same ID, reversed scopes: only comparing the scope can put these back in order.
+	scopes := workflow.Suspensions(workflow.JoinSuspensions(scoped("wait", 2), scoped("wait", 1), scoped("wait", 0)))
+	if len(scopes) != 3 {
+		t.Fatalf("Suspensions = %+v; want three", scopes)
+	}
+	for index, wait := range scopes {
+		if !slices.Equal(wait.Scope, indexedScope("items", uint64(index))) {
+			t.Fatalf("scopes = %v; want items[0], items[1], items[2]", scopeText(wait.Scope))
+		}
+	}
+}
+
 func TestJoinSuspensions_ordersByAwaitAfterIdentity(t *testing.T) {
 	err := workflow.JoinSuspensions(
 		&workflow.Suspension{ID: "wait", Await: workflow.Output("z")},

@@ -97,25 +97,36 @@ func TestEmptyAndEscapedGraphs(t *testing.T) {
 	}
 }
 
+// A node ID may contain the separator a Ref renders with, so several references
+// can display the same label while denoting different cells. Three of them share
+// one label here, split at each separator in turn: the node ID is then the only
+// thing that orders them, and reading it wrong would assign an edge to the wrong
+// box rather than fail outright.
 func TestMermaid_keepsExternalIdentitySeparateFromItsDisplayLabel(t *testing.T) {
 	graph := workflow.Graph{Nodes: []workflow.GraphNode{
 		{
 			ID:     "first",
 			Type:   "sink",
-			Inputs: workflow.OneInput(workflow.At("a", "b#", "c")),
+			Inputs: workflow.OneInput(workflow.At("a", "b#", "c#", "d")),
 		},
 		{
 			ID:     "second",
 			Type:   "sink",
-			Inputs: workflow.OneInput(workflow.At("a#/b", "c")),
+			Inputs: workflow.OneInput(workflow.At("a#/b", "c#", "d")),
+		},
+		{
+			ID:     "third",
+			Type:   "sink",
+			Inputs: workflow.OneInput(workflow.At("a#/b#/c", "d")),
 		},
 	}}
 
 	got := diagram.Mermaid(graph)
-	const sharedLabel = `a#/b#/c`
-	if strings.Count(got, `["`+sharedLabel+`"]`) != 2 ||
-		!strings.Contains(got, "  x0 -->|in: /b#/c| n0\n") ||
-		!strings.Contains(got, "  x1 -->|in: /c| n1\n") {
+	const sharedLabel = `a#/b#/c#/d`
+	if strings.Count(got, `["`+sharedLabel+`"]`) != 3 ||
+		!strings.Contains(got, "  x0 -->|in: /b#/c#/d| n0\n") ||
+		!strings.Contains(got, "  x1 -->|in: /c#/d| n1\n") ||
+		!strings.Contains(got, "  x2 -->|in: /d| n2\n") {
 		t.Fatalf("Mermaid merged structured external identities:\n%s", got)
 	}
 }
@@ -145,6 +156,31 @@ func TestMermaid_ordersASourceBeforeAValueRefSharingItsLabel(t *testing.T) {
 		!strings.Contains(got, "  x0 -.->|depends| n1\n") ||
 		!strings.Contains(got, "  x1 -->|in| n0\n") {
 		t.Fatalf("Mermaid did not order the source before the value ref:\n%s", got)
+	}
+}
+
+// TestMermaid_ordersExternalsByLabelBeforeKind pins which of the two links comes
+// first. Every other case here gives two externals the same label, where the label
+// cannot decide anything; this one gives them different labels that the kinds would
+// order the other way round -- a value ref sorts before a source by label and after
+// it by kind.
+func TestMermaid_ordersExternalsByLabelBeforeKind(t *testing.T) {
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
+		{
+			ID:     "reader",
+			Type:   "sink",
+			Inputs: workflow.OneInput(workflow.At("a", "value")),
+		},
+		{
+			ID:        "waiter",
+			Type:      "sink",
+			DependsOn: []string{"b"},
+		},
+	}}
+
+	got := diagram.Mermaid(graph)
+	if !strings.Contains(got, "  x0[\"a#/value\"]\n") || !strings.Contains(got, "  x1[\"b\"]\n") {
+		t.Fatalf("Mermaid ordered externals by kind before label:\n%s", got)
 	}
 }
 

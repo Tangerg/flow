@@ -65,8 +65,9 @@ func (e externalNode) label() string {
 // value ref's label is its node ID and path joined, so two that agree on both the
 // label and the node ID agree on the path as well. Neither the source nor the path
 // is compared here for that reason. See
-// TestMermaid_ordersASourceBeforeAValueRefSharingItsLabel and
-// TestMermaid_keepsExternalIdentitySeparateFromItsDisplayLabel.
+// TestExternalNodeCompare_tellsApartEverythingItOrdersBy, which asks the
+// comparator directly because a rendered order shows a missing link only as the
+// permutation map iteration happened to produce.
 func (e externalNode) compare(other externalNode) int {
 	return cmp.Or(
 		strings.Compare(e.label(), other.label()),

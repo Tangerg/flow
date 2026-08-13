@@ -849,22 +849,33 @@ func TestGraph_inputs(t *testing.T) {
 		{ID: "b", Type: "sum", Inputs: workflow.Inputs{
 			"a": workflow.Output("a"),          // internal
 			"b": workflow.At("params", "rate"), // external
+			// A second cell of the same external node, wired to a port whose name
+			// orders the other way: the result is ordered by reference, so only
+			// comparing the path after the node ID can put these two back in order.
+			"c": workflow.At("params", "limit"),
 		}},
 		{ID: "c", Type: "addN", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("seed")}}, // duplicate external
 	}}
 
 	got := g.Inputs()
-	want := []workflow.Ref{workflow.At("params", "rate"), workflow.Output("seed")}
+	want := []workflow.Ref{
+		workflow.At("params", "limit"),
+		workflow.At("params", "rate"),
+		workflow.Output("seed"),
+	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("Graph.Inputs = %v; want %v", got, want)
 	}
 
 	seeded := workflow.NewStore().WithOutput("seed", 1)
-	if missing := g.MissingInputs(seeded); !slices.Equal(missing, []workflow.Ref{workflow.At("params", "rate")}) {
-		t.Fatalf("Graph.MissingInputs = %v; want params.rate", missing)
+	wantMissing := []workflow.Ref{workflow.At("params", "limit"), workflow.At("params", "rate")}
+	if missing := g.MissingInputs(seeded); !slices.Equal(missing, wantMissing) {
+		t.Fatalf("Graph.MissingInputs = %v; want %v", missing, wantMissing)
 	}
 
-	complete := seeded.WithCell("params", "rate", 0.5)
+	complete := seeded.
+		WithCell("params", "limit", 10).
+		WithCell("params", "rate", 0.5)
 	if missing := g.MissingInputs(complete); len(missing) != 0 {
 		t.Fatalf("Graph.MissingInputs = %v; want none", missing)
 	}
