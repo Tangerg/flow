@@ -8,6 +8,8 @@ import (
 	"strconv"
 
 	"github.com/Tangerg/flow/internal/jsonnum"
+
+	"github.com/Tangerg/flow/internal/jsondoc"
 )
 
 var (
@@ -175,7 +177,7 @@ func (j *journalNode) appendEntries(scope []ScopeFrame, entries *[]journalEntry)
 // between runs, not while a Run is using the Journal.
 func (j *Journal) UnmarshalJSON(data []byte) error {
 	if j == nil {
-		return errors.New("workflow: unmarshal journal: nil journal")
+		return fmt.Errorf("workflow: unmarshal journal: %w", jsondoc.ErrNilReceiver)
 	}
 
 	var decoded journalDecoder

@@ -58,6 +58,33 @@ func TranslateDepth(err error, sentinel error) error {
 	)
 }
 
+// ErrNilReceiver reports an UnmarshalJSON call on a nil pointer. Every boundary
+// names itself in its own prefix, so the condition states only that the
+// destination is missing.
+var ErrNilReceiver = errors.New("nil receiver")
+
+// DecodeInto applies the boundary a strict UnmarshalJSON promises: a nil
+// receiver is reported rather than panicking, the whole document is decoded
+// before anything is assigned, and the destination is replaced only after
+// complete success. wrap gives each boundary its own diagnostic, because a
+// package may report through a structured error this one knows nothing about.
+func DecodeInto[T any](
+	dst *T,
+	data []byte,
+	decode func([]byte) (T, error),
+	wrap func(error) error,
+) error {
+	if dst == nil {
+		return wrap(ErrNilReceiver)
+	}
+	next, err := decode(data)
+	if err != nil {
+		return wrap(err)
+	}
+	*dst = next
+	return nil
+}
+
 // Validate checks data without retaining its decoded value.
 func (c Codec) Validate(data []byte) error {
 	_, err := c.Value(data)

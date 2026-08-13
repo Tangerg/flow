@@ -2,8 +2,6 @@ package workflow
 
 import (
 	"encoding/json"
-	"errors"
-	"fmt"
 )
 
 var _ json.Unmarshaler = (*Ref)(nil)
@@ -22,15 +20,7 @@ const (
 // rejected. The reference is not validated here: an unset Ref is meaningful in
 // several definition fields, and each owner reports its own field path.
 func (r *Ref) UnmarshalJSON(data []byte) error {
-	if r == nil {
-		return errors.New("workflow: unmarshal ref: nil ref")
-	}
-	next, err := decodeRef(data)
-	if err != nil {
-		return fmt.Errorf("workflow: unmarshal ref: %w", err)
-	}
-	*r = next
-	return nil
+	return decodeJSONInto(r, data, decodeRef, unmarshalError("ref"))
 }
 
 // decodeRef reads the strict canonical object. Each return names only its own

@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"encoding/json"
-	"errors"
 	"slices"
 )
 
@@ -89,15 +88,7 @@ func (g Graph) MarshalJSON() ([]byte, error) {
 // the same JSON Schema, duplicate-member, Unicode, integer, unknown-field, and
 // nesting rules as [ValidateGraphJSON] and [Registry.CompileGraphJSON].
 func (g *Graph) UnmarshalJSON(data []byte) error {
-	if g == nil {
-		return &GraphError{Field: fieldJSON, Err: errors.New("nil graph receiver")}
-	}
-	next, err := decodeGraphDocument(jsonDocument(data))
-	if err != nil {
-		return &GraphError{Field: fieldJSON, Err: err}
-	}
-	*g = next
-	return nil
+	return decodeJSONInto(g, data, decodeGraphDocument, graphJSONError)
 }
 
 // Inputs returns the external references the Graph may read: wired input ports

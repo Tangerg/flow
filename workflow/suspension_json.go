@@ -44,15 +44,7 @@ func (s Suspension) encode() ([]byte, error) {
 // values decode into the lossless JSON domain, including json.Number rather than
 // float64.
 func (s *Suspension) UnmarshalJSON(data []byte) error {
-	if s == nil {
-		return errors.New("workflow: unmarshal suspension: nil suspension")
-	}
-	next, err := decodeSuspension(data)
-	if err != nil {
-		return fmt.Errorf("workflow: unmarshal suspension: %w", err)
-	}
-	*s = next
-	return nil
+	return decodeJSONInto(s, data, decodeSuspension, unmarshalError("suspension"))
 }
 
 // decodeSuspension reads the strict canonical object, each return naming only its

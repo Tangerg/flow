@@ -33,15 +33,22 @@ func (b Bindings) MarshalJSON() ([]byte, error) {
 // nesting. The receiver is replaced only after the whole document has decoded
 // successfully.
 func (b *Bindings) UnmarshalJSON(data []byte) error {
-	if b == nil {
-		return errors.New("expr: bindings JSON: nil receiver")
-	}
+	return jsondoc.DecodeInto(b, data, decodeBindings, jsonError("bindings"))
+}
+
+func decodeBindings(data []byte) (Bindings, error) {
 	var next bindingsJSON
 	if err := decodeJSONObject(data, &next); err != nil {
-		return fmt.Errorf("expr: bindings JSON: %w", err)
+		return Bindings{}, err
 	}
-	*b = Bindings(next)
-	return nil
+	return Bindings(next), nil
+}
+
+// jsonError names one of this package's JSON boundaries.
+func jsonError(what string) func(error) error {
+	return func(err error) error {
+		return fmt.Errorf("expr: %s JSON: %w", what, err)
+	}
 }
 
 // MarshalJSON encodes a SwitchSpec without silently changing expression or
@@ -57,15 +64,15 @@ func (s SwitchSpec) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON strictly and atomically decodes a standalone SwitchSpec JSON
 // object.
 func (s *SwitchSpec) UnmarshalJSON(data []byte) error {
-	if s == nil {
-		return errors.New("expr: switch JSON: nil receiver")
-	}
+	return jsondoc.DecodeInto(s, data, decodeSwitchSpec, jsonError("switch"))
+}
+
+func decodeSwitchSpec(data []byte) (SwitchSpec, error) {
 	var next switchSpecJSON
 	if err := decodeJSONObject(data, &next); err != nil {
-		return fmt.Errorf("expr: switch JSON: %w", err)
+		return SwitchSpec{}, err
 	}
-	*s = SwitchSpec(next)
-	return nil
+	return SwitchSpec(next), nil
 }
 
 func decodeJSONObject(data []byte, dst any) error {

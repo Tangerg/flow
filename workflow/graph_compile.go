@@ -141,12 +141,9 @@ func (r registrySnapshot) gate(node GraphNode, plan graphPlan, step definedStep)
 // CompileGraphJSON validates data against [GraphJSONSchema], strictly
 // unmarshals it into a Graph, and compiles it.
 func (r *Registry) CompileGraphJSON(data []byte) (Step, error) {
-	graph, err := decodeGraphDocument(jsonDocument(data))
+	graph, err := decodeGraphDocument(data)
 	if err != nil {
-		return nil, &GraphError{
-			Field: fieldJSON,
-			Err:   err,
-		}
+		return nil, graphJSONError(err)
 	}
 	return r.CompileGraph(graph)
 }

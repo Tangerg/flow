@@ -303,8 +303,8 @@ func TestNilJournalJSONRepresentsAbsence(t *testing.T) {
 		t.Fatal("concrete Journal accepted null checkpoint")
 	}
 	if err := journal.UnmarshalJSON(data); err == nil ||
-		!strings.Contains(err.Error(), "nil journal") {
-		t.Fatalf("nil receiver UnmarshalJSON err = %v; want nil journal", err)
+		!strings.Contains(err.Error(), "nil receiver") {
+		t.Fatalf("nil receiver UnmarshalJSON err = %v; want a nil-receiver report", err)
 	}
 }
 

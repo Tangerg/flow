@@ -79,3 +79,25 @@ func (j jsonObject) allow(allowed ...string) error {
 func translateJSONError(err error) error {
 	return jsondoc.TranslateDepth(err, ErrMaxDepth)
 }
+
+// decodeJSONInto is [jsondoc.DecodeInto] with this package's nil-receiver
+// reporting; see it for the boundary all of these methods share.
+func decodeJSONInto[T any](
+	dst *T,
+	data []byte,
+	decode func([]byte) (T, error),
+	wrap func(error) error,
+) error {
+	return jsondoc.DecodeInto(dst, data, decode, wrap)
+}
+
+// unmarshalError names one decoding boundary that has no structured error.
+func unmarshalError(what string) func(error) error {
+	return func(err error) error {
+		return fmt.Errorf("workflow: unmarshal %s: %w", what, err)
+	}
+}
+
+func graphJSONError(err error) error { return &GraphError{Field: fieldJSON, Err: err} }
+
+func specJSONError(err error) error { return &SpecError{Field: fieldJSON, Err: err} }

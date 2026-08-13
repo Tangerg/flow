@@ -703,8 +703,8 @@ func TestStore_UnmarshalReportsFirstInvalidNodeDeterministically(t *testing.T) {
 func TestStore_UnmarshalRejectsNilReceiver(t *testing.T) {
 	var store *workflow.Store
 	if err := store.UnmarshalJSON([]byte(`{}`)); err == nil ||
-		!strings.Contains(err.Error(), "nil store") {
-		t.Fatalf("UnmarshalJSON err = %v; want nil store", err)
+		!strings.Contains(err.Error(), "nil receiver") {
+		t.Fatalf("UnmarshalJSON err = %v; want a nil-receiver report", err)
 	}
 }
 

@@ -74,17 +74,17 @@ type (
 	specJSONFields  Spec
 )
 
-func decodeGraphDocument(data jsonDocument) (Graph, error) {
+func decodeGraphDocument(data []byte) (Graph, error) {
 	var document graphJSON
-	if err := schemaLoader(loadGraphSchema).decode(data, &document); err != nil {
+	if err := schemaLoader(loadGraphSchema).decode(jsonDocument(data), &document); err != nil {
 		return Graph{}, err
 	}
 	return document.graph, nil
 }
 
-func decodeSpecDocument(data jsonDocument) (Spec, error) {
+func decodeSpecDocument(data []byte) (Spec, error) {
 	var document specJSON
-	if err := schemaLoader(loadSpecSchema).decode(data, &document); err != nil {
+	if err := schemaLoader(loadSpecSchema).decode(jsonDocument(data), &document); err != nil {
 		return Spec{}, err
 	}
 	return document.spec, nil

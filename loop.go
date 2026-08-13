@@ -18,14 +18,7 @@ type LoopConfig struct {
 
 // Validate reports whether c can configure [Loop].
 func (c LoopConfig) Validate() error {
-	if c.MaxIterations < 0 {
-		return fmt.Errorf(
-			"%w: max iterations must be non-negative, got %d",
-			ErrInvalidConfig,
-			c.MaxIterations,
-		)
-	}
-	return nil
+	return nonNegativeCount("max iterations", c.MaxIterations)
 }
 
 // Loop repeatedly applies body to a value until body reports done, ctx is

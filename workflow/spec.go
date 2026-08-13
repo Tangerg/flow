@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"encoding/json"
-	"errors"
 )
 
 // Kind identifies the structural shape of a workflow step. [Spec] accepts the
@@ -100,13 +99,5 @@ func (s Spec) MarshalJSON() ([]byte, error) {
 // the same JSON Schema, duplicate-member, Unicode, integer, unknown-field, and
 // nesting rules as [ValidateSpecJSON] and [Registry.CompileSpecJSON].
 func (s *Spec) UnmarshalJSON(data []byte) error {
-	if s == nil {
-		return &SpecError{Field: fieldJSON, Err: errors.New("nil spec receiver")}
-	}
-	next, err := decodeSpecDocument(jsonDocument(data))
-	if err != nil {
-		return &SpecError{Field: fieldJSON, Err: err}
-	}
-	*s = next
-	return nil
+	return decodeJSONInto(s, data, decodeSpecDocument, specJSONError)
 }

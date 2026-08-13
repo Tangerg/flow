@@ -268,3 +268,26 @@ func TestObjectRequiresOneJSONObject(t *testing.T) {
 		t.Fatal("Object accepted a malformed document")
 	}
 }
+
+func TestDecodeIntoIsFailureAtomicAndReportsANilDestination(t *testing.T) {
+	decode := func(data []byte) (int, error) {
+		if len(data) == 0 {
+			return 0, errors.New("empty")
+		}
+		return len(data), nil
+	}
+	wrapped := errors.New("boundary")
+	wrap := func(err error) error { return fmt.Errorf("%w: %w", wrapped, err) }
+
+	value := 7
+	if err := DecodeInto(&value, []byte("abc"), decode, wrap); err != nil || value != 3 {
+		t.Fatalf("DecodeInto = %v, value %d; want 3", err, value)
+	}
+	if err := DecodeInto(&value, nil, decode, wrap); !errors.Is(err, wrapped) || value != 3 {
+		t.Fatalf("DecodeInto = %v, value %d; want the wrapped failure and no assignment", err, value)
+	}
+	err := DecodeInto((*int)(nil), []byte("abc"), decode, wrap)
+	if !errors.Is(err, ErrNilReceiver) || !errors.Is(err, wrapped) {
+		t.Fatalf("DecodeInto on a nil destination = %v; want a wrapped ErrNilReceiver", err)
+	}
+}

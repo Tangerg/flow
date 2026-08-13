@@ -69,8 +69,8 @@ func GraphJSONSchema() json.RawMessage {
 // such as node types and config schemas are performed by [Registry.ValidateSpec]
 // and compilation.
 func ValidateSpecJSON(data []byte) error {
-	if _, err := decodeSpecDocument(jsonDocument(data)); err != nil {
-		return &SpecError{Field: fieldJSON, Err: err}
+	if _, err := decodeSpecDocument(data); err != nil {
+		return specJSONError(err)
 	}
 	return nil
 }
@@ -83,8 +83,8 @@ func ValidateSpecJSON(data []byte) error {
 // Registry-dependent checks such as node types, cycles, and config schemas are
 // performed by [Registry.ValidateGraph] and compilation.
 func ValidateGraphJSON(data []byte) error {
-	if _, err := decodeGraphDocument(jsonDocument(data)); err != nil {
-		return &GraphError{Field: fieldJSON, Err: err}
+	if _, err := decodeGraphDocument(data); err != nil {
+		return graphJSONError(err)
 	}
 	return nil
 }

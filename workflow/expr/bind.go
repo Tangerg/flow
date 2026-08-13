@@ -84,23 +84,28 @@ func (b *bindingRegistrar) register() error {
 }
 
 func (b *bindingRegistrar) compileConditions() error {
-	for _, name := range slices.Sorted(maps.Keys(b.bindings.Conditions)) {
-		condition, err := Condition(b.bindings.Conditions[name])
-		if err != nil {
-			return fmt.Errorf("condition %q: %w", name, err)
-		}
-		b.conditions[name] = condition
-	}
-	return nil
+	return compileNamed(b.bindings.Conditions, Condition, "condition", b.conditions)
 }
 
 func (b *bindingRegistrar) compileResolvers() error {
-	for _, name := range slices.Sorted(maps.Keys(b.bindings.Resolvers)) {
-		resolver, err := Resolver(b.bindings.Resolvers[name])
+	return compileNamed(b.bindings.Resolvers, Resolver, "resolver", b.resolvers)
+}
+
+// compileNamed compiles one table of named expressions in name order, so a
+// Bindings with several bad expressions always reports the same one. Both
+// tables differ only in what they compile to and what a diagnostic calls them.
+func compileNamed[T any](
+	source map[string]string,
+	compile func(string) (T, error),
+	kind string,
+	into map[string]T,
+) error {
+	for _, name := range slices.Sorted(maps.Keys(source)) {
+		compiled, err := compile(source[name])
 		if err != nil {
-			return fmt.Errorf("resolver %q: %w", name, err)
+			return fmt.Errorf("%s %q: %w", kind, name, err)
 		}
-		b.resolvers[name] = resolver
+		into[name] = compiled
 	}
 	return nil
 }

@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -138,7 +137,7 @@ func (s storeJSONDocument) marshal() ([]byte, error) {
 // different lineage reports every decoded cell.
 func (s *Store) UnmarshalJSON(data []byte) error {
 	if s == nil {
-		return errors.New("workflow: unmarshal store: nil store")
+		return fmt.Errorf("workflow: unmarshal store: %w", jsondoc.ErrNilReceiver)
 	}
 	raw, err := jsonDocument(data).object()
 	if err != nil {

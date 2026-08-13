@@ -2,10 +2,11 @@ package workflow
 
 import (
 	"cmp"
-	"errors"
 	"fmt"
 	"slices"
 	"sync"
+
+	"github.com/Tangerg/flow/internal/jsondoc"
 )
 
 // Journal records what a run already did, so a later run can pick up where it
@@ -104,7 +105,7 @@ func NewJournal() *Journal { return &Journal{} }
 // for concurrent use.
 func (j *Journal) Record(key JournalKey, value any) error {
 	if j == nil {
-		return errors.New("workflow: record journal: nil journal")
+		return fmt.Errorf("workflow: record journal: %w", jsondoc.ErrNilReceiver)
 	}
 	if err := j.insert(key, value); err != nil {
 		return fmt.Errorf("workflow: record journal: %w", err)
@@ -265,7 +266,7 @@ func (j *Journal) Reset() {
 // runs, not while a Run is using the Journal.
 func (j *Journal) Forget(key JournalKey) error {
 	if j == nil {
-		return errors.New("workflow: forget journal: nil journal")
+		return fmt.Errorf("workflow: forget journal: %w", jsondoc.ErrNilReceiver)
 	}
 	if err := key.validate(); err != nil {
 		return fmt.Errorf("workflow: forget journal: %w", err)

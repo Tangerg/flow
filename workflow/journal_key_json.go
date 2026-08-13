@@ -1,7 +1,6 @@
 package workflow
 
 import (
-	"errors"
 	"fmt"
 )
 
@@ -30,15 +29,7 @@ func (j JournalKey) MarshalJSON() ([]byte, error) {
 // lower-case member names are accepted, so an alternate spelling cannot resume a
 // run under a different identity than the one persisted.
 func (j *JournalKey) UnmarshalJSON(data []byte) error {
-	if j == nil {
-		return errors.New("workflow: unmarshal journal key: nil key")
-	}
-	next, err := decodeJournalKey(data)
-	if err != nil {
-		return fmt.Errorf("workflow: unmarshal journal key: %w", err)
-	}
-	*j = next
-	return nil
+	return decodeJSONInto(j, data, decodeJournalKey, unmarshalError("journal key"))
 }
 
 // decodeJournalKey reads the strict canonical object, each return naming only its
