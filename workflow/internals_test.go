@@ -1518,3 +1518,74 @@ func TestStoreOverlayBoundsAreExact(t *testing.T) {
 		t.Fatalf("sharedBase at the limit = %d; want a base with the whole budget", got)
 	}
 }
+
+// TestGraphExecution_admitsExactlyTheConcurrencyLimit pins the bound a graph's
+// Concurrency setting places on its scheduler. Nothing observable changes when
+// the limit is off by one -- the same nodes run and produce the same Store -- so
+// only the admission count states it.
+func TestGraphExecution_admitsExactlyTheConcurrencyLimit(t *testing.T) {
+	tests := []struct{ ready, limit, want int }{
+		{ready: 5, limit: 1, want: 1},
+		{ready: 5, limit: 2, want: 2},
+		{ready: 3, limit: 3, want: 3},
+		{ready: 2, limit: 5, want: 2},
+	}
+	for _, test := range tests {
+		steps := make(stepList, test.ready)
+		ready := make([]int, test.ready)
+		for index := range steps {
+			steps[index] = opaqueTestStepFunc(func(_ context.Context, s Store) (Store, error) {
+				return s, nil
+			})
+			ready[index] = index
+		}
+		execution := graphExecution{
+			graph: graphStep{steps: steps, dependencyNodeIndexes: make([][]int, test.ready)},
+			input: NewStore(),
+			ready: ready,
+		}
+		outcomes := make(chan graphOutcome, test.ready)
+		execution.startReady(t.Context(), outcomes, test.limit)
+		if execution.active != test.want || execution.head != test.want {
+			t.Fatalf("%d ready under a limit of %d admitted active=%d head=%d; want %d",
+				test.ready, test.limit, execution.active, execution.head, test.want)
+		}
+		for range test.want {
+			<-outcomes
+		}
+	}
+}
+
+// TestGraphExecution_dropsAnOutcomeFinishingAfterAFailure pins what the returned
+// Store means once a node has failed. A sibling admitted before the failure may
+// still finish successfully, and its writes are deliberately not merged: the
+// Journal keeps that completed boundary for the next run, while the Store handed
+// back with an error reports only what was known good before it.
+func TestGraphExecution_dropsAnOutcomeFinishingAfterAFailure(t *testing.T) {
+	input := NewStore().WithOutput("seed", 1)
+	execution := graphExecution{
+		graph: graphStep{
+			steps:                make(stepList, 2),
+			dependentNodeIndexes: make([][]int, 2),
+		},
+		input:   input,
+		counts:  []int{0, 0},
+		changes: make([][]storeChange, 2),
+		active:  2,
+	}
+
+	boom := errors.New("node failed")
+	if !execution.accept(graphOutcome{index: 0, input: input, store: input, err: boom}, false) {
+		t.Fatal("accept did not report the first failure")
+	}
+	late := input.WithOutput("late", 2)
+	if execution.accept(graphOutcome{index: 1, input: input, store: late}, false) {
+		t.Fatal("accept reported a second failure for a successful outcome")
+	}
+	if execution.changes[1] != nil {
+		t.Fatalf("a post-failure outcome recorded %v", execution.changes[1])
+	}
+	if _, found := execution.completedStore().Lookup(Output("late")); found {
+		t.Fatal("the returned Store carries a write made after the failure")
+	}
+}
