@@ -1095,3 +1095,79 @@ func TestCompileGraph_suspensionBlocksDependentsButNotUnrelatedWork(t *testing.T
 		t.Fatalf("target output = %v, %v; want ran", value, getErr)
 	}
 }
+
+// A DependsOn entry can be wrong in two ways, and the two read differently
+// because they are different mistakes: repeating an entry says nothing new, while
+// naming a node an input or gate already depends on says something the graph
+// already knew. Distinguishing them relies on connect linking inputs and gates
+// before DependsOn — reorder those loops and the second case silently becomes a
+// deduplicated edge instead of a diagnostic.
+func TestValidateGraph_distinguishesRedundantDependsOnEntries(t *testing.T) {
+	route := workflow.Factory(func(struct{}) (flow.Node[int, string], error) {
+		return flow.NodeFunc[int, string](
+			func(context.Context, int) (string, error) { return "yes", nil }), nil
+	})
+	sink := workflow.Factory(func(struct{}) (flow.Node[any, any], error) {
+		return flow.NodeFunc[any, any](
+			func(_ context.Context, value any) (any, error) { return value, nil }), nil
+	})
+	registry := workflow.NewRegistry().
+		MustRegisterNode("router", route).
+		MustRegisterSchema("router", workflow.NodeSchema{
+			Inputs:  workflow.OnePort(workflow.TypeAny),
+			Output:  workflow.TypeString,
+			Outlets: []string{"yes"},
+		}).
+		MustRegisterNode("sink", sink).
+		MustRegisterSchema("sink", workflow.NodeSchema{
+			Inputs: workflow.OnePort(workflow.TypeAny),
+			Output: workflow.TypeAny,
+		})
+
+	tests := map[string]struct {
+		node workflow.GraphNode
+		want string
+	}{
+		"listed twice": {
+			node: workflow.GraphNode{ID: "b", Type: "sink", DependsOn: []string{"a", "a"}},
+			want: `dependency "a" is listed more than once`,
+		},
+		"implied by an input": {
+			node: workflow.GraphNode{
+				ID: "b", Type: "sink",
+				Inputs:    workflow.OneInput(workflow.Output("a")),
+				DependsOn: []string{"a"},
+			},
+			want: `dependency "a" is already implied by an input or gate`,
+		},
+		"implied by a gate": {
+			node: workflow.GraphNode{
+				ID: "b", Type: "sink",
+				When:      []workflow.Gate{workflow.When("a", "yes")},
+				DependsOn: []string{"a"},
+			},
+			want: `dependency "a" is already implied by an input or gate`,
+		},
+		"names itself": {
+			node: workflow.GraphNode{ID: "b", Type: "sink", DependsOn: []string{"b"}},
+			want: "node depends on itself",
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			node := test.node
+			if node.Inputs == nil {
+				node.Inputs = workflow.OneInput(workflow.Output("seed"))
+			}
+			graph := workflow.Graph{Nodes: []workflow.GraphNode{
+				{ID: "a", Type: "router", Inputs: workflow.OneInput(workflow.Output("seed"))},
+				node,
+			}}
+			err := registry.ValidateGraph(graph)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("ValidateGraph = %v; want a message containing %q", err, test.want)
+			}
+		})
+	}
+}

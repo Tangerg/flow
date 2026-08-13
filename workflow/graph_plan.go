@@ -202,6 +202,9 @@ type nodeConnector struct {
 	explicit  map[string]struct{}
 }
 
+// connect links every edge a node declares. The order is load-bearing: inputs and
+// gates are linked first so that a DependsOn entry naming the same node can be
+// reported as already implied rather than silently deduplicated.
 func (n *nodeConnector) connect(node GraphNode) error {
 	for _, ref := range node.Inputs.Refs() {
 		if err := n.connectInput(ref.NodeID); err != nil {
@@ -209,7 +212,7 @@ func (n *nodeConnector) connect(node GraphNode) error {
 		}
 	}
 	for _, gate := range node.When {
-		if err := n.connectGate(gate.NodeID); err != nil {
+		if err := n.connectNamed(gate.NodeID, fieldWhen); err != nil {
 			return err
 		}
 	}
@@ -219,10 +222,6 @@ func (n *nodeConnector) connect(node GraphNode) error {
 		}
 	}
 	return nil
-}
-
-func (n *nodeConnector) connectGate(dependency string) error {
-	return n.connectNamed(dependency, fieldWhen)
 }
 
 func (n *nodeConnector) connectExplicit(dependency string) error {
