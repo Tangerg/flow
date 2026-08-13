@@ -580,15 +580,18 @@ func TestEval_containerEqualityIsSymmetric(t *testing.T) {
 		"list.output", []any{},
 		"object.output", map[string]any{},
 	)
+	// Each case names the operator and the rule that refused it, not only the
+	// operands: a container reaches arithmetic as well, which refuses it for wanting
+	// two numbers or two strings and reports the same pair.
 	for src, want := range map[string]string{
-		"nil == list.output":             "got nil and []interface {}",
-		"nil != list.output":             "got nil and []interface {}",
-		"list.output == nil":             "got []interface {} and nil",
-		"list.output == list.output":     "got []interface {} and []interface {}",
-		"nil == object.output":           "got nil and map[string]interface {}",
-		"object.output == nil":           "got map[string]interface {} and nil",
-		"object.output == object.output": "got map[string]interface {} and map[string]interface {}",
-		"list.output != object.output":   "got []interface {} and map[string]interface {}",
+		"nil == list.output":             "== wants scalar operands, got nil and []interface {}",
+		"nil != list.output":             "!= wants scalar operands, got nil and []interface {}",
+		"list.output == nil":             "== wants scalar operands, got []interface {} and nil",
+		"list.output == list.output":     "== wants scalar operands, got []interface {} and []interface {}",
+		"nil == object.output":           "== wants scalar operands, got nil and map[string]interface {}",
+		"object.output == nil":           "== wants scalar operands, got map[string]interface {} and nil",
+		"object.output == object.output": "== wants scalar operands, got map[string]interface {} and map[string]interface {}",
+		"list.output != object.output":   "!= wants scalar operands, got []interface {} and map[string]interface {}",
 	} {
 		t.Run(src, func(t *testing.T) {
 			_, err := expr.MustParse(src).Eval(s)

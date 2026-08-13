@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +22,64 @@ func addN() workflow.NodeFactory {
 	return workflow.Factory(func(cfg config) (flow.Node[int, int], error) {
 		return flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + cfg.N, nil }), nil
 	})
+}
+
+// TestCompileGraph_acceptsAFactoryThatReturnsAnIteration covers the boundary an
+// iteration is allowed to be. A node factory may return one -- the definition
+// boundary check admits it beside a leaf and a subgraph -- and the graph then has
+// to know it produces the output another node reads. Nothing else exercises an
+// iteration as a node's own step: everywhere else it is a composite inside a
+// definition, where its collected output is found a different way.
+func TestCompileGraph_acceptsAFactoryThatReturnsAnIteration(t *testing.T) {
+	registry := workflow.NewRegistry().
+		MustRegisterNode("double-each", func(spec workflow.NodeSpec) (workflow.Step, error) {
+			input, ok := spec.Inputs.Default()
+			if !ok {
+				return nil, fmt.Errorf("%w %q", workflow.ErrMissingPort, workflow.DefaultPort)
+			}
+			return workflow.Iteration(workflow.IterationConfig{
+				ID:    spec.ID,
+				Input: input,
+				Body: workflow.LeafFunc(
+					"double",
+					workflow.Item(spec.ID),
+					func(_ context.Context, value int) (int, error) { return value * 2, nil },
+				),
+				BodyOutput: workflow.Output("double"),
+			}), nil
+		}).
+		MustRegisterNode("count", workflow.Factory(
+			func(struct{}) (flow.Node[[]any, int], error) {
+				return flow.NodeFunc[[]any, int](
+					func(_ context.Context, items []any) (int, error) { return len(items), nil },
+				), nil
+			},
+		))
+
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
+		{ID: "each", Type: "double-each", Inputs: workflow.OneInput(workflow.Output("seed"))},
+		{ID: "size", Type: "count", Inputs: workflow.OneInput(workflow.Output("each"))},
+	}})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+
+	out, err := workflow.Run(
+		t.Context(),
+		step,
+		workflow.NewStore().WithOutput("seed", []any{1, 2, 3}),
+		workflow.RunConfig{},
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, err := workflow.Get[[]int](out, workflow.Output("each")); err != nil ||
+		!slices.Equal(got, []int{2, 4, 6}) {
+		t.Fatalf("collected = %v, %v; want [2 4 6]", got, err)
+	}
+	if got, err := workflow.Get[int](out, workflow.Output("size")); err != nil || got != 3 {
+		t.Fatalf("size = %d, %v; want 3", got, err)
+	}
 }
 
 // lateBoundNodeSpecFactory intentionally reads NodeSpec's mutable fields at
