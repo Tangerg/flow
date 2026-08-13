@@ -589,6 +589,68 @@ func TestStreamFunc_emitterFailureStopsEveryProducerInTheLeaf(t *testing.T) {
 	}
 }
 
+// TestStreamFunc_cancellationStopsEveryProducerInTheLeaf is the cancellation twin
+// of the test above, and it takes two producers for the same reason a second yield
+// from one would not do: a failed yield closes its own producer's lease, so the
+// leaf's session is asked again only by another producer. The Emitter returns nil
+// here, so the session holds no failure of its own and the cancelled run is the
+// only reason left to refuse the chunk.
+//
+// What the second producer is told matters as much as what the Emitter receives. A
+// dropped chunk reported as delivered is worse than a refused one: yield's false
+// result is the whole signal that the consumer stopped, so a producer told true
+// keeps going and believes its stream is intact.
+func TestStreamFunc_cancellationStopsEveryProducerInTheLeaf(t *testing.T) {
+	stopErr := errors.New("caller stopped")
+	ctx, cancel := context.WithCancelCause(t.Context())
+	firstEmit := make(chan struct{})
+	var lateYieldClaimedDelivery atomic.Bool
+	stream := workflow.StreamFunc[int, int, int](
+		func(ctx context.Context, input int, yield func(int) bool) (int, error) {
+			if input == 1 {
+				<-firstEmit
+				if yield(input) {
+					lateYieldClaimedDelivery.Store(true)
+				}
+				return 0, context.Cause(ctx)
+			}
+			yield(input)
+			return 0, context.Cause(ctx)
+		},
+	)
+	step := workflow.Leaf(
+		"batch",
+		workflow.From[[]int](workflow.Output("start")),
+		flow.Map(stream, flow.MapConfig{}),
+	)
+
+	var calls atomic.Int64
+	_, err := workflow.Run(
+		ctx,
+		step,
+		workflow.NewStore().WithOutput("start", []int{0, 1}),
+		workflow.RunConfig{Emitter: workflow.EmitterFunc(
+			func(_ context.Context, chunk workflow.Chunk) error {
+				calls.Add(1)
+				if chunk.Value == 0 {
+					cancel(stopErr)
+					close(firstEmit)
+				}
+				return nil
+			},
+		)},
+	)
+	if !errors.Is(err, stopErr) {
+		t.Fatalf("Run error = %v; want the cancellation cause", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("Emitter calls = %d; want the cancellation to stop the second producer", calls.Load())
+	}
+	if lateYieldClaimedDelivery.Load() {
+		t.Fatal("yield reported a chunk delivered that the cancelled run refused")
+	}
+}
+
 func TestStreamFunc_leafRejectsEmissionFromLeakedNodeWork(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -1283,12 +1345,18 @@ func TestStreamFunc_cancellationCannotPublishAPartialFinalOutput(t *testing.T) {
 	}
 }
 
+// TestStreamFunc_cancellationDuringEmissionStopsCompletion covers what a
+// cancelled stream stops doing: publishing a final output, and delivering another
+// chunk. It yields twice because one yield cannot tell the two apart — the first
+// already reports false, from the check after delivery, so only a second yield
+// says whether the check before delivery is there.
 func TestStreamFunc_cancellationDuringEmissionStopsCompletion(t *testing.T) {
 	stopErr := errors.New("caller stopped")
 	ctx, cancel := context.WithCancelCause(t.Context())
 	node := workflow.StreamFunc[int, int, int](
 		func(_ context.Context, input int, yield func(int) bool) (int, error) {
-			if yield(input) {
+			delivered, redelivered := yield(input), yield(input)
+			if delivered || redelivered {
 				t.Fatal("yield returned true after the Emitter cancelled the run")
 			}
 			return input, nil

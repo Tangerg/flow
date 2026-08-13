@@ -842,6 +842,23 @@ func TestSpecCompiler_defendsItsValidatedInputContract(t *testing.T) {
 	}
 }
 
+// TestLocateSpecError_passesThroughAnErrorItCannotLocate pins the branch that
+// keeps a prefixer from deciding an error's fate. Recursive Spec compilation
+// returns its boundary error directly, so every reachable caller hands this a
+// *SpecError or nothing at all — which is why returning the error unchanged and
+// returning nothing look the same from outside, and why the branch has to be
+// stated here to mean anything. It cannot be removed: what follows it dereferences
+// the assertion.
+func TestLocateSpecError_passesThroughAnErrorItCannotLocate(t *testing.T) {
+	foreign := errors.New("not a spec error")
+	if got := locateSpecError(foreign, "steps", "0"); !errors.Is(got, foreign) {
+		t.Fatalf("locateSpecError = %v; want the error it was given", got)
+	}
+	if got := locateSpecError(nil, "steps", "0"); got != nil {
+		t.Fatalf("locateSpecError(nil) = %v; want nil", got)
+	}
+}
+
 func TestStoreInternals_reportStableFallbacks(t *testing.T) {
 	changes := make([]storeChange, 0, storeOverlayLimit*2+1)
 	base := NewStore()
