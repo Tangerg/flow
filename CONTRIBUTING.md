@@ -114,7 +114,10 @@ go test ./example -run Example -v
   attached to that test, because a new test inserted into an existing comment block
   inherits its opening lines and leaves the old test undocumented.
   `TestTestCommentsNameTheirOwnTest` checks the attachment that
-  `TestCitedTestsResolve` cannot see.
+  `TestCitedTestsResolve` cannot see. The documentation names the API the same way,
+  and nothing compiles the fifty-odd Go snippets in the README and the tutorials, so
+  `TestDocumentedAPINamesResolve` checks that every package-qualified name they use
+  still exists.
 - Name the package exactly once in an error. Each package reaches that
   differently, and the difference is forced rather than chosen: `flow`'s
   sentinels carry `flow:` because most of them reach a caller with nothing

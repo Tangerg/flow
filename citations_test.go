@@ -80,6 +80,97 @@ func TestTestCommentsNameTheirOwnTest(t *testing.T) {
 	}
 }
 
+// TestDocumentedAPINamesResolve holds the documentation to the same rule as a
+// citation: a name it uses has to exist. Fifty-odd Go snippets across the README
+// and the tutorials name this module's API, and nothing compiles them -- a renamed
+// or removed export leaves them reading as instructions that cannot work.
+//
+// It checks package-qualified names, which is where a rename shows: a method or a
+// field is written on a variable whose type the check cannot know, and guessing at
+// that would report names the reader never wrote.
+func TestDocumentedAPINamesResolve(t *testing.T) {
+	exported := map[string]map[string]struct{}{
+		"flow":     exportedNames(t, "."),
+		"flowx":    exportedNames(t, "flowx"),
+		"workflow": exportedNames(t, "workflow"),
+		"expr":     exportedNames(t, "workflow/expr"),
+		"diagram":  exportedNames(t, "workflow/diagram"),
+	}
+	unresolved := make(map[string][]string)
+	walkRepository(t, ".md", func(name string, data []byte) {
+		for index, line := range strings.Split(string(data), "\n") {
+			for _, match := range qualifiedNamePattern.FindAllStringSubmatch(line, -1) {
+				if _, ok := exported[match[1]][match[2]]; ok {
+					continue
+				}
+				qualified := match[1] + "." + match[2]
+				unresolved[qualified] = append(
+					unresolved[qualified],
+					fmt.Sprintf("%s:%d", name, index+1),
+				)
+			}
+		}
+	})
+	if len(unresolved) == 0 {
+		return
+	}
+	for _, qualified := range slices.Sorted(maps.Keys(unresolved)) {
+		t.Errorf("%s: %s names nothing this module exports", strings.Join(unresolved[qualified], ", "), qualified)
+	}
+}
+
+// exportedNames returns every top-level name a package exports, read from its
+// sources rather than from a build, so the check needs no compiler. The directory
+// is read through a filesystem rooted at it, for the same reason walkRepository is.
+func exportedNames(t *testing.T, dir string) map[string]struct{} {
+	t.Helper()
+	names := make(map[string]struct{})
+	fileSet := token.NewFileSet()
+	sources := os.DirFS(dir)
+	entries, err := fs.ReadDir(sources, ".")
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		data, err := fs.ReadFile(sources, name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		file, err := parser.ParseFile(fileSet, name, data, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, declaration := range file.Decls {
+			collectExported(names, declaration)
+		}
+	}
+	return names
+}
+
+func collectExported(names map[string]struct{}, declaration ast.Decl) {
+	switch declared := declaration.(type) {
+	case *ast.FuncDecl:
+		if declared.Recv == nil {
+			names[declared.Name.Name] = struct{}{}
+		}
+	case *ast.GenDecl:
+		for _, spec := range declared.Specs {
+			switch value := spec.(type) {
+			case *ast.TypeSpec:
+				names[value.Name.Name] = struct{}{}
+			case *ast.ValueSpec:
+				for _, name := range value.Names {
+					names[name.Name] = struct{}{}
+				}
+			}
+		}
+	}
+}
+
 // testNamePattern matches the prefixes go test recognizes followed by the capital
 // that makes a name rather than a word: "Testing" is prose, "TestStore" is a
 // citation. openingTestName is the same name where a doc comment claims to be
@@ -87,6 +178,9 @@ func TestTestCommentsNameTheirOwnTest(t *testing.T) {
 var (
 	testNamePattern = regexp.MustCompile(`\b(?:Test|Benchmark|Example|Fuzz)[A-Z]\w*`)
 	openingTestName = regexp.MustCompile(`^(?:Test|Benchmark|Example|Fuzz)[A-Z]\w*`)
+	// qualifiedNamePattern matches this module's packages followed by an exported
+	// name, which is how documentation refers to the API.
+	qualifiedNamePattern = regexp.MustCompile(`\b(flow|flowx|workflow|expr|diagram)\.([A-Z]\w*)`)
 )
 
 func definedTestNames(t *testing.T) map[string]struct{} {
