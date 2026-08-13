@@ -679,6 +679,10 @@ func TestJournal_jsonFormatIsVersionedAndRejectsDuplicateKeys(t *testing.T) {
 		[]byte(`{"version":4.5,"records":[]}`),
 		[]byte(`{"version":4,"version":4,"records":[]}`),
 		[]byte(`{"version":5,"records":[]}`),
+		// A sign is not part of the version, so the supported number carrying one
+		// is still unsupported. Only this magnitude can tell the sign check from
+		// the value check.
+		[]byte(`{"version":-4,"records":[]}`),
 		[]byte(`{"version":4}`),
 		[]byte(`{"version":4,"records":null}`),
 		[]byte(`{"version":4,"records":[],"extra":true}`),

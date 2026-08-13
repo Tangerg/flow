@@ -50,16 +50,17 @@ func (s *Suspension) UnmarshalJSON(data []byte) error {
 // decodeSuspension reads the strict canonical object, each return naming only its
 // own condition while UnmarshalJSON owns the context.
 func decodeSuspension(data []byte) (Suspension, error) {
-	raw, err := jsonDocument(data).object()
-	if err != nil {
-		return Suspension{}, err
-	}
-	if err := (jsonObject(raw)).allow(
-		suspensionFieldID,
-		suspensionFieldScope,
-		suspensionFieldAwait,
-		suspensionFieldValue,
-	); err != nil {
+	// Every member is optional: an anonymous wait carries neither identity nor
+	// scope, and validateIdentity below owns what their combinations mean.
+	if _, err := (strictObject{
+		what: "suspension",
+		optional: []string{
+			suspensionFieldID,
+			suspensionFieldScope,
+			suspensionFieldAwait,
+			suspensionFieldValue,
+		},
+	}).parse(data); err != nil {
 		return Suspension{}, err
 	}
 

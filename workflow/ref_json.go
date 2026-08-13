@@ -48,16 +48,11 @@ func (r *Ref) UnmarshalJSON(data []byte) error {
 // keeps it from being repeated at every failure, and returning a value makes the
 // atomic replacement above the only way the receiver changes.
 func decodeRef(data []byte) (Ref, error) {
-	raw, err := jsonDocument(data).object()
+	object, err := (strictObject{
+		what:     "ref",
+		required: []string{refFieldNodeID, refFieldPath},
+	}).parse(data)
 	if err != nil {
-		return Ref{}, err
-	}
-
-	object := jsonObject(raw)
-	if err = object.allow(refFieldNodeID, refFieldPath); err != nil {
-		return Ref{}, err
-	}
-	if err = object.require("ref", refFieldNodeID, refFieldPath); err != nil {
 		return Ref{}, err
 	}
 	nodeID, err := object.stringMember(refFieldNodeID)

@@ -35,20 +35,15 @@ func (j *JournalKey) UnmarshalJSON(data []byte) error {
 // decodeJournalKey reads the strict canonical object, each return naming only its
 // own condition while UnmarshalJSON owns the context.
 func decodeJournalKey(data []byte) (JournalKey, error) {
-	raw, err := jsonDocument(data).object()
-	if err != nil {
-		return JournalKey{}, err
-	}
-
-	object := jsonObject(raw)
-	if err := object.allow(keyFieldID, keyFieldScope); err != nil {
-		return JournalKey{}, err
-	}
 	// validate below would also reject an absent id, but as an empty one. Naming
 	// the missing member says what the document lacks, and matches what every
 	// other member contract in this package reports, including the same id read
 	// as part of a Journal record.
-	if err := object.require("journal key", keyFieldID); err != nil {
+	if _, err := (strictObject{
+		what:     "journal key",
+		required: []string{keyFieldID},
+		optional: []string{keyFieldScope},
+	}).parse(data); err != nil {
 		return JournalKey{}, err
 	}
 

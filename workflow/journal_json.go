@@ -183,20 +183,12 @@ func (j *Journal) UnmarshalJSON(data []byte) error {
 }
 
 func (j *journalDecoder) decode(data []byte) error {
-	raw, err := jsonDocument(data).object()
+	document, err := (strictObject{
+		what:     "document",
+		required: []string{journalFieldVersion, journalFieldRecords},
+	}).parse(data)
 	if err != nil {
 		return err
-	}
-	document := jsonObject(raw)
-	if fieldErr := document.allow(journalFieldVersion, journalFieldRecords); fieldErr != nil {
-		return fieldErr
-	}
-	if fieldErr := document.require(
-		"document",
-		journalFieldVersion,
-		journalFieldRecords,
-	); fieldErr != nil {
-		return fieldErr
 	}
 
 	versionNumber, ok := document[journalFieldVersion].(json.Number)
@@ -233,10 +225,11 @@ func (j *journalDecoder) decodeRecord(value any) error {
 		return errors.New("must be an object")
 	}
 	record := jsonObject(raw)
-	if err := record.allow(journalFieldScope, journalFieldID, journalFieldValue); err != nil {
-		return err
-	}
-	if err := record.require("record", journalFieldID, journalFieldValue); err != nil {
+	if err := (strictObject{
+		what:     "record",
+		required: []string{journalFieldID, journalFieldValue},
+		optional: []string{journalFieldScope},
+	}).check(record); err != nil {
 		return err
 	}
 

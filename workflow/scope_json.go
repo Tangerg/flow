@@ -83,10 +83,11 @@ func decodeScopeFrame(data []byte) (ScopeFrame, error) {
 
 func (s scopeFrameObject) decode() (ScopeFrame, error) {
 	object := jsonObject(s)
-	if err := object.allow(scopeFieldID, scopeFieldIndex); err != nil {
-		return ScopeFrame{}, err
-	}
-	if err := object.require("scope frame", scopeFieldID); err != nil {
+	if err := (strictObject{
+		what:     "scope frame",
+		required: []string{scopeFieldID},
+		optional: []string{scopeFieldIndex},
+	}).check(object); err != nil {
 		return ScopeFrame{}, err
 	}
 

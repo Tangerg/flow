@@ -76,6 +76,43 @@ func (j jsonObject) allow(allowed ...string) error {
 	return nil
 }
 
+// strictObject is the contract every canonical object in this package shares: it
+// must be a JSON object, may hold only the members named here, and must hold the
+// required ones. Naming each member once, as required or optional, is what keeps
+// a member from being demanded and refused at the same time -- two lists could
+// disagree, and a member missing from the allowed one is rejected however it
+// arrives.
+// what names the object a missing member is missing from, so it is set even
+// where every member is currently optional and nothing reads it yet.
+type strictObject struct {
+	what     string
+	required []string
+	optional []string
+}
+
+// check applies the contract to already-parsed members, which is how a member
+// nested inside a larger document arrives.
+func (s strictObject) check(object jsonObject) error {
+	allowed := slices.Concat(s.required, s.optional)
+	if err := object.allow(allowed...); err != nil {
+		return err
+	}
+	return object.require(s.what, s.required...)
+}
+
+// parse applies the contract to a complete document and returns its members.
+func (s strictObject) parse(data []byte) (jsonObject, error) {
+	raw, err := jsonDocument(data).object()
+	if err != nil {
+		return nil, err
+	}
+	object := jsonObject(raw)
+	if err := s.check(object); err != nil {
+		return nil, err
+	}
+	return object, nil
+}
+
 func translateJSONError(err error) error {
 	return jsondoc.TranslateDepth(err, ErrMaxDepth)
 }
