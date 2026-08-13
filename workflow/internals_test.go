@@ -1366,3 +1366,155 @@ func TestStoreDepthMatchesItsOverlay(t *testing.T) {
 	check(t, "decoded", decoded)
 	check(t, "write after decoding", decoded.WithOutput("later", 1))
 }
+
+// TestGuaranteedOutputsAgreeAcrossRepresentations pins the one statement this
+// package makes twice. The projection rules a composite applies to its body
+// output are shared, but the walk that discovers what a body guarantees is
+// written once for a built Step and once for a Spec, because each reads a
+// different representation. A kind handled in one and not the other would let
+// ValidateSpec accept a projection Validate rejects, or the reverse.
+func TestGuaranteedOutputsAgreeAcrossRepresentations(t *testing.T) {
+	registry := NewRegistry().
+		MustRegisterNode("produce", func(spec NodeSpec) (Step, error) {
+			return Interrupt(spec.ID, nil), nil
+		}).
+		MustRegisterSchema("produce", NodeSchema{Output: TypeAny})
+	snapshot := registry.snapshot()
+
+	leafStep := func(id string) Step { return Interrupt(id, nil) }
+	leafSpec := func(id string) Spec { return Spec{Kind: KindLeaf, ID: id, Type: "produce"} }
+	body := func(spec Spec) *Spec { return &spec }
+
+	pairs := map[string]struct {
+		step Step
+		spec Spec
+	}{
+		"leaf": {leafStep("a"), leafSpec("a")},
+		"sequence": {
+			Sequence(leafStep("a"), leafStep("b")),
+			Spec{Kind: KindSequence, Steps: []Spec{leafSpec("a"), leafSpec("b")}},
+		},
+		"parallel": {
+			Parallel(ParallelConfig{Steps: []Step{leafStep("a"), leafStep("b")}}),
+			Spec{Kind: KindParallel, Steps: []Spec{leafSpec("a"), leafSpec("b")}},
+		},
+		"branch": {
+			Branch(BranchConfig{
+				ID:       "pick",
+				Resolver: flow.NodeFunc[Store, string](func(context.Context, Store) (string, error) { return "x", nil }),
+				Cases:    map[string]Step{"x": leafStep("a"), "y": leafStep("b")},
+			}),
+			Spec{
+				Kind: KindBranch, ID: "pick", Resolver: "r",
+				Cases: map[string]Spec{"x": leafSpec("a"), "y": leafSpec("b")},
+			},
+		},
+		"branch with a shared output": {
+			Branch(BranchConfig{
+				ID:       "pick",
+				Resolver: flow.NodeFunc[Store, string](func(context.Context, Store) (string, error) { return "x", nil }),
+				Cases:    map[string]Step{"x": leafStep("a"), "y": leafStep("a")},
+			}),
+			Spec{
+				Kind: KindBranch, ID: "pick", Resolver: "r",
+				Cases: map[string]Spec{"x": leafSpec("a"), "y": leafSpec("a")},
+			},
+		},
+		"loop": {
+			Loop(LoopConfig{ID: "l", Body: leafStep("a"), MaxIterations: 1}),
+			Spec{Kind: KindLoop, ID: "l", Condition: "c", Body: body(leafSpec("a")), MaxIterations: 1},
+		},
+		"iteration": {
+			Iteration(IterationConfig{ID: "each", Input: Output("seed"), Body: leafStep("a"), BodyOutput: Output("a")}),
+			Spec{Kind: KindIteration, ID: "each", Input: Output("seed"), Body: body(leafSpec("a")), BodyOutput: Output("a")},
+		},
+		"subgraph": {
+			Subgraph(SubgraphConfig{ID: "sg", Body: leafStep("a"), BodyOutput: Output("a")}),
+			Spec{Kind: KindSubgraph, ID: "sg", Body: body(leafSpec("a")), BodyOutput: Output("a")},
+		},
+		"nested": {
+			Sequence(
+				leafStep("a"),
+				Subgraph(SubgraphConfig{ID: "sg", Body: leafStep("b"), BodyOutput: Output("b")}),
+			),
+			Spec{Kind: KindSequence, Steps: []Spec{
+				leafSpec("a"),
+				{Kind: KindSubgraph, ID: "sg", Body: body(leafSpec("b")), BodyOutput: Output("b")},
+			}},
+		},
+		"unknowable extension point": {
+			Sequence(leafStep("a"), opaqueTestStepFunc(func(_ context.Context, s Store) (Store, error) {
+				return s, nil
+			})),
+			Spec{Kind: KindSequence, Steps: []Spec{
+				leafSpec("a"), {Kind: KindLeaf, ID: "opaque", Type: "unregistered"},
+			}},
+		},
+	}
+
+	for name, pair := range pairs {
+		t.Run(name, func(t *testing.T) {
+			fromStep := guaranteedOutputs(pair.step)
+			fromSpec := (&specValidator{registry: snapshot}).guaranteedOutputs(pair.spec)
+			if fromStep.known != fromSpec.known {
+				t.Fatalf("known = %t from the step and %t from the spec", fromStep.known, fromSpec.known)
+			}
+			if !maps.Equal(fromStep.nodes, fromSpec.nodes) {
+				t.Fatalf("outputs = %v from the step and %v from the spec",
+					slices.Sorted(maps.Keys(fromStep.nodes)), slices.Sorted(maps.Keys(fromSpec.nodes)))
+			}
+		})
+	}
+}
+
+// storeAtDepth returns a Store carrying exactly depth overlay writes. depth must
+// not exceed storeOverlayLimit, or the writes would flatten on the way.
+func storeAtDepth(t *testing.T, depth int) Store {
+	t.Helper()
+	if depth > storeOverlayLimit {
+		t.Fatalf("depth %d exceeds the overlay limit", depth)
+	}
+	store := NewStore()
+	for write := range depth {
+		store = store.WithOutput(fmt.Sprintf("n%d", write), write)
+	}
+	if store.depth != depth {
+		t.Fatalf("built a Store at depth %d; want %d", store.depth, depth)
+	}
+	return store
+}
+
+// TestStoreOverlayBoundsAreExact pins the two places this package decides when
+// to flatten. Neither changes a value a caller can read, so nothing else
+// notices if either moves by one write: bounded lets an overlay reach the limit
+// and flattens on the write after it, while sharedBase flattens one write
+// earlier so a concurrent deriver starts with the whole budget available.
+func TestStoreOverlayBoundsAreExact(t *testing.T) {
+	store := NewStore()
+	depths := make([]int, 0, storeOverlayLimit+2)
+	for write := range storeOverlayLimit + 2 {
+		store = store.WithOutput(fmt.Sprintf("n%d", write), write)
+		depths = append(depths, store.depth)
+	}
+	if got := depths[storeOverlayLimit-1]; got != storeOverlayLimit {
+		t.Fatalf("depth after %d writes = %d; want the full limit %d",
+			storeOverlayLimit, got, storeOverlayLimit)
+	}
+	if got := depths[storeOverlayLimit]; got != 0 {
+		t.Fatalf("depth after %d writes = %d; want a flattened overlay",
+			storeOverlayLimit+1, got)
+	}
+	if got := depths[storeOverlayLimit+1]; got != 1 {
+		t.Fatalf("depth after %d writes = %d; want one write over a fresh snapshot",
+			storeOverlayLimit+2, got)
+	}
+
+	for _, depth := range []int{0, 1, storeOverlayLimit - 1} {
+		if got := storeAtDepth(t, depth).sharedBase().depth; got != depth {
+			t.Fatalf("sharedBase at depth %d = %d; want it left alone", depth, got)
+		}
+	}
+	if got := storeAtDepth(t, storeOverlayLimit).sharedBase().depth; got != 0 {
+		t.Fatalf("sharedBase at the limit = %d; want a base with the whole budget", got)
+	}
+}
