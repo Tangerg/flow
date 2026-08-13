@@ -162,6 +162,11 @@ func Chain[T any](nodes ...flow.Node[T, T]) flow.Node[T, T] {
 // returned as-is, discards the result that raced with it, and does not trigger
 // or get hidden by the fallback. Fallback applies to every other error; it
 // cannot distinguish domain-specific third outcomes represented as errors.
+//
+// When alternate fails too, its error and its output are the operation's, and
+// primary's error is discarded: the alternate ran because primary's failure had
+// already been answered. This is why Fallback is not [flow.Race], which joins the
+// errors of nodes that are peers.
 func Fallback[I, O any](primary, alternate flow.Node[I, O]) flow.Node[I, O] {
 	return fallbackNode[I, O]{primary: primary, alternate: alternate}
 }

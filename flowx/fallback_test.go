@@ -23,6 +23,33 @@ func TestFallback(t *testing.T) {
 	}
 }
 
+// TestFallback_reportsTheAlternateFailureWhenBothFail covers the outcome the
+// other tests leave out: an alternate that fails too. Nothing else observes it,
+// and the failure mode is silent — a Fallback that dropped the alternate's error
+// would return the zero output as a success, which is the one result a caller
+// cannot detect.
+func TestFallback_reportsTheAlternateFailureWhenBothFail(t *testing.T) {
+	primaryErr := errors.New("primary unavailable")
+	alternateErr := errors.New("alternate unavailable")
+	primary := flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) {
+		return 0, primaryErr
+	})
+	alternate := flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) {
+		return 0, alternateErr
+	})
+
+	got, err := flowx.Fallback(primary, alternate).Run(t.Context(), 1)
+	if !errors.Is(err, alternateErr) {
+		t.Fatalf("err = %v; want the alternate's error", err)
+	}
+	if errors.Is(err, primaryErr) {
+		t.Fatalf("err = %v; want primary's error discarded once the alternate answered it", err)
+	}
+	if got != 0 {
+		t.Fatalf("output = %d; want the failed alternate's output", got)
+	}
+}
+
 func TestFallback_primarySuccessSkipsAlternate(t *testing.T) {
 	altRan := false
 	primary := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil })

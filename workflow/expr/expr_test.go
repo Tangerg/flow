@@ -287,9 +287,49 @@ func TestParse_enforcesTheWorkflowNestingLimit(t *testing.T) {
 	}
 }
 
-func TestEval_reportsRightOperandFailure(t *testing.T) {
-	if _, err := expr.MustParse(`1 + missing.output`).Eval(workflow.NewStore()); !errors.Is(err, expr.ErrUndefined) {
-		t.Fatalf("error = %v; want ErrUndefined", err)
+// TestEval_reportsWhyAnOperandFailed states once what every operator that reads
+// an operand owes its caller: the operand's own failure, unchanged. Each of these
+// operators checks its operand's type next, so a swallowed failure arrives there
+// as an untyped nil and the type check answers in its place — reporting a type
+// error about the operator for a reference that was only missing. has() is
+// deliberately absent: a missing reference is the answer it exists to give.
+func TestEval_reportsWhyAnOperandFailed(t *testing.T) {
+	for _, src := range []string{
+		`1 + missing.output`,
+		`missing.output + 1`,
+		`!missing.output`,
+		`-missing.output`,
+		`len(missing.output)`,
+		`missing.output && true`,
+		`true && missing.output`,
+		`missing.output || false`,
+	} {
+		t.Run(src, func(t *testing.T) {
+			_, err := expr.MustParse(src).Eval(workflow.NewStore())
+			if !errors.Is(err, expr.ErrUndefined) {
+				t.Fatalf("error = %v; want ErrUndefined", err)
+			}
+		})
+	}
+}
+
+// TestParse_reportsWhyAnIndexedBaseIsNotAReference is the same rule one level up:
+// an index reports why its base is not a reference. Swallowing that leaves an
+// empty node ID to fail the Ref check instead, which blames the reference the
+// compiler built rather than the expression the author wrote.
+func TestParse_reportsWhyAnIndexedBaseIsNotAReference(t *testing.T) {
+	for src, want := range map[string]string{
+		`1[0]`:          "reference may only use names and constant indexes",
+		`len(a)[0]`:     "reference may only use names and constant indexes",
+		`nil[0]`:        "cannot select into nil",
+		`true.field[0]`: "cannot select into true",
+	} {
+		t.Run(src, func(t *testing.T) {
+			_, err := expr.Parse(src)
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("Parse(%q) error = %v; want it to say %q", src, err, want)
+			}
+		})
 	}
 }
 
