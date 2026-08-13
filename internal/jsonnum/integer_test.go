@@ -163,6 +163,13 @@ func TestInteger_widthsHoldTheirBoundsFromBothSides(t *testing.T) {
 			signed:  -42, signedFits: true,
 			text: "-42",
 		},
+		// The magnitude the negative side accepts and the positive side does not is
+		// the only value that distinguishes the two bounds from each other.
+		"one above the signed floor": {
+			integer: jsonnum.Integer{Magnitude: math.MaxInt64, Negative: true},
+			signed:  -math.MaxInt64, signedFits: true,
+			text: "-9223372036854775807",
+		},
 		"at the signed floor": {
 			integer: jsonnum.Integer{Magnitude: beyondInt64, Negative: true},
 			signed:  math.MinInt64, signedFits: true,

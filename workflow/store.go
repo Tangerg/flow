@@ -274,6 +274,7 @@ func (w Write) Ref() Ref { return At(w.NodeID, w.Key) }
 // writes, not engine-owned namespace cleanup. It is therefore not a general
 // snapshot-synchronization protocol; persist s itself when the exact resulting
 // state matters.
+//
 // Change identity comes from Store lineage rather than value equality. If s is
 // unrelated to base — including a separately decoded snapshot — every cell in s
 // has a distinct write identity and is reported. Values are borrowed views and
