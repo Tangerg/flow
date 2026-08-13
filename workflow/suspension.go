@@ -257,10 +257,13 @@ func (s suspensionList) err() error {
 	for _, suspension := range s {
 		reasons = append(reasons, suspension.Error())
 	}
+	// The envelope counts the waits and joins them; it does not name this
+	// package, because every suspension it carries already does. Adding a
+	// prefix here would say it once per fan-out on top of once per branch.
 	return &multiSuspension{
 		suspensions: s,
 		message: fmt.Sprintf(
-			"workflow: %d steps suspended: %s",
+			"%d steps suspended: %s",
 			len(s),
 			strings.Join(reasons, "; "),
 		),

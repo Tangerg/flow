@@ -204,7 +204,7 @@ func (s switchResolver) Run(ctx context.Context, store workflow.Store) (string, 
 }
 
 // Refs returns every reference a SwitchSpec's cases read, deduplicated and
-// sorted. It reports a parse error in any case.
+// sorted. The returned slice is a copy. It reports a parse error in any case.
 func (s SwitchSpec) Refs() ([]workflow.Ref, error) {
 	var refs []workflow.Ref
 	for index, c := range s.Cases {

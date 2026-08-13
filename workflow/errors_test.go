@@ -231,3 +231,23 @@ func recordedDuringARun(t *testing.T) error {
 	)
 	return err
 }
+
+// TestAJoinedSuspensionNamesThePackageOncePerWait extends the rule above to the
+// one error this package builds out of several independent ones. Every wait
+// names itself, so the envelope that counts them must not: a fan-out of three
+// should read as three suspensions, not four mentions of this package.
+func TestAJoinedSuspensionNamesThePackageOncePerWait(t *testing.T) {
+	for count := 1; count <= 3; count++ {
+		waits := make([]*workflow.Suspension, count)
+		for index := range waits {
+			waits[index] = &workflow.Suspension{ID: string(rune('a' + index))}
+		}
+		err := workflow.JoinSuspensions(waits...)
+		if err == nil {
+			t.Fatalf("%d waits joined to nothing", count)
+		}
+		if got := strings.Count(err.Error(), "workflow:"); got != count {
+			t.Fatalf("%d waits name the package %d times: %v", count, got, err)
+		}
+	}
+}

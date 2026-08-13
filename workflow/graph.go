@@ -97,8 +97,9 @@ func (g *Graph) UnmarshalJSON(data []byte) error {
 // conditional node remain present even when a particular run bypasses that
 // node, so this is not an unconditional required-parameter set.
 //
-// The result is deduplicated and ordered by reference. A malformed graph yields
-// the references it can still resolve; use [Registry.ValidateGraph] to reject it.
+// The result is deduplicated, ordered by reference, and a fresh slice the
+// caller owns. A malformed graph yields the references it can still resolve;
+// use [Registry.ValidateGraph] to reject it.
 func (g Graph) Inputs() []Ref {
 	internalNodeIDs := make(nodeSet, len(g.Nodes))
 	for _, node := range g.Nodes {
@@ -121,7 +122,7 @@ func (g Graph) Inputs() []Ref {
 }
 
 // MissingInputs returns the references from [Graph.Inputs] that [Store.Lookup]
-// does not resolve. An empty result means the Store satisfies every potential
+// does not resolve. The returned slice is a copy. An empty result means the Store satisfies every potential
 // external read. A non-empty result does not by itself prevent a run: a
 // conditional node that would read one of those references may be bypassed.
 func (g Graph) MissingInputs(store Store) []Ref {

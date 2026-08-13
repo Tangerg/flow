@@ -36,13 +36,14 @@ func (i Inputs) Ref(port string) (Ref, bool) {
 // Default returns the reference wired to [DefaultPort].
 func (i Inputs) Default() (Ref, bool) { return i.Ref(DefaultPort) }
 
-// PortNames returns the bound names in sorted order. They are port names for a
-// GraphNode or leaf Spec and inner seed IDs for a Subgraph.
+// PortNames returns the bound names in sorted order, as a fresh slice. They are
+// port names for a GraphNode or leaf Spec and inner seed IDs for a Subgraph.
 func (i Inputs) PortNames() []string { return i.names() }
 
 func (i Inputs) names() []string { return slices.Sorted(maps.Keys(i)) }
 
-// Refs returns the wired references ordered by port name.
+// Refs returns the wired references ordered by port name. The returned slice is
+// a copy.
 func (i Inputs) Refs() []Ref {
 	refs := make([]Ref, 0, len(i))
 	for _, port := range i.PortNames() {

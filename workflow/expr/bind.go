@@ -128,8 +128,9 @@ func (b *bindingRegistrar) compileSwitches() error {
 	return nil
 }
 
-// Refs returns every reference the bindings read, deduplicated and sorted. An
-// editor uses it to check that a rule set only reads values the graph produces.
+// Refs returns every reference the bindings read, deduplicated and sorted. The
+// returned slice is a copy. An editor uses it to check that a rule set only
+// reads values the graph produces.
 func (b Bindings) Refs() ([]workflow.Ref, error) {
 	var refs []workflow.Ref
 	collect := func(kind, name, src string) error {

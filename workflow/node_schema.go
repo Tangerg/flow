@@ -194,7 +194,8 @@ func (r *Registry) NodeSchema(nodeType string) (NodeSchema, bool) {
 	return registered.schema.clone(), true
 }
 
-// NodeTypes returns the registered node type names in sorted order.
+// NodeTypes returns the registered node type names in sorted order, as a fresh
+// slice that does not alias the Registry.
 func (r *Registry) NodeTypes() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
