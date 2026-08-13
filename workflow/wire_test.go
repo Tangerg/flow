@@ -314,3 +314,42 @@ func TestTextAndDefinitionChecksDescribeAFieldTheSameWay(t *testing.T) {
 		})
 	}
 }
+
+// TestEveryIdentityBearingTypeRefusesToRenameItself pins the guarantee that
+// makes these types safe to persist: encoding/json replaces invalid UTF-8 by
+// design, so a type whose text is identity must refuse to encode rather than
+// quietly encode something else. Ref was the one wire type without it, and the
+// one callers most often hold on its own -- Graph.Inputs and Graph.MissingInputs
+// hand back bare slices of them.
+func TestEveryIdentityBearingTypeRefusesToRenameItself(t *testing.T) {
+	notUTF8 := string([]byte{0xff})
+	bad := workflow.Ref{NodeID: notUTF8, Path: "/output"}
+
+	values := map[string]any{
+		"Ref":        bad,
+		"Ref path":   workflow.Ref{NodeID: "a", Path: "/" + notUTF8},
+		"ScopeFrame": workflow.ScopeFrame{ID: notUTF8},
+		"JournalKey": workflow.JournalKey{ID: notUTF8},
+		"Suspension": workflow.Suspension{ID: notUTF8},
+		"Spec input": workflow.Spec{
+			Kind: workflow.KindLeaf, ID: "a", Type: "t",
+			Inputs: workflow.Inputs{"in": bad},
+		},
+		"Graph input": workflow.Graph{Nodes: []workflow.GraphNode{
+			{ID: "a", Type: "t", Inputs: workflow.Inputs{"in": bad}},
+		}},
+		"Store key": workflow.NewStore().WithCell(notUTF8, "k", 1),
+	}
+
+	for name, value := range values {
+		t.Run(name, func(t *testing.T) {
+			encoded, err := json.Marshal(value)
+			if err == nil {
+				t.Fatalf("encoded as %s; want a refusal rather than replacement", encoded)
+			}
+			if !strings.Contains(err.Error(), "not valid UTF-8") {
+				t.Fatalf("Marshal error = %v; want it to name the invalid text", err)
+			}
+		})
+	}
+}

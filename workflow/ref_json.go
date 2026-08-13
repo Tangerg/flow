@@ -2,9 +2,16 @@ package workflow
 
 import (
 	"encoding/json"
+	"fmt"
 )
 
-var _ json.Unmarshaler = (*Ref)(nil)
+var (
+	_ json.Marshaler   = Ref{}
+	_ json.Unmarshaler = (*Ref)(nil)
+)
+
+// refJSON keeps MarshalJSON from recursing while retaining the wire members.
+type refJSON Ref
 
 // A Ref is decoded inside definitions and inside persisted waits. Only the
 // definition path is covered by a JSON Schema, so the member contract is stated
@@ -14,6 +21,19 @@ const (
 	refFieldNodeID = "nodeID"
 	refFieldPath   = "path"
 )
+
+// MarshalJSON encodes a Ref without letting encoding/json change what it names.
+// Every identity-bearing type in this package validates its text before
+// encoding, because encoding/json replaces invalid UTF-8 by design. A Ref needs
+// that on its own account, not only inside a definition: [Graph.Inputs] and
+// [Graph.MissingInputs] hand callers bare references, and an editor that
+// serializes one would otherwise persist a different reference than it read.
+func (r Ref) MarshalJSON() ([]byte, error) {
+	if err := r.validateJSONText(); err != nil {
+		return nil, fmt.Errorf("workflow: marshal ref: %w", err)
+	}
+	return marshalJSON(refJSON(r))
+}
 
 // UnmarshalJSON atomically replaces a Ref from its strict canonical object. Both
 // members are required, and unknown, duplicate, or noncanonical names are
