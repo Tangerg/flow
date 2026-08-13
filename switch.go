@@ -56,7 +56,7 @@ func (s switchNode[K, I, O]) Validate() error {
 	for key, node := range s.cases {
 		if err := Validate(node); err != nil {
 			caseErrors = append(caseErrors, fmt.Errorf(
-				"flow: switch case %#v: %w",
+				"switch case %#v: %w",
 				key,
 				err,
 			))

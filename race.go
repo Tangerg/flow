@@ -103,8 +103,13 @@ func (r *raceRun[O]) waitForAll(parent context.Context) (O, error) {
 	return zero, errors.Join(r.errs...)
 }
 
+// decided reports whether the outcome is already fixed: a winner has been
+// taken, or the parent cancelled. Both remaining results and their errors are
+// then only drained, never used.
+func (r *raceRun[O]) decided() bool { return r.won || r.parentErr != nil }
+
 func (r *raceRun[O]) nextResult(parent context.Context) raceResult[O] {
-	if r.won || r.parentErr != nil {
+	if r.decided() {
 		return <-r.results
 	}
 	select {
@@ -118,13 +123,14 @@ func (r *raceRun[O]) nextResult(parent context.Context) raceResult[O] {
 }
 
 func (r *raceRun[O]) record(result raceResult[O]) {
-	if result.err == nil && !r.won && r.parentErr == nil {
+	if r.decided() {
+		return
+	}
+	if result.err == nil {
 		r.winner = result.value
 		r.won = true
 		r.cancel()
 		return
 	}
-	if !r.won && r.parentErr == nil {
-		r.errs[result.index] = &IndexError{Index: result.index, Err: result.err}
-	}
+	r.errs[result.index] = &IndexError{Index: result.index, Err: result.err}
 }

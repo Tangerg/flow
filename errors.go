@@ -34,8 +34,12 @@ type IndexError struct {
 	Err   error
 }
 
+// Error states the position and defers to the cause. This package's sentinels
+// carry its name themselves, because most of them reach a caller with nothing
+// wrapping them; a location that repeated the name would say it twice, and
+// nested locations would say it once per level.
 func (i *IndexError) Error() string {
-	return fmt.Sprintf("flow: index %d: %v", i.Index, i.Err)
+	return fmt.Sprintf("index %d: %v", i.Index, i.Err)
 }
 
 // Unwrap returns the underlying element error.

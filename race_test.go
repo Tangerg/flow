@@ -120,7 +120,7 @@ func TestRace_allFailErrorOrderIsStable(t *testing.T) {
 	})
 
 	_, err := flow.Race(n1, n2).Run(t.Context(), 0)
-	if err == nil || err.Error() != "flow: index 0: first\nflow: index 1: second" {
+	if err == nil || err.Error() != "index 0: first\nindex 1: second" {
 		t.Fatalf("joined error = %q; want input order", err)
 	}
 }
