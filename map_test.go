@@ -137,6 +137,29 @@ func TestMap_boundsConcurrency(t *testing.T) {
 	}
 }
 
+// A limit of one means each call runs after the last one returned, which no
+// waiting test can prove: proving nothing else started requires waiting forever.
+// So assert it from inside the calls instead. Nothing below is synchronized, on
+// purpose — the ordered result says each call observed every earlier one, and the
+// race detector says they needed no synchronization to do it.
+func TestMap_concurrencyOneRunsOneCallAtATime(t *testing.T) {
+	visits := 0
+	node := flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) {
+		visits++
+		return visits, nil
+	})
+
+	got, err := flow.Map(node, flow.MapConfig{Concurrency: 1}).Run(t.Context(), make([]int, 8))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for index, value := range got {
+		if value != index+1 {
+			t.Fatalf("Map = %v; want call n to observe the n-1 before it", got)
+		}
+	}
+}
+
 func TestMap_zeroConcurrencyIsUnbounded(t *testing.T) {
 	node := flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
 		return value + 1, nil
