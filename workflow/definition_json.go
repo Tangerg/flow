@@ -104,16 +104,21 @@ func (g graphJSONEncoder) marshal() ([]byte, error) {
 }
 
 func (n GraphNode) validateJSONText() (string, error) {
-	for _, field := range [...]struct {
-		name  string
+	// Each member carries both halves of its vocabulary: the serialized field a
+	// GraphError points at, and the concept name the message states. Reusing the
+	// field for both would repeat it -- "field type: type is not valid UTF-8" --
+	// and would describe the same member differently from the definition check.
+	for _, member := range [...]struct {
+		field string
+		kind  string
 		value string
 	}{
-		{name: fieldID, value: n.ID},
-		{name: fieldType, value: n.Type},
-		{name: fieldTrigger, value: string(n.Trigger)},
+		{field: fieldID, kind: nameStepID, value: n.ID},
+		{field: fieldType, kind: nameNodeType, value: n.Type},
+		{field: fieldTrigger, kind: nameTrigger, value: string(n.Trigger)},
 	} {
-		if err := validateText(field.name, field.value); err != nil {
-			return field.name, err
+		if err := validateText(member.kind, member.value); err != nil {
+			return member.field, err
 		}
 	}
 	if err := n.Inputs.validatePortJSONText(); err != nil {
@@ -125,15 +130,15 @@ func (n GraphNode) validateJSONText() (string, error) {
 		}
 	}
 	for index, dependency := range n.DependsOn {
-		if err := validateText("dependency ID", dependency); err != nil {
+		if err := validateText(nameDependency, dependency); err != nil {
 			return fieldDependsOn, fmt.Errorf("dependency %d: %w", index, err)
 		}
 	}
 	for index, gate := range n.When {
-		if err := validateText("gate source node ID", gate.NodeID); err != nil {
+		if err := validateText(nameGateSource, gate.NodeID); err != nil {
 			return fieldWhen, fmt.Errorf("gate %d: %w", index, err)
 		}
-		if err := validateText("gate outlet", gate.Outlet); err != nil {
+		if err := validateText(nameGateOutlet, gate.Outlet); err != nil {
 			return fieldWhen, fmt.Errorf("gate %d: %w", index, err)
 		}
 	}
@@ -212,18 +217,19 @@ func (s *specJSONEncoder) encodeChild(spec Spec) (specJSONOutput, error) {
 }
 
 func (s Spec) validateJSONText() (string, error) {
-	for _, field := range [...]struct {
-		name  string
+	for _, member := range [...]struct {
+		field string
+		kind  string
 		value string
 	}{
-		{name: fieldKind, value: string(s.Kind)},
-		{name: fieldID, value: s.ID},
-		{name: fieldType, value: s.Type},
-		{name: fieldResolver, value: s.Resolver},
-		{name: fieldCondition, value: s.Condition},
+		{field: fieldKind, kind: nameKind, value: string(s.Kind)},
+		{field: fieldID, kind: nameStepID, value: s.ID},
+		{field: fieldType, kind: nameNodeType, value: s.Type},
+		{field: fieldResolver, kind: nameResolver, value: s.Resolver},
+		{field: fieldCondition, kind: nameCondition, value: s.Condition},
 	} {
-		if err := validateText(field.name, field.value); err != nil {
-			return field.name, err
+		if err := validateText(member.kind, member.value); err != nil {
+			return member.field, err
 		}
 	}
 	if len(s.Config) > 0 {
@@ -250,7 +256,7 @@ func (s Spec) validateJSONText() (string, error) {
 	// encoding/json would replace rather than reject. Sorted, so a Spec with more
 	// than one invalid name always reports the same one.
 	for _, name := range slices.Sorted(maps.Keys(s.Cases)) {
-		if err := validateText("branch case name", name); err != nil {
+		if err := validateText(nameBranchCase, name); err != nil {
 			return fieldCases, err
 		}
 	}

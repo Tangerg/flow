@@ -206,7 +206,7 @@ func (s *specValidator) validateLoop(spec Spec) error {
 	if err := s.admit(spec); err != nil {
 		return err
 	}
-	if err := validateName("condition name", spec.Condition); err != nil {
+	if err := validateName(nameCondition, spec.Condition); err != nil {
 		return spec.fieldError(fieldCondition, err)
 	}
 	if _, err := s.registry.requireCondition(spec); err != nil {
@@ -224,7 +224,7 @@ func (s *specValidator) validateLeaf(spec Spec) error {
 	if err := s.admit(spec); err != nil {
 		return err
 	}
-	if err := validateName("node type", spec.Type); err != nil {
+	if err := validateName(nameNodeType, spec.Type); err != nil {
 		return spec.fieldError(fieldType, err)
 	}
 	if _, ok := s.registry.lookupNode(spec.Type); !ok {
@@ -255,7 +255,7 @@ func (s *specValidator) validateBranch(spec Spec) error {
 	if err := s.admit(spec); err != nil {
 		return err
 	}
-	if err := validateName("resolver name", spec.Resolver); err != nil {
+	if err := validateName(nameResolver, spec.Resolver); err != nil {
 		return spec.fieldError(fieldResolver, err)
 	}
 	if _, err := s.registry.requireResolver(spec); err != nil {
@@ -267,7 +267,7 @@ func (s *specValidator) validateBranch(spec Spec) error {
 	// visible to the steps after it.
 	introduced := newDefinitionIDs()
 	for _, name := range slices.Sorted(maps.Keys(spec.Cases)) {
-		if err := validateName("branch case name", name); err != nil {
+		if err := validateName(nameBranchCase, name); err != nil {
 			return spec.fieldError(fieldCases, err)
 		}
 		caseValidator := s.child(s.stepIDs.clone())

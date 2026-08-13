@@ -150,7 +150,7 @@ func (b branchStep) validate() error {
 			fmt.Errorf("%w: branch requires at least one case", flow.ErrInvalidConfig))
 	}
 	for _, name := range slices.Sorted(maps.Keys(b.cases)) {
-		if err := validateName("branch case name", name); err != nil {
+		if err := validateName(nameBranchCase, name); err != nil {
 			return newValidationError(
 				b.id,
 				fmt.Errorf("%w: %w", flow.ErrInvalidConfig, err))

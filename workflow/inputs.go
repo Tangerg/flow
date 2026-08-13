@@ -68,8 +68,8 @@ type bindingRules struct {
 }
 
 var (
-	portBinding = bindingVocabulary{nameKind: "input port name", bindingKind: "input port"}
-	seedBinding = bindingVocabulary{nameKind: "subgraph seed ID", bindingKind: "subgraph seed"}
+	portBinding = bindingVocabulary{nameKind: nameInputPort, bindingKind: "input port"}
+	seedBinding = bindingVocabulary{nameKind: nameSubgraphSeed, bindingKind: "subgraph seed"}
 
 	definitionBinding = bindingRules{name: validateName, ref: Ref.Validate}
 	jsonTextBinding   = bindingRules{name: validateText, ref: Ref.validateJSONText}

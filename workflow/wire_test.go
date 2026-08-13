@@ -273,3 +273,44 @@ func TestSpecNestingStopsAtTheJSONBoundaryAndStaysReadable(t *testing.T) {
 		t.Fatalf("Marshal one level deeper = %v; want ErrMaxDepth", err)
 	}
 }
+
+// TestTextAndDefinitionChecksDescribeAFieldTheSameWay pins the vocabulary the
+// two validators share. A Spec field is checked twice for the same property --
+// that its text crosses the JSON boundary unchanged -- once while validating a
+// definition and once while encoding one. Naming the field differently would
+// make one defect read as two different problems depending on which check ran.
+func TestTextAndDefinitionChecksDescribeAFieldTheSameWay(t *testing.T) {
+	notUTF8 := string([]byte{0xff})
+	leaf := workflow.Spec{Kind: workflow.KindLeaf, ID: "inner", Type: "noop"}
+	registry := workflow.NewRegistry().
+		MustRegisterNode("noop", func(spec workflow.NodeSpec) (workflow.Step, error) {
+			return workflow.Interrupt(spec.ID, nil), nil
+		})
+
+	specs := map[string]workflow.Spec{
+		"type": {Kind: workflow.KindLeaf, ID: "a", Type: notUTF8},
+		"resolver": {
+			Kind: workflow.KindBranch, ID: "b", Resolver: notUTF8,
+			Cases: map[string]workflow.Spec{"x": leaf},
+		},
+		"condition": {
+			Kind: workflow.KindLoop, ID: "l", Condition: notUTF8, Body: &leaf,
+		},
+	}
+
+	for field, spec := range specs {
+		t.Run(field, func(t *testing.T) {
+			definition := registry.ValidateSpec(spec)
+			// MarshalJSON is called directly because encoding/json prefixes its
+			// own wrapper, which is not part of what the two checks report.
+			_, encoding := spec.MarshalJSON()
+			if definition == nil || encoding == nil {
+				t.Fatalf("ValidateSpec = %v, MarshalJSON = %v; want both to reject", definition, encoding)
+			}
+			if definition.Error() != encoding.Error() {
+				t.Fatalf("the two checks describe %s differently:\n  definition: %v\n  encoding:   %v",
+					field, definition, encoding)
+			}
+		})
+	}
+}

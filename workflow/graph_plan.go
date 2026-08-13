@@ -95,7 +95,7 @@ func (g *graphPlanner) indexNodes() error {
 				Err:   err,
 			}
 		}
-		if err := validateName("node type", node.Type); err != nil {
+		if err := validateName(nameNodeType, node.Type); err != nil {
 			return location.fieldError(fieldType, err)
 		}
 		if _, duplicate := g.plan.nodesByID[node.ID]; duplicate {
@@ -146,10 +146,10 @@ func (g *gateValidator) validate() error {
 }
 
 func (g *gateValidator) validateGate(gate Gate) error {
-	if err := validateName("gate source node ID", gate.NodeID); err != nil {
+	if err := validateName(nameGateSource, gate.NodeID); err != nil {
 		return g.fieldError(fieldWhen, err)
 	}
-	if err := validateName("gate outlet", gate.Outlet); err != nil {
+	if err := validateName(nameGateOutlet, gate.Outlet); err != nil {
 		return g.fieldError(fieldWhen, err)
 	}
 	if _, duplicate := g.seen[gate]; duplicate {
@@ -225,7 +225,7 @@ func (n *nodeConnector) connect(node GraphNode) error {
 }
 
 func (n *nodeConnector) connectExplicit(dependency string) error {
-	if err := validateName("dependency ID", dependency); err != nil {
+	if err := validateName(nameDependency, dependency); err != nil {
 		return n.fieldError(fieldDependsOn, err)
 	}
 	if _, duplicate := n.explicit[dependency]; duplicate {

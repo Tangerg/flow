@@ -43,7 +43,7 @@ func (s ScopeFrame) String() string {
 // composites should validate the frame they add even when they may invoke no
 // child, because no child boundary would otherwise observe it.
 func (s ScopeFrame) Validate() error {
-	if err := validateName("scope frame ID", s.ID); err != nil {
+	if err := validateName(nameScopeFrameID, s.ID); err != nil {
 		return err
 	}
 	if !s.Indexed && s.Index != 0 {

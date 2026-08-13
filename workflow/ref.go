@@ -53,10 +53,10 @@ func (r Ref) compare(other Ref) int {
 // should use it for definition checks rather than discovering a malformed
 // reference as a missing value at run time.
 func (r Ref) Validate() error {
-	if err := validateName("node ID", r.NodeID); err != nil {
+	if err := validateName(nameNodeID, r.NodeID); err != nil {
 		return err
 	}
-	if err := validateText("path", r.Path); err != nil {
+	if err := validateText(namePath, r.Path); err != nil {
 		return err
 	}
 	pointer, ok := encodedPointer(r.Path).scan()
@@ -78,10 +78,10 @@ func (r Ref) Validate() error {
 // Full definition validation remains the caller's responsibility: a zero or
 // otherwise incomplete Ref can still be represented faithfully as JSON.
 func (r Ref) validateJSONText() error {
-	if err := validateText("node ID", r.NodeID); err != nil {
+	if err := validateText(nameNodeID, r.NodeID); err != nil {
 		return err
 	}
-	return validateText("path", r.Path)
+	return validateText(namePath, r.Path)
 }
 
 // withinOutput reports whether r addresses a conventional output cell or one

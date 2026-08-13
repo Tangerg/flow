@@ -121,7 +121,7 @@ func (n NodeSchema) validate() error {
 	}
 	outlets := make(map[string]struct{}, len(n.Outlets))
 	for _, outlet := range n.Outlets {
-		if err := validateName("outlet name", outlet); err != nil {
+		if err := validateName(nameOutlet, outlet); err != nil {
 			return err
 		}
 		if _, duplicate := outlets[outlet]; duplicate {
@@ -130,7 +130,7 @@ func (n NodeSchema) validate() error {
 		outlets[outlet] = struct{}{}
 	}
 	for _, port := range slices.Sorted(maps.Keys(n.Inputs)) {
-		if err := validateName("input port name", port); err != nil {
+		if err := validateName(nameInputPort, port); err != nil {
 			return err
 		}
 		valueType := n.Inputs[port]

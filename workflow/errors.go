@@ -91,6 +91,30 @@ const (
 	fieldWhen          = "when"
 )
 
+// Diagnostic name kinds are the human-readable half of the same vocabulary. A
+// concept is checked in more than one place -- a definition, the JSON text
+// carrying it, and sometimes the compiled step -- and must describe itself the
+// same way in each, so each kind is written once here rather than at every
+// check.
+const (
+	nameBranchCase   = "branch case name"
+	nameCondition    = "condition name"
+	nameDependency   = "dependency ID"
+	nameGateOutlet   = "gate outlet"
+	nameGateSource   = "gate source node ID"
+	nameInputPort    = "input port name"
+	nameKind         = "kind"
+	nameNodeID       = "node ID"
+	nameNodeType     = "node type"
+	nameOutlet       = "outlet name"
+	namePath         = "path"
+	nameResolver     = "resolver name"
+	nameScopeFrameID = "scope frame ID"
+	nameStepID       = "step ID"
+	nameSubgraphSeed = "subgraph seed ID"
+	nameTrigger      = "trigger"
+)
+
 // StepOp identifies the operation that owns a workflow step error.
 type StepOp string
 

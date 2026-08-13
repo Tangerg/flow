@@ -227,7 +227,7 @@ func registerDecision[O any](
 func validateRegistrationName(kind, name string) error {
 	label := "name"
 	if kind == registrationNode || kind == registrationSchema {
-		label = "node type"
+		label = nameNodeType
 	}
 	if err := validateName(label, name); err != nil {
 		return &RegistrationError{
