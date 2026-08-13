@@ -251,7 +251,7 @@ func (s specCompiler) compileIteration(spec Spec) (Step, error) {
 		BodyOutput:  spec.BodyOutput,
 		Concurrency: spec.Concurrency,
 	}).step()
-	if err := step.definition().validateIterationOutput(); err != nil {
+	if err := step.definition().iterationOutputCondition(); err != nil {
 		return nil, spec.fieldError(fieldBodyOutput, err)
 	}
 	return step, nil
@@ -268,7 +268,7 @@ func (s specCompiler) compileSubgraph(spec Spec) (Step, error) {
 		Body:       body,
 		BodyOutput: spec.BodyOutput,
 	}).step()
-	if err := step.definition().validateSubgraphOutput(); err != nil {
+	if err := step.definition().subgraphOutputCondition(); err != nil {
 		return nil, spec.fieldError(fieldBodyOutput, err)
 	}
 	return step, nil

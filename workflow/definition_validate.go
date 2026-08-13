@@ -230,26 +230,41 @@ func (d *definitionValidator) validateOwnBody(definition stepDefinition, depth i
 	return bodyValidator.validateStep(definition.body, depth+1)
 }
 
-func (s stepDefinition) validateSubgraphOutput() error {
+// subgraphOutputCondition and iterationOutputCondition report why a projection
+// cannot be satisfied, or nil. They name no step: definition validation locates
+// the failure by step identity and Spec compilation locates it by wire field,
+// and adding a location here would make one of them say it twice.
+func (s stepDefinition) subgraphOutputCondition() error {
 	outputs := guaranteedOutputs(s.body)
-	if !outputs.known {
+	if !outputs.known || subgraphOutputGuaranteed(s.inputs, outputs, s.bodyOutput) {
 		return nil
 	}
-	if subgraphOutputGuaranteed(s.inputs, outputs, s.bodyOutput) {
+	return subgraphOutputError(s.bodyOutput)
+}
+
+func (s stepDefinition) iterationOutputCondition() error {
+	outputs := guaranteedOutputs(s.body)
+	if !outputs.known || iterationOutputGuaranteed(s.id, outputs, s.bodyOutput) {
 		return nil
 	}
-	return newValidationError(s.id, subgraphOutputError(s.bodyOutput))
+	return iterationOutputError(s.bodyOutput)
+}
+
+func (s stepDefinition) validateSubgraphOutput() error {
+	return s.locate(s.subgraphOutputCondition())
 }
 
 func (s stepDefinition) validateIterationOutput() error {
-	outputs := guaranteedOutputs(s.body)
-	if !outputs.known {
+	return s.locate(s.iterationOutputCondition())
+}
+
+// locate attaches this definition's execution identity to a condition, which is
+// how a code-built definition reports one.
+func (s stepDefinition) locate(condition error) error {
+	if condition == nil {
 		return nil
 	}
-	if iterationOutputGuaranteed(s.id, outputs, s.bodyOutput) {
-		return nil
-	}
-	return newValidationError(s.id, iterationOutputError(s.bodyOutput))
+	return newValidationError(s.id, condition)
 }
 
 // subgraphOutputGuaranteed and iterationOutputGuaranteed are the shared

@@ -186,3 +186,61 @@ func TestEveryConstructionFormSuspendsAndResumesAlike(t *testing.T) {
 		}
 	}
 }
+
+// TestAProjectionDefectReadsTheSameWhicheverCheckFindsIt pins the division of
+// labour these two checks document. A body whose node type declares a schema
+// has a knowable output set, so validating the Spec rejects a bad projection.
+// A body whose type declares none does not, so validation accepts and
+// compilation rejects once the factory has returned a concrete step. The defect
+// is the same either way and must read the same, or which check happened to run
+// first would change what the author is told.
+//
+// Comparing CompileSpec against ValidateSpec on one Spec would prove nothing:
+// compilation begins by validating. These are two independent judgements.
+func TestAProjectionDefectReadsTheSameWhicheverCheckFindsIt(t *testing.T) {
+	factory := func(spec workflow.NodeSpec) (workflow.Step, error) {
+		return workflow.Interrupt(spec.ID, nil), nil
+	}
+	registry := workflow.NewRegistry().
+		MustRegisterNode("declared", factory).
+		MustRegisterSchema("declared", workflow.NodeSchema{Output: workflow.TypeAny}).
+		MustRegisterNode("schemaless", factory)
+
+	compose := map[string]func(body *workflow.Spec) workflow.Spec{
+		"subgraph": func(body *workflow.Spec) workflow.Spec {
+			return workflow.Spec{
+				Kind: workflow.KindSubgraph, ID: "sg",
+				Body: body, BodyOutput: workflow.Output("ghost"),
+			}
+		},
+		"iteration": func(body *workflow.Spec) workflow.Spec {
+			return workflow.Spec{
+				Kind: workflow.KindIteration, ID: "each", Input: workflow.Output("seed"),
+				Body: body, BodyOutput: workflow.Output("ghost"),
+			}
+		},
+	}
+
+	for kind, build := range compose {
+		t.Run(kind, func(t *testing.T) {
+			declared := workflow.Spec{Kind: workflow.KindLeaf, ID: "inner", Type: "declared"}
+			schemaless := workflow.Spec{Kind: workflow.KindLeaf, ID: "inner", Type: "schemaless"}
+
+			found := registry.ValidateSpec(build(&declared))
+			if found == nil {
+				t.Fatal("ValidateSpec accepted a projection its schema proves impossible")
+			}
+			if err := registry.ValidateSpec(build(&schemaless)); err != nil {
+				t.Fatalf("ValidateSpec = %v; want it to defer to compilation without a schema", err)
+			}
+			_, deferred := registry.CompileSpec(build(&schemaless))
+			if deferred == nil {
+				t.Fatal("CompileSpec accepted a projection the built body contradicts")
+			}
+			if deferred.Error() != found.Error() {
+				t.Fatalf("the same defect reads two ways:\n  validation:  %v\n  compilation: %v",
+					found, deferred)
+			}
+		})
+	}
+}
