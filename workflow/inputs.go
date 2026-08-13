@@ -51,46 +51,54 @@ func (i Inputs) Refs() []Ref {
 	return refs
 }
 
+// Inputs is validated along two independent axes: which data boundary it binds,
+// which supplies the diagnostic vocabulary, and how strict the check is, which
+// differs between a definition and the JSON text carrying one. Naming each axis
+// value once keeps the four combinations from drifting apart -- a port and a
+// seed must not describe themselves differently depending on which check found
+// the problem.
+type bindingVocabulary struct {
+	nameKind    string
+	bindingKind string
+}
+
+type bindingRules struct {
+	name func(kind, value string) error
+	ref  func(Ref) error
+}
+
+var (
+	portBinding = bindingVocabulary{nameKind: "input port name", bindingKind: "input port"}
+	seedBinding = bindingVocabulary{nameKind: "subgraph seed ID", bindingKind: "subgraph seed"}
+
+	definitionBinding = bindingRules{name: validateName, ref: Ref.Validate}
+	jsonTextBinding   = bindingRules{name: validateText, ref: Ref.validateJSONText}
+)
+
 func (i Inputs) validatePorts() error {
-	return i.validateBindings("input port name", "input port", validateName, Ref.Validate)
+	return i.validateBindings(portBinding, definitionBinding)
 }
 
 func (i Inputs) validateSeeds() error {
-	return i.validateBindings("subgraph seed ID", "subgraph seed", validateName, Ref.Validate)
+	return i.validateBindings(seedBinding, definitionBinding)
 }
 
 func (i Inputs) validatePortJSONText() error {
-	return i.validateBindings(
-		"input port name",
-		"input port",
-		validateText,
-		Ref.validateJSONText,
-	)
+	return i.validateBindings(portBinding, jsonTextBinding)
 }
 
 func (i Inputs) validateSeedJSONText() error {
-	return i.validateBindings(
-		"subgraph seed ID",
-		"subgraph seed",
-		validateText,
-		Ref.validateJSONText,
-	)
+	return i.validateBindings(seedBinding, jsonTextBinding)
 }
 
-// validateBindings is the single validation traversal for Inputs' two named
-// data-boundary uses. Only their diagnostic vocabulary differs.
-func (i Inputs) validateBindings(
-	nameKind string,
-	bindingKind string,
-	validateBindingName func(string, string) error,
-	validateRef func(Ref) error,
-) error {
+// validateBindings is the single validation traversal behind all four.
+func (i Inputs) validateBindings(vocabulary bindingVocabulary, rules bindingRules) error {
 	for _, name := range i.names() {
-		if err := validateBindingName(nameKind, name); err != nil {
+		if err := rules.name(vocabulary.nameKind, name); err != nil {
 			return err
 		}
-		if err := validateRef(i[name]); err != nil {
-			return fmt.Errorf("%s %q: %w", bindingKind, name, err)
+		if err := rules.ref(i[name]); err != nil {
+			return fmt.Errorf("%s %q: %w", vocabulary.bindingKind, name, err)
 		}
 	}
 	return nil
