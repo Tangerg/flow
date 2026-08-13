@@ -80,17 +80,22 @@ type raceResult[O any] struct {
 // even after a winner or parent cancellation, so Run owns every goroutine it
 // started.
 type raceRun[O any] struct {
-	cancel    context.CancelFunc
-	results   <-chan raceResult[O]
-	errs      []error
-	winner    O
-	won       bool
-	parentErr error
+	cancel  context.CancelFunc
+	results <-chan raceResult[O]
+	errs    []error
+	winner  O
+	won     bool
 }
 
+// waitForAll takes one result per started node, which is what waiting for all of
+// them means: each sends exactly once. Parent cancellation takes no part in that
+// drain -- it already reaches the nodes through the context this race derived
+// from it -- and takes precedence here, where the outcome is chosen, rather than
+// also while collecting. Deciding it twice would state one rule in two places
+// that nothing outside can tell apart, because this one settles what Run returns.
 func (r *raceRun[O]) waitForAll(parent context.Context) (O, error) {
 	for range len(r.errs) {
-		r.record(r.nextResult(parent))
+		r.record(<-r.results)
 	}
 
 	var zero O
@@ -103,27 +108,10 @@ func (r *raceRun[O]) waitForAll(parent context.Context) (O, error) {
 	return zero, errors.Join(r.errs...)
 }
 
-// decided reports whether the outcome is already fixed: a winner has been
-// taken, or the parent cancelled. Both remaining results and their errors are
-// then only drained, never used.
-func (r *raceRun[O]) decided() bool { return r.won || r.parentErr != nil }
-
-func (r *raceRun[O]) nextResult(parent context.Context) raceResult[O] {
-	if r.decided() {
-		return <-r.results
-	}
-	select {
-	case result := <-r.results:
-		return result
-	case <-parent.Done():
-		r.parentErr = context.Cause(parent)
-		r.cancel()
-		return <-r.results
-	}
-}
-
+// record keeps the first success and stops the rest. Results after it are only
+// drained: which node won is already fixed.
 func (r *raceRun[O]) record(result raceResult[O]) {
-	if r.decided() {
+	if r.won {
 		return
 	}
 	if result.err == nil {

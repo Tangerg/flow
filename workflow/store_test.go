@@ -95,6 +95,11 @@ func TestRef_helpers(t *testing.T) {
 	}
 }
 
+// Only the leading '/' makes a path a pointer; each segment's escaping is decided
+// as that segment is read. So Validate has to read all of them, and a fault in a
+// later segment is the case that says it does — the one
+// TestStore_LookupRejectsMalformedJSONPointers checks for the same walk at run
+// time, which is what Validate exists to happen before.
 func TestRef_Validate(t *testing.T) {
 	invalidUTF8 := string([]byte{0xff})
 	tests := map[string]struct {
@@ -103,12 +108,19 @@ func TestRef_Validate(t *testing.T) {
 	}{
 		"output":                 {ref: workflow.Output("step"), valid: true},
 		"empty object key":       {ref: workflow.At("step", ""), valid: true},
+		"nested path":            {ref: workflow.At("step", "output", "field"), valid: true},
 		"empty node ID":          {ref: workflow.Ref{Path: "/output"}},
 		"non-UTF-8 node ID":      {ref: workflow.Ref{NodeID: invalidUTF8, Path: "/output"}},
 		"empty path":             {ref: workflow.Ref{NodeID: "step"}},
 		"relative path":          {ref: workflow.Ref{NodeID: "step", Path: "output"}},
 		"invalid pointer escape": {ref: workflow.Ref{NodeID: "step", Path: "/~2"}},
-		"non-UTF-8 path":         {ref: workflow.Ref{NodeID: "step", Path: "/" + invalidUTF8}},
+		"invalid escape below the first segment": {
+			ref: workflow.Ref{NodeID: "step", Path: "/output/~2"},
+		},
+		"truncated escape below the first segment": {
+			ref: workflow.Ref{NodeID: "step", Path: "/output/~"},
+		},
+		"non-UTF-8 path": {ref: workflow.Ref{NodeID: "step", Path: "/" + invalidUTF8}},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
