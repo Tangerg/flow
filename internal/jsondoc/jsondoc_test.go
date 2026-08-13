@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -32,6 +33,22 @@ func TestCodec(t *testing.T) {
 	}
 	if err := codec.Validate([]byte(`[true,null,{"value":"ok"}]`)); err != nil {
 		t.Fatalf("Validate: %v", err)
+	}
+	// Value returns what a caller reads, so the document has to come back as
+	// itself. Numbers arrive as json.Number because that is the only form a
+	// re-encoding can reproduce exactly. Checking the whole value is what says the
+	// containers have the members they were given and no others -- an
+	// error-only check cannot see an array that came back one element longer.
+	value, err := codec.Value([]byte(`{"a":[1,"two",[3]],"b":null}`))
+	if err != nil {
+		t.Fatalf("Value: %v", err)
+	}
+	want := map[string]any{
+		"a": []any{json.Number("1"), "two", []any{json.Number("3")}},
+		"b": nil,
+	}
+	if !reflect.DeepEqual(value, want) {
+		t.Fatalf("Value = %#v; want %#v", value, want)
 	}
 	if err := codec.Decode([]byte(`{"unknown":1}`), &target); err == nil {
 		t.Fatal("Decode accepted an unknown field")
@@ -77,6 +94,9 @@ func TestCodec_rejectsAmbiguousOrLossyDocuments(t *testing.T) {
 		want string
 	}{
 		{name: "duplicate", data: []byte(`{"a/b":{"~key":1,"~key":2}}`), want: `duplicate object member "~key" at /a~1b/~0key`},
+		// An array contributes its index to the path, counted from zero as RFC 6901
+		// requires. Only a failure inside an array reports one.
+		{name: "duplicate in an array", data: []byte(`[0,{"k":1,"k":2}]`), want: `duplicate object member "k" at /1/k`},
 		{name: "multiple", data: []byte(`1 2`), want: "multiple JSON values"},
 		{name: "trailing syntax", data: []byte(`1 x`), want: "invalid character"},
 		{name: "invalid UTF-8", data: []byte{'"', 0xff, '"'}, want: "invalid UTF-8 at byte 2"},
@@ -92,9 +112,23 @@ func TestCodec_rejectsAmbiguousOrLossyDocuments(t *testing.T) {
 		// 0xDFFF is still a low one.
 		{name: "highest high surrogate", data: []byte(`"\udbff"`), want: "unpaired UTF-16 surrogate"},
 		{name: "highest low surrogate", data: []byte(`"\udfff"`), want: "unpaired UTF-16 surrogate"},
+		// A low surrogate is never the first unit of a pair, so one followed by
+		// another is two unpaired escapes rather than a pair -- the case that says
+		// which range the first unit was matched against.
+		{name: "low then low", data: []byte(`"\udc00\udc00"`), want: "unpaired UTF-16 surrogate"},
+		// 0xE000 is the first code unit above the surrogate range: too high to
+		// complete a pair after a high surrogate, and valid on its own.
+		{name: "high then above the range", data: []byte(`"\ud800\ue000"`), want: "unpaired UTF-16 surrogate"},
+		// The offset is 1-based and names the backslash that opened the escape, not
+		// the code unit inside it.
+		{name: "reported position", data: []byte(`{"k":"\ud800"}`), want: "unpaired UTF-16 surrogate escape at byte 7"},
 		// 0x80 is the first byte that cannot stand alone, so it is the one an
 		// invalid-UTF-8 bound can let through.
 		{name: "lowest continuation byte", data: []byte{'"', 0x80, '"'}, want: "invalid UTF-8 at byte 2"},
+		// This scan starts at the first byte, which only a document whose very first
+		// byte is invalid can say. Such a document is not JSON either, so the message
+		// is what distinguishes the scan from the decoder behind it.
+		{name: "invalid first byte", data: []byte{0xff}, want: "invalid UTF-8 at byte 1"},
 		// This pass runs before the JSON decoder, so it reads whatever a caller
 		// passed. Each input below ends inside the escape the scan is examining,
 		// which is the only way to reach a bound with nothing behind it.
@@ -119,6 +153,8 @@ func TestCodec_rejectsAmbiguousOrLossyDocuments(t *testing.T) {
 		[]byte(`"\ud800\udc00"`),
 		// The last low surrogate still completes a pair.
 		[]byte(`"\ud800\udfff"`),
+		// The first code unit above the surrogate range stands alone.
+		[]byte(`"\ue000"`),
 		[]byte(`"\\ud800"`),
 		[]byte(`"\"value"`),
 	} {
