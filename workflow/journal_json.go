@@ -199,7 +199,7 @@ func (j *journalDecoder) decode(data []byte) error {
 	if errors.Is(err, jsonnum.ErrFractional) {
 		return fmt.Errorf("version must be an integer, got %s", versionNumber)
 	}
-	if err != nil || version.Negative || version.Magnitude != journalJSONVersion {
+	if value, fits := version.Unsigned(); err != nil || !fits || value != journalJSONVersion {
 		return fmt.Errorf(
 			"unsupported version %s; want %d",
 			versionNumber,

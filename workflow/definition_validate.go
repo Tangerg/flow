@@ -296,16 +296,11 @@ type outputGuarantee struct {
 }
 
 func knownOutputs(ids ...string) outputGuarantee {
-	nodes := make(nodeSet, len(ids))
-	for _, id := range ids {
-		nodes[id] = struct{}{}
-	}
-	return outputGuarantee{nodes: nodes, known: true}
+	return outputGuarantee{nodes: newNodeSet(ids...), known: true}
 }
 
 func (o outputGuarantee) contains(id string) bool {
-	_, present := o.nodes[id]
-	return o.known && present
+	return o.known && o.nodes.has(id)
 }
 
 // union combines outputs produced by steps that all run. Unknown is absorbing:

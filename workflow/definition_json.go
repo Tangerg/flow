@@ -420,11 +420,7 @@ func decodeInt(data json.RawMessage) (int, error) {
 	// A magnitude jsonnum rejects and one strconv.Atoi rejects are the same
 	// condition seen at two widths: the value does not fit this platform's int.
 	if err == nil {
-		decimal := strconv.FormatUint(integer.Magnitude, 10)
-		if integer.Negative {
-			decimal = "-" + decimal
-		}
-		if converted, convertErr := strconv.Atoi(decimal); convertErr == nil {
+		if converted, convertErr := strconv.Atoi(integer.String()); convertErr == nil {
 			return converted, nil
 		}
 	}

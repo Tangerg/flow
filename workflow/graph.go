@@ -91,6 +91,17 @@ func (g *Graph) UnmarshalJSON(data []byte) error {
 	return decodeJSONInto(g, data, decodeGraphDocument, graphJSONError)
 }
 
+// nodeIDs is the namespace the graph declares. A malformed graph still has one --
+// duplicate IDs collapse, which is what a caller reading external references
+// needs and not what validation needs.
+func (g Graph) nodeIDs() nodeSet {
+	ids := make(nodeSet, len(g.Nodes))
+	for _, node := range g.Nodes {
+		ids[node.ID] = struct{}{}
+	}
+	return ids
+}
+
 // Inputs returns the external references the Graph may read: wired input ports
 // whose nodeID names no node in the graph. An editor can render this complete
 // potential-input set without compiling or running the definition. Inputs of a
@@ -101,15 +112,12 @@ func (g *Graph) UnmarshalJSON(data []byte) error {
 // caller owns. A malformed graph yields the references it can still resolve;
 // use [Registry.ValidateGraph] to reject it.
 func (g Graph) Inputs() []Ref {
-	internalNodeIDs := make(nodeSet, len(g.Nodes))
-	for _, node := range g.Nodes {
-		internalNodeIDs[node.ID] = struct{}{}
-	}
+	internal := g.nodeIDs()
 
 	externalRefs := make([]Ref, 0, len(g.Nodes))
 	for _, node := range g.Nodes {
 		for _, ref := range node.Inputs.Refs() {
-			if _, internal := internalNodeIDs[ref.NodeID]; internal {
+			if internal.has(ref.NodeID) {
 				continue
 			}
 			externalRefs = append(externalRefs, ref)

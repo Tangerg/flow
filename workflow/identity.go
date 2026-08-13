@@ -7,8 +7,23 @@ import (
 )
 
 // nodeSet is a set of workflow node IDs used by static output analysis and
-// engine-owned Store namespace boundaries.
+// engine-owned Store namespace boundaries. Membership is the only question asked
+// of it, and it is asked from three places that each named the answer
+// differently -- claimed, internal, present -- so the set answers it.
 type nodeSet map[string]struct{}
+
+func newNodeSet(ids ...string) nodeSet {
+	set := make(nodeSet, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	return set
+}
+
+func (n nodeSet) has(id string) bool {
+	_, present := n[id]
+	return present
+}
 
 // definitionIDs owns path-local execution identity during static traversal.
 // Branch cases clone the path they inherit, then merge only newly introduced

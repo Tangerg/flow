@@ -193,7 +193,7 @@ func (s Store) withoutNodes(nodeIDs nodeSet) Store {
 	// estimate — closer than the whole Store, which a graph rarely owns entirely.
 	owned := make([]storeChange, 0, len(nodeIDs))
 	for key, current := range s.cells() {
-		if _, claimed := nodeIDs[key.nodeID]; claimed && !current.removed {
+		if nodeIDs.has(key.nodeID) && !current.removed {
 			owned = append(owned, storeChange{key: key, cell: current})
 		}
 	}

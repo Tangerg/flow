@@ -103,17 +103,18 @@ func (s scopeFrameObject) decode() (ScopeFrame, error) {
 			return ScopeFrame{}, errors.New("index must be an integer")
 		}
 		parsed, err := jsonnum.ParseInteger(number.String())
+		index, fits := parsed.Unsigned()
 		switch {
 		case errors.Is(err, jsonnum.ErrRange):
 			return ScopeFrame{}, fmt.Errorf("index %s exceeds uint64", number)
-		case err != nil || parsed.Negative:
+		case err != nil || !fits:
 			return ScopeFrame{}, fmt.Errorf(
 				"index must be a non-negative integer, got %s",
 				number,
 			)
 		}
 		frame.Indexed = true
-		frame.Index = parsed.Magnitude
+		frame.Index = index
 	}
 	if err := frame.Validate(); err != nil {
 		return ScopeFrame{}, err

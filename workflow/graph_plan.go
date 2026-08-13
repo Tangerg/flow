@@ -175,6 +175,16 @@ func (g *gateValidator) validateGate(gate Gate) error {
 	return nil
 }
 
+// nodeIDs is the namespace the graph owns, which a run clears from its input so a
+// rerun cannot read a previous attempt's outputs.
+func (g graphPlan) nodeIDs() nodeSet {
+	ids := make(nodeSet, len(g.nodesByID))
+	for nodeID := range g.nodesByID {
+		ids[nodeID] = struct{}{}
+	}
+	return ids
+}
+
 func (g *graphPlanner) connectNodes() error {
 	for nodeIndex, node := range g.graph.Nodes {
 		connector := nodeConnector{

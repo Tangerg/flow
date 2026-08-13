@@ -124,15 +124,13 @@ func (j jsonNumber) normalized() any {
 	// float64 conversion can round them. Values outside the integer domain below
 	// still fall back to float64 when that representation exists.
 	if integer, err := jsonnum.ParseInteger(text); err == nil {
-		switch {
-		case !integer.Negative && integer.Magnitude <= math.MaxInt64:
-			return int64(integer.Magnitude)
-		case !integer.Negative:
-			return integer.Magnitude
-		case integer.Magnitude == uint64(math.MaxInt64)+1:
-			return int64(math.MinInt64)
-		case integer.Magnitude <= math.MaxInt64:
-			return -int64(integer.Magnitude)
+		// Signed first: a value that fits both widths normalizes to int64, which is
+		// what keeps comparison from meeting the same number in two representations.
+		if signed, ok := integer.Signed(); ok {
+			return signed
+		}
+		if unsigned, ok := integer.Unsigned(); ok {
+			return unsigned
 		}
 	}
 	if f, err := strconv.ParseFloat(text, 64); err == nil {

@@ -41,7 +41,7 @@ func (r registrySnapshot) compileGraph(graph Graph) (Step, error) {
 	if err := plan.validateBuiltOutputs(graph, outputs); err != nil {
 		return nil, err
 	}
-	compiled := compiledGraph(plan, steps, graph.Concurrency)
+	compiled := plan.compile(steps, graph.Concurrency)
 	if err := validateNode(compiled); err != nil {
 		return nil, &GraphError{Err: err}
 	}
@@ -86,16 +86,16 @@ func (graphStep) validate() error { return nil }
 
 func (g graphStep) Validate() error { return validateDefinition(g) }
 
-func compiledGraph(plan graphPlan, steps stepList, limit int) Step {
-	nodeIDs := make(nodeSet, len(plan.nodesByID))
-	for nodeID := range plan.nodesByID {
-		nodeIDs[nodeID] = struct{}{}
-	}
+// compile turns the plan into the Step that runs it. Everything the step needs to
+// schedule -- who waits for whom, whose completion releases whom, and which node
+// namespace the graph owns -- is the plan's own knowledge, so the plan builds it
+// rather than handing its fields to a function that reads nothing else.
+func (g graphPlan) compile(steps stepList, limit int) Step {
 	return graphStep{
 		steps:                 steps,
-		dependencyNodeIndexes: cloneIndexes(plan.dependencyNodeIndexes),
-		dependentNodeIndexes:  cloneIndexes(plan.dependentNodeIndexes),
-		nodeIDs:               nodeIDs,
+		dependencyNodeIndexes: cloneIndexes(g.dependencyNodeIndexes),
+		dependentNodeIndexes:  cloneIndexes(g.dependentNodeIndexes),
+		nodeIDs:               g.nodeIDs(),
 		limit:                 limit,
 	}
 }

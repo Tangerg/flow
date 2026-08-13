@@ -104,10 +104,7 @@ func FuzzParseInteger(f *testing.F) {
 		if integer.Magnitude == 0 && integer.Negative {
 			t.Fatal("zero retained a negative sign")
 		}
-		canonical := strconv.FormatUint(integer.Magnitude, 10)
-		if integer.Negative {
-			canonical = "-" + canonical
-		}
+		canonical := integer.String()
 		reparsed, reparsedErr := jsonnum.ParseInteger(canonical)
 		if reparsedErr != nil || reparsed != integer {
 			t.Fatalf(
@@ -119,4 +116,84 @@ func FuzzParseInteger(f *testing.F) {
 			)
 		}
 	})
+}
+
+// TestInteger_widthsHoldTheirBoundsFromBothSides covers what a caller used to
+// derive from the sign and the magnitude. int64's bounds are not symmetric -- the
+// negative one is a magnitude no positive value may have -- so each direction is
+// asked at the last value that fits and the first that does not. Unsigned has one
+// bound, the sign itself.
+func TestInteger_widthsHoldTheirBoundsFromBothSides(t *testing.T) {
+	const beyondInt64 = uint64(math.MaxInt64) + 1
+	tests := map[string]struct {
+		integer      jsonnum.Integer
+		signed       int64
+		signedFits   bool
+		unsigned     uint64
+		unsignedFits bool
+		text         string
+	}{
+		"zero": {
+			integer: jsonnum.Integer{}, signedFits: true, unsignedFits: true, text: "0",
+		},
+		"positive": {
+			integer: jsonnum.Integer{Magnitude: 42},
+			signed:  42, signedFits: true,
+			unsigned: 42, unsignedFits: true,
+			text: "42",
+		},
+		"at the signed ceiling": {
+			integer: jsonnum.Integer{Magnitude: math.MaxInt64},
+			signed:  math.MaxInt64, signedFits: true,
+			unsigned: math.MaxInt64, unsignedFits: true,
+			text: "9223372036854775807",
+		},
+		"past the signed ceiling": {
+			integer:  jsonnum.Integer{Magnitude: beyondInt64},
+			unsigned: beyondInt64, unsignedFits: true,
+			text: "9223372036854775808",
+		},
+		"at the unsigned ceiling": {
+			integer:  jsonnum.Integer{Magnitude: math.MaxUint64},
+			unsigned: math.MaxUint64, unsignedFits: true,
+			text: "18446744073709551615",
+		},
+		"negative": {
+			integer: jsonnum.Integer{Magnitude: 42, Negative: true},
+			signed:  -42, signedFits: true,
+			text: "-42",
+		},
+		"at the signed floor": {
+			integer: jsonnum.Integer{Magnitude: beyondInt64, Negative: true},
+			signed:  math.MinInt64, signedFits: true,
+			text: "-9223372036854775808",
+		},
+		"past the signed floor": {
+			integer: jsonnum.Integer{Magnitude: beyondInt64 + 1, Negative: true},
+			text:    "-9223372036854775809",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			signed, signedFits := test.integer.Signed()
+			if signed != test.signed || signedFits != test.signedFits {
+				t.Fatalf("Signed() = %d, %t; want %d, %t", signed, signedFits, test.signed, test.signedFits)
+			}
+			unsigned, unsignedFits := test.integer.Unsigned()
+			if unsigned != test.unsigned || unsignedFits != test.unsignedFits {
+				t.Fatalf(
+					"Unsigned() = %d, %t; want %d, %t",
+					unsigned, unsignedFits, test.unsigned, test.unsignedFits,
+				)
+			}
+			if got := test.integer.String(); got != test.text {
+				t.Fatalf("String() = %q; want %q", got, test.text)
+			}
+			// The decimal spelling reads back as the same value, which is what makes
+			// it the canonical one.
+			if reparsed, err := jsonnum.ParseInteger(test.text); err != nil || reparsed != test.integer {
+				t.Fatalf("ParseInteger(%q) = %+v, %v; want %+v", test.text, reparsed, err, test.integer)
+			}
+		})
+	}
 }

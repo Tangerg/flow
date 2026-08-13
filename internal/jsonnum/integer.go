@@ -11,9 +11,53 @@ import (
 
 // Integer is the sign and magnitude of a mathematical JSON integer. Zero is
 // always non-negative.
+//
+// The sign and magnitude are the representation; which Go type holds a value
+// exactly is a question about the value, so it is asked here rather than derived
+// from the two fields by every caller that needs it.
 type Integer struct {
 	Magnitude uint64
 	Negative  bool
+}
+
+// Signed returns the value as an int64 and whether it fits one exactly. The
+// negative bound is one further from zero than the positive bound, so the two
+// directions are not symmetric.
+func (i Integer) Signed() (int64, bool) {
+	if !i.Negative {
+		if i.Magnitude > math.MaxInt64 {
+			return 0, false
+		}
+		// #nosec G115 -- the magnitude is at most MaxInt64 here.
+		return int64(i.Magnitude), true
+	}
+	switch {
+	case i.Magnitude == uint64(math.MaxInt64)+1:
+		return math.MinInt64, true
+	case i.Magnitude <= math.MaxInt64:
+		// #nosec G115 -- the magnitude is at most MaxInt64 here.
+		return -int64(i.Magnitude), true
+	default:
+		return 0, false
+	}
+}
+
+// Unsigned returns the value as a uint64 and whether it fits one exactly. Every
+// magnitude does; only a negative value does not.
+func (i Integer) Unsigned() (uint64, bool) {
+	if i.Negative {
+		return 0, false
+	}
+	return i.Magnitude, true
+}
+
+// String returns the decimal spelling of the value.
+func (i Integer) String() string {
+	decimal := strconv.FormatUint(i.Magnitude, 10)
+	if i.Negative {
+		return "-" + decimal
+	}
+	return decimal
 }
 
 // ParseInteger errors. Callers normally translate them into the vocabulary of
