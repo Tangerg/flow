@@ -87,6 +87,23 @@ func TestCodec_rejectsAmbiguousOrLossyDocuments(t *testing.T) {
 		{name: "short escape", data: []byte(`"\u12"`), want: "invalid character"},
 		{name: "unknown escape", data: []byte(`"\q"`), want: "invalid character"},
 		{name: "trailing escape", data: []byte{'"', '\\'}, want: "unexpected EOF"},
+		// Each surrogate range ends where the other begins, so its last code unit
+		// is the one a boundary can misplace: 0xDBFF is still a high surrogate and
+		// 0xDFFF is still a low one.
+		{name: "highest high surrogate", data: []byte(`"\udbff"`), want: "unpaired UTF-16 surrogate"},
+		{name: "highest low surrogate", data: []byte(`"\udfff"`), want: "unpaired UTF-16 surrogate"},
+		// 0x80 is the first byte that cannot stand alone, so it is the one an
+		// invalid-UTF-8 bound can let through.
+		{name: "lowest continuation byte", data: []byte{'"', 0x80, '"'}, want: "invalid UTF-8 at byte 2"},
+		// This pass runs before the JSON decoder, so it reads whatever a caller
+		// passed. Each input below ends inside the escape the scan is examining,
+		// which is the only way to reach a bound with nothing behind it.
+		{name: "unterminated string", data: []byte(`"abc`), want: "unexpected EOF"},
+		{name: "escape ends the input", data: []byte(`"\ud800`), want: "unpaired UTF-16 surrogate"},
+		{name: "backslash ends the input", data: []byte(`"\ud800\`), want: "unpaired UTF-16 surrogate"},
+		// A high surrogate, then an escape that is not \u, then four characters
+		// that would read as a low surrogate if the scan looked past the escape.
+		{name: "escape that is not a code unit", data: []byte(`"\ud800\ndc00"`), want: "unpaired UTF-16 surrogate"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -100,12 +117,21 @@ func TestCodec_rejectsAmbiguousOrLossyDocuments(t *testing.T) {
 		[]byte(`"plain"`),
 		[]byte(`"\u0041"`),
 		[]byte(`"\ud800\udc00"`),
+		// The last low surrogate still completes a pair.
+		[]byte(`"\ud800\udfff"`),
 		[]byte(`"\\ud800"`),
 		[]byte(`"\"value"`),
 	} {
 		if _, err := codec.Value(data); err != nil {
 			t.Fatalf("Value(%s): %v", data, err)
 		}
+	}
+
+	// A complete pair that ends the input is still a pair: the document is
+	// malformed for want of a closing quote, not for an unpaired escape.
+	if _, err := codec.Value([]byte(`"\ud800\udc00`)); err == nil ||
+		!strings.Contains(err.Error(), "unexpected EOF") {
+		t.Fatalf("Value of a pair at end of input = %v; want a syntax error", err)
 	}
 }
 
