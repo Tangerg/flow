@@ -28,6 +28,15 @@ type Bindings struct { //nolint:recvcheck // UnmarshalJSON must use a pointer re
 	Switches map[string]SwitchSpec `json:"switches,omitempty"`
 }
 
+// A binding kind names itself in every diagnostic about it: compiling its
+// expression, checking that its text crosses JSON unchanged, and collecting the
+// references it reads. Naming each once keeps those from disagreeing.
+const (
+	kindCondition = "condition"
+	kindResolver  = "resolver"
+	kindSwitch    = "switch"
+)
+
 // Register compiles every expression and registers it under its name. It
 // compiles all of them before registering any, so a Bindings with a bad
 // expression leaves the Registry untouched.
@@ -84,11 +93,11 @@ func (b *bindingRegistrar) register() error {
 }
 
 func (b *bindingRegistrar) compileConditions() error {
-	return compileNamed(b.bindings.Conditions, Condition, "condition", b.conditions)
+	return compileNamed(b.bindings.Conditions, Condition, kindCondition, b.conditions)
 }
 
 func (b *bindingRegistrar) compileResolvers() error {
-	return compileNamed(b.bindings.Resolvers, Resolver, "resolver", b.resolvers)
+	return compileNamed(b.bindings.Resolvers, Resolver, kindResolver, b.resolvers)
 }
 
 // compileNamed compiles one table of named expressions in name order, so a
@@ -121,7 +130,7 @@ func (b *bindingRegistrar) compileSwitches() error {
 		}
 		resolver, err := Switch(b.bindings.Switches[name])
 		if err != nil {
-			return fmt.Errorf("switch %q: %w", name, err)
+			return fmt.Errorf("%s %q: %w", kindSwitch, name, err)
 		}
 		b.resolvers[name] = resolver
 	}
@@ -143,19 +152,19 @@ func (b Bindings) Refs() ([]workflow.Ref, error) {
 	}
 
 	for _, name := range slices.Sorted(maps.Keys(b.Conditions)) {
-		if err := collect("condition", name, b.Conditions[name]); err != nil {
+		if err := collect(kindCondition, name, b.Conditions[name]); err != nil {
 			return nil, err
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(b.Resolvers)) {
-		if err := collect("resolver", name, b.Resolvers[name]); err != nil {
+		if err := collect(kindResolver, name, b.Resolvers[name]); err != nil {
 			return nil, err
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(b.Switches)) {
 		caseRefs, err := b.Switches[name].Refs()
 		if err != nil {
-			return nil, fmt.Errorf("switch %q: %w", name, err)
+			return nil, fmt.Errorf("%s %q: %w", kindSwitch, name, err)
 		}
 		refs = append(refs, caseRefs...)
 	}

@@ -1,7 +1,6 @@
 package expr
 
 import (
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -64,7 +63,7 @@ func (s SwitchSpec) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON strictly and atomically decodes a standalone SwitchSpec JSON
 // object.
 func (s *SwitchSpec) UnmarshalJSON(data []byte) error {
-	return jsondoc.DecodeInto(s, data, decodeSwitchSpec, jsonError("switch"))
+	return jsondoc.DecodeInto(s, data, decodeSwitchSpec, jsonError(kindSwitch))
 }
 
 func decodeSwitchSpec(data []byte) (SwitchSpec, error) {
@@ -88,29 +87,39 @@ func translateJSONError(err error) error {
 
 func (b Bindings) validateJSONText() error {
 	for _, name := range slices.Sorted(maps.Keys(b.Conditions)) {
-		if err := validateNamedText("condition", name, b.Conditions[name]); err != nil {
+		if err := validateNamedText(kindCondition, name, b.Conditions[name]); err != nil {
 			return err
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(b.Resolvers)) {
-		if err := validateNamedText("resolver", name, b.Resolvers[name]); err != nil {
+		if err := validateNamedText(kindResolver, name, b.Resolvers[name]); err != nil {
 			return err
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(b.Switches)) {
-		if !utf8.ValidString(name) {
-			return errors.New("expr: switch name is not valid UTF-8")
+		if err := validateBindingName(kindSwitch, name); err != nil {
+			return err
 		}
 		if err := b.Switches[name].validateText(); err != nil {
-			return fmt.Errorf("expr: switch %q: %w", name, err)
+			return fmt.Errorf("expr: %s %q: %w", kindSwitch, name, err)
 		}
 	}
 	return nil
 }
 
-func validateNamedText(kind, name, value string) error {
+// validateBindingName checks the rule every binding name shares: it must cross
+// the JSON boundary unchanged. A switch asks on its own because its value is a
+// document rather than an expression string.
+func validateBindingName(kind, name string) error {
 	if !utf8.ValidString(name) {
 		return fmt.Errorf("expr: %s name is not valid UTF-8", kind)
+	}
+	return nil
+}
+
+func validateNamedText(kind, name, value string) error {
+	if err := validateBindingName(kind, name); err != nil {
+		return err
 	}
 	if !utf8.ValidString(value) {
 		return fmt.Errorf("expr: %s %q is not valid UTF-8", kind, name)

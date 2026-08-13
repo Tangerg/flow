@@ -283,6 +283,41 @@ func TestCompileGraph_triggerAnyAndFirstOfMerge(t *testing.T) {
 	}
 }
 
+// Any means at least one, so it has to be able to say no. Every other trigger-any
+// test gives it a gate that matches, which leaves the count it compares against
+// unverified: a bound one step looser admits a node whose sources all chose
+// something else.
+func TestCompileGraph_triggerAnyBypassesWhenNoGateMatches(t *testing.T) {
+	registry := workflow.NewRegistry().
+		MustRegisterNode("route", routingFactory(func(int) string { return "left" })).
+		MustRegisterSchema("route", routingSchema("left", "right", "other")).
+		MustRegisterNode("copy", addN())
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
+		{ID: "route", Type: "route", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
+		{
+			ID: "target", Type: "copy",
+			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
+			When: []workflow.Gate{
+				workflow.When("route", "right"),
+				workflow.When("route", "other"),
+			},
+			Trigger: workflow.TriggerAny,
+		},
+	}}
+
+	step, err := registry.CompileGraph(graph)
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+	out, err := step.Run(t.Context(), workflow.NewStore().WithOutput("start", 1))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if value, ok := out.Lookup(workflow.Output("target")); ok {
+		t.Fatalf("target = %v; want a bypassed node to produce nothing", value)
+	}
+}
+
 func TestCompileGraph_triggerAnyReadsEachRoutingSourceOnce(t *testing.T) {
 	var routeEncodes atomic.Int64
 	registry := workflow.NewRegistry().

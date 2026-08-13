@@ -90,29 +90,31 @@ func (e *Expr) Eval(s workflow.Store) (any, error) {
 // Bool evaluates the expression and requires a bool result. There is no implicit
 // truthiness: a non-bool result is an [ErrType] error rather than a silent
 // coercion.
-func (e *Expr) Bool(s workflow.Store) (bool, error) {
-	v, err := e.Eval(s)
-	if err != nil {
-		return false, err
-	}
-	b, ok := v.(bool)
-	if !ok {
-		return false, e.wrap(fmt.Errorf("%w: want bool, got %s", ErrType, (operand{raw: v}).typeName()))
-	}
-	return b, nil
-}
+func (e *Expr) Bool(s workflow.Store) (bool, error) { return evalAs[bool](e, s) }
 
 // String evaluates the expression and requires a string result.
-func (e *Expr) String(s workflow.Store) (string, error) {
-	v, err := e.Eval(s)
+func (e *Expr) String(s workflow.Store) (string, error) { return evalAs[string](e, s) }
+
+// evalAs is the one accessor behind the typed ones above: evaluate, then require
+// the result to already be a T. Naming T as the type argument states the wanted
+// type once, where a method would otherwise repeat it in its signature, its
+// assertion, and its message.
+func evalAs[T any](e *Expr, s workflow.Store) (T, error) {
+	var zero T
+	value, err := e.Eval(s)
 	if err != nil {
-		return "", err
+		return zero, err
 	}
-	str, ok := v.(string)
+	typed, ok := value.(T)
 	if !ok {
-		return "", e.wrap(fmt.Errorf("%w: want string, got %s", ErrType, (operand{raw: v}).typeName()))
+		return zero, e.wrap(fmt.Errorf(
+			"%w: want %T, got %s",
+			ErrType,
+			zero,
+			(operand{raw: value}).typeName(),
+		))
 	}
-	return str, nil
+	return typed, nil
 }
 
 // wrap attaches the expression source to an evaluation error, leaving an error

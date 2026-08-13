@@ -311,6 +311,39 @@ func TestEval_preservesNestedStoreResolutionFailure(t *testing.T) {
 	}
 }
 
+// A typed accessor requires its type rather than coercing towards it, and says
+// which type it wanted and which it got. Both halves are the reason a caller can
+// tell a wrong expression from a wrong Store value.
+func TestTypedAccessorsNameBothTypes(t *testing.T) {
+	tests := map[string]struct {
+		eval func(workflow.Store) error
+		want string
+	}{
+		"bool wanted": {
+			eval: func(s workflow.Store) error {
+				_, err := expr.MustParse(`v.output`).Bool(s)
+				return err
+			},
+			want: "want bool, got string",
+		},
+		"string wanted": {
+			eval: func(s workflow.Store) error {
+				_, err := expr.MustParse(`v.output == v.output`).String(s)
+				return err
+			},
+			want: "want string, got bool",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := test.eval(store("v.output", "text"))
+			if !errors.Is(err, expr.ErrType) || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v; want ErrType saying %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestParse_integerIndexesUseTheStorePathRepresentation(t *testing.T) {
 	s := store("list.output", []any{"zero", "one", "two"})
 	for src, want := range map[string]string{
