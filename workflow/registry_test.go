@@ -1063,11 +1063,23 @@ func TestSpec_enforcesProgrammaticNestingLimit(t *testing.T) {
 		t.Fatalf("CompileSpec at nesting limit: %v", err)
 	}
 
+	// The bound belongs to the Spec, not to whichever walk reached it: validating,
+	// compiling, and encoding descend the same tree, so all three must stop at the
+	// same depth and say so the same way.
 	tooDeep := workflow.Spec{Kind: workflow.KindSequence, Steps: []workflow.Spec{nested}}
+	reached := fmt.Sprintf(
+		"nesting depth %d exceeds limit %d",
+		workflow.MaxNestingDepth+1,
+		workflow.MaxNestingDepth,
+	)
 	for name, check := range map[string]func() error{
 		"validate": func() error { return registry.ValidateSpec(tooDeep) },
 		"compile": func() error {
 			_, err := registry.CompileSpec(tooDeep)
+			return err
+		},
+		"marshal": func() error {
+			_, err := json.Marshal(tooDeep)
 			return err
 		},
 	} {
@@ -1078,6 +1090,9 @@ func TestSpec_enforcesProgrammaticNestingLimit(t *testing.T) {
 				!errors.Is(err, workflow.ErrMaxDepth) ||
 				!errors.As(err, &specErr) || specErr.Field != "" {
 				t.Fatalf("error = %v; want whole-spec ErrInvalidSpec and ErrMaxDepth", err)
+			}
+			if !strings.Contains(err.Error(), reached) {
+				t.Fatalf("error = %v; want the depth it stopped at, %q", err, reached)
 			}
 		})
 	}

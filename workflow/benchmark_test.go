@@ -326,22 +326,7 @@ func BenchmarkCompileGraphScaling(b *testing.B) {
 }
 
 func BenchmarkGraphRunScaling(b *testing.B) {
-	registry := workflow.NewRegistry().MustRegisterNode(
-		"noop",
-		func(spec workflow.NodeSpec) (workflow.Step, error) {
-			return workflow.Leaf(
-				spec.ID,
-				workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
-					return struct{}{}, nil
-				}),
-				flow.NodeFunc[struct{}, struct{}](
-					func(context.Context, struct{}) (struct{}, error) {
-						return struct{}{}, nil
-					},
-				),
-			), nil
-		},
-	)
+	registry := workflow.NewRegistry().MustRegisterNode("noop", benchmarkNoopNode())
 
 	for _, shape := range []string{"chain", "wide"} {
 		for _, size := range []int{16, 128} {
@@ -365,28 +350,14 @@ func BenchmarkGraphRunScaling(b *testing.B) {
 
 // BenchmarkGraphRunInputScaling varies the number of cells in the input Store,
 // named by the subtest, over a graph whose nodes are all independent and
-// therefore all ready at once. Two costs scale on this axis. Up to
-// storeOverlayLimit the count is also the overlay length, so 64 is the fan-out
-// cliff where every node would otherwise flatten the snapshot separately. Beyond
-// it the count drives the per-run whole-Store work of clearing the graph's own
-// namespace, which a large store makes the dominant term.
+// therefore all ready at once. The cost on this axis is the per-run whole-Store
+// work of clearing the graph's own namespace, which a large store makes the
+// dominant term. The overlay length is not on this axis: the owned cells this
+// benchmark adds to force the re-run path are themselves writes, so they carry
+// the overlay past the limit and back down to a short one. Reaching the fan-out
+// cliff needs an untouched overlay -- see BenchmarkGraphRunBaseScaling.
 func BenchmarkGraphRunInputScaling(b *testing.B) {
-	registry := workflow.NewRegistry().MustRegisterNode(
-		"noop",
-		func(spec workflow.NodeSpec) (workflow.Step, error) {
-			return workflow.Leaf(
-				spec.ID,
-				workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
-					return struct{}{}, nil
-				}),
-				flow.NodeFunc[struct{}, struct{}](
-					func(context.Context, struct{}) (struct{}, error) {
-						return struct{}{}, nil
-					},
-				),
-			), nil
-		},
-	)
+	registry := workflow.NewRegistry().MustRegisterNode("noop", benchmarkNoopNode())
 	step, err := registry.CompileGraph(benchmarkGraph("wide", 16))
 	if err != nil {
 		b.Fatalf("CompileGraph: %v", err)
@@ -400,6 +371,34 @@ func BenchmarkGraphRunInputScaling(b *testing.B) {
 			for index := range 16 {
 				input = input.WithOutput("node-"+strconv.Itoa(index), index)
 			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if _, err := step.Run(b.Context(), input); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkGraphRunBaseScaling varies the input Store's overlay length, named by
+// the subtest, while holding the node count fixed. Every node derives its own
+// Store from the shared input, so an overlay at the limit is the case where each
+// node would flatten the snapshot separately instead of extending a shared one.
+// The input owns no cell the graph clears, which is what keeps the overlay at the
+// requested length until the fan-out reads it.
+func BenchmarkGraphRunBaseScaling(b *testing.B) {
+	registry := workflow.NewRegistry().MustRegisterNode("noop", benchmarkNoopNode())
+	step, err := registry.CompileGraph(benchmarkGraph("wide", 16))
+	if err != nil {
+		b.Fatalf("CompileGraph: %v", err)
+	}
+
+	for _, overlay := range []int{1, 32, 64} {
+		b.Run(strconv.Itoa(overlay), func(b *testing.B) {
+			input := benchmarkStore(overlay)
 
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -502,6 +501,25 @@ func benchmarkIncrement(id, input string) workflow.Step {
 			return value + 1, nil
 		}),
 	)
+}
+
+// benchmarkNoopNode is the node type the graph benchmarks register. It binds
+// nothing and returns immediately so a measurement reports the engine around the
+// node rather than the node.
+func benchmarkNoopNode() workflow.NodeFactory {
+	return func(spec workflow.NodeSpec) (workflow.Step, error) {
+		return workflow.Leaf(
+			spec.ID,
+			workflow.BinderFunc[struct{}](func(workflow.Store) (struct{}, error) {
+				return struct{}{}, nil
+			}),
+			flow.NodeFunc[struct{}, struct{}](
+				func(context.Context, struct{}) (struct{}, error) {
+					return struct{}{}, nil
+				},
+			),
+		), nil
+	}
 }
 
 func benchmarkStore(size int) workflow.Store {

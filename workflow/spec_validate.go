@@ -23,8 +23,8 @@ func (r *Registry) ValidateSpec(spec Spec) error {
 // specKindFields is the field matrix of [Spec]: which of its fields each kind
 // may populate. Kind itself is always required and never listed. Keeping it here
 // as data rather than inside the dispatch switch shows the whole matrix in one
-// place, and lets TestSpecKindFieldsCoverEverySpecField check it against the
-// Spec struct so a newly added field cannot stay silently unguarded.
+// place, and lets TestSpecFieldMatricesAgreeWithTheSpecStruct check it against
+// the Spec struct so a newly added field cannot stay silently unguarded.
 var specKindFields = map[Kind][]string{
 	KindLeaf:      {fieldID, fieldType, fieldConfig, fieldInputs},
 	KindSequence:  {fieldSteps},
@@ -53,10 +53,15 @@ type specValidator struct {
 	depth    int
 }
 
-// depthError names the one nesting limit a Spec has, wherever it is reached.
-// Validation and encoding both walk the same tree and both must stop at the same
-// depth for the same stated reason.
-func (s Spec) depthError(depth int) error {
+// checkDepth enforces the one nesting limit a Spec has, wherever it is reached.
+// Validation and encoding walk the same tree and must stop at the same depth for
+// the same stated reason, so both ask here rather than restating the bound next
+// to their own copy of the reason -- see
+// TestSpec_enforcesProgrammaticNestingLimit.
+func (s Spec) checkDepth(depth int) error {
+	if depth <= MaxNestingDepth {
+		return nil
+	}
 	return s.fieldError("", fmt.Errorf(
 		"%w: nesting depth %d exceeds limit %d",
 		ErrMaxDepth,
@@ -66,8 +71,8 @@ func (s Spec) depthError(depth int) error {
 }
 
 func (s *specValidator) validate(spec Spec) error {
-	if s.depth > MaxNestingDepth {
-		return spec.depthError(s.depth)
+	if err := spec.checkDepth(s.depth); err != nil {
+		return err
 	}
 
 	var validateVariant func() error

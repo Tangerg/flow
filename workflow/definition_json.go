@@ -168,8 +168,8 @@ func (s *specJSONEncoder) marshal() ([]byte, error) {
 }
 
 func (s *specJSONEncoder) encode(spec Spec) (specJSONOutput, error) {
-	if s.depth > MaxNestingDepth {
-		return specJSONOutput{}, spec.depthError(s.depth)
+	if err := spec.checkDepth(s.depth); err != nil {
+		return specJSONOutput{}, err
 	}
 	if field, err := spec.validateJSONText(); err != nil {
 		return specJSONOutput{}, spec.fieldError(field, err)
@@ -177,6 +177,9 @@ func (s *specJSONEncoder) encode(spec Spec) (specJSONOutput, error) {
 
 	fields := specJSONFields(spec)
 	output := specJSONOutput{specJSONFields: &fields}
+	// The wire tags decide whether a child member appears: an empty container and
+	// an absent one encode alike. The guards below only skip allocating a container
+	// that no child will fill.
 	if len(spec.Steps) > 0 {
 		output.Steps = make([]specJSONOutput, len(spec.Steps))
 		for index, child := range spec.Steps {

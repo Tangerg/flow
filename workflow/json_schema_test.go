@@ -332,6 +332,38 @@ func TestSpecMarshalReportsEveryLosslessEncodingBoundary(t *testing.T) {
 	}
 }
 
+// Inputs bind either a leaf's ports or a subgraph's seeds, and the two are
+// checked by the same traversal under different vocabularies. Neither may
+// describe itself by the other's name depending on which check found the
+// problem, so the encoder owes the wording the definition check already gives --
+// see the invalid seed ID case in TestSubgraph_validatesBoundaryBeforeRunningBody.
+func TestSpecMarshalNamesTheBindingItWasEncoding(t *testing.T) {
+	invalid := string([]byte{0xff})
+	tests := map[string]struct {
+		kind   workflow.Kind
+		want   string
+		reject string
+	}{
+		"leaf port":     {kind: workflow.KindLeaf, want: "input port name", reject: "subgraph seed"},
+		"subgraph seed": {kind: workflow.KindSubgraph, want: "subgraph seed ID", reject: "input port"},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := json.Marshal(workflow.Spec{
+				Kind:   test.kind,
+				Inputs: workflow.Inputs{invalid: workflow.Output("source")},
+			})
+			if err == nil {
+				t.Fatal("Marshal accepted an input name that is not valid UTF-8")
+			}
+			if !strings.Contains(err.Error(), test.want) ||
+				strings.Contains(err.Error(), test.reject) {
+				t.Fatalf("Marshal error = %v; want %q and not %q", err, test.want, test.reject)
+			}
+		})
+	}
+}
+
 func TestSpecMarshalRejectsCyclesAndExcessiveDepth(t *testing.T) {
 	cyclic := &workflow.Spec{Kind: workflow.KindLoop}
 	cyclic.Body = cyclic
