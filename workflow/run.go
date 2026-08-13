@@ -41,10 +41,32 @@ type runState struct {
 	config          RunConfig
 	journalRevision uint64
 	seq             atomic.Uint64
-	claimsMu        sync.Mutex
-	claims          journalNode
-	bypassedMu      sync.RWMutex
-	bypassed        journalNode
+	claims          scopedSet
+	bypassed        scopedSet
+}
+
+// scopedSet is a concurrent set of execution identities, keyed the way a
+// [Journal] keys its records so that a scope's structure is its identity rather
+// than its rendered form. Owning the lock is the point: the discipline that a
+// trie is never touched without it becomes part of the type instead of a
+// convention each of runState's two sets would otherwise restate.
+type scopedSet struct {
+	mu   sync.RWMutex
+	root journalNode
+}
+
+// add records one identity and reports whether it was new.
+func (s *scopedSet) add(scope []ScopeFrame, id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.root.record(scope, id, journalValue{})
+}
+
+func (s *scopedSet) has(scope []ScopeFrame, id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.root.lookup(scope, id)
+	return ok
 }
 
 // Run executes step once under cfg. Each call establishes a fresh execution
@@ -143,8 +165,10 @@ func (r *runState) observing() bool {
 	if r == nil || r.config.Observer == nil {
 		return false
 	}
-	function, ok := r.config.Observer.(ObserverFunc)
-	return !ok || function != nil
+	if function, ok := r.config.Observer.(ObserverFunc); ok && function == nil {
+		return false
+	}
+	return true
 }
 
 // journal returns the run's Journal, or nil when resumption is disabled.
@@ -203,9 +227,7 @@ func (r *runState) claim(scope []ScopeFrame, id string) error {
 		return nil
 	}
 
-	r.claimsMu.Lock()
-	defer r.claimsMu.Unlock()
-	if !r.claims.record(scope, id, journalValue{}) {
+	if !r.claims.add(scope, id) {
 		return fmt.Errorf(
 			"%w: step %q in scope %q was invoked more than once in one run",
 			ErrDuplicateStep,
@@ -216,17 +238,14 @@ func (r *runState) claim(scope []ScopeFrame, id string) error {
 	return nil
 }
 
+// markBypassed records that a gate declined to run id, so a node downstream of
+// it can tell "did not run" from "has not run yet".
 func (r *runState) markBypassed(scope []ScopeFrame, id string) {
-	r.bypassedMu.Lock()
-	defer r.bypassedMu.Unlock()
-	r.bypassed.record(scope, id, journalValue{})
+	r.bypassed.add(scope, id)
 }
 
 func (r *runState) wasBypassed(scope []ScopeFrame, id string) bool {
-	r.bypassedMu.RLock()
-	defer r.bypassedMu.RUnlock()
-	_, ok := r.bypassed.lookup(scope, id)
-	return ok
+	return r.bypassed.has(scope, id)
 }
 
 // emit completes event with the run's sequence number and scope, then delivers
