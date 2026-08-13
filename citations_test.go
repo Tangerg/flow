@@ -35,10 +35,59 @@ func TestCitedTestsResolve(t *testing.T) {
 	}
 }
 
+// TestTestCommentsNameTheirOwnTest covers the other way a citation goes wrong:
+// the name still resolves, so [TestCitedTestsResolve] stays green, but it names a
+// different test than the one the comment is attached to. That happens by editing
+// — a new test inserted into an existing comment block inherits its first lines
+// and leaves the old test undocumented — and the result reads as documentation
+// while describing something else.
+func TestTestCommentsNameTheirOwnTest(t *testing.T) {
+	fileSet := token.NewFileSet()
+	documented := 0
+	walkRepository(t, ".go", func(name string, data []byte) {
+		if !strings.HasSuffix(name, "_test.go") {
+			return
+		}
+		file, err := parser.ParseFile(fileSet, name, data, parser.ParseComments|parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok || function.Recv != nil || function.Doc == nil {
+				continue
+			}
+			// Only an opening name is a claim about what follows. A name later in
+			// the comment is a cross-reference, which TestCitedTestsResolve checks.
+			named := openingTestName.FindString(function.Doc.Text())
+			if named == "" {
+				continue
+			}
+			documented++
+			if named != function.Name.Name {
+				t.Errorf(
+					"%s:%d: comment opens with %s but documents %s",
+					name,
+					fileSet.Position(function.Pos()).Line,
+					named,
+					function.Name.Name,
+				)
+			}
+		}
+	})
+	if documented == 0 {
+		t.Fatal("no test opens its comment with its own name; the walk stopped seeing the repository")
+	}
+}
+
 // testNamePattern matches the prefixes go test recognizes followed by the capital
 // that makes a name rather than a word: "Testing" is prose, "TestStore" is a
-// citation.
-var testNamePattern = regexp.MustCompile(`\b(?:Test|Benchmark|Example|Fuzz)[A-Z]\w*`)
+// citation. openingTestName is the same name where a doc comment claims to be
+// about it.
+var (
+	testNamePattern = regexp.MustCompile(`\b(?:Test|Benchmark|Example|Fuzz)[A-Z]\w*`)
+	openingTestName = regexp.MustCompile(`^(?:Test|Benchmark|Example|Fuzz)[A-Z]\w*`)
+)
 
 func definedTestNames(t *testing.T) map[string]struct{} {
 	t.Helper()

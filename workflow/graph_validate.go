@@ -133,23 +133,25 @@ func (g graphValidator) validateOutputRefs(location nodeLocation, node GraphNode
 	return nil
 }
 
+// validateGates checks the one thing a gate asserts: its source declares the
+// outlet it names. A source type with no registered schema, or a schema with no
+// outlets, declares no outlet to find -- the same failure with less to search,
+// not a second one. Reporting it as the same failure keeps it matchable with
+// [ErrUnknownOutlet], which is what a run reports for the same violation, and
+// keeps validation from stating that a type declares no outlets when what is
+// missing is the schema that would say -- see
+// TestValidateGraph_rejectsInvalidGates.
 func (g graphValidator) validateGates(location nodeLocation, node GraphNode) error {
 	for _, gate := range node.When {
 		source := g.plan.nodesByID[gate.NodeID]
-		registered, ok := g.registry.lookupNodeSchema(source.Type)
-		if !ok || len(registered.schema.Outlets) == 0 {
-			return location.fieldError(fieldWhen, fmt.Errorf(
-				"routing node %q type %q declares no outlets",
-				gate.NodeID,
-				source.Type,
-			))
-		}
+		registered, _ := g.registry.lookupNodeSchema(source.Type)
 		if !slices.Contains(registered.schema.Outlets, gate.Outlet) {
 			return location.fieldError(fieldWhen, fmt.Errorf(
-				"%w %q on routing node %q",
+				"%w %q on routing node %q of type %q",
 				ErrUnknownOutlet,
 				gate.Outlet,
 				gate.NodeID,
+				source.Type,
 			))
 		}
 	}

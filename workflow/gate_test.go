@@ -877,7 +877,7 @@ func TestValidateGraph_rejectsInvalidGates(t *testing.T) {
 					When: []workflow.Gate{workflow.When("route", "yes")},
 				},
 			}},
-			want: workflow.ErrInvalidGraph, field: "when",
+			want: workflow.ErrUnknownOutlet, field: "when",
 			prepare: func(registry *workflow.Registry) {
 				registry.MustRegisterNode("plain", addN())
 			},
@@ -890,7 +890,7 @@ func TestValidateGraph_rejectsInvalidGates(t *testing.T) {
 					When: []workflow.Gate{workflow.When("route", "yes")},
 				},
 			}},
-			want: workflow.ErrInvalidGraph, field: "when",
+			want: workflow.ErrUnknownOutlet, field: "when",
 			prepare: func(registry *workflow.Registry) {
 				registry.
 					MustRegisterNode("plain", addN()).

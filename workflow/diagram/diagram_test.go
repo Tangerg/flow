@@ -120,6 +120,34 @@ func TestMermaid_keepsExternalIdentitySeparateFromItsDisplayLabel(t *testing.T) 
 	}
 }
 
+// TestMermaid_ordersASourceBeforeAValueRefSharingItsLabel covers the collision
+// the sibling test above does not: there both externals are value refs, so the
+// Ref behind each breaks the tie. Here a dependency names a node spelled like a
+// Ref, so a whole external source and a path into one render the same label with
+// no Ref to compare — and externals are collected from a map, so without a fixed
+// order between the kinds the same graph would not always draw the same diagram.
+func TestMermaid_ordersASourceBeforeAValueRefSharingItsLabel(t *testing.T) {
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{
+		{
+			ID:     "reader",
+			Type:   "sink",
+			Inputs: workflow.OneInput(workflow.Output("seed")),
+		},
+		{
+			ID:        "waiter",
+			Type:      "sink",
+			DependsOn: []string{"seed#/output"},
+		},
+	}}
+
+	got := diagram.Mermaid(graph)
+	if strings.Count(got, `["seed#/output"]`) != 2 ||
+		!strings.Contains(got, "  x0 -.->|depends| n1\n") ||
+		!strings.Contains(got, "  x1 -->|in| n0\n") {
+		t.Fatalf("Mermaid did not order the source before the value ref:\n%s", got)
+	}
+}
+
 func TestMermaid_keepsDeclarationTargetsSeparateFromDuplicateIDs(t *testing.T) {
 	graph := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "duplicate", Type: "first"},

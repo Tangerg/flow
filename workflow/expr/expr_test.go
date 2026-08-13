@@ -3,6 +3,7 @@ package expr_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"slices"
 	"strings"
@@ -895,17 +896,66 @@ func TestSourceAndMustParsePanics(t *testing.T) {
 	expr.MustParse("counter")
 }
 
-func TestError_reportsPosition(t *testing.T) {
-	_, err := expr.Parse("a.output & 1")
-	var exprErr *expr.Error
-	if !errors.As(err, &exprErr) {
-		t.Fatalf("err = %v; want *expr.Error", err)
+// TestError_reportsAPositionOnlyWhenItHasOne pins both message forms Error
+// chooses between, because the field choosing them is documented as a 1-based
+// offset: a failure with no single position must not print "at 0", an offset no
+// expression has. Only the two forms checked together say which is which — a
+// positioned message read alone looks right no matter what the other one does.
+func TestError_reportsAPositionOnlyWhenItHasOne(t *testing.T) {
+	tests := map[string]struct {
+		fail     func() error
+		wantPos  bool
+		wantText string
+	}{
+		"unsupported operator": {
+			fail: func() error {
+				_, err := expr.Parse("a.output & 1")
+				return err
+			},
+			wantPos:  true,
+			wantText: "a.output & 1",
+		},
+		"malformed expression": {
+			fail: func() error {
+				_, err := expr.Parse("a.output &")
+				return err
+			},
+			wantText: "a.output &",
+		},
+		"evaluated value of the wrong type": {
+			fail: func() error {
+				_, err := expr.MustParse("v.output").Bool(store("v.output", "text"))
+				return err
+			},
+			wantText: "v.output",
+		},
 	}
-	if exprErr.Pos <= 0 {
-		t.Fatalf("Pos = %d; want a 1-based offset", exprErr.Pos)
-	}
-	if !strings.Contains(exprErr.Error(), "a.output & 1") {
-		t.Fatalf("Error = %q; want it to quote the source", exprErr.Error())
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			var exprErr *expr.Error
+			if err := test.fail(); !errors.As(err, &exprErr) {
+				t.Fatalf("err = %v; want *expr.Error", err)
+			}
+			message := exprErr.Error()
+			if !strings.Contains(message, test.wantText) {
+				t.Fatalf("Error = %q; want it to quote %q", message, test.wantText)
+			}
+			if !test.wantPos {
+				if exprErr.Pos != 0 {
+					t.Fatalf("Pos = %d; want zero for a failure with no single position", exprErr.Pos)
+				}
+				if strings.Contains(message, " at ") {
+					t.Fatalf("Error = %q; want no position for a failure that has none", message)
+				}
+				return
+			}
+			if exprErr.Pos <= 0 {
+				t.Fatalf("Pos = %d; want a 1-based offset", exprErr.Pos)
+			}
+			if want := fmt.Sprintf(" at %d: ", exprErr.Pos); !strings.Contains(message, want) {
+				t.Fatalf("Error = %q; want it to report %q", message, want)
+			}
+		})
 	}
 }
 

@@ -209,6 +209,27 @@ func TestEmissionSession_retainsFirstEmitterError(t *testing.T) {
 	}
 }
 
+// TestEmissionLease_closeReportsWhyTheStreamStopped pins what StreamFunc.Run's
+// documented precedence rests on: once yield reports false, close reports the
+// reason, so a producer cannot return success over a stream that stopped. Inside
+// a leaf an Emitter failure also reaches the run through the session above, which
+// masks this layer; a stream stopped by cancellation with no Emitter to fail has
+// only this one.
+func TestEmissionLease_closeReportsWhyTheStreamStopped(t *testing.T) {
+	stopped := errors.New("cancelled while streaming")
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(stopped)
+	// A nil session is a StreamFunc with no Emitter to publish through, so the
+	// only reason its yield can fail is the invocation's own context.
+	lease := emissionLease{}
+	if lease.yield(ctx, 1) {
+		t.Fatal("yield published a value through a stopped stream")
+	}
+	if err := lease.close(); !errors.Is(err, stopped) {
+		t.Fatalf("close() = %v; want the reason yield reported false", err)
+	}
+}
+
 func TestGatedStep_resamplesCancellationAfterBypassEvent(t *testing.T) {
 	cause := errors.New("cancel during bypass event")
 	ctx, cancel := context.WithCancelCause(t.Context())
@@ -1065,17 +1086,11 @@ func specMemberNames(t *testing.T) []string {
 	return names
 }
 
-// TestSpecFieldMatricesAgreeWithTheSpecStruct pins the three places that must
-// know every Spec field to the struct itself: populatedFields, which decides
-// what "populated" means; specKindFields, which decides what each kind may
-// carry; and the embedded JSON Schema, which decides the same thing on the wire.
-// Nothing else enforces that agreement, and its absence is not inert — a field
-// added to Spec but missing from a matrix is accepted by every kind, and one
-// missing from the schema makes Spec marshal a document it cannot unmarshal.
-// forget promises to prune the scope nodes it empties on the way back up.
-// Nothing outside observes that: Keys and the wire format report records, and an
-// emptied scope holds none. So a node that outlives its last record leaks
-// silently, one per repeated boundary a long-lived Journal forgets.
+// TestJournalForgetPrunesTheScopeItEmptied pins what forget promises and
+// nothing outside observes: it prunes the scope nodes it empties on the way back
+// up. Keys and the wire format report records, and an emptied scope holds none,
+// so a node that outlives its last record leaks silently — one per repeated
+// boundary a long-lived Journal forgets.
 func TestJournalForgetPrunesTheScopeItEmptied(t *testing.T) {
 	journal := NewJournal()
 	scope := []ScopeFrame{{ID: "loop", Indexed: true}, {ID: "body"}}
@@ -1101,6 +1116,13 @@ func TestJournalForgetPrunesTheScopeItEmptied(t *testing.T) {
 	}
 }
 
+// TestSpecFieldMatricesAgreeWithTheSpecStruct pins the three places that must
+// know every Spec field to the struct itself: populatedFields, which decides
+// what "populated" means; specKindFields, which decides what each kind may
+// carry; and the embedded JSON Schema, which decides the same thing on the wire.
+// Nothing else enforces that agreement, and its absence is not inert — a field
+// added to Spec but missing from a matrix is accepted by every kind, and one
+// missing from the schema makes Spec marshal a document it cannot unmarshal.
 func TestSpecFieldMatricesAgreeWithTheSpecStruct(t *testing.T) {
 	want := specMemberNames(t)
 

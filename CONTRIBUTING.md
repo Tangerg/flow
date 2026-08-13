@@ -109,7 +109,12 @@ go test ./example -run Example -v
   that does, so a rename quietly turns a pinned rule back into a trusted one.
   `TestCitedTestsResolve` walks every comment and every document and fails on a
   name no test defines — three of eleven citations were already broken when it was
-  written, one of them naming a benchmark that had never existed.
+  written, one of them naming a benchmark that had never existed. A citation can
+  also resolve to the wrong test: a comment that opens with a test's name must be
+  attached to that test, because a new test inserted into an existing comment block
+  inherits its opening lines and leaves the old test undocumented.
+  `TestTestCommentsNameTheirOwnTest` checks the attachment that
+  `TestCitedTestsResolve` cannot see.
 - Name the package exactly once in an error. Each package reaches that
   differently, and the difference is forced rather than chosen: `flow`'s
   sentinels carry `flow:` because most of them reach a caller with nothing
