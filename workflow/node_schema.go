@@ -226,10 +226,6 @@ func (v ValueType) acceptsCellPath(ref Ref, nodeID, key string) bool {
 	if ref.NodeID != nodeID {
 		return false
 	}
-	cellPath := pointerPath{key}.encode()
-	if ref.Path == cellPath {
-		return true
-	}
 	pointer, ok := encodedPointer(ref.Path).scan()
 	if !ok {
 		return false
@@ -238,9 +234,13 @@ func (v ValueType) acceptsCellPath(ref Ref, nodeID, key string) bool {
 	if !valid || cell != key {
 		return false
 	}
-	child, _, valid := pointer.next()
+	child, present, valid := pointer.next()
 	if !valid {
 		return false
+	}
+	if !present {
+		// The reference is the cell itself, which every declared shape resolves.
+		return true
 	}
 	switch v {
 	case TypeAny, TypeObject:
