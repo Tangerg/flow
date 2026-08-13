@@ -187,8 +187,9 @@ func (e *emissionSession) emit(ctx context.Context, value any) error {
 		return e.err
 	case e.closed:
 		return context.Canceled
-	case context.Cause(ctx) != nil:
-		return context.Cause(ctx)
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
 	}
 
 	index := e.index
@@ -257,6 +258,10 @@ func (e *emissionLease) yield(ctx context.Context, value any) bool {
 	return false
 }
 
+// close refuses new yields, waits for the admitted ones, and reports why the
+// stream stopped. The lock is released before the wait on purpose: an in-flight
+// yield takes it to record its own failure, so holding it across Wait would
+// deadlock the invocation this is trying to end.
 func (e *emissionLease) close() error {
 	e.mu.Lock()
 	e.closed = true

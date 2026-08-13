@@ -117,11 +117,15 @@ func (g gatedStep) fail(
 	return store, stepErr
 }
 
+// satisfied evaluates every gate and only then applies the trigger. Stopping
+// early on a decided TriggerAny would let a gate naming an undeclared outlet, or
+// a source the target cannot read, go unreported whenever an earlier gate
+// happened to match -- making a routing contract violation depend on gate order.
 func (g gatedStep) satisfied(ctx context.Context, store Store) (bool, error) {
-	satisfied := g.trigger == TriggerAll
 	evaluation := gateEvaluation{
 		selections: make(map[string]routingSelection, len(g.gates)),
 	}
+	matched := 0
 	for _, gate := range g.gates {
 		if err := context.Cause(ctx); err != nil {
 			return false, err
@@ -133,13 +137,14 @@ func (g gatedStep) satisfied(ctx context.Context, store Store) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if g.trigger == TriggerAny {
-			satisfied = satisfied || match
-		} else {
-			satisfied = satisfied && match
+		if match {
+			matched++
 		}
 	}
-	return satisfied, nil
+	if g.trigger == TriggerAny {
+		return matched > 0, nil
+	}
+	return matched == len(g.gates), nil
 }
 
 func (g *gateEvaluation) match(
