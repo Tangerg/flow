@@ -3,6 +3,7 @@ package workflow
 import (
 	"encoding/json"
 	"fmt"
+	"iter"
 	"maps"
 	"slices"
 	"unicode/utf8"
@@ -45,15 +46,39 @@ func (s storeJSONDocument) encode() ([]byte, error) {
 
 type storeJSONDocument map[string]map[string]any
 
-func (s storeJSONDocument) validateNames() error {
-	for _, nodeID := range slices.Sorted(maps.Keys(s)) {
-		if !utf8.ValidString(nodeID) {
-			return fmt.Errorf("node ID %q is not valid UTF-8", nodeID)
-		}
-		for _, key := range slices.Sorted(maps.Keys(s[nodeID])) {
-			if !utf8.ValidString(key) {
-				return fmt.Errorf("node %q key %q is not valid UTF-8", nodeID, key)
+// cells iterates the document one cell at a time in the canonical order
+// [storeKey.compare] defines. Map iteration order is random, so every pass over
+// the wire format walks this order instead: the three encoding stages report the
+// same first failing cell on every run, and decoding assigns its revisions in
+// the order an encoded document lists them.
+func (s storeJSONDocument) cells() iter.Seq2[storeKey, any] {
+	return func(yield func(storeKey, any) bool) {
+		var identities []storeKey
+		for nodeID, values := range s {
+			for key := range values {
+				identities = append(identities, storeKey{nodeID: nodeID, key: key})
 			}
+		}
+		slices.SortFunc(identities, storeKey.compare)
+
+		for _, identity := range identities {
+			if !yield(identity, s[identity.nodeID][identity.key]) {
+				return
+			}
+		}
+	}
+}
+
+// validateNames rejects identities that would not survive the boundary
+// unchanged. A node with no cells cannot reach the document, so checking each
+// cell reaches every name.
+func (s storeJSONDocument) validateNames() error {
+	for identity := range s.cells() {
+		if !utf8.ValidString(identity.nodeID) {
+			return fmt.Errorf("node ID %q is not valid UTF-8", identity.nodeID)
+		}
+		if !utf8.ValidString(identity.key) {
+			return fmt.Errorf("node %q key %q is not valid UTF-8", identity.nodeID, identity.key)
 		}
 	}
 	return nil
@@ -87,17 +112,19 @@ func (s storeJSONDocument) put(identity storeKey, cell cell) {
 // encodeValues invokes application JSON marshalers exactly once, replacing
 // every temporary document value with the resulting immutable JSON fragment.
 func (s storeJSONDocument) encodeValues() error {
-	for _, nodeID := range slices.Sorted(maps.Keys(s)) {
-		values := s[nodeID]
-		for _, key := range slices.Sorted(maps.Keys(values)) {
-			encoded, err := json.Marshal(values[key])
-			if err != nil {
-				return fmt.Errorf("node %q key %q: %w", nodeID, key, err)
-			}
-			values[key] = json.RawMessage(encoded)
+	for identity, value := range s.cells() {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return identity.locate(err)
 		}
+		s[identity.nodeID][identity.key] = json.RawMessage(encoded)
 	}
 	return nil
+}
+
+// locate names the cell a wire-format failure happened in.
+func (s storeKey) locate(err error) error {
+	return fmt.Errorf("node %q key %q: %w", s.nodeID, s.key, err)
 }
 
 // marshal enforces the same recursive boundary as Store.UnmarshalJSON. Each
@@ -106,15 +133,12 @@ func (s storeJSONDocument) encodeValues() error {
 // assembly readable. Values are RawMessages produced by encodeValues, so the
 // structural encodings below cannot invoke application code.
 func (s storeJSONDocument) marshal() ([]byte, error) {
-	for _, nodeID := range slices.Sorted(maps.Keys(s)) {
-		values := s[nodeID]
-		for _, key := range slices.Sorted(maps.Keys(values)) {
-			candidate := storeJSONDocument{
-				nodeID: {key: values[key]},
-			}
-			if _, err := marshalJSON(candidate); err != nil {
-				return nil, fmt.Errorf("node %q key %q: %w", nodeID, key, err)
-			}
+	for identity, value := range s.cells() {
+		candidate := storeJSONDocument{
+			identity.nodeID: {identity.key: value},
+		}
+		if _, err := marshalJSON(candidate); err != nil {
+			return nil, identity.locate(err)
 		}
 	}
 	// The same invariant applies to the complete map, and the per-cell checks
@@ -145,14 +169,12 @@ func (s *Store) UnmarshalJSON(data []byte) error {
 	}
 
 	// Validating every node before assigning any revision keeps a malformed
-	// document from consuming revisions. Map iteration order is random, so both
-	// passes walk sorted names: invalid documents report the same first node, and
-	// valid documents receive the same revision order on every decode. Holding
-	// the converted maps means the second pass needs no repeated assertion.
-	nodes := make(map[string]map[string]any, len(raw))
-	nodeIDs := slices.Sorted(maps.Keys(raw))
+	// document from consuming revisions. This pass walks sorted node names so an
+	// invalid document reports the same first node on every decode; assembling the
+	// document lets the pass below reuse the one canonical cell order.
+	document := make(storeJSONDocument, len(raw))
 	size := 0
-	for _, nodeID := range nodeIDs {
+	for _, nodeID := range slices.Sorted(maps.Keys(raw)) {
 		value := raw[nodeID]
 		values, ok := value.(map[string]any)
 		if !ok {
@@ -162,20 +184,17 @@ func (s *Store) UnmarshalJSON(data []byte) error {
 				jsondoc.Kind(value),
 			)
 		}
-		nodes[nodeID] = values
+		document[nodeID] = values
 		size += len(values)
 	}
 
 	nextData := make(storeCells, size)
-	for _, nodeID := range nodeIDs {
-		values := nodes[nodeID]
-		for _, key := range slices.Sorted(maps.Keys(values)) {
-			revision := revisionCounter.Add(1)
-			nextData[storeKey{nodeID: nodeID, key: key}] = cell{
-				value:    values[key],
-				revision: revision,
-				lineage:  revision,
-			}
+	for identity, value := range document.cells() {
+		revision := revisionCounter.Add(1)
+		nextData[identity] = cell{
+			value:    value,
+			revision: revision,
+			lineage:  revision,
 		}
 	}
 	if len(nextData) == 0 {

@@ -84,7 +84,9 @@ type storeCells map[storeKey]cell
 
 // revisionCounter gives each internal mutation an identity. Parallel uses it to
 // distinguish a branch's changes from cells merely inherited from its input
-// snapshot, without comparing arbitrary values.
+// snapshot, without comparing arbitrary values. Its first value is 1, so
+// revision and lineage 0 belong to the zero cell alone: a reader may take the
+// cell a Store lacks as that zero value instead of testing for presence.
 var revisionCounter atomic.Uint64
 
 type cell struct {
@@ -95,6 +97,13 @@ type cell struct {
 	// unrelated Store that happens to use the same node ID and key.
 	lineage uint64
 	removed bool
+}
+
+// removedBy reports whether next, a removal marker, removes this cell: a live
+// cell of the same lineage. A cell that merely shares a node ID and key carries
+// a different lineage, and the zero cell carries none.
+func (c cell) removedBy(next cell) bool {
+	return !c.removed && c.lineage == next.lineage
 }
 
 // storeChange is one identity-preserving internal mutation. A removed cell is
@@ -290,11 +299,7 @@ func (s Store) Changes(base Store) []Write {
 // takes the overlay fast path when possible and falls back to revision
 // comparison for an unrelated or compacted Store.
 func (s Store) changesSince(base Store) []storeChange {
-	if deltas, ok := s.deltaSince(base); ok {
-		changes := make([]storeChange, 0, len(deltas))
-		for _, delta := range deltas {
-			changes = append(changes, storeChange{key: delta.key, cell: delta.cell})
-		}
+	if changes, ok := s.deltaSince(base); ok {
 		return changes
 	}
 	return s.changedCells(base.materialize())
@@ -313,50 +318,49 @@ func (s Store) changesSince(base Store) []storeChange {
 func (s Store) changedCells(base storeCells) []storeChange {
 	var changed []storeChange
 	for identity, next := range s.cells() {
-		if current, ok := base[identity]; ok && next.revision == current.revision {
+		current := base[identity]
+		if next.revision == current.revision {
 			continue
 		}
-		if next.removed {
-			current, ok := base[identity]
-			if !ok || current.removed || current.lineage != next.lineage {
-				continue
-			}
+		// A removal says something only about a cell base still holds. One base
+		// never held reads as the zero cell, which no lineage can match.
+		if next.removed && !current.removedBy(next) {
+			continue
 		}
 		changed = append(changed, storeChange{key: identity, cell: next})
 	}
-	slices.SortFunc(changed, func(a, b storeChange) int {
-		return cmp.Compare(a.cell.revision, b.cell.revision)
-	})
+	slices.SortFunc(changed, byRevision)
 	return changed
+}
+
+// byRevision orders changes as they were written. Every mutation takes a
+// globally unique revision, so the order needs no tie-breaker.
+func byRevision(left, right storeChange) int {
+	return cmp.Compare(left.cell.revision, right.cell.revision)
 }
 
 // deltaSince returns the final change to each cell changed in s after base. It
 // succeeds when both Stores share a snapshot and s's overlay descends from
-// base's overlay.
-func (s Store) deltaSince(base Store) ([]*storeDelta, bool) {
+// base's overlay, which is what a Store handed to a deriver and returned with
+// its own writes on top looks like.
+func (s Store) deltaSince(base Store) ([]storeChange, bool) {
 	if s.snapshot != base.snapshot {
 		return nil, false
 	}
 
-	var writes []*storeDelta
+	var writes []storeChange
 	for delta := s.delta; delta != base.delta; delta = delta.parent {
 		if delta == nil {
 			return nil, false
 		}
-		seen := false
-		for _, write := range writes {
-			if write.key == delta.key {
-				seen = true
-				break
-			}
+		if slices.ContainsFunc(writes, func(write storeChange) bool {
+			return write.key == delta.key
+		}) {
+			continue
 		}
-		if !seen {
-			writes = append(writes, delta)
-		}
+		writes = append(writes, storeChange{key: delta.key, cell: delta.cell})
 	}
-	slices.SortFunc(writes, func(left, right *storeDelta) int {
-		return cmp.Compare(left.cell.revision, right.cell.revision)
-	})
+	slices.SortFunc(writes, byRevision)
 	return writes, true
 }
 
@@ -367,11 +371,12 @@ func (s Store) merge(others ...Store) Store {
 	for _, other := range others {
 		merger.add(other)
 	}
-	return merger.result.bounded()
+	return merger.result
 }
 
-// withChanges applies identity-preserving changes in order. It is the low-level
-// counterpart of merge for a caller that already isolated each branch's delta.
+// withChanges applies identity-preserving changes in order. Every batch of
+// changes lands here, whether merge isolated it from a branch or a graph node
+// replayed it from a recorded dependency.
 func (s Store) withChanges(changes []storeChange) Store {
 	for _, change := range changes {
 		s = s.withDelta(change.key, change.cell)
@@ -388,44 +393,17 @@ type storeMerger struct {
 }
 
 func (s *storeMerger) add(other Store) {
-	if s.addDirectChild(other) {
-		return
+	changes, ok := other.deltaSince(s.base)
+	if !ok {
+		// A branch may return a Store unrelated to its input or compact a long
+		// overlay. Fall back to revision comparison in that uncommon case, over one
+		// materialized base shared by every branch that needs it.
+		if s.baseData == nil {
+			s.baseData = s.base.materialize()
+		}
+		changes = other.changedCells(s.baseData)
 	}
-	if changes, ok := other.deltaSince(s.base); ok {
-		s.addChanges(changes)
-		return
-	}
-
-	// A branch may return a Store unrelated to its input or compact a long
-	// overlay. Fall back to revision comparison in that uncommon case.
-	if s.baseData == nil {
-		s.baseData = s.base.materialize()
-	}
-	for _, change := range other.changedCells(s.baseData) {
-		s.result = s.result.withDelta(change.key, change.cell)
-	}
-}
-
-func (s *storeMerger) addDirectChild(other Store) bool {
-	delta := other.delta
-	if other.snapshot != s.base.snapshot ||
-		delta == nil ||
-		delta.parent != s.base.delta {
-		return false
-	}
-	if s.result.snapshot == s.base.snapshot &&
-		s.result.delta == s.base.delta {
-		s.result = other
-	} else {
-		s.result = s.result.withDelta(delta.key, delta.cell)
-	}
-	return true
-}
-
-func (s *storeMerger) addChanges(changes []*storeDelta) {
-	for _, change := range changes {
-		s.result = s.result.withDelta(change.key, change.cell)
-	}
+	s.result = s.result.withChanges(changes)
 }
 
 func (s Store) lookupCell(nodeID, key string) (cell, bool) {
