@@ -103,6 +103,13 @@ go test ./example -run Example -v
   and keep a kind-discriminated one such as `Spec` in
   `TestSpecFieldMatricesAgreeWithTheSpecStruct`. Both derive what they expect by
   reflecting over the struct, so neither becomes another list to maintain.
+- Name the test, and keep the name resolving. A comment that cites a test is how
+  a pinned rule proves it is pinned: the reader checks the test instead of taking
+  the comment's word. A citation that no longer resolves reads exactly like one
+  that does, so a rename quietly turns a pinned rule back into a trusted one.
+  `TestCitedTestsResolve` walks every comment and every document and fails on a
+  name no test defines — three of eleven citations were already broken when it was
+  written, one of them naming a benchmark that had never existed.
 - Name the package exactly once in an error. Each package reaches that
   differently, and the difference is forced rather than chosen: `flow`'s
   sentinels carry `flow:` because most of them reach a caller with nothing
@@ -126,10 +133,13 @@ go test ./example -run Example -v
   `encoding/json` replaces invalid UTF-8 by design and a wire type must refuse
   rather than rename itself: `TestEveryIdentityBearingTypeRefusesToRenameItself`.
 - Say what a caller owns when an exported result is a slice or a map. Every one
-  in this repo is built fresh, and a signature cannot say so. `Scope`,
-  `Graph.Inputs`, `Journal.Keys`, `Registry.NodeSchema`, `Expr.Refs`, and
-  `Suspensions` each state it in one clause; a new one that stays silent reads
-  as uncertainty rather than as the convention it is.
+  in this repo is built fresh and a signature cannot say so, so each says it in
+  one clause the way `Journal.Keys` does. Whether the values inside are the
+  caller's too needs saying separately — `Store.Changes` returns a fresh slice of
+  borrowed values. A `MarshalJSON` needs no clause, since `json.Marshaler`
+  already hands its bytes over. A new result that stays silent reads as
+  uncertainty rather than as the convention it is; naming the ones that comply
+  would be a list to maintain, and it drifted before this sentence replaced it.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

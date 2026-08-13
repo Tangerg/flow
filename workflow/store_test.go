@@ -392,16 +392,27 @@ func TestStore_path(t *testing.T) {
 func TestStore_arrayPathsUseCanonicalJSONPointerIndexes(t *testing.T) {
 	store := workflow.NewStore().
 		WithOutput("array", []any{"zero", "one"}).
+		// Ten elements so a canonical index can carry the last digit. A shorter
+		// array cannot: every single digit is inside it.
+		WithOutput("wide", []any{0, 1, 2, 3, 4, 5, 6, 7, 8, "nine"}).
 		WithOutput("object", map[string]any{"01": "object key"})
 
 	if value, ok := store.Lookup(workflow.Output("array").Child("1")); !ok || value != "one" {
 		t.Fatalf("canonical index = %v, %v; want one, true", value, ok)
+	}
+	if value, ok := store.Lookup(workflow.Output("wide").Child("9")); !ok || value != "nine" {
+		t.Fatalf("index 9 = %v, %v; want nine, true", value, ok)
 	}
 	for _, token := range []string{
 		"01",
 		"+1",
 		"-1",
 		"-",
+		// One digit already past the end. Every longer token is refused while
+		// accumulating the next digit, so this is the only shape that reaches the
+		// bound check on the first one -- and the element access behind it is
+		// unchecked.
+		"2",
 		"999999999999999999999999999999999999999999999999999999999999",
 	} {
 		if value, ok := store.Lookup(workflow.Output("array").Child(token)); ok {
@@ -410,6 +421,23 @@ func TestStore_arrayPathsUseCanonicalJSONPointerIndexes(t *testing.T) {
 	}
 	if value, ok := store.Lookup(workflow.Output("object").Child("01")); !ok || value != "object key" {
 		t.Fatalf("object key = %v, %v; want object key, true", value, ok)
+	}
+}
+
+// RFC 6901 makes the empty string a member name like any other, and Store
+// promises every possible object key is representable. A trailing empty segment
+// is the easy half of that: the scan finds no separator and stops. One with a
+// segment behind it is where the scan has to yield an empty name and continue.
+func TestStore_pathsAddressAnEmptyObjectKey(t *testing.T) {
+	store := workflow.NewStore().WithOutput("nested", map[string]any{
+		"": map[string]any{"deep": "found"},
+	})
+
+	if value, ok := store.Lookup(workflow.Output("nested").Child("", "deep")); !ok || value != "found" {
+		t.Fatalf("path through an empty key = %v, %v; want found, true", value, ok)
+	}
+	if _, ok := store.Lookup(workflow.Output("nested").Child("")); !ok {
+		t.Fatal("trailing empty key did not resolve to the nested object")
 	}
 }
 

@@ -1,0 +1,129 @@
+package flow_test
+
+import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"maps"
+	"os"
+	"path"
+	"regexp"
+	"slices"
+	"strings"
+	"testing"
+)
+
+// A comment that names a test is how this repository shows a rule stated twice
+// is pinned rather than trusted: the reader checks the named test instead of
+// taking the comment's word for it. A name that no longer resolves reads exactly
+// like one that does, so renaming a test quietly turns a pinned rule back into a
+// trusted one. Three of eleven citations were already broken when this test was
+// written, one of them naming a benchmark that had never existed.
+func TestCitedTestsResolve(t *testing.T) {
+	defined := definedTestNames(t)
+	cited := citedTestNames(t)
+	if len(cited) == 0 {
+		t.Fatal("no cited test names found; the walk below stopped seeing the repository")
+	}
+	// Sorted so a failure reports the same way on every run.
+	for _, name := range slices.Sorted(maps.Keys(cited)) {
+		if _, ok := defined[name]; !ok {
+			t.Errorf("%s: no test named %s exists", strings.Join(cited[name], ", "), name)
+		}
+	}
+}
+
+// testNamePattern matches the prefixes go test recognizes followed by the capital
+// that makes a name rather than a word: "Testing" is prose, "TestStore" is a
+// citation.
+var testNamePattern = regexp.MustCompile(`\b(?:Test|Benchmark|Example|Fuzz)[A-Z]\w*`)
+
+func definedTestNames(t *testing.T) map[string]struct{} {
+	t.Helper()
+	names := make(map[string]struct{})
+	fileSet := token.NewFileSet()
+	walkRepository(t, ".go", func(path string, data []byte) {
+		if !strings.HasSuffix(path, "_test.go") {
+			return
+		}
+		file, err := parser.ParseFile(fileSet, path, data, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if ok && function.Recv == nil {
+				names[function.Name.Name] = struct{}{}
+			}
+		}
+	})
+	return names
+}
+
+// citedTestNames collects the names comments and documentation claim, mapped to
+// where each claim is made. Only comments count in Go sources: code that names a
+// test is a call, which the compiler already resolves.
+func citedTestNames(t *testing.T) map[string][]string {
+	t.Helper()
+	cited := make(map[string][]string)
+	record := func(path string, line int, text string) {
+		for _, name := range testNamePattern.FindAllString(text, -1) {
+			cited[name] = append(cited[name], fmt.Sprintf("%s:%d", path, line))
+		}
+	}
+
+	fileSet := token.NewFileSet()
+	walkRepository(t, ".go", func(path string, data []byte) {
+		if strings.HasSuffix(path, "_test.go") {
+			return
+		}
+		file, err := parser.ParseFile(fileSet, path, data, parser.ParseComments|parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		for _, group := range file.Comments {
+			for _, comment := range group.List {
+				record(path, fileSet.Position(comment.Pos()).Line, comment.Text)
+			}
+		}
+	})
+	walkRepository(t, ".md", func(path string, data []byte) {
+		for index, line := range strings.Split(string(data), "\n") {
+			record(path, index+1, line)
+		}
+	})
+	return cited
+}
+
+// walkRepository visits every file with the given extension. The repository is
+// the test's own working directory, read through a filesystem rooted there so the
+// walk cannot address anything above it.
+func walkRepository(t *testing.T, extension string, visit func(name string, data []byte)) {
+	t.Helper()
+	repository := os.DirFS(".")
+	err := fs.WalkDir(repository, ".", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if path.Ext(name) != extension {
+			return nil
+		}
+		data, err := fs.ReadFile(repository, name)
+		if err != nil {
+			return err
+		}
+		visit(name, data)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk repository: %v", err)
+	}
+}

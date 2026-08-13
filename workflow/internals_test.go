@@ -1072,6 +1072,35 @@ func specMemberNames(t *testing.T) []string {
 // Nothing else enforces that agreement, and its absence is not inert — a field
 // added to Spec but missing from a matrix is accepted by every kind, and one
 // missing from the schema makes Spec marshal a document it cannot unmarshal.
+// forget promises to prune the scope nodes it empties on the way back up.
+// Nothing outside observes that: Keys and the wire format report records, and an
+// emptied scope holds none. So a node that outlives its last record leaks
+// silently, one per repeated boundary a long-lived Journal forgets.
+func TestJournalForgetPrunesTheScopeItEmptied(t *testing.T) {
+	journal := NewJournal()
+	scope := []ScopeFrame{{ID: "loop", Indexed: true}, {ID: "body"}}
+	kept := JournalKey{ID: "kept", Scope: scope}
+	forgotten := JournalKey{ID: "forgotten", Scope: scope}
+	for _, key := range []JournalKey{kept, forgotten} {
+		if err := journal.Record(key, 1); err != nil {
+			t.Fatalf("Record %v: %v", key, err)
+		}
+	}
+
+	if err := journal.Forget(forgotten); err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
+	if journal.root.children == nil {
+		t.Fatal("forget dropped a scope that still holds a record")
+	}
+	if err := journal.Forget(kept); err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
+	if journal.root.children != nil {
+		t.Fatalf("forget left %d scope nodes holding nothing", len(journal.root.children))
+	}
+}
+
 func TestSpecFieldMatricesAgreeWithTheSpecStruct(t *testing.T) {
 	want := specMemberNames(t)
 
