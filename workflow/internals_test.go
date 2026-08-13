@@ -955,9 +955,8 @@ func TestGraphExecution_doesNotStartReadyNodeAfterCancellation(t *testing.T) {
 				return Store{}, nil
 			},
 		)}},
-		input:  NewStore(),
-		states: make([]graphNodeState, 1),
-		ready:  []int{0},
+		input: NewStore(),
+		ready: []int{0},
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -973,11 +972,11 @@ func TestGraphExecution_doesNotStartReadyNodeAfterCancellation(t *testing.T) {
 			execution.head,
 		)
 	}
-	if execution.states[0] != graphNodePending || len(outcomes) != 0 {
+	if len(outcomes) != 0 || execution.changes != nil {
 		t.Fatalf(
-			"state, outcomes = %d, %d; want pending, 0",
-			execution.states[0],
+			"outcomes, changes = %d, %v; want 0, nil",
 			len(outcomes),
+			execution.changes,
 		)
 	}
 }

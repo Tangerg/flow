@@ -2,22 +2,16 @@ package workflow
 
 import "context"
 
-type graphNodeState uint8
-
-const (
-	graphNodePending graphNodeState = iota
-	graphNodeRunning
-	graphNodeCompleted
-)
-
 // graphExecution owns all mutable state of one compiled graph invocation.
 // Keeping it separate from graphStep makes the compiled definition safe for
 // concurrent reuse without locks.
+//
+// changes doubles as the record of which nodes finished: only a node that
+// completed successfully has an entry, so nothing else needs to track that.
 type graphExecution struct {
 	graph   graphStep
 	input   Store
 	counts  []int
-	states  []graphNodeState
 	changes [][]storeChange
 	ready   []int
 	head    int
@@ -59,7 +53,6 @@ func (g *graphExecution) run(ctx context.Context) (Store, error) {
 	// Every node's input derives from this one, and ready nodes run concurrently.
 	g.input = g.input.sharedBase()
 	g.counts = inDegrees(g.graph.dependencyNodeIndexes)
-	g.states = make([]graphNodeState, len(g.graph.steps))
 	g.changes = make([][]storeChange, len(g.graph.steps))
 	g.ready = make([]int, 0, len(g.graph.steps))
 	for index, count := range g.counts {
@@ -134,7 +127,6 @@ func (g *graphExecution) startReady(
 		}
 		index := g.ready[g.head]
 		g.head++
-		g.states[index] = graphNodeRunning
 		g.active++
 		call := graphCall{
 			index: index,
@@ -157,7 +149,6 @@ func (g *graphExecution) nodeInput(index int) Store {
 }
 
 func (g *graphExecution) complete(outcome graphOutcome) {
-	g.states[outcome.index] = graphNodeCompleted
 	g.changes[outcome.index] = outcome.store.changesSince(outcome.input)
 	for _, dependent := range g.graph.dependentNodeIndexes[outcome.index] {
 		g.counts[dependent]--
@@ -167,12 +158,13 @@ func (g *graphExecution) complete(outcome graphOutcome) {
 	}
 }
 
+// completedStore replays, in node order, the changes of every node that
+// finished successfully. A node that failed, suspended, was dropped by
+// cancellation, or never started recorded none.
 func (g *graphExecution) completedStore() Store {
 	var changes []storeChange
-	for index := range g.changes {
-		if g.states[index] == graphNodeCompleted {
-			changes = append(changes, g.changes[index]...)
-		}
+	for _, nodeChanges := range g.changes {
+		changes = append(changes, nodeChanges...)
 	}
 	return g.input.withChanges(changes)
 }

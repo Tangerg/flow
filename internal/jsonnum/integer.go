@@ -163,11 +163,19 @@ func exponentLimit(length int) int {
 
 func (n numberParser) integer() (Integer, error) {
 	digits := n.text[n.integerStart:n.integerEnd] + n.text[n.fractionStart:n.fractionEnd]
-	firstNonZero := strings.IndexAny(digits, "123456789")
-	if firstNonZero < 0 {
+	if !strings.ContainsAny(digits, "123456789") {
+		// Zero at any exponent, and -0, are the one non-negative zero.
 		return Integer{}, nil
 	}
 
+	// The exponent shifts the decimal point across digits. Shifting it left, or
+	// not far enough right, leaves a fractional part that must be all zeros;
+	// shifting it further right appends that many zeros.
+	//
+	// Each bound below runs before the sum it guards. parseExponent saturates the
+	// exponent just past the length of the text, so on a machine whose int cannot
+	// hold that — and only there — an exponent large enough to overflow one of
+	// these sums is one this rejects first.
 	fractionDigits := n.fractionEnd - n.fractionStart
 	var (
 		integerDigits string
@@ -175,25 +183,22 @@ func (n numberParser) integer() (Integer, error) {
 	)
 	switch {
 	case n.exponentNegative:
-		integerDigitCount := len(digits) - fractionDigits
-		if n.exponent > integerDigitCount {
+		if n.exponent > len(digits)-fractionDigits {
 			return Integer{}, ErrFractional
 		}
-		fractionalDigits := fractionDigits + n.exponent
 		var err error
-		integerDigits, err = integralPrefix(digits, fractionalDigits)
+		integerDigits, err = integralPrefix(digits, fractionDigits+n.exponent)
 		if err != nil {
 			return Integer{}, err
 		}
 	case n.exponent < fractionDigits:
-		fractionalDigits := fractionDigits - n.exponent
 		var err error
-		integerDigits, err = integralPrefix(digits, fractionalDigits)
+		integerDigits, err = integralPrefix(digits, fractionDigits-n.exponent)
 		if err != nil {
 			return Integer{}, err
 		}
 	default:
-		integerDigits = digits[firstNonZero:]
+		integerDigits = digits
 		trailingZeros = n.exponent - fractionDigits
 	}
 
