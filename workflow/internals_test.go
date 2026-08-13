@@ -848,6 +848,31 @@ func TestSpecCompiler_defendsItsValidatedInputContract(t *testing.T) {
 	}
 }
 
+// TestJournalUnmarshal_stampsDecodedRecordsAsNewerThanEverySnapshot pins what
+// keeps a run from replaying work it never did: a decoded record is stamped with a
+// revision above every snapshot taken before the decode, so a run already under way
+// cannot see records loaded into its Journal afterwards. The decoder assigns no
+// revision of its own, so without the stamp every decoded record would read as
+// older than any snapshot and become visible to all of them.
+func TestJournalUnmarshal_stampsDecodedRecordsAsNewerThanEverySnapshot(t *testing.T) {
+	journal := NewJournal()
+	if err := journal.Record(JournalKey{ID: "before"}, 1); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	snapshot := journal.snapshotRevision()
+
+	document := []byte(`{"version":4,"records":[{"id":"loaded","value":2}]}`)
+	if err := json.Unmarshal(document, journal); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if value, ok := journal.lookupAt(nil, "loaded", snapshot); ok {
+		t.Fatalf("a snapshot taken before the decode saw %v", value)
+	}
+	if value, ok := journal.lookupAt(nil, "loaded", journal.snapshotRevision()); !ok || value != json.Number("2") {
+		t.Fatalf("lookupAt after the decode = %v, %v; want the loaded record", value, ok)
+	}
+}
+
 // TestLocateSpecError_passesThroughAnErrorItCannotLocate pins the branch that
 // keeps a prefixer from deciding an error's fate. Recursive Spec compilation
 // returns its boundary error directly, so every reachable caller hands this a

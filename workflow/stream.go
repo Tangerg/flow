@@ -209,13 +209,16 @@ func (e *emissionSession) emit(ctx context.Context, value any) error {
 	return context.Cause(ctx)
 }
 
+// close refuses further chunks and reports the failure that stopped the stream.
+// Cancelling the emission context is not part of that: the invocation that opened
+// the session defers it, which is the one statement of it that also holds when the
+// node panics. cancel remains the session's own for [emissionSession.emit], which
+// cancels with the Emitter's failure as the cause.
 func (e *emissionSession) close() error {
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.closed = true
-	err := e.err
-	e.mu.Unlock()
-	e.cancel(nil)
-	return err
+	return e.err
 }
 
 // emissionLease restricts a yield callback to one StreamFunc invocation. The

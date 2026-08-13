@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -370,6 +372,19 @@ func TestSpecMarshalRejectsCyclesAndExcessiveDepth(t *testing.T) {
 	if _, err := json.Marshal(cyclic); !errors.Is(err, workflow.ErrInvalidSpec) ||
 		!strings.Contains(err.Error(), "cyclic spec body") {
 		t.Fatalf("cycle error = %v; want ErrInvalidSpec cycle", err)
+	}
+
+	// A cycle is a body that contains itself, not a body used more than once. The
+	// same pointer in two sibling positions is a shape a caller can legitimately
+	// build, and it is the only thing that says the cycle check tracks the path
+	// down rather than everything it has seen.
+	shared := &workflow.Spec{Kind: workflow.KindLeaf, ID: "shared", Type: "noop"}
+	siblings := workflow.Spec{Kind: workflow.KindSequence, Steps: []workflow.Spec{
+		{Kind: workflow.KindLoop, ID: "first", Condition: "done", Body: shared},
+		{Kind: workflow.KindLoop, ID: "second", Condition: "done", Body: shared},
+	}}
+	if _, err := json.Marshal(siblings); err != nil {
+		t.Fatalf("Marshal of a body used twice = %v; want it accepted", err)
 	}
 
 	deep := workflow.Spec{Kind: workflow.KindLoop}
@@ -976,10 +991,20 @@ func TestRegisterSchemaValidatesNodeConfig(t *testing.T) {
 	}
 }
 
+// Registering a node must not read the network or the filesystem because of a
+// reference in a caller's schema. An https ref cannot say that on its own: nothing
+// serves it, so it fails whether the loader was refused or merely unreachable. A
+// file ref to a schema that exists and is valid is the case that distinguishes them
+// -- it resolves the moment any loader is registered.
 func TestRegisterSchemaRejectsInvalidAndExternalConfigSchemas(t *testing.T) {
+	local := filepath.Join(t.TempDir(), "schema.json")
+	if err := os.WriteFile(local, []byte(`{"type":"object"}`), 0o600); err != nil {
+		t.Fatalf("write local schema: %v", err)
+	}
 	tests := map[string]json.RawMessage{
 		"invalid schema": json.RawMessage(`{"type":42}`),
 		"external ref":   json.RawMessage(`{"$ref":"https://example.com/schema.json"}`),
+		"file ref":       json.RawMessage(`{"$ref":"file://` + filepath.ToSlash(local) + `"}`),
 		"whitespace":     json.RawMessage(" \n\t"),
 	}
 	for name, schema := range tests {
@@ -994,6 +1019,29 @@ func TestRegisterSchemaRejectsInvalidAndExternalConfigSchemas(t *testing.T) {
 			var registrationErr *workflow.RegistrationError
 			if !errors.As(err, &registrationErr) {
 				t.Fatalf("error chain lacks RegistrationError: %v", err)
+			}
+		})
+	}
+}
+
+// TestRegisterSchemaRejectsEarlierDraftConstructs is the other side of the draft
+// statement: a schema that names no dialect is compiled under the one this package
+// chose, so a construct only an earlier draft accepts has to be refused. The
+// accepted cases show which keywords exist; these show which do not.
+func TestRegisterSchemaRejectsEarlierDraftConstructs(t *testing.T) {
+	for name, schema := range map[string]json.RawMessage{
+		// items as a list is draft-07 tuple validation; 2020-12 spells that
+		// prefixItems and requires items to be a schema.
+		"tuple items":              json.RawMessage(`{"type":"array","items":[{"type":"integer"}]}`),
+		"boolean exclusiveMinimum": json.RawMessage(`{"type":"number","minimum":1,"exclusiveMinimum":true}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := workflow.NewRegistry().RegisterSchema("node", workflow.NodeSchema{
+				Output:       workflow.TypeAny,
+				ConfigSchema: schema,
+			})
+			if !errors.Is(err, workflow.ErrInvalidRegistration) {
+				t.Fatalf("error = %v; want ErrInvalidRegistration", err)
 			}
 		})
 	}
@@ -1017,6 +1065,13 @@ func TestRegisterSchemaEnforcesDraft2020WithoutInspectingInstanceValues(t *testi
 		}`),
 		"nested canonical resource": json.RawMessage(`{
 			"$defs":{"nested":{"$id":"nested","$schema":"https://json-schema.org/draft/2020-12/schema"}}
+		}`),
+		// prefixItems exists only from 2020-12. A schema that omits $schema is
+		// compiled under the draft this package chose, so accepting this one says
+		// which draft that is.
+		"draft 2020 keyword without a dialect": json.RawMessage(`{
+			"type":"array",
+			"prefixItems":[{"type":"integer"}]
 		}`),
 		"instance values with schema members": json.RawMessage(`{
 			"const":{"$schema":"http://json-schema.org/draft-04/schema"},

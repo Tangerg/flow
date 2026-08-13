@@ -812,6 +812,33 @@ func TestDefinitionNestingLimitCountsEveryCompositeOnce(t *testing.T) {
 	}
 }
 
+// TestValidate_rejectsAStepReusingAnIDABranchCaseIntroduced covers the half of the
+// case-ID rule that reaches past the branch. Cases may reuse IDs with one another,
+// because only one of them runs; what none of them may do is take an ID a step after
+// the branch also uses, since the two would both run. Only a step after the branch
+// can say that -- inside it, reuse is the point.
+func TestValidate_rejectsAStepReusingAnIDABranchCaseIntroduced(t *testing.T) {
+	branch := workflow.Branch(workflow.BranchConfig{
+		ID: "route",
+		Resolver: resolverNode(func(context.Context, workflow.Store) (string, error) {
+			return "first", nil
+		}),
+		Cases: map[string]workflow.Step{
+			"first":  leafStep("inner"),
+			"second": leafStep("inner"),
+		},
+	})
+
+	// The cases alone are legal: each runs alone, so both may own "inner".
+	if err := flow.Validate(branch); err != nil {
+		t.Fatalf("Validate cases reusing an ID with each other: %v", err)
+	}
+	after := workflow.Sequence(branch, leafStep("inner"))
+	if err := flow.Validate(after); !errors.Is(err, workflow.ErrDuplicateStep) {
+		t.Fatalf("Validate error = %v; want ErrDuplicateStep", err)
+	}
+}
+
 // TestValidate_rejectsACompositeReusingAnEarlierStepID covers the claim a Branch
 // and a Loop make for their own ID against the steps around them. Running either
 // reports the collision too — the run claims each ID as it reaches it — so, as with

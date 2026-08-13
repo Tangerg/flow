@@ -111,6 +111,51 @@ func TestEvents_distinguishValidationReplayAndAdmission(t *testing.T) {
 		}
 	})
 
+	t.Run("rejected admission reports a failure without a start", func(t *testing.T) {
+		leaf := workflow.Leaf(
+			"leaf",
+			workflow.From[int](workflow.Output("seed")),
+			flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in, nil }),
+		)
+		// The definition is valid, so nothing before admission rejects it. Reaching
+		// the same boundary twice claims one identity twice, which is the other way
+		// admission fails -- and the only one that fails a boundary that already ran.
+		twice := flow.NodeFunc[workflow.Store, workflow.Store](
+			func(ctx context.Context, store workflow.Store) (workflow.Store, error) {
+				next, err := leaf.Run(ctx, store)
+				if err != nil {
+					return next, err
+				}
+				return leaf.Run(ctx, next)
+			},
+		)
+		var events []workflow.Event
+		_, err := workflow.Run(
+			t.Context(),
+			twice,
+			workflow.NewStore().WithOutput("seed", 1),
+			workflow.RunConfig{Observer: record(&events)},
+		)
+		if !errors.Is(err, workflow.ErrDuplicateStep) {
+			t.Fatalf("error = %v; want ErrDuplicateStep", err)
+		}
+		kinds := make([]workflow.EventKind, len(events))
+		for index, event := range events {
+			kinds[index] = event.Kind
+		}
+		want := []workflow.EventKind{
+			workflow.EventStarted,
+			workflow.EventCompleted,
+			workflow.EventFailed,
+		}
+		if !slices.Equal(kinds, want) {
+			t.Fatalf("events = %v; want %v", kinds, want)
+		}
+		if !errors.Is(events[2].Err, workflow.ErrDuplicateStep) {
+			t.Fatalf("failure event error = %v; want ErrDuplicateStep", events[2].Err)
+		}
+	})
+
 	t.Run("cancellation before admission has no event", func(t *testing.T) {
 		ctx, cancel := context.WithCancelCause(t.Context())
 		cause := errors.New("stop before admission")

@@ -355,6 +355,79 @@ func TestStreamFunc_mapSharesOneLeafStreamSafely(t *testing.T) {
 	}
 }
 
+// TestStreamFunc_waitsForAnInFlightYield pins the promise the sibling test below
+// depends on without ever reaching: StreamFunc does not return until every yield it
+// admitted has returned. A yield that arrives after the invocation is refused, which
+// only means something if one still running at that moment is waited for.
+//
+// The wait has to be observed between StreamFunc and the leaf around it, because the
+// leaf cannot see it: delivery holds the session lock, so the leaf's own close waits
+// for the chunk whether or not the invocation did. A node composed after the stream
+// runs exactly in that gap.
+func TestStreamFunc_waitsForAnInFlightYield(t *testing.T) {
+	emitting := make(chan struct{})
+	release := make(chan struct{})
+	var delivered atomic.Bool
+	var seenByNextNode atomic.Bool
+	stream := workflow.StreamFunc[int, int, int](
+		func(_ context.Context, input int, yield func(int) bool) (int, error) {
+			go func() {
+				yield(input)
+			}()
+			// Return while that yield is inside the Emitter, which is the only moment
+			// the wait can be observed.
+			<-emitting
+			return input, nil
+		},
+	)
+	step := workflow.Leaf(
+		"stream",
+		workflow.From[int](workflow.Output("start")),
+		flow.Then(stream, flow.NodeFunc[int, int](
+			func(_ context.Context, input int) (int, error) {
+				seenByNextNode.Store(delivered.Load())
+				return input, nil
+			},
+		)),
+	)
+
+	finished := make(chan error, 1)
+	go func() {
+		_, err := workflow.Run(
+			t.Context(),
+			step,
+			workflow.NewStore().WithOutput("start", 1),
+			workflow.RunConfig{Emitter: workflow.EmitterFunc(
+				func(context.Context, workflow.Chunk) error {
+					close(emitting)
+					<-release
+					// Recorded before returning, so it is set before this yield
+					// returns and therefore before anything the invocation's wait
+					// releases.
+					delivered.Store(true)
+					return nil
+				},
+			)},
+		)
+		finished <- err
+	}()
+
+	<-emitting
+	select {
+	case err := <-finished:
+		t.Fatalf("Run returned while a yield was still in flight: %v", err)
+	default:
+	}
+	close(release)
+
+	if err := <-finished; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !seenByNextNode.Load() {
+		t.Fatal("the node after the stream ran before the in-flight yield had delivered")
+	}
+}
+
 func TestStreamFunc_rejectsYieldAfterItsInvocationReturns(t *testing.T) {
 	var saved func(string) bool
 	parserStarted := make(chan struct{})

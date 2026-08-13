@@ -50,6 +50,18 @@ func TestCodec(t *testing.T) {
 	if !reflect.DeepEqual(value, want) {
 		t.Fatalf("Value = %#v; want %#v", value, want)
 	}
+	// A destination that takes any value must receive the number as text. Only an
+	// untyped field says so: a json.Number field is filled from the document either
+	// way, and float64 is where an integer too large for one loses digits.
+	var untyped struct {
+		Value any `json:"value"`
+	}
+	if err := codec.Decode([]byte(`{"value":9007199254740993}`), &untyped); err != nil {
+		t.Fatalf("Decode untyped: %v", err)
+	}
+	if untyped.Value != json.Number("9007199254740993") {
+		t.Fatalf("untyped value = %#v; want json.Number", untyped.Value)
+	}
 	if err := codec.Decode([]byte(`{"unknown":1}`), &target); err == nil {
 		t.Fatal("Decode accepted an unknown field")
 	}
