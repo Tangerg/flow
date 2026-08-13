@@ -226,18 +226,24 @@ func (j *Journal) Keys() []JournalKey {
 	defer j.mu.RUnlock()
 
 	keys := make([]JournalKey, 0, j.count)
-	j.root.appendKeys(nil, &keys)
+	j.root.walk(nil, func(key JournalKey, _ journalValue) {
+		keys = append(keys, key)
+	})
 	slices.SortFunc(keys, JournalKey.compare)
 	return keys
 }
 
-func (j *journalNode) appendKeys(scope []ScopeFrame, keys *[]JournalKey) {
-	for id := range j.records {
-		*keys = append(*keys, JournalKey{Scope: slices.Clone(scope), ID: id})
+// walk visits every record in the subtree under the scope it sits in, outermost
+// frame first. Each visit receives a complete key that owns its scope, which is
+// what both callers need: one keeps it as a key and the other as a wire record.
+// Map iteration order is random, so a caller that needs an order imposes it.
+func (j *journalNode) walk(scope []ScopeFrame, visit func(JournalKey, journalValue)) {
+	for id, value := range j.records {
+		visit(JournalKey{Scope: slices.Clone(scope), ID: id}, value)
 	}
 	for frame, child := range j.children {
 		scope = append(scope, frame)
-		child.appendKeys(scope, keys)
+		child.walk(scope, visit)
 		scope = scope[:len(scope)-1]
 	}
 }

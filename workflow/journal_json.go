@@ -81,7 +81,9 @@ func (j *Journal) MarshalJSON() ([]byte, error) {
 
 	j.mu.RLock()
 	entries := make([]journalEntry, 0, j.count)
-	j.root.appendEntries(nil, &entries)
+	j.root.walk(nil, func(key JournalKey, value journalValue) {
+		entries = append(entries, journalEntry{key: key, value: value.value})
+	})
 	j.mu.RUnlock()
 
 	slices.SortFunc(entries, func(left, right journalEntry) int {
@@ -145,20 +147,6 @@ func (j journalDocument) encode() []byte {
 	//nolint:errchkjson // The construction invariant above excludes invalid JSON.
 	encoded, _ := json.Marshal(j)
 	return encoded
-}
-
-func (j *journalNode) appendEntries(scope []ScopeFrame, entries *[]journalEntry) {
-	for id, value := range j.records {
-		*entries = append(*entries, journalEntry{
-			key:   JournalKey{Scope: slices.Clone(scope), ID: id},
-			value: value.value,
-		})
-	}
-	for frame, child := range j.children {
-		scope = append(scope, frame)
-		child.appendEntries(scope, entries)
-		scope = scope[:len(scope)-1]
-	}
 }
 
 // UnmarshalJSON atomically replaces the Journal's records. On failure the

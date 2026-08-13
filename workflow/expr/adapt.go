@@ -14,6 +14,11 @@ import (
 // observed before or during evaluation takes precedence over whatever the
 // expression itself produced. Every adapter in this file shares that rule, so
 // it is stated here rather than reassembled per adapter.
+//
+// It is the same precedence flow applies around a node it runs sequentially.
+// This package restates it because a compiled adapter is also a [workflow.Step]
+// a caller can run directly, and the helper that applies it in flow is that
+// package's own.
 func evaluate[T any](
 	ctx context.Context,
 	store workflow.Store,

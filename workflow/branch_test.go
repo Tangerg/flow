@@ -443,6 +443,25 @@ func TestBranch_rejectsInvalidStaticIdentities(t *testing.T) {
 	}
 }
 
+// Cases may reuse an ID with one another, since only one of them runs, but not
+// with the branch around them. Running the branch reports that too -- the run
+// claims each ID as it reaches it -- which leaves the definition check observable
+// only before execution. That is where a compiled workflow asks, so it is where
+// the rule has to hold.
+func TestBranch_rejectsACaseIDCollisionBeforeRunning(t *testing.T) {
+	step := workflow.Branch(workflow.BranchConfig{
+		ID: "route",
+		Resolver: resolverNode(func(context.Context, workflow.Store) (string, error) {
+			return "case", nil
+		}),
+		Cases: map[string]workflow.Step{"case": workflow.Interrupt("route", nil)},
+	})
+
+	if err := flow.Validate(step); !errors.Is(err, workflow.ErrDuplicateStep) {
+		t.Fatalf("Validate error = %v; want ErrDuplicateStep", err)
+	}
+}
+
 func TestBranch_rejectsDuplicateOpaqueInvocation(t *testing.T) {
 	branch := workflow.Branch(workflow.BranchConfig{ID: "route", Resolver: resolverNode(func(context.Context, workflow.Store) (string, error) { return "ok", nil }), Cases: map[string]workflow.Step{
 		"ok": flow.NodeFunc[workflow.Store, workflow.Store](

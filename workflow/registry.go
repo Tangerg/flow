@@ -142,19 +142,40 @@ func NewRegistry() *Registry {
 // RegisterNode registers the factory for a node type. It reports an
 // empty or non-UTF-8 name, nil factory, or duplicate registration immediately.
 func (r *Registry) RegisterNode(nodeType string, factory NodeFactory) error {
-	if err := validateRegistrationName(registrationNode, nodeType); err != nil {
+	return register(r, &r.nodes, registrationNode, nodeType, func() (NodeFactory, error) {
+		if factory == nil {
+			return nil, flow.ErrNilFunc
+		}
+		return factory, nil
+	})
+}
+
+// register admits one entry into one Registry table. Every kind is admitted the
+// same way and in the same order -- the name, then whatever that kind must prove
+// about its value, then the name claim under the lock -- so the order a caller
+// sees failures in is stated here once rather than per kind. prepare returns the
+// value to store, which lets a kind that compiles its input register the compiled
+// form without a second shape for that case.
+func register[T any](
+	r *Registry,
+	table *registrationTable[T],
+	kind, name string,
+	prepare func() (T, error),
+) error {
+	if err := validateRegistrationName(kind, name); err != nil {
 		return err
 	}
-	if factory == nil {
+	value, err := prepare()
+	if err != nil {
 		return &RegistrationError{
-			Kind: registrationNode,
-			Name: nodeType,
-			Err:  flow.ErrNilFunc,
+			Kind: kind,
+			Name: name,
+			Err:  err,
 		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.nodes.add(registrationNode, nodeType, factory)
+	return table.add(kind, name, value)
 }
 
 // MustRegisterNode is like [Registry.RegisterNode] but panics on error. It
@@ -200,28 +221,20 @@ func (r *Registry) MustRegisterCondition(name string, condition Condition) *Regi
 }
 
 // registerDecision registers one of the two decision shapes. [Resolver] and
-// [Condition] differ only in what they return, so they are admitted the same
-// way: check the name, then the node's complete visible definition, then claim
-// the name under the Registry lock.
+// [Condition] differ only in what they return, so what they must prove is the
+// same: the node's complete visible definition.
 func registerDecision[O any](
 	r *Registry,
 	table *registrationTable[flow.Node[Store, O]],
 	kind, name string,
 	node flow.Node[Store, O],
 ) error {
-	if err := validateRegistrationName(kind, name); err != nil {
-		return err
-	}
-	if err := validateNode(node); err != nil {
-		return &RegistrationError{
-			Kind: kind,
-			Name: name,
-			Err:  err,
+	return register(r, table, kind, name, func() (flow.Node[Store, O], error) {
+		if err := validateNode(node); err != nil {
+			return nil, err
 		}
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return table.add(kind, name, node)
+		return node, nil
+	})
 }
 
 func validateRegistrationName(kind, name string) error {

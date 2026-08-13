@@ -959,6 +959,24 @@ func TestSuspension_JSONBoundaryIsStrictAndAtomic(t *testing.T) {
 	}
 }
 
+// Suspend returns an anonymous wait: no ID, and therefore no scope, since a
+// scope requires an identified step. Every other test crosses JSON with an
+// identified one, so the rule that rejects a scope without an ID was free to
+// reject the absence of both.
+func TestSuspension_anonymousWaitCrossesJSON(t *testing.T) {
+	data, err := json.Marshal(workflow.Suspension{Value: "pending"})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var restored workflow.Suspension
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if restored.ID != "" || len(restored.Scope) != 0 || restored.Value != "pending" {
+		t.Fatalf("restored = %#v; want an anonymous wait still carrying its value", restored)
+	}
+}
+
 func TestSuspension_JSONEncodingPreservesIdentityAndReadableStructure(t *testing.T) {
 	bad := string([]byte{0xff})
 	for name, suspension := range map[string]workflow.Suspension{
