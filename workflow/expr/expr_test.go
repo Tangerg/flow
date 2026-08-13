@@ -272,6 +272,13 @@ func TestParse_enforcesTheWorkflowNestingLimit(t *testing.T) {
 			atLimit: "root" + strings.Repeat(".field", workflow.MaxNestingDepth-1),
 			tooDeep: "root" + strings.Repeat(".field", workflow.MaxNestingDepth),
 		},
+		// An index descends a reference the same way a selector does, and counts its
+		// own level. Only this shape says so: a chain of selectors never reaches the
+		// index case, so the limit could be reached there at a different depth.
+		"index chain": {
+			atLimit: "root" + strings.Repeat("[0]", workflow.MaxNestingDepth-1),
+			tooDeep: "root" + strings.Repeat("[0]", workflow.MaxNestingDepth),
+		},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -385,23 +392,29 @@ func TestTypedAccessorsNameBothTypes(t *testing.T) {
 	}
 }
 
+// TestParse_integerIndexesUseTheStorePathRepresentation covers an index written in
+// any Go base becoming the decimal a Store path uses. One of the indexes is
+// two-digit on purpose: below ten every base agrees, so a single-digit index cannot
+// say which one the path was written in.
 func TestParse_integerIndexesUseTheStorePathRepresentation(t *testing.T) {
-	s := store("list.output", []any{"zero", "one", "two"})
-	for src, want := range map[string]string{
-		"list.output[0x1]": "one",
-		"list.output[0o2]": "two",
+	items := make([]any, 12)
+	items[1], items[2], items[11] = "one", "two", "eleven"
+	s := store("list.output", items)
+	for src, want := range map[string]struct{ value, path string }{
+		"list.output[0x1]":  {value: "one", path: "1"},
+		"list.output[0o2]":  {value: "two", path: "2"},
+		"list.output[0xb]":  {value: "eleven", path: "11"},
+		"list.output[0o13]": {value: "eleven", path: "11"},
+		"list.output[11]":   {value: "eleven", path: "11"},
 	} {
 		t.Run(src, func(t *testing.T) {
 			e := expr.MustParse(src)
 			got, err := e.String(s)
-			if err != nil || got != want {
-				t.Fatalf("String = %q, %v; want %q", got, err, want)
+			if err != nil || got != want.value {
+				t.Fatalf("String = %q, %v; want %q", got, err, want.value)
 			}
-			if refs := e.Refs(); len(refs) != 1 || refs[0].Path != "/output/"+map[string]string{
-				"list.output[0x1]": "1",
-				"list.output[0o2]": "2",
-			}[src] {
-				t.Fatalf("Refs = %v; want a decimal Store path", refs)
+			if refs := e.Refs(); len(refs) != 1 || refs[0].Path != "/output/"+want.path {
+				t.Fatalf("Refs = %v; want the decimal Store path /output/%s", refs, want.path)
 			}
 		})
 	}

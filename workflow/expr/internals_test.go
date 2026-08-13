@@ -50,6 +50,47 @@ func TestNumericNormalization_preservesOutOfRangeValues(t *testing.T) {
 	if got := jsonNumber(invalid).normalized(); got != invalid {
 		t.Fatalf("normalized invalid json.Number = %#v; want original", got)
 	}
+	// The three float64 values with no JSON form are named as one guard, so each
+	// has to be asked separately -- a guard that admitted one of them would reach
+	// an encoder that cannot represent it.
+	for name, value := range map[string]float64{
+		"NaN":               math.NaN(),
+		"positive infinity": math.Inf(1),
+		"negative infinity": math.Inf(-1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, ok := floatNumber(value).normalized().(float64)
+			if !ok || (got != value && !math.IsNaN(value)) || (math.IsNaN(value) && !math.IsNaN(got)) {
+				t.Fatalf("normalized %s = %#v; want the float64 unchanged", name, got)
+			}
+		})
+	}
+}
+
+// TestNormalizationReadsTheDecimalItWrote pins the base each normalization path
+// parses in. Every one of them writes a decimal and reads it back, and a
+// single-digit value reads the same in any base — which is what every value these
+// paths are otherwise asked about amounts to, because the boundary values that
+// matter are all rejected by the parse and land in the big-integer path instead. A
+// two-digit value is the smallest one that says base ten.
+func TestNormalizationReadsTheDecimalItWrote(t *testing.T) {
+	tests := []struct {
+		name string
+		got  any
+		want any
+	}{
+		{name: "float to signed", got: floatNumber(42).normalized(), want: int64(42)},
+		{name: "float to negative signed", got: floatNumber(-42).normalized(), want: int64(-42)},
+		{name: "JSON integer", got: jsonNumber("42").normalized(), want: int64(42)},
+		{name: "JSON negative integer", got: jsonNumber("-42").normalized(), want: int64(-42)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.got != test.want {
+				t.Fatalf("normalized = %#v; want %#v", test.got, test.want)
+			}
+		})
+	}
 }
 
 func TestExactNumericComparison_boundaries(t *testing.T) {
@@ -93,12 +134,38 @@ func TestExactNumericComparison_boundaries(t *testing.T) {
 		// hands comparison an unsigned operand this small, so the equality is the
 		// routine's own contract rather than a reachable expression.
 		{name: "zero", number: 0, floating: 0},
+		// A fraction between zero and one is on the other side of that same end: it
+		// is not negative, so it has to reach the truncation and the remainder that
+		// distinguishes it from the integer it truncates to.
+		{name: "fraction below one", number: 0, floating: 0.5, order: -1},
 	}
 	for _, test := range unsignedCases {
 		t.Run("unsigned "+test.name, func(t *testing.T) {
 			order, unordered := test.number.compareFloat(test.floating)
 			if order != test.order || unordered {
 				t.Fatalf("compareFloat = %d, %v; want %d, false", order, unordered, test.order)
+			}
+		})
+	}
+
+	// compareUnsigned guards on the signed operand being negative, so zero is the
+	// end of that interval from the signed side: it is not negative, and must
+	// therefore compare as the magnitude it is rather than as less than everything.
+	unsignedPairs := []struct {
+		name     string
+		signed   signedNumber
+		unsigned unsignedNumber
+		order    int
+	}{
+		{name: "zero and zero"},
+		{name: "zero below", unsigned: 1, order: -1},
+		{name: "negative", signed: -1, order: -1},
+		{name: "greater magnitude", signed: 2, unsigned: 1, order: 1},
+	}
+	for _, test := range unsignedPairs {
+		t.Run("signed against unsigned "+test.name, func(t *testing.T) {
+			if order := test.signed.compareUnsigned(test.unsigned); order != test.order {
+				t.Fatalf("compareUnsigned = %d; want %d", order, test.order)
 			}
 		})
 	}
