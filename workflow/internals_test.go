@@ -1353,7 +1353,7 @@ func TestStoreDepthMatchesItsOverlay(t *testing.T) {
 	}
 	check(t, "merge", base.merge(branches...))
 
-	var changes []storeChange
+	changes := make([]storeChange, 0, len(branches))
 	for _, branch := range branches {
 		changes = append(changes, branch.changesSince(base)...)
 	}
