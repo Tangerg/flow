@@ -45,7 +45,7 @@ var (
 	ErrIncompatibleType      = errors.New("incompatible value type")
 	ErrInvalidSpec           = errors.New("invalid spec")
 	ErrDuplicateStep         = errors.New("duplicate step")
-	ErrJournalConflict       = errors.New("journal record already exists")
+	ErrJournalConflict       = errors.New("duplicate journal record")
 	ErrMissingPort           = errors.New("unwired input port")
 	ErrUnknownPort           = errors.New("unknown input port")
 	ErrUnknownOutlet         = errors.New("unknown outlet")

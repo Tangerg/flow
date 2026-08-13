@@ -179,6 +179,10 @@ func TestSurfacedErrorsNamePackageExactlyOnce(t *testing.T) {
 		"nil step to Run":   runError(t, nil),
 		"nil loop body":     runError(t, workflow.Loop(workflow.LoopConfig{ID: "l", Body: nil})),
 		"duplicate step ID": runError(t, workflow.Sequence(passthrough("same"), passthrough("same"))),
+		// The same conflict as "journal conflict", but reached during a run so a
+		// StepError supplies the prefix instead of Record. The two paths format
+		// separately, so both have to be checked.
+		"journal conflict during a run": recordedDuringARun(t),
 	}
 
 	for name, err := range errs {
@@ -203,4 +207,27 @@ func runError(t *testing.T, step workflow.Step) error {
 func passthrough(id string) workflow.Step {
 	return workflow.LeafFunc(id, workflow.Output("seed"),
 		func(_ context.Context, value int) (int, error) { return value, nil })
+}
+
+// recordedDuringARun reaches ErrJournalConflict the one way a single run can:
+// a record created after the run began is deliberately not replayed, so the
+// step it names still executes and then collides on its own identity. That is
+// the hazard Journal documents for a host that admits two runs at once.
+func recordedDuringARun(t *testing.T) error {
+	t.Helper()
+	journal := workflow.NewJournal()
+	claimTarget := workflow.LeafFunc("claim", workflow.Output("seed"),
+		func(_ context.Context, value int) (int, error) {
+			if err := journal.Record(workflow.JournalKey{ID: "target"}, value); err != nil {
+				t.Errorf("Record: %v", err)
+			}
+			return value, nil
+		})
+	_, err := workflow.Run(
+		t.Context(),
+		workflow.Sequence(claimTarget, passthrough("target")),
+		workflow.NewStore().WithOutput("seed", 1),
+		workflow.RunConfig{Journal: journal},
+	)
+	return err
 }

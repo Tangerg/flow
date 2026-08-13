@@ -106,7 +106,10 @@ func (j *Journal) Record(key JournalKey, value any) error {
 	if j == nil {
 		return errors.New("workflow: record journal: nil journal")
 	}
-	return j.insert(key, value)
+	if err := j.insert(key, value); err != nil {
+		return fmt.Errorf("workflow: record journal: %w", err)
+	}
+	return nil
 }
 
 // record stores a step's output. A nil Journal discards it, so callers need not
@@ -118,9 +121,13 @@ func (j *Journal) record(scope []ScopeFrame, id string, value any) error {
 	return j.insert(JournalKey{ID: id, Scope: scope}, value)
 }
 
+// insert is the write path both Record and record share. Its errors locate a
+// failure by scope alone, because the step ID and this package are context each
+// caller already supplies: Record from the key it was handed, an internal
+// caller from the [StepError] that wraps it.
 func (j *Journal) insert(key JournalKey, value any) error {
 	if err := key.validate(); err != nil {
-		return fmt.Errorf("workflow: record journal: %w", err)
+		return err
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -129,8 +136,7 @@ func (j *Journal) insert(key JournalKey, value any) error {
 		value:    value,
 		revision: nextRevision,
 	}); !inserted {
-		return fmt.Errorf("workflow: record journal step %q at %q: %w",
-			key.ID, formatScope(key.Scope), ErrJournalConflict)
+		return fmt.Errorf("%w at %q", ErrJournalConflict, formatScope(key.Scope))
 	}
 	j.revision = nextRevision
 	j.count++
