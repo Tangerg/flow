@@ -103,6 +103,33 @@ go test ./example -run Example -v
   and keep a kind-discriminated one such as `Spec` in
   `TestSpecFieldMatricesAgreeWithTheSpecStruct`. Both derive what they expect by
   reflecting over the struct, so neither becomes another list to maintain.
+- Name the package exactly once in an error. Each package reaches that
+  differently, and the difference is forced rather than chosen: `flow`'s
+  sentinels carry `flow:` because most of them reach a caller with nothing
+  wrapping them, so the locations it adds — `IndexError`, a switch case — state
+  only where. `workflow` and `expr` are the mirror image, because a `StepError`,
+  `GraphError`, `SpecError`, or `expr.Error` always supplies the name, so the
+  sentinels they wrap state only the condition. An error assembled from several
+  independent ones adds nothing of its own, the way `errors.Join` does not: a
+  fan-out of three suspensions names the package three times, not four.
+  `TestErrorsNameThePackageAtMostOnce` in `flow` and `expr`,
+  `TestSurfacedErrorsNamePackageExactlyOnce`, and
+  `TestAJoinedSuspensionNamesThePackageOncePerWait` hold each package to it.
+- Decode through `jsondoc.DecodeInto`. Every exported `UnmarshalJSON` here makes
+  the same promise — a nil receiver reported rather than a panic, the whole
+  document decoded, and the destination replaced only after complete success —
+  and eight of them once implemented it independently, where any one could have
+  assigned before checking its error. Supply a `decode` returning the value and
+  a `wrap` giving the boundary its own diagnostic; the definition types need the
+  second because a `GraphError` carries a field the plain boundaries have no
+  place for. A type whose text is identity also needs `MarshalJSON`, because
+  `encoding/json` replaces invalid UTF-8 by design and a wire type must refuse
+  rather than rename itself: `TestEveryIdentityBearingTypeRefusesToRenameItself`.
+- Say what a caller owns when an exported result is a slice or a map. Every one
+  in this repo is built fresh, and a signature cannot say so. `Scope`,
+  `Graph.Inputs`, `Journal.Keys`, `Registry.NodeSchema`, `Expr.Refs`, and
+  `Suspensions` each state it in one clause; a new one that stays silent reads
+  as uncertainty rather than as the convention it is.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out
