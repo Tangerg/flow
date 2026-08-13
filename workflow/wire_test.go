@@ -315,6 +315,44 @@ func TestTextAndDefinitionChecksDescribeAFieldTheSameWay(t *testing.T) {
 	}
 }
 
+// TestMarshalRejectsAConfigTooShortToBeADocument covers the one length a raw
+// config guard can be wrong about. A config is caller-supplied bytes rather than
+// something a decoder produced, so a single byte reaches the check that decides
+// whether to read it at all -- and a guard that skipped it would emit a document
+// nothing can read back.
+func TestMarshalRejectsAConfigTooShortToBeADocument(t *testing.T) {
+	malformed := json.RawMessage("}")
+	spec := workflow.Spec{Kind: workflow.KindLeaf, ID: "a", Type: "noop", Config: malformed}
+	if _, err := spec.MarshalJSON(); err == nil {
+		t.Fatal("Spec.MarshalJSON encoded a config that is not a JSON document")
+	}
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{{ID: "a", Type: "noop", Config: malformed}}}
+	if _, err := graph.MarshalJSON(); err == nil {
+		t.Fatal("Graph.MarshalJSON encoded a config that is not a JSON document")
+	}
+
+	// A kind that accepts no config must see a one-byte one as present. This config
+	// is a valid JSON document, so nothing downstream objects to it -- only the
+	// per-kind field matrix does, and only if it counts.
+	sequence := workflow.Spec{
+		Kind:   workflow.KindSequence,
+		Steps:  []workflow.Spec{{Kind: workflow.KindLeaf, ID: "a", Type: "noop"}},
+		Config: json.RawMessage("1"),
+	}
+	registry := workflow.NewRegistry().
+		MustRegisterNode("noop", func(spec workflow.NodeSpec) (workflow.Step, error) {
+			return workflow.Interrupt(spec.ID, nil), nil
+		})
+	if err := registry.ValidateSpec(sequence); !errors.Is(err, workflow.ErrInvalidSpec) {
+		t.Fatalf("ValidateSpec = %v; want the config rejected for a sequence", err)
+	}
+	// The same spec without the config is what says the config was the reason.
+	sequence.Config = nil
+	if err := registry.ValidateSpec(sequence); err != nil {
+		t.Fatalf("ValidateSpec without a config = %v; want nil", err)
+	}
+}
+
 // TestEveryIdentityBearingTypeRefusesToRenameItself pins the guarantee that
 // makes these types safe to persist: encoding/json replaces invalid UTF-8 by
 // design, so a type whose text is identity must refuse to encode rather than

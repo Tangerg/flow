@@ -744,6 +744,74 @@ func TestSequence_enforcesDefinitionNestingLimit(t *testing.T) {
 	}
 }
 
+// TestDefinitionNestingLimitCountsEveryCompositeOnce pins the level each composite
+// kind adds to the nesting depth. Every kind counts its own in its own line, and a
+// sequence was the only shape the limit had been measured on -- so one that counted
+// twice would halve the limit for that shape alone, and nothing would say so. Each
+// case here puts a single composite at the bottom of a stack of sequences, which
+// measures that one kind's level without building a thousand of them.
+func TestDefinitionNestingLimitCountsEveryCompositeOnce(t *testing.T) {
+	body := leafStep("body")
+	graph, err := workflow.NewRegistry().
+		MustRegisterNode("noop", func(spec workflow.NodeSpec) (workflow.Step, error) {
+			return workflow.Interrupt(spec.ID, nil), nil
+		}).
+		CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{ID: "node", Type: "noop"}}})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+	composites := map[string]workflow.Step{
+		"branch": workflow.Branch(workflow.BranchConfig{
+			ID: "branch",
+			Resolver: resolverNode(func(context.Context, workflow.Store) (string, error) {
+				return "case", nil
+			}),
+			Cases: map[string]workflow.Step{"case": body},
+		}),
+		"loop": workflow.Loop(workflow.LoopConfig{
+			ID:   "loop",
+			Body: body,
+			Condition: flow.NodeFunc[workflow.Store, bool](
+				func(context.Context, workflow.Store) (bool, error) { return true, nil },
+			),
+		}),
+		"iteration": workflow.Iteration(workflow.IterationConfig{
+			ID:         "each",
+			Input:      workflow.Output("items"),
+			Body:       body,
+			BodyOutput: workflow.Output("body"),
+		}),
+		"subgraph": workflow.Subgraph(workflow.SubgraphConfig{
+			ID:         "sub",
+			Inputs:     workflow.Inputs{"seed": workflow.Output("items")},
+			Body:       body,
+			BodyOutput: workflow.Output("body"),
+		}),
+		// A compiled graph's children are its nodes, which sit one level below it
+		// like any other composite's.
+		"graph": graph,
+	}
+	nest := func(step workflow.Step, levels int) workflow.Step {
+		for range levels {
+			step = workflow.Sequence(step)
+		}
+		return step
+	}
+
+	for name, composite := range composites {
+		t.Run(name, func(t *testing.T) {
+			// The composite's own child sits one level below it, so a stack this tall
+			// puts that child exactly at the limit.
+			if err := flow.Validate(nest(composite, workflow.MaxNestingDepth-1)); err != nil {
+				t.Fatalf("Validate at the nesting limit: %v", err)
+			}
+			if err := flow.Validate(nest(composite, workflow.MaxNestingDepth)); !errors.Is(err, workflow.ErrMaxDepth) {
+				t.Fatalf("Validate above the nesting limit = %v; want ErrMaxDepth", err)
+			}
+		})
+	}
+}
+
 // TestValidate_rejectsACompositeReusingAnEarlierStepID covers the claim a Branch
 // and a Loop make for their own ID against the steps around them. Running either
 // reports the collision too — the run claims each ID as it reaches it — so, as with
@@ -941,6 +1009,37 @@ func TestLeaf_rejectsExcessiveExecutionScopeDepth(t *testing.T) {
 	)
 	if !errors.Is(err, workflow.ErrMaxDepth) {
 		t.Fatalf("error = %v; want ErrMaxDepth", err)
+	}
+}
+
+// TestScopedComposite_admitsTheDeepestScopeItCanPush pins where a composite's own
+// depth boundary is. It counts the frame it is about to add, so an inherited scope
+// one short of the limit is the deepest one whose body can still run. Only the
+// accepting side says that: above the limit, rejection reads the same whether the
+// composite counts one frame or two.
+func TestScopedComposite_admitsTheDeepestScopeItCanPush(t *testing.T) {
+	ctx := t.Context()
+	for index := range workflow.MaxNestingDepth - 1 {
+		ctx = workflow.WithScope(ctx, fmt.Sprintf("scope-%d", index))
+	}
+	step := workflow.Loop(workflow.LoopConfig{
+		ID: "loop",
+		Body: workflow.Leaf(
+			"body",
+			workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+			flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in, nil }),
+		),
+		Condition: flow.NodeFunc[workflow.Store, bool](
+			func(context.Context, workflow.Store) (bool, error) { return true, nil },
+		),
+	})
+
+	out, err := workflow.Run(ctx, step, workflow.NewStore(), workflow.RunConfig{})
+	if err != nil {
+		t.Fatalf("Run at the deepest admissible scope: %v", err)
+	}
+	if got, err := workflow.Get[int](out, workflow.Output("body")); err != nil || got != 1 {
+		t.Fatalf("body output = %d, %v; want 1", got, err)
 	}
 }
 

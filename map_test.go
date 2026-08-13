@@ -160,13 +160,41 @@ func TestMap_concurrencyOneRunsOneCallAtATime(t *testing.T) {
 	}
 }
 
+// Two elements is the smallest input that can run concurrently, and so the
+// smallest one a scheduler can quietly hand to the sequential path instead.
+// Checking the results cannot tell the two apart -- both produce [2 3] -- so
+// require the calls to overlap: neither returns until both have started, which
+// only an unbounded Map can reach.
 func TestMap_zeroConcurrencyIsUnbounded(t *testing.T) {
-	node := flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
-		return value + 1, nil
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	node := flow.NodeFunc[int, int](func(ctx context.Context, value int) (int, error) {
+		started <- struct{}{}
+		select {
+		case <-release:
+			return value + 1, nil
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
 	})
-	got, err := flow.Map(node, flow.MapConfig{}).Run(t.Context(), []int{1, 2})
-	if err != nil || len(got) != 2 || got[0] != 2 || got[1] != 3 {
-		t.Fatalf("Map = %v, %v", got, err)
+
+	type result struct {
+		values []int
+		err    error
+	}
+	finished := make(chan result, 1)
+	go func() {
+		values, err := flow.Map(node, flow.MapConfig{}).Run(t.Context(), []int{1, 2})
+		finished <- result{values: values, err: err}
+	}()
+	for range 2 {
+		<-started
+	}
+	close(release)
+
+	got := <-finished
+	if got.err != nil || len(got.values) != 2 || got.values[0] != 2 || got.values[1] != 3 {
+		t.Fatalf("Map = %v, %v", got.values, got.err)
 	}
 }
 

@@ -704,6 +704,12 @@ func TestJSONSchemaError_ordersDeduplicatesAndHidesBackend(t *testing.T) {
 		strings.Index(message, "at '/a'") > strings.Index(message, "at '/z'") {
 		t.Fatalf("Error = %q; want stable, deduplicated path order", message)
 	}
+	// Every leaf is a diagnostic, so the joined text has no empty entry. Comparing
+	// two of these messages to each other cannot see one, because both would carry
+	// it.
+	if strings.HasPrefix(message, "; ") || strings.Contains(message, "; ; ") {
+		t.Fatalf("Error = %q; want no empty diagnostic among the leaves", message)
+	}
 	var backend *jschema.ValidationError
 	if errors.As(err, &backend) {
 		t.Fatal("JSON Schema backend escaped through the public error chain")

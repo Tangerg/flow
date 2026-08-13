@@ -34,6 +34,28 @@ func scopeText(scope []workflow.ScopeFrame) string {
 	return strings.Join(frames, "/")
 }
 
+// TestScopeFrame_StringIsDecimal covers the base an indexed frame displays in.
+// Every scope text asserted elsewhere comes from a run of three iterations, where
+// one digit reads the same in any base; a two-digit index is the smallest one that
+// says decimal. This text reaches a caller inside a StepError, so it is the form a
+// reader matches a scope against.
+func TestScopeFrame_StringIsDecimal(t *testing.T) {
+	for _, test := range []struct {
+		frame workflow.ScopeFrame
+		want  string
+	}{
+		{frame: workflow.ScopeFrame{ID: "loop", Indexed: true}, want: "loop[0]"},
+		{frame: workflow.ScopeFrame{ID: "loop", Indexed: true, Index: 11}, want: "loop[11]"},
+		{frame: workflow.ScopeFrame{ID: "subgraph"}, want: "subgraph"},
+	} {
+		t.Run(test.want, func(t *testing.T) {
+			if got := test.frame.String(); got != test.want {
+				t.Fatalf("String = %q; want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestScopeFrame_Validate(t *testing.T) {
 	invalidUTF8 := string([]byte{0xff})
 	tests := map[string]struct {

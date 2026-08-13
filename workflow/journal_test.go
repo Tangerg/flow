@@ -987,6 +987,17 @@ func TestAwaitFactory_requiresAWiredPort(t *testing.T) {
 	if _, err := workflow.AwaitFactory()(workflow.NodeSpec{ID: "a"}); !errors.Is(err, workflow.ErrMissingPort) {
 		t.Fatalf("err = %v; want ErrMissingPort", err)
 	}
+	// An await takes no config, and a JSON number is a whole config in one byte --
+	// the shortest one a length guard can be set too high to notice.
+	for _, config := range []json.RawMessage{json.RawMessage("1"), json.RawMessage(`{}`)} {
+		if _, err := workflow.AwaitFactory()(workflow.NodeSpec{
+			ID:     "a",
+			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("x")},
+			Config: config,
+		}); !errors.Is(err, flow.ErrInvalidConfig) {
+			t.Fatalf("config %s error = %v; want ErrInvalidConfig", config, err)
+		}
+	}
 	if _, err := workflow.AwaitFactory()(workflow.NodeSpec{
 		ID: "a",
 		Inputs: workflow.Inputs{

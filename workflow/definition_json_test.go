@@ -105,6 +105,25 @@ func TestDefinitionJSONPreservesDecoderTypeErrors(t *testing.T) {
 	}
 }
 
+// A body member is read when it holds anything but null, which a body of a single
+// byte is the shortest way to say: it is a JSON value, so it must be read and
+// rejected for what it is rather than skipped for being too short and reported as
+// a body that was never there.
+func TestDefinitionJSONReadsABodyOfEveryLength(t *testing.T) {
+	for name, document := range map[string]string{
+		"one byte":   `{"kind":"loop","id":"l","condition":"c","body":1}`,
+		"many bytes": `{"kind":"loop","id":"l","condition":"c","body":{"kind":"leaf"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var spec Spec
+			err := json.Unmarshal([]byte(document), &spec)
+			if err == nil || !strings.Contains(err.Error(), "/body") {
+				t.Fatalf("Unmarshal error = %v; want one located at /body", err)
+			}
+		})
+	}
+}
+
 func TestDecodeDefinitionInt(t *testing.T) {
 	const signBit = strconv.IntSize - 1
 	platformMax := uint64(1)<<signBit - 1

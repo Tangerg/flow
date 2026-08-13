@@ -407,6 +407,7 @@ func TestStore_arrayPathsUseCanonicalJSONPointerIndexes(t *testing.T) {
 		// Ten elements so a canonical index can carry the last digit. A shorter
 		// array cannot: every single digit is inside it.
 		WithOutput("wide", []any{0, 1, 2, 3, 4, 5, 6, 7, 8, "nine"}).
+		WithOutput("wider", []any{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, "eleven"}).
 		WithOutput("object", map[string]any{"01": "object key"})
 
 	if value, ok := store.Lookup(workflow.Output("array").Child("1")); !ok || value != "one" {
@@ -414,6 +415,11 @@ func TestStore_arrayPathsUseCanonicalJSONPointerIndexes(t *testing.T) {
 	}
 	if value, ok := store.Lookup(workflow.Output("wide").Child("9")); !ok || value != "nine" {
 		t.Fatalf("index 9 = %v, %v; want nine, true", value, ok)
+	}
+	// Every single digit reads the same in any base, so only a two-digit index says
+	// the accumulator is decimal.
+	if value, ok := store.Lookup(workflow.Output("wider").Child("11")); !ok || value != "eleven" {
+		t.Fatalf("index 11 = %v, %v; want eleven, true", value, ok)
 	}
 	for _, token := range []string{
 		"01",

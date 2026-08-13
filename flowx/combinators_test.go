@@ -325,6 +325,17 @@ func TestChain(t *testing.T) {
 	if got != 3 {
 		t.Fatalf("got %d, want 3", got)
 	}
+
+	// Repeating one node cannot say which nodes ran, or in what order: dropping the
+	// first and running another twice gives the same answer. Two nodes that do
+	// different things, composed in an order that does not commute, can.
+	double := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil })
+	if got, err = flowx.Chain(inc, double).Run(t.Context(), 5); err != nil || got != 12 {
+		t.Fatalf("Chain(inc, double)(5) = %d, %v; want 12, nil", got, err)
+	}
+	if got, err = flowx.Chain(double, inc).Run(t.Context(), 5); err != nil || got != 11 {
+		t.Fatalf("Chain(double, inc)(5) = %d, %v; want 11, nil", got, err)
+	}
 }
 
 func TestChain_emptyAndSingle(t *testing.T) {

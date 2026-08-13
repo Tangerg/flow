@@ -525,10 +525,15 @@ func TestSubgraphFactory_rejectsConfigAndInvalidBoundary(t *testing.T) {
 			return store, nil
 		},
 	)
-	if _, err := workflow.SubgraphFactory(body, workflow.Output("value"))(
-		workflow.NodeSpec{ID: "sub", Config: json.RawMessage(`{}`)},
-	); !errors.Is(err, flow.ErrInvalidConfig) {
-		t.Fatalf("config error = %v; want ErrInvalidConfig", err)
+	// A subgraph takes no config, so the shortest one there is has to be refused
+	// too: the guard reads a length, and every longer config would still exceed a
+	// bound one too high.
+	for _, config := range []json.RawMessage{json.RawMessage("1"), json.RawMessage(`{}`)} {
+		if _, err := workflow.SubgraphFactory(body, workflow.Output("value"))(
+			workflow.NodeSpec{ID: "sub", Config: config},
+		); !errors.Is(err, flow.ErrInvalidConfig) {
+			t.Fatalf("config %s error = %v; want ErrInvalidConfig", config, err)
+		}
 	}
 	if _, err := workflow.SubgraphFactory(nil, workflow.Output("value"))(
 		workflow.NodeSpec{ID: "sub"},

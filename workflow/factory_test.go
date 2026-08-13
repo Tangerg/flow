@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/Tangerg/flow"
@@ -195,6 +196,37 @@ func sumPorts() workflow.NodeFactory {
 			}), nil
 		},
 	)
+}
+
+// TestBindFactory_readsAConfigOfEveryLength covers the length a config guard can be
+// wrong about. A JSON number is a whole document in one byte, so it is the shortest
+// config there is -- and a guard set one too high would hand the factory the zero
+// value of its config type, which reads as a configured node rather than an error.
+func TestBindFactory_readsAConfigOfEveryLength(t *testing.T) {
+	factory := workflow.BindFactory(
+		func(offset int, _ workflow.Inputs) (workflow.Binder[int], error) {
+			return workflow.BinderFunc[int](func(workflow.Store) (int, error) { return offset, nil }), nil
+		},
+		func(int) (flow.Node[int, int], error) {
+			return flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in, nil }), nil
+		},
+	)
+	for _, want := range []int{7, 70} {
+		step, err := factory(workflow.NodeSpec{
+			ID:     "n",
+			Config: json.RawMessage(strconv.Itoa(want)),
+		})
+		if err != nil {
+			t.Fatalf("BindFactory with config %d: %v", want, err)
+		}
+		out, err := step.Run(t.Context(), workflow.NewStore())
+		if err != nil {
+			t.Fatalf("Run with config %d: %v", want, err)
+		}
+		if got, err := workflow.Get[int](out, workflow.Output("n")); err != nil || got != want {
+			t.Fatalf("output = %d, %v; want %d", got, err, want)
+		}
+	}
 }
 
 func TestBindFactory_bindsNamedPorts(t *testing.T) {

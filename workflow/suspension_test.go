@@ -860,6 +860,34 @@ func TestSuspension_errorMessage(t *testing.T) {
 	}
 }
 
+// TestSuspension_fanOutMessageNamesEveryWaitOnce pins the envelope a fan-out
+// reports. Suspensions() gives a caller the structured waits, but the error's own
+// text is what reaches a log, and nothing had asked for it -- so an empty reason
+// joined in front of the real ones would read as a wait that gave none.
+func TestSuspension_fanOutMessageNamesEveryWaitOnce(t *testing.T) {
+	wait := func(id string) workflow.Step {
+		return workflow.Leaf(
+			id,
+			workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+			flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+				return 0, workflow.Suspend("waiting on " + id)
+			}),
+		)
+	}
+
+	_, err := workflow.Run(
+		t.Context(),
+		workflow.Parallel(workflow.ParallelConfig{Steps: []workflow.Step{wait("a"), wait("b")}}),
+		workflow.NewStore(),
+		workflow.RunConfig{},
+	)
+	want := `2 steps suspended: workflow: step "a" suspended: waiting on a; ` +
+		`workflow: step "b" suspended: waiting on b`
+	if err == nil || err.Error() != want {
+		t.Fatalf("Run error = %v; want %q", err, want)
+	}
+}
+
 func TestSuspension_keyAndJSONOwnTheirStructure(t *testing.T) {
 	suspension := &workflow.Suspension{
 		ID:    `approve"item`,
