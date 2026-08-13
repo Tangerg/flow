@@ -898,3 +898,32 @@ func TestParse_reportsAnUnknownFunctionBeforeItsArity(t *testing.T) {
 		})
 	}
 }
+
+// TestOrdering_comparesAcrossTheSignedUnsignedBoundary pins the one ordering
+// that cannot be decided by converting to a common integer type: a negative
+// value against a magnitude only uint64 holds. Either conversion would change a
+// value, so the sign settles the order by itself.
+func TestOrdering_comparesAcrossTheSignedUnsignedBoundary(t *testing.T) {
+	tests := map[string]bool{
+		"-1 < 18446744073709551615":                   true,
+		"-1 > 18446744073709551615":                   false,
+		"-1 >= 18446744073709551615":                  false,
+		"18446744073709551615 > -1":                   true,
+		"18446744073709551615 < -1":                   false,
+		"0 < 9223372036854775808":                     true,
+		"1 < 18446744073709551615":                    true,
+		"1 > 18446744073709551615":                    false,
+		"18446744073709551615 > 1":                    true,
+		"9223372036854775808 <= -1":                   false,
+		"-9223372036854775808 < 9223372036854775808":  true,
+		"-9223372036854775808 >= 9223372036854775808": false,
+	}
+	for source, want := range tests {
+		t.Run(source, func(t *testing.T) {
+			got, err := expr.MustParse(source).Bool(workflow.NewStore())
+			if err != nil || got != want {
+				t.Fatalf("%s = %v, %v; want %v", source, got, err, want)
+			}
+		})
+	}
+}

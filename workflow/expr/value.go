@@ -200,8 +200,10 @@ func (b binaryOperator) apply(left, right operand) (any, error) {
 	if result, handled, err := b.applyEquality(left, right); handled {
 		return result, err
 	}
-	if order, unordered, ok := left.compareNumber(right); ok && b.ordering() {
-		return b.applyOrder(order, unordered), nil
+	if b.ordering() {
+		if order, unordered, ok := left.compareNumber(right); ok {
+			return b.applyOrder(order, unordered), nil
+		}
 	}
 	return b.applyArithmetic(left, right)
 }
@@ -237,7 +239,7 @@ func (b binaryOperator) applyArithmetic(left, right operand) (any, error) {
 			return b.applyInt(li, ri)
 		}
 	}
-	if value, ok, err := b.applyUnsigned(left, right); ok {
+	if value, handled, err := b.applyUnsigned(left, right); handled {
 		return value, err
 	}
 	leftFloat, leftOK := left.asFloat()
@@ -475,7 +477,9 @@ func applyDividable[T int64 | uint64 | float64](b binaryOperator, left, right T)
 // applyUnsigned handles arithmetic when at least one integer needs uint64's
 // range. Small unsigned values normalize to int64, so a mixed pair can be
 // converted without loss only when its signed operand is non-negative.
-func (b binaryOperator) applyUnsigned(left, right operand) (any, bool, error) {
+func (b binaryOperator) applyUnsigned(
+	left, right operand,
+) (result any, handled bool, err error) {
 	leftInteger, leftOK := left.integer()
 	rightInteger, rightOK := right.integer()
 	if !leftOK || !rightOK {
