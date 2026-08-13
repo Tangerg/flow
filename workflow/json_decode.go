@@ -43,15 +43,8 @@ func (j jsonDocument) value() (any, error) {
 }
 
 func (j jsonDocument) object() (map[string]any, error) {
-	value, err := j.value()
-	if err != nil {
-		return nil, err
-	}
-	object, ok := value.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("expected object, got %s", jsonValue{raw: value}.kind())
-	}
-	return object, nil
+	object, err := strictJSON.Object(j)
+	return object, translateJSONError(err)
 }
 
 func (j jsonObject) require(kind string, required ...string) error {

@@ -224,3 +224,47 @@ func TestValidateFragmentReportsWholeDocumentDepthAndPath(t *testing.T) {
 		t.Fatalf("whole document at the limit: %v", err)
 	}
 }
+
+// TestKindNamesEveryDecodedShape covers the vocabulary every boundary built on
+// this package uses to report a wrong shape, including the fallback for a value
+// that never came from Value.
+func TestKindNamesEveryDecodedShape(t *testing.T) {
+	codec := Codec{MaxDepth: 8}
+	documents := map[string]string{
+		"null":    `null`,
+		"boolean": `true`,
+		"number":  `1`,
+		"string":  `"s"`,
+		"array":   `[]`,
+		"object":  `{}`,
+	}
+	for want, document := range documents {
+		t.Run(want, func(t *testing.T) {
+			value, err := codec.Value([]byte(document))
+			if err != nil {
+				t.Fatalf("Value: %v", err)
+			}
+			if got := Kind(value); got != want {
+				t.Fatalf("Kind(%s) = %q; want %q", document, got, want)
+			}
+		})
+	}
+	if got := Kind(strings.NewReader("")); got == "" {
+		t.Fatal("Kind returned an empty description for a value outside the JSON domain")
+	}
+}
+
+func TestObjectRequiresOneJSONObject(t *testing.T) {
+	codec := Codec{MaxDepth: 8}
+	object, err := codec.Object([]byte(`{"a":1}`))
+	if err != nil || len(object) != 1 {
+		t.Fatalf("Object = %v, %v; want one member", object, err)
+	}
+	if _, err := codec.Object([]byte(`[]`)); err == nil ||
+		!strings.Contains(err.Error(), "expected object, got array") {
+		t.Fatalf("Object([]) error = %v; want a wrong-shape report", err)
+	}
+	if _, err := codec.Object([]byte(`{`)); err == nil {
+		t.Fatal("Object accepted a malformed document")
+	}
+}

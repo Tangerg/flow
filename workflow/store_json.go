@@ -7,6 +7,8 @@ import (
 	"maps"
 	"slices"
 	"unicode/utf8"
+
+	"github.com/Tangerg/flow/internal/jsondoc"
 )
 
 var (
@@ -152,7 +154,7 @@ func (s *Store) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf(
 				"workflow: unmarshal store node %q: expected object, got %s",
 				nodeID,
-				jsonValue{raw: value}.kind(),
+				jsondoc.Kind(value),
 			)
 		}
 		nodes[nodeID] = values
@@ -177,27 +179,4 @@ func (s *Store) UnmarshalJSON(data []byte) error {
 		*s = Store{snapshot: &storeSnapshot{data: nextData}}
 	}
 	return nil
-}
-
-type jsonValue struct {
-	raw any
-}
-
-func (j jsonValue) kind() string {
-	switch j.raw.(type) {
-	case nil:
-		return "null"
-	case bool:
-		return "boolean"
-	case json.Number:
-		return "number"
-	case string:
-		return "string"
-	case []any:
-		return "array"
-	case map[string]any:
-		return "object"
-	default:
-		return fmt.Sprintf("%T", j.raw)
-	}
 }

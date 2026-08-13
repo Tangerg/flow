@@ -69,12 +69,8 @@ func (s *SwitchSpec) UnmarshalJSON(data []byte) error {
 }
 
 func decodeJSONObject(data []byte, dst any) error {
-	document, err := strictJSON.Value(data)
-	if err != nil {
+	if _, err := strictJSON.Object(data); err != nil {
 		return translateJSONError(err)
-	}
-	if _, ok := document.(map[string]any); !ok {
-		return errors.New("document must be an object")
 	}
 	return translateJSONError(strictJSON.DecodeParsed(data, dst))
 }

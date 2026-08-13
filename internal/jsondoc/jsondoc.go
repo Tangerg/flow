@@ -64,6 +64,44 @@ func (c Codec) Validate(data []byte) error {
 	return err
 }
 
+// Kind names the JSON kind of a value produced by [Codec.Value]. It is the
+// vocabulary of the domain this package decodes into, so every boundary built
+// on it reports a wrong shape the same way.
+func Kind(value any) string {
+	switch value.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "boolean"
+	case json.Number:
+		return "number"
+	case string:
+		return "string"
+	case []any:
+		return "array"
+	case map[string]any:
+		return "object"
+	default:
+		return fmt.Sprintf("%T", value)
+	}
+}
+
+// Object is [Codec.Value] for the common case of a document that must be one
+// JSON object. Stating that requirement here keeps every boundary that decodes
+// into a named member set from restating it, and from naming a wrong shape
+// differently.
+func (c Codec) Object(data []byte) (map[string]any, error) {
+	value, err := c.Value(data)
+	if err != nil {
+		return nil, err
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("expected object, got %s", Kind(value))
+	}
+	return object, nil
+}
+
 // Marshal encodes value and then validates the complete resulting document.
 // Validation reads only the encoded bytes, so it does not invoke a custom
 // MarshalJSON method a second time for any encoded occurrence. Callers that

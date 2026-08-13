@@ -193,13 +193,9 @@ func (j *Journal) UnmarshalJSON(data []byte) error {
 }
 
 func (j *journalDecoder) decode(data []byte) error {
-	value, err := jsonDocument(data).value()
+	raw, err := jsonDocument(data).object()
 	if err != nil {
 		return err
-	}
-	raw, ok := value.(map[string]any)
-	if !ok {
-		return errors.New("document must be an object")
 	}
 	document := jsonObject(raw)
 	if fieldErr := document.allow(journalFieldVersion, journalFieldRecords); fieldErr != nil {

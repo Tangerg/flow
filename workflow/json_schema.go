@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Tangerg/flow/internal/jsondoc"
 	jschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -134,7 +135,7 @@ func (s *schemaDialectValidator) validate(value any) error {
 				"$schema at %s must be a string naming %q, got %s",
 				s.location(),
 				draft2020URL,
-				(jsonValue{raw: dialect}).kind(),
+				jsondoc.Kind(dialect),
 			)
 		}
 		if !isDraft2020(name) {

@@ -1,7 +1,6 @@
 package workflow
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -758,15 +757,6 @@ func TestSpecCompiler_defendsItsValidatedInputContract(t *testing.T) {
 }
 
 func TestStoreInternals_reportStableFallbacks(t *testing.T) {
-	for _, value := range []jsonValue{
-		{raw: map[string]any{}},
-		{raw: bytes.NewBuffer(nil)},
-	} {
-		if value.kind() == "" {
-			t.Fatal("kind returned an empty description")
-		}
-	}
-
 	changes := make([]storeChange, 0, storeOverlayLimit*2+1)
 	base := NewStore()
 	for index := range storeOverlayLimit*2 + 1 {

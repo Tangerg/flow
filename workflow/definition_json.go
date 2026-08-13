@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/Tangerg/flow/internal/jsondoc"
 	"github.com/Tangerg/flow/internal/jsonnum"
 )
 
@@ -394,7 +395,7 @@ func decodeDefinitionInt(field string, data json.RawMessage) (int, error) {
 		return 0, fmt.Errorf(
 			"json field %s: expected integer, got %s",
 			field,
-			(jsonValue{raw: value}).kind(),
+			jsondoc.Kind(value),
 		)
 	}
 	integer, err := jsonnum.ParseInteger(number.String())
