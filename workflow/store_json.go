@@ -54,10 +54,8 @@ func (s storeJSONDocument) validateNames() error {
 
 func (s Store) jsonDocument() storeJSONDocument {
 	document := make(storeJSONDocument)
-	if s.snapshot != nil {
-		for identity, cell := range s.snapshot.data {
-			document.put(identity, cell)
-		}
+	for identity, cell := range s.baseCells() {
+		document.put(identity, cell)
 	}
 	s.delta.applyOverlay(document.put)
 	return document

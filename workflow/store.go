@@ -437,16 +437,24 @@ func (s Store) lookupCell(nodeID, key string) (cell, bool) {
 	return c, true
 }
 
+// base returns the cell records under the overlay. A Store that has never been
+// flattened carries no snapshot; that is the same Store as one carrying an empty
+// snapshot, so this reports the empty map for both and readers below index,
+// range, and copy it without asking which they hold.
+func (s Store) baseCells() storeCells {
+	if s.snapshot == nil {
+		return nil
+	}
+	return s.snapshot.data
+}
+
 func (s Store) lookupRecord(identity storeKey) (cell, bool) {
 	for delta := s.delta; delta != nil; delta = delta.parent {
 		if delta.key == identity {
 			return delta.cell, true
 		}
 	}
-	if s.snapshot == nil {
-		return cell{}, false
-	}
-	c, ok := s.snapshot.data[identity]
+	c, ok := s.baseCells()[identity]
 	return c, ok
 }
 
@@ -457,12 +465,9 @@ func (s Store) lookupRecord(identity storeKey) (cell, bool) {
 // than by the number of cells.
 func (s Store) cells() iter.Seq2[storeKey, cell] {
 	return func(yield func(storeKey, cell) bool) {
-		if s.snapshot == nil && s.delta == nil {
-			return
-		}
 		if s.delta == nil {
 			// Nothing shadows the snapshot, so no tracking set is needed.
-			for key, record := range s.snapshot.data {
+			for key, record := range s.baseCells() {
 				if !yield(key, record) {
 					return
 				}
@@ -480,10 +485,7 @@ func (s Store) cells() iter.Seq2[storeKey, cell] {
 				return
 			}
 		}
-		if s.snapshot == nil {
-			return
-		}
-		for key, record := range s.snapshot.data {
+		for key, record := range s.baseCells() {
 			if _, seen := shadowed[key]; seen {
 				continue
 			}
@@ -497,14 +499,8 @@ func (s Store) cells() iter.Seq2[storeKey, cell] {
 // materialize returns a mutable copy of the Store's complete flat cell-record
 // map, including private removal markers needed by enclosing composites.
 func (s Store) materialize() storeCells {
-	capacity := 0
-	if s.snapshot != nil {
-		capacity = len(s.snapshot.data)
-	}
-	data := make(storeCells, capacity+s.depth)
-	if s.snapshot != nil {
-		maps.Copy(data, s.snapshot.data)
-	}
+	data := make(storeCells, len(s.baseCells())+s.depth)
+	maps.Copy(data, s.baseCells())
 
 	s.delta.applyOverlay(func(key storeKey, record cell) {
 		data[key] = record

@@ -272,12 +272,13 @@ func (s schemaLoader) decode(document jsonDocument, dst any) error {
 	return document.decodeParsed(dst)
 }
 
+// validateConfig checks a node config against this schema. An absent config
+// stands in as the empty object, so a schema with required members rejects it
+// rather than skipping the check. A node type that declares no schema still
+// requires a config that is a well-formed strict JSON document.
 func (c *compiledSchema) validateConfig(config json.RawMessage) error {
 	data := config
 	if len(data) == 0 {
-		if c == nil {
-			return nil
-		}
 		data = json.RawMessage(`{}`)
 	}
 	doc, err := jsonDocument(data).value()
