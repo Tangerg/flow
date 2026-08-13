@@ -2,6 +2,7 @@ package workflow_test
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -235,5 +236,40 @@ func TestSpecRoundTripsEveryKind(t *testing.T) {
 				t.Fatalf("re-encoding moved bytes:\nfirst:  %s\nsecond: %s", first, second)
 			}
 		})
+	}
+}
+
+// The nesting limit is shared, but each boundary counts its own unit, so a Spec
+// meets the JSON one first: every level spends a step object and a steps array.
+// What matters is that the boundary rejects cleanly and that whatever it accepts
+// can be read back — a definition that encodes to a document it cannot decode
+// would be persisted and then refused on resume.
+func TestSpecNestingStopsAtTheJSONBoundaryAndStaysReadable(t *testing.T) {
+	nest := func(levels int) workflow.Spec {
+		spec := workflow.Spec{Kind: workflow.KindLeaf, ID: "leaf", Type: "registered"}
+		for range levels {
+			spec = workflow.Spec{Kind: workflow.KindSequence, Steps: []workflow.Spec{spec}}
+		}
+		return spec
+	}
+
+	// Two JSON containers per level, so the limit lands at half of it.
+	const deepest = workflow.MaxNestingDepth/2 - 1
+
+	encoded, err := json.Marshal(nest(deepest))
+	if err != nil {
+		t.Fatalf("Marshal at the deepest accepted nesting: %v", err)
+	}
+	var decoded workflow.Spec
+	if err = json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal of what Marshal produced: %v", err)
+	}
+	if !reflect.DeepEqual(decoded, nest(deepest)) {
+		t.Fatal("the deepest accepted Spec did not survive its round trip")
+	}
+
+	_, err = json.Marshal(nest(deepest + 1))
+	if !errors.Is(err, workflow.ErrMaxDepth) {
+		t.Fatalf("Marshal one level deeper = %v; want ErrMaxDepth", err)
 	}
 }

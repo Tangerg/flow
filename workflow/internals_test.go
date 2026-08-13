@@ -1308,3 +1308,72 @@ func TestGraphPlanAdjacencyListsAreTransposes(t *testing.T) {
 		})
 	}
 }
+
+// depth caches the length of the overlay chain so a write does not have to walk
+// it. Only withDelta and compact set it — one adds a link and increments, the
+// other drops the chain and returns to zero — but everything that bounds an
+// overlay reads it, so a drift would either let a Store grow past
+// storeOverlayLimit unnoticed or flatten one that had not reached it.
+func TestStoreDepthMatchesItsOverlay(t *testing.T) {
+	links := func(s Store) int {
+		count := 0
+		for delta := s.delta; delta != nil; delta = delta.parent {
+			count++
+		}
+		return count
+	}
+	check := func(t *testing.T, label string, s Store) Store {
+		t.Helper()
+		if s.depth != links(s) {
+			t.Fatalf("%s: depth = %d; overlay has %d links", label, s.depth, links(s))
+		}
+		if s.depth > storeOverlayLimit {
+			t.Fatalf("%s: depth %d exceeds the limit %d", label, s.depth, storeOverlayLimit)
+		}
+		return s
+	}
+
+	check(t, "zero value", Store{})
+	check(t, "NewStore", NewStore())
+
+	// Enough writes to cross the compaction boundary several times.
+	store := NewStore()
+	for index := range storeOverlayLimit*3 + 7 {
+		store = check(t, fmt.Sprintf("write %d", index), store.WithOutput(fmt.Sprintf("n%03d", index), index))
+	}
+
+	base := check(t, "compact", store.compact())
+	check(t, "sharedBase", store.sharedBase())
+	check(t, "bounded", store.bounded())
+
+	// Composition paths: each ends by bounding an overlay it extended.
+	branches := make([]Store, 0, 4)
+	for index := range 4 {
+		branches = append(branches, base.WithOutput(fmt.Sprintf("branch%d", index), index))
+	}
+	check(t, "merge", base.merge(branches...))
+
+	var changes []storeChange
+	for _, branch := range branches {
+		changes = append(changes, branch.changesSince(base)...)
+	}
+	check(t, "withChanges", base.withChanges(changes))
+
+	owned := nodeSet{}
+	for index := range 8 {
+		owned[fmt.Sprintf("n%03d", index)] = struct{}{}
+	}
+	check(t, "withoutNodes", base.withoutNodes(owned))
+	check(t, "withoutNodes on an overlay", store.withoutNodes(owned))
+
+	encoded, err := json.Marshal(store)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded Store
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	check(t, "decoded", decoded)
+	check(t, "write after decoding", decoded.WithOutput("later", 1))
+}

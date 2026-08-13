@@ -55,6 +55,13 @@ var (
 // boundaries, including programmatic definitions, JSON values, Journal scopes,
 // and expressions compiled by package expr. Keeping one limit prevents a value
 // from passing one boundary only to exhaust the stack in the next one.
+//
+// Each boundary counts its own unit of recursion, so a value crossing several is
+// bounded by whichever it reaches first. A nested [Spec] spends two JSON
+// containers per level — the step object and its steps array — so one that will
+// be persisted nests about half as deep as one held only in memory. Both are
+// rejected cleanly rather than by exhausting the stack, which is what the shared
+// limit is for.
 const MaxNestingDepth = 1024
 
 // Definition diagnostic fields are shared by strict validation, compilation,
