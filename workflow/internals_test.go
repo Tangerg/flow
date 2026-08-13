@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Tangerg/flow"
@@ -887,6 +888,112 @@ func TestLocateSpecError_passesThroughAnErrorItCannotLocate(t *testing.T) {
 	}
 	if got := locateSpecError(nil, "steps", "0"); got != nil {
 		t.Fatalf("locateSpecError(nil) = %v; want nil", got)
+	}
+}
+
+// storeDerivers is the fan-out width the sharing test uses: enough goroutines to
+// interleave, few enough to stay an ordinary unit test.
+const storeDerivers = 8
+
+// deriveConcurrently hands one Store to every deriver at once. Each reads the
+// shared base before writing, so the race detector sees the reads and the writes
+// overlap, and returns what it derived.
+func deriveConcurrently(t *testing.T, base Store) []Store {
+	t.Helper()
+	derived := make([]Store, storeDerivers)
+	reads := make([]int, storeDerivers)
+	var group sync.WaitGroup
+	for index := range storeDerivers {
+		group.Go(func() {
+			value, err := Get[int](base, At("seed", "key-00"))
+			if err != nil {
+				t.Errorf("deriver %d read the shared base: %v", index, err)
+			}
+			reads[index] = value
+			derived[index] = base.WithOutput(fmt.Sprintf("node-%d", index), index)
+		})
+	}
+	group.Wait()
+	for index, read := range reads {
+		if read != 0 {
+			t.Fatalf("deriver %d read %d from the shared base; want 0", index, read)
+		}
+	}
+	return derived
+}
+
+// assertDerivationIsPrivate checks that a derivation holds its own write and no
+// other deriver's: that is what makes handing one Store to all of them safe.
+func assertDerivationIsPrivate(t *testing.T, derived []Store) {
+	t.Helper()
+	for index, store := range derived {
+		if got, err := Get[int](store, Output(fmt.Sprintf("node-%d", index))); err != nil || got != index {
+			t.Fatalf("deriver %d = %d, %v; want %d", index, got, err, index)
+		}
+		for other := range storeDerivers {
+			if other == index {
+				continue
+			}
+			if _, present := store.Lookup(Output(fmt.Sprintf("node-%d", other))); present {
+				t.Fatalf("deriver %d saw deriver %d's write", index, other)
+			}
+		}
+	}
+}
+
+// assertBaseSurvives checks that every derivation still reads the whole base, from
+// the snapshot behind the overlay as well as the overlay itself.
+func assertBaseSurvives(t *testing.T, derived []Store, base Store) {
+	t.Helper()
+	last := fmt.Sprintf("key-%02d", storeOverlayLimit-1)
+	for index, store := range derived {
+		if got, err := Get[int](store, At("seed", last)); err != nil || got != storeOverlayLimit-1 {
+			t.Fatalf("deriver %d lost the snapshot: %d, %v", index, got, err)
+		}
+		if got, err := Get[int](store, At("overlay", last)); err != nil || got != storeOverlayLimit-1 {
+			t.Fatalf("deriver %d lost the overlay: %d, %v", index, got, err)
+		}
+	}
+	if _, present := base.Lookup(Output("node-0")); present {
+		t.Fatal("a derivation wrote into the shared base")
+	}
+}
+
+// TestStore_sharesOneBaseAcrossConcurrentDerivers pins what the whole fan-out
+// design rests on: a derivation is a new value, so one Store can be handed to every
+// branch at once. Nothing tested it directly. Concurrent runs reach it through a
+// composite, where a race would surface as a failure somewhere else entirely, and
+// the benchmarks that watch for the flattening cliff measure cost rather than
+// correctness.
+//
+// Both shapes a fan-out can hand out are covered. A base at the overlay limit makes
+// every deriver flatten the same snapshot and overlay for itself, which is the
+// heaviest concurrent read of one Store there is; sharedBase flattens once and hands
+// out a snapshot nobody has to walk. A flattening that decided to remember its
+// result would fail the first shape: the race detector reports it writing into the
+// snapshot every deriver is reading.
+func TestStore_sharesOneBaseAcrossConcurrentDerivers(t *testing.T) {
+	atLimit := NewStore()
+	for index := range storeOverlayLimit {
+		atLimit = atLimit.WithCell("seed", fmt.Sprintf("key-%02d", index), index)
+	}
+	// Compact once, then fill the overlay again. A Store in a running workflow has a
+	// snapshot behind its overlay, and that snapshot is what a flattening reads
+	// through.
+	atLimit = atLimit.sharedBase()
+	for index := range storeOverlayLimit {
+		atLimit = atLimit.WithCell("overlay", fmt.Sprintf("key-%02d", index), index)
+	}
+
+	for name, base := range map[string]Store{
+		"each deriver flattens": atLimit,
+		"flattened once":        atLimit.sharedBase(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			derived := deriveConcurrently(t, base)
+			assertDerivationIsPrivate(t, derived)
+			assertBaseSurvives(t, derived, base)
+		})
 	}
 }
 

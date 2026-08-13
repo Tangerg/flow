@@ -92,7 +92,10 @@ go test ./example -run Example -v
   the snapshot separately and the fan-out costs one copy per deriver.
   `BenchmarkParallelBaseScaling`, `BenchmarkIterationBaseScaling`, and
   `BenchmarkGraphRunBaseScaling` vary the input overlay length so a new fan-out
-  site that skips this shows up as an allocation cliff at the limit.
+  site that skips this shows up as an allocation cliff at the limit. Those measure
+  cost; `TestStore_sharesOneBaseAcrossConcurrentDerivers` measures correctness, and
+  it is what a flattening that decided to remember its result would fail — the race
+  detector reports it writing into the snapshot every deriver is reading.
 - State a wire member set once where you can. `expr` encodes and decodes through
   the same struct tags, so its members cannot drift. `workflow` states some sets
   twice on purpose: an explicit member list, or the embedded JSON Schema, rejects
