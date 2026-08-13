@@ -744,6 +744,38 @@ func TestSequence_enforcesDefinitionNestingLimit(t *testing.T) {
 	}
 }
 
+// TestValidate_rejectsACompositeReusingAnEarlierStepID covers the claim a Branch
+// and a Loop make for their own ID against the steps around them. Running either
+// reports the collision too — the run claims each ID as it reaches it — so, as with
+// a case colliding with its branch, the definition check is observable only before
+// execution, which is where a compiled workflow asks. See
+// TestBranch_rejectsACaseIDCollisionBeforeRunning for the same rule one level in.
+func TestValidate_rejectsACompositeReusingAnEarlierStepID(t *testing.T) {
+	for name, composite := range map[string]workflow.Step{
+		"branch": workflow.Branch(workflow.BranchConfig{
+			ID: "taken",
+			Resolver: resolverNode(func(context.Context, workflow.Store) (string, error) {
+				return "case", nil
+			}),
+			Cases: map[string]workflow.Step{"case": leafStep("case")},
+		}),
+		"loop": workflow.Loop(workflow.LoopConfig{
+			ID:   "taken",
+			Body: leafStep("body"),
+			Condition: flow.NodeFunc[workflow.Store, bool](
+				func(context.Context, workflow.Store) (bool, error) { return true, nil },
+			),
+		}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			step := workflow.Sequence(workflow.Interrupt("taken", nil), composite)
+			if err := flow.Validate(step); !errors.Is(err, workflow.ErrDuplicateStep) {
+				t.Fatalf("Validate error = %v; want ErrDuplicateStep", err)
+			}
+		})
+	}
+}
+
 func TestWorkflowDefinitionsParticipateInFlowValidation(t *testing.T) {
 	var calls int
 	first := flow.NodeFunc[workflow.Store, workflow.Store](

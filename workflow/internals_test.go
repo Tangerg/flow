@@ -131,6 +131,32 @@ func TestLoopStop_resamplesCancellationAfterJournalRecord(t *testing.T) {
 	}
 }
 
+// TestLoopStop_cancellationOutranksTheConditionsOwnError pins the order of the
+// two checks a loop makes after its condition runs: the cancellation sampled at
+// that boundary is reported, not the error the condition returned while racing it.
+// A condition that honours its context fails with the cause anyway, which is what
+// hides the order; one that fails for its own reason is where they differ.
+func TestLoopStop_cancellationOutranksTheConditionsOwnError(t *testing.T) {
+	cause := errors.New("cancel while the condition ran")
+	conditionErr := errors.New("condition failed for its own reason")
+	cancelCtx := ctxtest.CancelAtCheck(t.Context(), 2, cause)
+	ctx := withConfig(cancelCtx, RunConfig{Journal: NewJournal()})
+
+	execution := loopExecution{
+		loop: loopStep{config: LoopConfig{
+			ID: "loop",
+			Condition: flow.NodeFunc[Store, bool](func(context.Context, Store) (bool, error) {
+				return true, conditionErr
+			}),
+		}},
+		run: runFrom(ctx),
+	}
+	stop, err := execution.stop(ctx, NewStore())
+	if !errors.Is(err, cause) || errors.Is(err, conditionErr) || stop {
+		t.Fatalf("stop = %t, error = %v; want the cancellation cause alone", stop, err)
+	}
+}
+
 func TestBranch_resamplesCancellationBeforeCaseAdmission(t *testing.T) {
 	cause := errors.New("cancel after decision")
 	for _, cancelAt := range []int{4, 5} {
@@ -179,17 +205,25 @@ func TestGatedStep_resamplesCancellationAroundBypassCommit(t *testing.T) {
 	}
 }
 
-func TestSubgraphBind_rejectsCancellationBeforeInputRead(t *testing.T) {
-	cause := errors.New("cancel before subgraph input")
-	ctx, cancel := context.WithCancelCause(t.Context())
-	cancel(cause)
-	execution := subgraphExecution{
-		subgraph: subgraphStep{inputs: Inputs{"seed": Output("missing")}},
-		outer:    NewStore(),
-	}
-	_, err := execution.bind(ctx)
-	if !errors.Is(err, cause) {
-		t.Fatalf("bind error = %v; want cancellation cause", err)
+// TestSubgraphBind_rejectsCancellationAroundEveryInputRead pins both checks a
+// subgraph makes around one input read: before it, and after it, where the read's
+// own failure competes. The input is missing either way, so the second check is
+// what decides whether a cancelled subgraph reports the cancellation or blames an
+// input it was never going to finish reading.
+func TestSubgraphBind_rejectsCancellationAroundEveryInputRead(t *testing.T) {
+	cause := errors.New("cancel around a subgraph input")
+	for _, cancelAt := range []int{1, 2} {
+		t.Run(fmt.Sprintf("check %d", cancelAt), func(t *testing.T) {
+			ctx := ctxtest.CancelAtCheck(t.Context(), cancelAt, cause)
+			execution := subgraphExecution{
+				subgraph: subgraphStep{inputs: Inputs{"seed": Output("missing")}},
+				outer:    NewStore(),
+			}
+			_, err := execution.bind(ctx)
+			if !errors.Is(err, cause) || errors.Is(err, ErrNotFound) {
+				t.Fatalf("bind error = %v; want the cancellation cause alone", err)
+			}
+		})
 	}
 }
 
@@ -373,6 +407,37 @@ func TestIterationCollect_resamplesParentCancellation(t *testing.T) {
 				t.Fatal("collect published output after cancellation")
 			}
 		})
+	}
+}
+
+// TestIterationElement_cancellationOutranksASuspension pins which of two true
+// answers an element gives: the cancellation sampled after its body ran, not the
+// suspension the body returned. A suspension deliberately travels as a value so
+// Map keeps the other elements running, so swallowing the cancellation here does
+// not surface as a failure — it reports the element as waiting, and a cancelled
+// run then reads as one that can be resumed. Every step's own boundary would have
+// converted the cancellation first, which is what leaves this check untested.
+func TestIterationElement_cancellationOutranksASuspension(t *testing.T) {
+	cause := errors.New("cancel while the element suspended")
+	ctx, cancel := context.WithCancelCause(t.Context())
+	execution := iterationExecution{
+		iteration: iterationStep{
+			id: "items",
+			body: opaqueTestStepFunc(func(context.Context, Store) (Store, error) {
+				cancel(cause)
+				return Store{}, Suspend("wait")
+			}),
+		},
+		input: NewStore(),
+		items: []any{1},
+	}
+
+	outcome, err := execution.Run(ctx, 0)
+	if !errors.Is(err, cause) {
+		t.Fatalf("Run error = %v; want the cancellation cause", err)
+	}
+	if outcome.suspensions != nil {
+		t.Fatalf("cancelled element reported %v; want no suspension", outcome.suspensions)
 	}
 }
 

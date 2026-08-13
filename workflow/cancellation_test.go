@@ -277,9 +277,11 @@ func TestTerminalObserverCancellationWins(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancelCause(t.Context())
 			seen := false
+			var observed []workflow.EventKind
 			output, err := workflow.Run(ctx, test.step, test.input, workflow.RunConfig{
 				Journal: test.journal,
 				Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
+					observed = append(observed, event.Kind)
 					if event.Kind == test.event {
 						seen = true
 						cancel(cause)
@@ -288,6 +290,14 @@ func TestTerminalObserverCancellationWins(t *testing.T) {
 			})
 			if !seen || !errors.Is(err, cause) || workflow.SuspendedOnly(err) {
 				t.Fatalf("Run error = %v, event seen = %t; want cancellation cause", err, seen)
+			}
+			// Observer promises the cancellation is sampled before the boundary
+			// returns. Returning the cause says it was sampled; emitting nothing
+			// further is what says it was sampled before returning -- a boundary that
+			// went on to announce a start would reach the same error the next time it
+			// looked.
+			if last := observed[len(observed)-1]; last != test.event {
+				t.Fatalf("events = %v; want none after the %s that cancelled", observed, test.event)
 			}
 			if _, published := output.Lookup(workflow.Output("leaf")); published {
 				t.Fatal("cancelled leaf terminal event published its output")
