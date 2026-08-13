@@ -47,7 +47,7 @@ func (b *Bindings) UnmarshalJSON(data []byte) error {
 // MarshalJSON encodes a SwitchSpec without silently changing expression or
 // branch text. Switch still owns semantic validation and compilation.
 func (s SwitchSpec) MarshalJSON() ([]byte, error) {
-	if err := s.validateJSONText(); err != nil {
+	if err := s.validateText(); err != nil {
 		return nil, err
 	}
 	data, err := strictJSON.Marshal(switchSpecJSON(s))
@@ -98,7 +98,7 @@ func (b Bindings) validateJSONText() error {
 		if !utf8.ValidString(name) {
 			return errors.New("expr: switch name is not valid UTF-8")
 		}
-		if err := b.Switches[name].validateJSONText(); err != nil {
+		if err := b.Switches[name].validateText(); err != nil {
 			return fmt.Errorf("expr: switch %q: %w", name, err)
 		}
 	}
@@ -111,21 +111,6 @@ func validateNamedText(kind, name, value string) error {
 	}
 	if !utf8.ValidString(value) {
 		return fmt.Errorf("expr: %s %q is not valid UTF-8", kind, name)
-	}
-	return nil
-}
-
-func (s SwitchSpec) validateJSONText() error {
-	for index, entry := range s.Cases {
-		if !utf8.ValidString(entry.When) {
-			return fmt.Errorf("case %d expression is not valid UTF-8", index)
-		}
-		if !utf8.ValidString(entry.Then) {
-			return fmt.Errorf("case %d branch name is not valid UTF-8", index)
-		}
-	}
-	if !utf8.ValidString(s.Fallback) {
-		return errors.New("fallback branch name is not valid UTF-8")
 	}
 	return nil
 }

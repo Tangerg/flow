@@ -2,6 +2,7 @@ package expr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"unicode/utf8"
 
@@ -94,6 +95,26 @@ type SwitchSpec struct { //nolint:recvcheck // UnmarshalJSON must use a pointer 
 	Fallback string `json:"fallback,omitempty"`
 }
 
+// validateText checks the text a SwitchSpec carries for the one property both
+// its JSON boundary and its compiler require: text that survives encoding
+// unchanged, since encoding/json replaces invalid UTF-8 by design. Stating the
+// rule once keeps [SwitchSpec.MarshalJSON] and [Switch] from disagreeing about
+// which specs are representable.
+func (s SwitchSpec) validateText() error {
+	for index, entry := range s.Cases {
+		if !utf8.ValidString(entry.When) {
+			return fmt.Errorf("case %d expression is not valid UTF-8", index)
+		}
+		if !utf8.ValidString(entry.Then) {
+			return fmt.Errorf("case %d branch name is not valid UTF-8", index)
+		}
+	}
+	if !utf8.ValidString(s.Fallback) {
+		return errors.New("fallback branch name is not valid UTF-8")
+	}
+	return nil
+}
+
 // Switch compiles an ordered list of boolean cases into a [workflow.Branch]
 // resolver. Cases are evaluated in order and the first one that holds selects its
 // Then; if none hold, fallback is selected, or the resolver fails when fallback
@@ -130,6 +151,9 @@ func (s switchCompiler) compile() (workflow.Resolver, error) {
 			flow.ErrInvalidConfig,
 		)
 	}
+	if err := s.spec.validateText(); err != nil {
+		return nil, fmt.Errorf("%w: %w", flow.ErrInvalidConfig, err)
+	}
 
 	compiled := switchResolver{
 		cases:    make([]compiledCase, 0, len(s.spec.Cases)),
@@ -142,33 +166,23 @@ func (s switchCompiler) compile() (workflow.Resolver, error) {
 		}
 		compiled.cases = append(compiled.cases, entry)
 	}
-	if !utf8.ValidString(compiled.fallback) {
-		return nil, fmt.Errorf(
-			"%w: switch fallback branch name is not valid UTF-8",
-			flow.ErrInvalidConfig,
-		)
-	}
 	return compiled, nil
 }
 
+// compileCase reports a case by its index alone. Whoever holds the switch names
+// it — [Bindings] by its member name, a direct Switch caller by having called
+// it — so repeating "switch" here would say it twice.
 func (switchCompiler) compileCase(index int, spec Case) (compiledCase, error) {
 	if spec.Then == "" {
 		return compiledCase{}, fmt.Errorf(
-			"%w: switch case %d has an empty branch name",
-			flow.ErrInvalidConfig,
-			index,
-		)
-	}
-	if !utf8.ValidString(spec.Then) {
-		return compiledCase{}, fmt.Errorf(
-			"%w: switch case %d branch name is not valid UTF-8",
+			"%w: case %d has an empty branch name",
 			flow.ErrInvalidConfig,
 			index,
 		)
 	}
 	when, err := Parse(spec.When)
 	if err != nil {
-		return compiledCase{}, fmt.Errorf("switch case %d: %w", index, err)
+		return compiledCase{}, fmt.Errorf("case %d: %w", index, err)
 	}
 	return compiledCase{when: when, then: spec.Then}, nil
 }
@@ -196,7 +210,7 @@ func (s SwitchSpec) Refs() ([]workflow.Ref, error) {
 	for index, c := range s.Cases {
 		e, err := Parse(c.When)
 		if err != nil {
-			return nil, fmt.Errorf("switch case %d: %w", index, err)
+			return nil, fmt.Errorf("case %d: %w", index, err)
 		}
 		refs = append(refs, e.Refs()...)
 	}

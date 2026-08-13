@@ -329,8 +329,8 @@ func TestSwitchSpec_Refs(t *testing.T) {
 	}
 	if _, err := (expr.SwitchSpec{Cases: []expr.Case{{When: "counter", Then: "x"}}}).Refs(); err == nil {
 		t.Fatal("Refs on an invalid case unexpectedly succeeded")
-	} else if !strings.Contains(err.Error(), "switch case 0") {
-		t.Fatalf("Refs error = %v; want switch case index", err)
+	} else if !strings.HasPrefix(err.Error(), "case 0: ") {
+		t.Fatalf("Refs error = %v; want the failing case index", err)
 	}
 }
 
@@ -585,5 +585,100 @@ func TestSwitchSpec_JSONIsStrictAtomicAndLossless(t *testing.T) {
 	bad := string([]byte{0xff})
 	if _, err := json.Marshal(expr.SwitchSpec{Fallback: bad}); err == nil {
 		t.Fatal("Marshal accepted invalid UTF-8")
+	}
+}
+
+// namingsOfPackage counts how many times a message introduces itself as coming
+// from this package, in either of the two forms it uses: the expression prefix
+// an [expr.Error] writes and the plain prefix the JSON boundary writes.
+func namingsOfPackage(message string) int {
+	return strings.Count(message, `expr "`) + strings.Count(message, "expr: ")
+}
+
+// TestErrorsNameThePackageAtMostOnce pins the rule the sentinels rely on. Every
+// expression failure is wrapped in an expr.Error that names the package, so a
+// sentinel or an intermediate wrapper that named it again would stutter. The
+// same rule holds at the JSON boundary, which names the package itself because
+// nothing wraps it.
+func TestErrorsNameThePackageAtMostOnce(t *testing.T) {
+	registry := workflow.NewRegistry()
+	badExpr := "foo(1)"
+	badSwitch := expr.SwitchSpec{Cases: []expr.Case{{When: badExpr, Then: "a"}}}
+	notUTF8 := string([]byte{0xff})
+	store := workflow.NewStore().WithOutput("a", "text")
+
+	failures := map[string]func() error{
+		"Parse syntax":    func() error { _, err := expr.Parse("1 +"); return err },
+		"Parse construct": func() error { _, err := expr.Parse(badExpr); return err },
+		"Parse reference": func() error { _, err := expr.Parse("counter"); return err },
+		"Eval undefined":  func() error { _, err := expr.MustParse("missing.output").Eval(store); return err },
+		"Eval type":       func() error { _, err := expr.MustParse(`a.output + 1`).Eval(store); return err },
+		"Eval zero":       func() error { _, err := expr.MustParse("1 / 0").Eval(store); return err },
+		"Bool result":     func() error { _, err := expr.MustParse("a.output").Bool(store); return err },
+		"String result":   func() error { _, err := expr.MustParse("1").String(store); return err },
+		"Condition":       func() error { _, err := expr.Condition(badExpr); return err },
+		"Resolver":        func() error { _, err := expr.Resolver(badExpr); return err },
+		"Switch case":     func() error { _, err := expr.Switch(badSwitch); return err },
+		"Switch text": func() error {
+			_, err := expr.Switch(expr.SwitchSpec{Cases: []expr.Case{{When: "true", Then: notUTF8}}})
+			return err
+		},
+		"SwitchSpec.Refs": func() error { _, err := badSwitch.Refs(); return err },
+		"Register switch": func() error {
+			return expr.Bindings{Switches: map[string]expr.SwitchSpec{"r": badSwitch}}.Register(registry)
+		},
+		"Register cond":    func() error { return expr.Bindings{Conditions: map[string]string{"c": badExpr}}.Register(registry) },
+		"Register resolve": func() error { return expr.Bindings{Resolvers: map[string]string{"r": badExpr}}.Register(registry) },
+		"Bindings.Refs": func() error {
+			_, err := expr.Bindings{Switches: map[string]expr.SwitchSpec{"r": badSwitch}}.Refs()
+			return err
+		},
+		"Marshal text": func() error {
+			_, err := json.Marshal(expr.Bindings{Switches: map[string]expr.SwitchSpec{"r": {Cases: []expr.Case{{When: "true", Then: notUTF8}}}}})
+			return err
+		},
+		"Unmarshal bindings": func() error { return json.Unmarshal([]byte(`[]`), &expr.Bindings{}) },
+		"Unmarshal switch":   func() error { return json.Unmarshal([]byte(`{"cases":1}`), &expr.SwitchSpec{}) },
+	}
+
+	for name, fail := range failures {
+		t.Run(name, func(t *testing.T) {
+			err := fail()
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			if got := namingsOfPackage(err.Error()); got > 1 {
+				t.Fatalf("names the package %d times: %v", got, err)
+			}
+		})
+	}
+}
+
+// TestSwitchSpecTextRuleHoldsAtBothBoundaries pins the single statement of which
+// text a SwitchSpec may carry. Encoding and compiling ask the same question, so
+// a spec one rejects must be rejected by the other for the same stated reason.
+func TestSwitchSpecTextRuleHoldsAtBothBoundaries(t *testing.T) {
+	notUTF8 := string([]byte{0xff})
+	specs := map[string]expr.SwitchSpec{
+		"case expression": {Cases: []expr.Case{{When: notUTF8, Then: "a"}}},
+		"case branch":     {Cases: []expr.Case{{When: "true", Then: notUTF8}}},
+		"fallback":        {Cases: []expr.Case{{When: "true", Then: "a"}}, Fallback: notUTF8},
+	}
+	for name, spec := range specs {
+		t.Run(name, func(t *testing.T) {
+			// MarshalJSON is called directly because encoding/json prefixes its
+			// own wrapper, which would hide the reason being compared.
+			_, encodeErr := spec.MarshalJSON()
+			_, compileErr := expr.Switch(spec)
+			if encodeErr == nil || compileErr == nil {
+				t.Fatalf("MarshalJSON err = %v, Switch err = %v; want both to reject", encodeErr, compileErr)
+			}
+			if !strings.HasSuffix(compileErr.Error(), encodeErr.Error()) {
+				t.Fatalf("Switch err = %q does not end in the encoder's reason %q", compileErr, encodeErr)
+			}
+			if _, err := json.Marshal(spec); err == nil {
+				t.Fatal("json.Marshal accepted a spec MarshalJSON rejects")
+			}
+		})
 	}
 }

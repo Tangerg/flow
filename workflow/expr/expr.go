@@ -169,7 +169,7 @@ func (c *compiler) compile(node ast.Expr) (evalFunc, error) {
 
 func (c *compiler) depthError(node ast.Node) error {
 	return c.errorAt(node, fmt.Errorf(
-		"%w: %w: expression depth exceeds limit %d",
+		"%w: %w: depth exceeds limit %d",
 		ErrUnsupported,
 		workflow.ErrMaxDepth,
 		workflow.MaxNestingDepth,
@@ -502,7 +502,9 @@ func (c *compiler) compileCall(n *ast.CallExpr) (evalFunc, error) {
 			return (operand{raw: v}).length()
 		}, nil
 	default:
-		return nil, c.errorAt(n, fmt.Errorf("%w: unknown function %q; expr provides has and len", ErrUnsupported, name.Name))
+		return nil, c.errorAt(n, fmt.Errorf(
+			"%w: unknown function %q; the only functions are has and len",
+			ErrUnsupported, name.Name))
 	}
 }
 
