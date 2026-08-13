@@ -55,19 +55,23 @@ func (e externalNode) label() string {
 	return e.source
 }
 
-// compare orders externals by what the diagram shows, then by the identity
-// behind it, because two externals can render the same label: a node ID may be
-// spelled like a Ref. Once labels tie, kindOrder decides between the two kinds,
-// and only two value refs can still tie -- two sources sharing a label are the
-// same source, because a source's label is itself, so the map already holds one
-// of them. That is why the source is not compared here: it could never decide.
-// See TestMermaid_ordersASourceBeforeAValueRefSharingItsLabel.
+// compare orders externals by what the diagram shows, then by the identity behind
+// it, because two externals can render the same label: a node ID may be spelled
+// like a Ref. Once labels tie, kindOrder decides between the two kinds, and only
+// two value refs can still tie -- two sources sharing a label are the same source,
+// because a source's label is itself, so the map already holds one of them.
+//
+// The node ID settles the rest, and nothing after it could decide anything: a
+// value ref's label is its node ID and path joined, so two that agree on both the
+// label and the node ID agree on the path as well. Neither the source nor the path
+// is compared here for that reason. See
+// TestMermaid_ordersASourceBeforeAValueRefSharingItsLabel and
+// TestMermaid_keepsExternalIdentitySeparateFromItsDisplayLabel.
 func (e externalNode) compare(other externalNode) int {
 	return cmp.Or(
 		strings.Compare(e.label(), other.label()),
 		cmp.Compare(e.kindOrder(), other.kindOrder()),
 		cmp.Compare(e.ref.NodeID, other.ref.NodeID),
-		cmp.Compare(e.ref.Path, other.ref.Path),
 	)
 }
 

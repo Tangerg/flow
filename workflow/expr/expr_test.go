@@ -571,23 +571,32 @@ func TestEval_integralJSONNumbersRemainExact(t *testing.T) {
 	}
 }
 
+// The refusal is symmetric, which is what makes the order the diagnostic reports
+// invisible: both sides fail either way. So each case also names the operands as the
+// author wrote them -- an error that swapped them would send a reader looking at the
+// wrong half of their expression.
 func TestEval_containerEqualityIsSymmetric(t *testing.T) {
 	s := store(
 		"list.output", []any{},
 		"object.output", map[string]any{},
 	)
-	for _, src := range []string{
-		"nil == list.output",
-		"nil != list.output",
-		"list.output == nil",
-		"list.output == list.output",
-		"nil == object.output",
-		"object.output == nil",
-		"object.output == object.output",
+	for src, want := range map[string]string{
+		"nil == list.output":             "got nil and []interface {}",
+		"nil != list.output":             "got nil and []interface {}",
+		"list.output == nil":             "got []interface {} and nil",
+		"list.output == list.output":     "got []interface {} and []interface {}",
+		"nil == object.output":           "got nil and map[string]interface {}",
+		"object.output == nil":           "got map[string]interface {} and nil",
+		"object.output == object.output": "got map[string]interface {} and map[string]interface {}",
+		"list.output != object.output":   "got []interface {} and map[string]interface {}",
 	} {
 		t.Run(src, func(t *testing.T) {
-			if _, err := expr.MustParse(src).Eval(s); !errors.Is(err, expr.ErrType) {
+			_, err := expr.MustParse(src).Eval(s)
+			if !errors.Is(err, expr.ErrType) {
 				t.Fatalf("err = %v; want ErrType", err)
+			}
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("err = %v; want it to say %q", err, want)
 			}
 		})
 	}
