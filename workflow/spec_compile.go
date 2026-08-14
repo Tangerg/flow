@@ -129,6 +129,13 @@ type leafCompiler struct {
 	registry registrySnapshot
 }
 
+// compile builds one leaf and names the field a failure belongs to. Both callers
+// check the node type against this same registry snapshot before arriving, so the
+// missing-factory branch is not one a public route can reach: it keeps a table that
+// lost an entry from becoming a nil call, and the only way in is compiling without
+// validating first, which one internal test does. The category a caller does see is
+// pinned where it is actually reported --
+// TestUnknownNodeTypeIsMatchableOnEveryRouteThatReportsIt.
 func (l leafCompiler) compile(node leafNode) (definedStep, string, error) {
 	factory, ok := l.registry.lookupNode(node.nodeType)
 	if !ok {

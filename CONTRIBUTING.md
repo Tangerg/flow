@@ -362,6 +362,22 @@ go test ./example -run Example -v
   over its accumulator is the only reason nothing notices today.
   `TestOutputGuaranteeCombinatorsLeaveTheirOperandsAlone` says it instead of leaving
   it for a second caller to discover.
+- Match a category on every route that reports it. `%w` and `%v` render the same
+  bytes, and a sentinel handed to a structured error is indistinguishable from any
+  other error of the same text, so a wrap is a promise only where something matches
+  through it. Of 159 format wraps here, 48 change nothing when downgraded — mostly
+  an inner `%w` over a cause carrying no sentinel — and the ones worth reading are
+  the sentinel-carrying routes. Two were unheld. `ErrUnknownNodeType` is reported
+  from three places and only the `Spec` validator's was matched, while
+  `errors_test.go` builds a `GraphError` around that sentinel by hand to check how a
+  location prints, which says nothing about the path that reports it:
+  `TestUnknownNodeTypeIsMatchableOnEveryRouteThatReportsIt` covers the routes
+  instead. `RefError`'s doc promises `ErrNotFound` or `ErrTypeMismatch`, and the
+  stored-nil branch was the half nothing matched — the category is what makes
+  `FirstOf` stop there rather than skip to a later reference, so
+  `TestAStoredNilIsATypeErrorNotAnAbsence` pins the consequence and not just the
+  sentinel. A branch no public route can reach says so where it is, the way
+  `leafCompiler.compile` does.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

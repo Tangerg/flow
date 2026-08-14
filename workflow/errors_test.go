@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -287,5 +289,66 @@ func TestAJoinedSuspensionNamesThePackageOncePerWait(t *testing.T) {
 		if got := strings.Count(err.Error(), "workflow:"); got != count {
 			t.Fatalf("%d waits name the package %d times: %v", count, got, err)
 		}
+	}
+}
+
+// TestUnknownNodeTypeIsMatchableOnEveryRouteThatReportsIt holds one category to
+// the axiom that the construction routes agree: a caller who switched from a Spec
+// to a Graph, or from validating to compiling, must still recognize the same
+// failure. ErrUnknownNodeType is reported from three places, and only the Spec
+// validator's was matched -- replacing the %w with a %v at the other two changed
+// no message and failed no test, because a wrap is a promise only where something
+// matches through it.
+//
+// errors_test.go's own table is why that reads as covered when it is not: it
+// builds a GraphError around this sentinel by hand to check how a location prints,
+// which says nothing about whether the path that reports it still carries the
+// category.
+func TestUnknownNodeTypeIsMatchableOnEveryRouteThatReportsIt(t *testing.T) {
+	registry := workflow.NewRegistry()
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{{ID: "a", Type: "nope"}}}
+	spec := workflow.Spec{Kind: workflow.KindLeaf, ID: "a", Type: "nope"}
+	routes := map[string]func() error{
+		"ValidateGraph": func() error { return registry.ValidateGraph(graph) },
+		"CompileGraph":  func() error { _, err := registry.CompileGraph(graph); return err },
+		"ValidateSpec":  func() error { return registry.ValidateSpec(spec) },
+		"CompileSpec":   func() error { _, err := registry.CompileSpec(spec); return err },
+	}
+	for _, name := range slices.Sorted(maps.Keys(routes)) {
+		err := routes[name]()
+		if !errors.Is(err, workflow.ErrUnknownNodeType) {
+			t.Errorf("%s error = %v; want it to match ErrUnknownNodeType", name, err)
+		}
+	}
+}
+
+// TestAStoredNilIsATypeErrorNotAnAbsence pins which half of RefError's documented
+// Unwrap a stored untyped nil is. Both halves are one sentence -- "Unwrap returns
+// [ErrNotFound] or [ErrTypeMismatch]" -- and replacing this branch's
+// ErrTypeMismatch with an error carrying the same text failed no test, while doing
+// that to the ErrNotFound beside it failed two examples immediately.
+//
+// The category is not decoration here. FirstOf skips a reference only when it is
+// absent, so a cell holding nil read as absence would move the search on to a later
+// reference and hand back a value the caller wired for a different case.
+func TestAStoredNilIsATypeErrorNotAnAbsence(t *testing.T) {
+	store := workflow.NewStore().
+		WithOutput("empty", nil).
+		WithOutput("later", 7)
+
+	_, err := workflow.Get[int](store, workflow.Output("empty"))
+	if !errors.Is(err, workflow.ErrTypeMismatch) {
+		t.Fatalf("Get[int] of a nil cell = %v; want ErrTypeMismatch", err)
+	}
+	if errors.Is(err, workflow.ErrNotFound) {
+		t.Fatalf("Get[int] of a nil cell = %v; want it not to read as absence", err)
+	}
+
+	value, err := workflow.FirstOf[int](
+		workflow.Output("empty"),
+		workflow.Output("later"),
+	).Bind(store)
+	if !errors.Is(err, workflow.ErrTypeMismatch) || value != 0 {
+		t.Fatalf("FirstOf past a nil cell = %d, %v; want 0, ErrTypeMismatch", value, err)
 	}
 }
