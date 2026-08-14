@@ -33,6 +33,34 @@ func testGraph() workflow.Graph {
 	}}
 }
 
+// TestASCII_namesTheTriggerADocumentCarries pins what a rendering may claim about
+// a rule it does not recognize. These functions draw whatever graph they are
+// handed -- an editor renders a document before it is valid, and neither ASCII nor
+// Mermaid consults a Registry -- so the trigger has to appear as the document
+// spells it. Every trigger but the zero value already does; naming an unfamiliar
+// one "all" would show the rule that zero value carries on a document that asked
+// for something else.
+func TestASCII_namesTheTriggerADocumentCarries(t *testing.T) {
+	for trigger, want := range map[workflow.Trigger]string{
+		workflow.TriggerAll: "when:all=yes",
+		workflow.TriggerAny: "when:any=yes",
+		"eventually":        "when:eventually=yes",
+	} {
+		graph := workflow.Graph{Nodes: []workflow.GraphNode{
+			{ID: "route", Type: "switch"},
+			{
+				ID:      "act",
+				Type:    "send",
+				When:    []workflow.Gate{workflow.When("route", "yes")},
+				Trigger: trigger,
+			},
+		}}
+		if got := diagram.ASCII(graph); !strings.Contains(got, want) {
+			t.Fatalf("ASCII with trigger %q:\n%s\nwant an edge labelled %q", trigger, got, want)
+		}
+	}
+}
+
 func TestASCII(t *testing.T) {
 	const want = `nodes:
   "route" ["switch"]

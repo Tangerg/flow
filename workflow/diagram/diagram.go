@@ -129,18 +129,28 @@ func (r *renderer) collectEdges() {
 			})
 		}
 		for _, gate := range node.When {
-			label := "when:all=" + gate.Outlet
-			if node.Trigger == workflow.TriggerAny {
-				label = "when:any=" + gate.Outlet
-			}
 			r.edges = append(r.edges, edge{
 				source:      gate.NodeID,
 				targetIndex: targetIndex,
-				label:       label,
+				label:       "when:" + triggerName(node.Trigger) + "=" + gate.Outlet,
 				kind:        gateEdge,
 			})
 		}
 	}
+}
+
+// triggerName is how a trigger reads in a diagram. Every trigger but one spells
+// itself, so only the zero value needs a name here -- a document that requires
+// every gate says nothing about it. Deriving the rest keeps the rendering from
+// claiming a rule it does not recognize: these functions render whatever graph
+// they are handed, [Registry.ValidateGraph] not having been asked, and a trigger
+// this package has never heard of is not "all" -- see
+// TestASCII_namesTheTriggerADocumentCarries.
+func triggerName(trigger workflow.Trigger) string {
+	if trigger == workflow.TriggerAll {
+		return "all"
+	}
+	return string(trigger)
 }
 
 func (r *renderer) addDataEdge(targetIndex int, port string, ref workflow.Ref) {

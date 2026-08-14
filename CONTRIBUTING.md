@@ -289,6 +289,17 @@ go test ./example -run Example -v
   no behavior can reveal, so `TestPackageDependenciesPointOneWay` reads the imports
   and `TestModuleImportsCoversEveryPackage` keeps the table from permitting a
   package it forgot to mention.
+- Say what a rendering may claim. `diagram` draws whatever graph it is handed,
+  because an editor renders a document before it is valid and neither renderer
+  consults a `Registry`. It labelled a gate by testing for `TriggerAny` and calling
+  everything else "all", which reads as a rule the document did not ask for on any
+  trigger this package has not heard of. Every trigger but the zero value spells
+  itself, so only that one needs a name here —
+  `TestASCII_namesTheTriggerADocumentCarries`.
+- Own state or be a function. `graphPlanner`, `nodeConnector`, and `specValidator`
+  are types because a traversal mutates them; `switchCompiler` had one immutable
+  field and a method that ignored its receiver, so the shape promised state that
+  was not there. `Switch` is the compiler it always was.
 - Let the type own an order it promises. Three exported results are documented as
   sorted references, and the order lived in `Ref.compare` for two of them while
   `expr` wrote it out again for the third — which is the one a caller is told to

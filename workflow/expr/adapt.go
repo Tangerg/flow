@@ -128,15 +128,32 @@ func (s SwitchSpec) validateText() error {
 //
 // This is how a rule set carried in config — "route to escalate when the score is
 // low" — becomes a branch without a Go redeploy.
+//
+// The resolver holds only compiled, immutable state: it is safe for concurrent
+// reuse and retains none of the spec's slices.
 func Switch(spec SwitchSpec) (workflow.Resolver, error) {
-	return (switchCompiler{spec: spec}).compile()
-}
+	if len(spec.Cases) == 0 {
+		return nil, fmt.Errorf(
+			"%w: switch requires at least one case",
+			flow.ErrInvalidConfig,
+		)
+	}
+	if err := spec.validateText(); err != nil {
+		return nil, fmt.Errorf("%w: %w", flow.ErrInvalidConfig, err)
+	}
 
-// switchCompiler owns definition validation and expression compilation. The
-// resulting switchResolver contains only immutable executable state and can be
-// reused concurrently without retaining the caller's SwitchSpec slices.
-type switchCompiler struct {
-	spec SwitchSpec
+	compiled := switchResolver{
+		cases:    make([]compiledCase, 0, len(spec.Cases)),
+		fallback: spec.Fallback,
+	}
+	for index, specCase := range spec.Cases {
+		entry, err := compileCase(index, specCase)
+		if err != nil {
+			return nil, err
+		}
+		compiled.cases = append(compiled.cases, entry)
+	}
+	return compiled, nil
 }
 
 type switchResolver struct {
@@ -149,35 +166,10 @@ type compiledCase struct {
 	then string
 }
 
-func (s switchCompiler) compile() (workflow.Resolver, error) {
-	if len(s.spec.Cases) == 0 {
-		return nil, fmt.Errorf(
-			"%w: switch requires at least one case",
-			flow.ErrInvalidConfig,
-		)
-	}
-	if err := s.spec.validateText(); err != nil {
-		return nil, fmt.Errorf("%w: %w", flow.ErrInvalidConfig, err)
-	}
-
-	compiled := switchResolver{
-		cases:    make([]compiledCase, 0, len(s.spec.Cases)),
-		fallback: s.spec.Fallback,
-	}
-	for index, specCase := range s.spec.Cases {
-		entry, err := s.compileCase(index, specCase)
-		if err != nil {
-			return nil, err
-		}
-		compiled.cases = append(compiled.cases, entry)
-	}
-	return compiled, nil
-}
-
 // compileCase reports a case by its index alone. Whoever holds the switch names
 // it — [Bindings] by its member name, a direct Switch caller by having called
 // it — so repeating "switch" here would say it twice.
-func (switchCompiler) compileCase(index int, spec Case) (compiledCase, error) {
+func compileCase(index int, spec Case) (compiledCase, error) {
 	if spec.Then == "" {
 		return compiledCase{}, fmt.Errorf(
 			"%w: case %d has an empty branch name",

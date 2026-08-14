@@ -82,6 +82,11 @@ func (s *Suspension) Error() string {
 	return message.String()
 }
 
+// suspensionReason returns the value a message can state directly, which is text
+// and nothing else: an approval request or a job descriptor is structured data a
+// caller reads through [Suspensions], not a sentence. It asks for the kind rather
+// than asserting string, because an application's own string type is still text
+// and a type assertion would drop it -- see TestSuspension_errorMessage.
 func suspensionReason(value any) string {
 	if value == nil {
 		return ""
