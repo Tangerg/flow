@@ -183,3 +183,54 @@ func TestDecodeDefinitionInt(t *testing.T) {
 		})
 	}
 }
+
+// TestSpecDecodingLocatesTheChildAJSONSchemaCannotReach names the one nested
+// failure the embedded schema cannot express, and which the decoder therefore has
+// to locate itself: a JSON integer the schema accepts as an integer and Go cannot
+// represent. Everything else a nested Spec can get wrong is refused by the schema,
+// which already points at the child with a JSON Pointer.
+//
+// That single class is the whole reason specJSONDecoder shadows steps, cases, and
+// body with raw members rather than letting the embedded Spec fields decode them:
+// renaming any of those three tags decodes valid documents identically, because
+// encoding/json then reaches the embedded field of the same name, and only the
+// location of this failure changes.
+func TestSpecDecodingLocatesTheChildAJSONSchemaCannotReach(t *testing.T) {
+	const unrepresentable = `{"kind":"parallel","concurrency":1e400}`
+	tests := map[string]struct {
+		document string
+		want     string
+	}{
+		"a sequence child": {
+			document: `{"kind":"sequence","steps":[{"kind":"sequence"},` + unrepresentable + `]}`,
+			want:     `steps[1]: json field concurrency:`,
+		},
+		"a branch case": {
+			document: `{"kind":"branch","id":"b","resolver":"r","cases":` +
+				`{"a":{"kind":"sequence"},"z":` + unrepresentable + `}}`,
+			want: `case "z": json field concurrency:`,
+		},
+		"a loop body": {
+			document: `{"kind":"loop","id":"l","condition":"c","body":` + unrepresentable + `}`,
+			want:     `body: json field concurrency:`,
+		},
+		// The root has no child position to report, so the same condition arrives
+		// with nothing in front of it.
+		"the root itself": {
+			document: unrepresentable,
+			want:     `field json: json field concurrency:`,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			var spec Spec
+			err := json.Unmarshal([]byte(test.document), &spec)
+			if err == nil {
+				t.Fatal("decoded an integer Go cannot represent")
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v; want substring %q", err, test.want)
+			}
+		})
+	}
+}

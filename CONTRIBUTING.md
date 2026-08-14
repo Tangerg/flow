@@ -378,6 +378,19 @@ go test ./example -run Example -v
   `TestAStoredNilIsATypeErrorNotAnAbsence` pins the consequence and not just the
   sentinel. A branch no public route can reach says so where it is, the way
   `leafCompiler.compile` does.
+- Pin a wire member name where nothing else will. Renaming any of this module's 64
+  JSON members fails a test — except ten, and each of the ten says something. Two
+  are `specJSONDecoder`'s `steps` and `body`: renaming them decodes valid documents
+  identically, because `encoding/json` then reaches the embedded `Spec` field of the
+  same name. Those raw shadows exist for exactly one thing, locating the single
+  nested failure the embedded schema cannot express — an integer it accepts as an
+  integer and Go cannot represent — so
+  `TestSpecDecodingLocatesTheChildAJSONSchemaCannotReach` names that class rather
+  than the mechanism. The other eight belong to `Description` and `NodeSchema`,
+  which nothing in this module encodes: a rename there is silent in the repository
+  and breaking for every editor, which is what both types are documented to serve.
+  `TestEditorFacingTypesPublishTheWireNamesTheyCarry` spells their bytes out,
+  including which members an absent value may omit.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

@@ -1314,3 +1314,64 @@ func TestRegisterSchemaEnforcesDraft2020WithoutInspectingInstanceValues(t *testi
 		})
 	}
 }
+
+// TestEditorFacingTypesPublishTheWireNamesTheyCarry pins the two wire shapes this
+// package never encodes itself. Every other JSON member here is held by a test
+// that round-trips it, so renaming one fails immediately; these eight are the ones
+// a rename would leave silent, because nothing inside the module marshals a
+// Description or a NodeSchema.
+//
+// Repository-local usage is not what makes them a contract. Description is
+// documented as a tree to walk or render, and NodeSchema as what an editor reads
+// to draw a node palette beside [Registry.NodeTypes] — reaching either from an
+// editor means encoding it, so the member names and which of them are optional are
+// promises whether or not this module spends them.
+func TestEditorFacingTypesPublishTheWireNamesTheyCarry(t *testing.T) {
+	tests := map[string]struct {
+		value any
+		want  string
+	}{
+		"a described tree": {
+			value: workflow.Description{
+				ID:       "root",
+				Label:    "chosen",
+				Kind:     workflow.KindSequence,
+				Children: []workflow.Description{{ID: "a", Kind: workflow.KindLeaf}},
+			},
+			want: `{"id":"root","label":"chosen","kind":"sequence","children":[{"id":"a","kind":"leaf"}]}`,
+		},
+		// A description always carries its kind; everything else is presentation
+		// that an absent member reports as absent rather than as empty.
+		"a described node with nothing but its kind": {
+			value: workflow.Description{Kind: workflow.KindOpaque},
+			want:  `{"kind":"opaque"}`,
+		},
+		"a declared node type": {
+			value: workflow.NodeSchema{
+				Inputs:       workflow.OnePort(workflow.TypeNumber),
+				Output:       workflow.TypeString,
+				Outlets:      []string{"yes"},
+				ConfigSchema: json.RawMessage(`{"type":"object"}`),
+			},
+			want: `{"inputs":{"in":"number"},"output":"string","outlets":["yes"],` +
+				`"configSchema":{"type":"object"}}`,
+		},
+		// Every member of a schema is a declaration a node type may decline to make,
+		// so the zero value declares nothing rather than declaring emptiness.
+		"a node type that declares nothing": {
+			value: workflow.NodeSchema{},
+			want:  `{}`,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			encoded, err := json.Marshal(test.value)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			if string(encoded) != test.want {
+				t.Fatalf("encoded = %s; want %s", encoded, test.want)
+			}
+		})
+	}
+}
