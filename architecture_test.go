@@ -1,6 +1,8 @@
 package flow_test
 
 import (
+	"fmt"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"maps"
@@ -137,4 +139,96 @@ func packageName(directory string) string {
 		return "flow"
 	}
 	return directory
+}
+
+// wireDecodeExceptions names the types whose UnmarshalJSON cannot route through
+// the shared boundary, with the reason it cannot. An exception has to be listed
+// here rather than merely written differently, because a hand-rolled decoder that
+// assigns before checking its error looks exactly like one that does not.
+var wireDecodeExceptions = map[string]string{
+	"Journal": "owns a mutex, so it cannot be replaced by value, and its decoded " +
+		"records continue the revision it is already at rather than replacing it",
+}
+
+// TestEveryUnmarshalJSONDecodesThroughOneBoundary holds the wire layer to one
+// decoding promise: a nil receiver reported rather than a panic, the whole
+// document read before anything is assigned, and the destination replaced only
+// after complete success. That promise is three separate things to get right, and
+// this repository has watched it drift twice — eight types once implemented it
+// independently, and two later grew their own again.
+//
+// The check is structural because the interesting half is not observable: a
+// decoder that assigns a partial value and then fails returns the same error as one
+// that does not.
+//
+// It asks about the exported types, which are the ones a caller hands to
+// json.Unmarshal. An unexported adapter such as graphJSON is the inside of a decode
+// function, reached only from within the boundary this test is about.
+func TestEveryUnmarshalJSONDecodesThroughOneBoundary(t *testing.T) {
+	fileSet := token.NewFileSet()
+	shared := make(map[string]struct{})
+	own := make(map[string]string)
+	walkRepository(t, ".go", func(name string, data []byte) {
+		if strings.HasSuffix(name, "_test.go") {
+			return
+		}
+		file, err := parser.ParseFile(fileSet, name, data, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok || function.Recv == nil || function.Name.Name != "UnmarshalJSON" {
+				continue
+			}
+			receiver := receiverType(function.Recv)
+			if !ast.IsExported(receiver) {
+				continue
+			}
+			if decodesThroughSharedBoundary(function.Body) {
+				shared[receiver] = struct{}{}
+				continue
+			}
+			own[receiver] = fmt.Sprintf("%s:%d", name, fileSet.Position(function.Pos()).Line)
+		}
+	})
+	if len(shared) == 0 {
+		t.Fatal("no UnmarshalJSON reaches the shared decoder; the walk stopped seeing the repository")
+	}
+
+	for _, receiver := range slices.Sorted(maps.Keys(own)) {
+		if _, allowed := wireDecodeExceptions[receiver]; !allowed {
+			t.Errorf(
+				"%s: %s.UnmarshalJSON decodes on its own; route it through decodeJSONInto or say why it cannot",
+				own[receiver],
+				receiver,
+			)
+		}
+	}
+	for _, receiver := range slices.Sorted(maps.Keys(wireDecodeExceptions)) {
+		if _, stale := own[receiver]; !stale {
+			t.Errorf("%s is excused from the shared decoder but no longer needs to be", receiver)
+		}
+	}
+}
+
+// decodesThroughSharedBoundary reports whether the body reaches the one decoder,
+// by either of its two spellings: workflow wraps it to add its own nil-receiver
+// prefix, and expr calls jsondoc directly.
+func decodesThroughSharedBoundary(body *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(body, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch target := call.Fun.(type) {
+		case *ast.Ident:
+			found = found || target.Name == "decodeJSONInto"
+		case *ast.SelectorExpr:
+			found = found || target.Sel.Name == "DecodeInto"
+		}
+		return !found
+	})
+	return found
 }

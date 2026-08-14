@@ -163,6 +163,14 @@ func (j journalDocument) encode() []byte {
 // fit uint64. Only the current wire version is accepted; applications must
 // migrate or discard older checkpoints before decoding them. Call UnmarshalJSON
 // between runs, not while a Run is using the Journal.
+// A Journal is the one wire type here that cannot decode through
+// [decodeJSONInto]: replacing it wholesale would copy the mutex it owns, and it
+// has state to keep rather than replace -- the revision every decoded record takes
+// continues the one this Journal was already at, so a run that snapshotted before
+// the decode does not suddenly find these records historical. It keeps the shared
+// promise by other means: nothing is assigned until journalDecoder has read the
+// whole document, and the assignment happens under the same lock every other
+// mutation takes.
 func (j *Journal) UnmarshalJSON(data []byte) error {
 	if j == nil {
 		return fmt.Errorf("workflow: unmarshal journal: %w", jsondoc.ErrNilReceiver)

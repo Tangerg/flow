@@ -160,12 +160,15 @@ func (s storeJSONDocument) marshal() ([]byte, error) {
 // receive fresh write identities, so [Store.Changes] against a Store from a
 // different lineage reports every decoded cell.
 func (s *Store) UnmarshalJSON(data []byte) error {
-	if s == nil {
-		return fmt.Errorf("workflow: unmarshal store: %w", jsondoc.ErrNilReceiver)
-	}
+	return decodeJSONInto(s, data, decodeStore, unmarshalError("store"))
+}
+
+// decodeStore reads the strict document, each return naming only its own
+// condition while UnmarshalJSON owns the context.
+func decodeStore(data []byte) (Store, error) {
 	raw, err := jsonDocument(data).object()
 	if err != nil {
-		return fmt.Errorf("workflow: unmarshal store: %w", err)
+		return Store{}, err
 	}
 
 	// Validating every node before assigning any revision keeps a malformed
@@ -178,8 +181,8 @@ func (s *Store) UnmarshalJSON(data []byte) error {
 		value := raw[nodeID]
 		values, ok := value.(map[string]any)
 		if !ok {
-			return fmt.Errorf(
-				"workflow: unmarshal store node %q: expected object, got %s",
+			return Store{}, fmt.Errorf(
+				"node %q: expected object, got %s",
 				nodeID,
 				jsondoc.Kind(value),
 			)
@@ -198,9 +201,7 @@ func (s *Store) UnmarshalJSON(data []byte) error {
 		}
 	}
 	if len(nextData) == 0 {
-		*s = Store{}
-	} else {
-		*s = Store{snapshot: &storeSnapshot{data: nextData}}
+		return Store{}, nil
 	}
-	return nil
+	return Store{snapshot: &storeSnapshot{data: nextData}}, nil
 }

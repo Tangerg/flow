@@ -765,7 +765,9 @@ func TestStore_UnmarshalReportsEveryJSONKind(t *testing.T) {
 
 func TestStore_UnmarshalReportsFirstInvalidNodeDeterministically(t *testing.T) {
 	const document = `{"z":null,"a":false}`
-	const want = `workflow: unmarshal store node "a": expected object, got boolean`
+	// The boundary names itself once and the condition names the node it is
+	// about, which is the shape every wire type in this package reports.
+	const want = `workflow: unmarshal store: node "a": expected object, got boolean`
 
 	for range 100 {
 		var store workflow.Store

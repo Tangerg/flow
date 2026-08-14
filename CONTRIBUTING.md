@@ -247,6 +247,13 @@ go test ./example -run Example -v
   place for. A type whose text is identity also needs `MarshalJSON`, because
   `encoding/json` replaces invalid UTF-8 by design and a wire type must refuse
   rather than rename itself: `TestEveryIdentityBearingTypeRefusesToRenameItself`.
+  The rule is checked rather than trusted, because it has drifted twice and the
+  half that matters is invisible — a decoder that assigns a partial value and then
+  fails returns the same error as one that does not.
+  `TestEveryUnmarshalJSONDecodesThroughOneBoundary` reads the bodies, and a type
+  that genuinely cannot route through it says so in `wireDecodeExceptions`: only
+  `Journal` does, because it owns a mutex and continues its own revision rather
+  than being replaced.
 - Say what a caller owns when an exported result is a slice or a map. Every one
   in this repo is built fresh and a signature cannot say so, so each says it in
   one clause the way `Journal.Keys` does. Whether the values inside are the
