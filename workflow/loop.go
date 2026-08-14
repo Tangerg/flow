@@ -181,7 +181,7 @@ func (l *loopExecution) stop(ctx context.Context, s Store) (bool, error) {
 	}
 	if err != nil {
 		if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
-			return false, suspensions.identify(boundaryKey(ctx, l.loop.config.ID)).err()
+			return false, suspensions.errAt(boundaryKey(ctx, l.loop.config.ID))
 		}
 		return false, newStepError(ctx, l.loop.config.ID, OpRun, err)
 	}

@@ -246,13 +246,7 @@ func (l *leafExecution[I, O]) runNode(ctx context.Context, input I) (O, error) {
 		return l.leaf.node.Run(ctx, input)
 	}
 
-	emissionCtx, emission := withEmission(
-		ctx,
-		l.run,
-		l.leaf.id,
-		scope(ctx),
-		emitter,
-	)
+	emissionCtx, emission := withEmission(ctx, l.run, boundaryKey(ctx, l.leaf.id), emitter)
 	defer emission.cancel(nil)
 	output, err := l.leaf.node.Run(emissionCtx, input)
 	if emissionErr := emission.close(); emissionErr != nil {
@@ -317,7 +311,7 @@ func (l *leafExecution[I, O]) suspend(
 	ctx context.Context,
 	suspensions suspensionList,
 ) (Store, error) {
-	err := suspensions.identify(boundaryKey(ctx, l.leaf.id)).err()
+	err := suspensions.errAt(boundaryKey(ctx, l.leaf.id))
 	if l.run.observing() {
 		if contextErr := l.run.emitAndCheck(ctx, Event{
 			Kind:    EventSuspended,

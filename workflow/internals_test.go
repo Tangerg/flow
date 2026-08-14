@@ -240,7 +240,7 @@ func TestEmissionSession_retainsFirstEmitterError(t *testing.T) {
 		run:     new(runState),
 		cancel:  cancel,
 		emitter: EmitterFunc(func(context.Context, Chunk) error { return boom }),
-		id:      "stream",
+		key:     JournalKey{ID: "stream"},
 	}
 	first := session.emit(ctx, 1)
 	second := session.emit(ctx, 2)

@@ -455,7 +455,18 @@ go test ./example -run Example -v
   pair survives only in `journalNode`, where the scope is a path to descend and the
   ID a member to act on; `journalNode.record` says so where it happens. The weaker
   clumps stay: a registration's kind and name exist to build a `RegistrationError`,
-  and a binary operator's two operands are two things.
+  and a binary operator's two operands are two things. A pair sweep sees only pairs,
+  so it missed `withEmission`, which took the same identity in the opposite order
+  with two other arguments between sightings; a separate look at signatures with
+  four or more non-context parameters is what surfaced it, and `emissionSession`
+  now holds the key instead of its two halves.
+- Make an ordering that matters impossible rather than documented. Every call of
+  `suspensionList.identify` was immediately followed by `err`, and its own comment
+  said why they had to be — assigning an ID changes the sort key, so ordering the
+  list before the names are in place orders it by identities it does not have yet.
+  A comment is not a guard, and three callers each had to remember. `errAt` is the
+  one operation, and there is nothing left to call in the wrong order. A sweep for
+  calls on the same value in adjacent statements finds no other pair.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

@@ -238,24 +238,25 @@ func collectBranches(children []error) (suspensionList, bool) {
 
 type suspensionList []*Suspension
 
-// identify fills in the workflow boundary that owns an otherwise anonymous
-// suspension. ID and Scope are one identity: an existing ID means the wait was
-// already identified, including when its nil Scope deliberately names the root
-// of an independent nested Run. An anonymous wait is owned wholly by the
-// current boundary rather than retaining a caller-supplied partial identity.
+// errAt reports these waits as one error after naming the boundary that owns any
+// of them that arrived anonymous. ID and Scope are one identity: an existing ID
+// means the wait was already identified, including when its nil Scope deliberately
+// names the root of an independent nested Run. An anonymous wait is owned wholly
+// by the current boundary rather than retaining a caller-supplied partial identity.
 //
-// It writes through the pointers it holds, which is safe because every list
-// reaching it came from [suspensionList.normalized] and therefore holds clones —
-// see [Suspension.clone]. Assigning an ID also changes the sort key, so a caller
-// that needs order must normalize again afterwards, which err does.
-func (s suspensionList) identify(key JournalKey) suspensionList {
+// Naming and reporting are one operation because an ID is part of the sort key:
+// ordering the list before the names are in place would order it by identities it
+// does not have yet. It writes through the pointers it holds, which is safe
+// because every list reaching it came from [suspensionList.normalized] and
+// therefore holds clones — see [Suspension.clone].
+func (s suspensionList) errAt(key JournalKey) error {
 	for _, suspension := range s {
 		if suspension.ID == "" {
 			suspension.ID = key.ID
 			suspension.Scope = slices.Clone(key.Scope)
 		}
 	}
-	return s
+	return s.err()
 }
 
 // err reports the suspensions of a fan-out as one error. Several branches may

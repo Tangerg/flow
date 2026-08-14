@@ -180,7 +180,7 @@ func (b *branchExecution) decide(ctx context.Context) (string, bool, error) {
 	name, err = b.branch.resolve.Run(ctx, b.input)
 	if err != nil {
 		if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
-			return "", false, suspensions.identify(boundaryKey(ctx, b.branch.id)).err()
+			return "", false, suspensions.errAt(boundaryKey(ctx, b.branch.id))
 		}
 		return "", false, newStepError(ctx, b.branch.id, OpRun, err)
 	}

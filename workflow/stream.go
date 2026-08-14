@@ -142,8 +142,7 @@ type emissionSession struct {
 	run     *runState
 	cancel  context.CancelCauseFunc
 	emitter Emitter
-	id      string
-	scope   []ScopeFrame
+	key     JournalKey
 	index   uint64
 	closed  bool
 	err     error
@@ -152,8 +151,7 @@ type emissionSession struct {
 func withEmission(
 	ctx context.Context,
 	run *runState,
-	id string,
-	scope []ScopeFrame,
+	key JournalKey,
 	emitter Emitter,
 ) (context.Context, *emissionSession) {
 	ctx, cancel := context.WithCancelCause(ctx)
@@ -161,8 +159,9 @@ func withEmission(
 		run:     run,
 		cancel:  cancel,
 		emitter: emitter,
-		id:      id,
-		scope:   slices.Clone(scope),
+		// The session outlives the call that opened it, so it owns the scope it
+		// reports rather than borrowing the context's.
+		key: JournalKey{ID: key.ID, Scope: slices.Clone(key.Scope)},
 	}
 	return context.WithValue(ctx, emissionKey{}, session), session
 }
@@ -200,8 +199,8 @@ func (e *emissionSession) emit(ctx context.Context, value any) error {
 
 	index := e.index
 	chunk := Chunk{
-		ID:    e.id,
-		Scope: slices.Clone(e.scope),
+		ID:    e.key.ID,
+		Scope: slices.Clone(e.key.Scope),
 		Seq:   e.run.nextSeq(),
 		Index: index,
 		Value: value,
