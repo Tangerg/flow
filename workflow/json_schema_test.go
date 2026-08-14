@@ -777,6 +777,48 @@ func TestValidateSpecJSONRejectsSchemaViolations(t *testing.T) {
 		"duplicate member":     `{"kind":"sequence","kind":"parallel","steps":[]}`,
 		"unpaired surrogate":   `{"kind":"leaf","id":"\ud800","type":"x"}`,
 		"unknown field":        `{"kind":"sequence","steps":[],"unknown":true}`,
+		// One document per member the wire refuses. Validation refuses the same
+		// definitions once the document has decoded, and reports the field it
+		// belongs to; the wire says the document is malformed, which is a
+		// different repair and the only one available before a Spec exists.
+		"empty ref node":                 `{"kind":"leaf","id":"x","type":"x","inputs":{"in":{"nodeID":"","path":"/output"}}}`,
+		"ref without node":               `{"kind":"leaf","id":"x","type":"x","inputs":{"in":{"path":"/output"}}}`,
+		"ref without path":               `{"kind":"leaf","id":"x","type":"x","inputs":{"in":{"nodeID":"seed"}}}`,
+		"ref with extra member":          `{"kind":"leaf","id":"x","type":"x","inputs":{"in":{"nodeID":"s","path":"/output","extra":1}}}`,
+		"empty port name":                `{"kind":"leaf","id":"x","type":"x","inputs":{"":{"nodeID":"s","path":"/output"}}}`,
+		"unknown kind":                   `{"kind":"switch"}`,
+		"empty leaf id":                  `{"kind":"leaf","id":"","type":"x"}`,
+		"empty leaf type":                `{"kind":"leaf","id":"x","type":""}`,
+		"leaf without id":                `{"kind":"leaf","type":"x"}`,
+		"leaf without type":              `{"kind":"leaf","id":"x"}`,
+		"parallel with id":               `{"kind":"parallel","id":"p","steps":[]}`,
+		"empty branch id":                `{"kind":"branch","id":"","resolver":"r","cases":{"a":{"kind":"sequence"}}}`,
+		"empty branch resolver":          `{"kind":"branch","id":"b","resolver":"","cases":{"a":{"kind":"sequence"}}}`,
+		"empty case name":                `{"kind":"branch","id":"b","resolver":"r","cases":{"":{"kind":"sequence"}}}`,
+		"case that is not a spec":        `{"kind":"branch","id":"b","resolver":"r","cases":{"a":"sequence"}}`,
+		"branch without id":              `{"kind":"branch","resolver":"r","cases":{"a":{"kind":"sequence"}}}`,
+		"branch without resolver":        `{"kind":"branch","id":"b","cases":{"a":{"kind":"sequence"}}}`,
+		"branch without cases":           `{"kind":"branch","id":"b","resolver":"r"}`,
+		"branch with steps":              `{"kind":"branch","id":"b","resolver":"r","cases":{"a":{"kind":"sequence"}},"steps":[]}`,
+		"empty loop id":                  `{"kind":"loop","id":"","body":{"kind":"sequence"},"condition":"c"}`,
+		"empty loop condition":           `{"kind":"loop","id":"l","body":{"kind":"sequence"},"condition":""}`,
+		"negative iteration cap":         `{"kind":"loop","id":"l","body":{"kind":"sequence"},"condition":"c","maxIterations":-1}`,
+		"loop without id":                `{"kind":"loop","body":{"kind":"sequence"},"condition":"c"}`,
+		"loop without body":              `{"kind":"loop","id":"l","condition":"c"}`,
+		"loop without condition":         `{"kind":"loop","id":"l","body":{"kind":"sequence"}}`,
+		"loop with steps":                `{"kind":"loop","id":"l","body":{"kind":"sequence"},"condition":"c","steps":[]}`,
+		"empty iteration id":             `{"kind":"iteration","id":"","input":{"nodeID":"s","path":"/output"},"body":{"kind":"sequence"},"bodyOutput":{"nodeID":"b","path":"/output"}}`,
+		"negative iteration concurrency": `{"kind":"iteration","id":"i","input":{"nodeID":"s","path":"/output"},"body":{"kind":"sequence"},"bodyOutput":{"nodeID":"b","path":"/output"},"concurrency":-1}`,
+		"iteration without id":           `{"kind":"iteration","input":{"nodeID":"s","path":"/output"},"body":{"kind":"sequence"},"bodyOutput":{"nodeID":"b","path":"/output"}}`,
+		"iteration without input":        `{"kind":"iteration","id":"i","body":{"kind":"sequence"},"bodyOutput":{"nodeID":"b","path":"/output"}}`,
+		"iteration without body":         `{"kind":"iteration","id":"i","input":{"nodeID":"s","path":"/output"},"bodyOutput":{"nodeID":"b","path":"/output"}}`,
+		"iteration without output":       `{"kind":"iteration","id":"i","input":{"nodeID":"s","path":"/output"},"body":{"kind":"sequence"}}`,
+		"iteration with steps":           `{"kind":"iteration","id":"i","input":{"nodeID":"s","path":"/output"},"body":{"kind":"sequence"},"bodyOutput":{"nodeID":"b","path":"/output"},"steps":[]}`,
+		"empty subgraph id":              `{"kind":"subgraph","id":"","body":{"kind":"sequence"},"bodyOutput":{"nodeID":"b","path":"/output"}}`,
+		"subgraph without id":            `{"kind":"subgraph","body":{"kind":"sequence"},"bodyOutput":{"nodeID":"b","path":"/output"}}`,
+		"subgraph without body":          `{"kind":"subgraph","id":"s","bodyOutput":{"nodeID":"b","path":"/output"}}`,
+		"subgraph without output":        `{"kind":"subgraph","id":"s","body":{"kind":"sequence"}}`,
+		"subgraph with steps":            `{"kind":"subgraph","id":"s","body":{"kind":"sequence"},"bodyOutput":{"nodeID":"b","path":"/output"},"steps":[]}`,
 	}
 	for name, data := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -851,6 +893,88 @@ func TestValidateSpecJSONReportsOnlySelectedKind(t *testing.T) {
 			t.Fatalf("error includes unrelated %s diagnostics: %v", unrelated, err)
 		}
 	}
+
+	// A document that has not said what it is selects no kind at all. Each kind is
+	// matched on the member being present as well as equal, which is what keeps a
+	// missing kind from matching every one of them: the answer is that the member
+	// is missing, not seven accounts of what the document failed to be.
+	kindless := workflow.ValidateSpecJSON([]byte(`{"steps":[]}`))
+	if kindless == nil {
+		t.Fatal("a document without a kind unexpectedly passed validation")
+	}
+	if want := "missing property 'kind'"; !strings.Contains(kindless.Error(), want) {
+		t.Fatalf("error = %v; want %q", kindless, want)
+	}
+	for _, unrelated := range []string{"id", "type", "resolver", "cases", "condition", "bodyOutput"} {
+		if strings.Contains(kindless.Error(), "'"+unrelated+"'") {
+			t.Fatalf("error also answers for %s: %v", unrelated, kindless)
+		}
+	}
+}
+
+// TestJSONDiagnosticsPointAtTheMemberTheyRefused pins what the schema contributes
+// over the decoder that reads the same document after it. Ref's own UnmarshalJSON
+// refuses a missing or unknown member too, and a case that is not an object fails
+// to decode as one, but neither can say which of a graph's nodes, which port, or
+// which branch case carried the defect. The pointer is what turns a repair from a
+// search into a lookup, so it belongs to the diagnostic and not only to the schema
+// that knows it.
+func TestJSONDiagnosticsPointAtTheMemberTheyRefused(t *testing.T) {
+	tests := map[string]struct {
+		data     string
+		pointer  string
+		validate func([]byte) error
+	}{
+		"graph ref without node": {
+			data: `{"nodes":[{"id":"a","type":"x"},` +
+				`{"id":"b","type":"x","inputs":{"in":{"path":"/output"}}}]}`,
+			pointer:  "/nodes/1/inputs/in",
+			validate: workflow.ValidateGraphJSON,
+		},
+		"graph ref without path": {
+			data: `{"nodes":[{"id":"a","type":"x"},` +
+				`{"id":"b","type":"x","inputs":{"in":{"nodeID":"a"}}}]}`,
+			pointer:  "/nodes/1/inputs/in",
+			validate: workflow.ValidateGraphJSON,
+		},
+		"graph ref with unknown member": {
+			data: `{"nodes":[{"id":"a","type":"x"},` +
+				`{"id":"b","type":"x","inputs":{"in":{"nodeID":"a","path":"/output","extra":1}}}]}`,
+			pointer:  "/nodes/1/inputs/in",
+			validate: workflow.ValidateGraphJSON,
+		},
+		"spec ref without node": {
+			data: `{"kind":"sequence","steps":[{"kind":"sequence"},` +
+				`{"kind":"leaf","id":"b","type":"x","inputs":{"in":{"path":"/output"}}}]}`,
+			pointer:  "/steps/1/inputs/in",
+			validate: workflow.ValidateSpecJSON,
+		},
+		"spec ref without path": {
+			data: `{"kind":"sequence","steps":[{"kind":"sequence"},` +
+				`{"kind":"leaf","id":"b","type":"x","inputs":{"in":{"nodeID":"a"}}}]}`,
+			pointer:  "/steps/1/inputs/in",
+			validate: workflow.ValidateSpecJSON,
+		},
+		"spec ref with unknown member": {
+			data: `{"kind":"sequence","steps":[{"kind":"sequence"},` +
+				`{"kind":"leaf","id":"b","type":"x","inputs":{"in":{"nodeID":"a","path":"/output","extra":1}}}]}`,
+			pointer:  "/steps/1/inputs/in",
+			validate: workflow.ValidateSpecJSON,
+		},
+		"branch case that is not a spec": {
+			data:     `{"kind":"branch","id":"b","resolver":"r","cases":{"other":"sequence"}}`,
+			pointer:  "/cases/other",
+			validate: workflow.ValidateSpecJSON,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := test.validate([]byte(test.data))
+			if err == nil || !strings.Contains(err.Error(), test.pointer) {
+				t.Fatalf("error = %v; want it to point at %s", err, test.pointer)
+			}
+		})
+	}
 }
 
 func TestJSONSchemaDiagnosticsAreStable(t *testing.T) {
@@ -899,6 +1023,26 @@ func TestValidateGraphJSONRejectsSchemaViolations(t *testing.T) {
 		"singular node input":   `{"nodes":[{"id":"x","type":"x","input":{"nodeID":"seed","path":"/output"}}]}`,
 		"unpaired surrogate":    `{"nodes":[{"id":"\ud800","type":"x"}]}`,
 		"unknown field":         `{"nodes":[],"unknown":true}`,
+		// A node, a reference and a gate each have members the schema is the first
+		// to refuse. Every one of these is refused again by validation once the
+		// document has decoded, which is why the field these assert matters: it
+		// says the wire boundary was what caught it, and it is the only place a
+		// caller learns that the document itself is wrong.
+		"missing node id":       `{"nodes":[{"type":"x"}]}`,
+		"empty node type":       `{"nodes":[{"id":"x","type":""}]}`,
+		"empty dependency":      `{"nodes":[{"id":"x","type":"x","dependsOn":[""]}]}`,
+		"empty ref node":        `{"nodes":[{"id":"x","type":"x","inputs":{"in":{"nodeID":"","path":"/output"}}}]}`,
+		"empty ref path":        `{"nodes":[{"id":"x","type":"x","inputs":{"in":{"nodeID":"seed","path":""}}}]}`,
+		"relative ref path":     `{"nodes":[{"id":"x","type":"x","inputs":{"in":{"nodeID":"seed","path":"output"}}}]}`,
+		"ref without node":      `{"nodes":[{"id":"x","type":"x","inputs":{"in":{"path":"/output"}}}]}`,
+		"ref without path":      `{"nodes":[{"id":"x","type":"x","inputs":{"in":{"nodeID":"seed"}}}]}`,
+		"ref with extra member": `{"nodes":[{"id":"x","type":"x","inputs":{"in":{"nodeID":"seed","path":"/output","extra":1}}}]}`,
+		"port bound to text":    `{"nodes":[{"id":"x","type":"x","inputs":{"in":"seed"}}]}`,
+		"gate without node":     `{"nodes":[{"id":"x","type":"x","when":[{"outlet":"yes"}]}]}`,
+		"empty gate node":       `{"nodes":[{"id":"x","type":"x","when":[{"nodeID":"","outlet":"yes"}]}]}`,
+		"empty gate outlet":     `{"nodes":[{"id":"x","type":"x","when":[{"nodeID":"r","outlet":""}]}]}`,
+		"gate with extra member": `{"nodes":[{"id":"x","type":"x","when":[` +
+			`{"nodeID":"r","outlet":"yes","extra":1}]}]}`,
 	}
 	for name, data := range tests {
 		t.Run(name, func(t *testing.T) {

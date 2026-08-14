@@ -220,6 +220,12 @@ func (e *emissionSession) emit(ctx context.Context, value any) error {
 // the session defers it, which is the one statement of it that also holds when the
 // node panics. cancel remains the session's own for [emissionSession.emit], which
 // cancels with the Emitter's failure as the cause.
+//
+// The lock is what makes this safe against a leaked yield, and only that: every
+// yield an invocation admitted has already returned by the time the leaf closes,
+// because the lease waits for them. So no test can put a delivery and this call in
+// flight together on purpose -- the only way in is a goroutine that outlived the
+// invocation that gave it the yield.
 func (e *emissionSession) close() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()

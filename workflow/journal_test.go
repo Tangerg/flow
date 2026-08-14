@@ -1145,3 +1145,67 @@ func TestJournal_LenAgreesWithKeys(t *testing.T) {
 	}
 	assert(t, "after Reset then Record", &restored, 1)
 }
+
+// TestJournal_synchronizesEveryStateItShares covers the accessors the type
+// promises are safe against concurrent access but that no other test reaches from
+// two goroutines: the count, the wire form, and the two operations that replace
+// the whole record set. The race detector is the assertion -- with a lock removed
+// every answer here stays plausible, and only the detector notices that the
+// record set was read while it was being replaced. Two goroutines per operation
+// are enough: this asks whether the state is guarded, not how it behaves at scale.
+func TestJournal_synchronizesEveryStateItShares(t *testing.T) {
+	journal := workflow.NewJournal()
+	for index := range 4 {
+		if err := journal.Record(workflow.JournalKey{ID: "step" + strconv.Itoa(index)}, index); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+	encoded, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var readers sync.WaitGroup
+	for range 4 {
+		readers.Go(func() { _ = journal.Len() })
+		readers.Go(func() {
+			if _, marshalErr := json.Marshal(journal); marshalErr != nil {
+				t.Errorf("Marshal: %v", marshalErr)
+			}
+		})
+		readers.Go(func() { journal.Reset() })
+		readers.Go(func() {
+			if unmarshalErr := json.Unmarshal(encoded, journal); unmarshalErr != nil {
+				t.Errorf("Unmarshal: %v", unmarshalErr)
+			}
+		})
+	}
+	readers.Wait()
+
+	// Whichever of those landed last, the Journal still answers consistently.
+	if got, keys := journal.Len(), journal.Keys(); got != len(keys) {
+		t.Fatalf("Len = %d but Keys = %d", got, len(keys))
+	}
+
+	// A run reads the Journal as it starts to decide which records it may replay --
+	// the one shared read a host cannot make itself. A response recorded from
+	// elsewhere at that moment is the concurrency this type documents, so neither
+	// outcome of the race is a failure and only the detector has anything to say.
+	journal.Reset()
+	step := workflow.LeafFunc(
+		"step",
+		workflow.Output("start"),
+		func(_ context.Context, value int) (int, error) { return value, nil },
+	)
+	var racing sync.WaitGroup
+	racing.Go(func() {
+		_, _ = workflow.Run(
+			t.Context(),
+			step,
+			workflow.NewStore().WithOutput("start", 1),
+			workflow.RunConfig{Journal: journal},
+		)
+	})
+	racing.Go(func() { _ = journal.Record(workflow.JournalKey{ID: "elsewhere"}, true) })
+	racing.Wait()
+}

@@ -26,7 +26,6 @@
         "nodeID": { "type": "string", "minLength": 1 },
         "path": {
           "type": "string",
-          "minLength": 1,
           "pattern": "^/(?:[^~/]|~[01])*(?:/(?:[^~/]|~[01])*)*$",
           "description": "An RFC 6901 JSON Pointer below the node value."
         }

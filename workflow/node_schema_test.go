@@ -6,6 +6,8 @@ import (
 	"errors"
 	"maps"
 	"slices"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/Tangerg/flow/workflow"
@@ -336,5 +338,41 @@ func TestRegisterSchema_ownsDefinitionStorage(t *testing.T) {
 	schema, ok := reg.NodeSchema("addN")
 	if !ok || !bytes.Equal(schema.ConfigSchema, wantConfigSchema) {
 		t.Fatalf("ConfigSchema = %q, %t; want %q, true", schema.ConfigSchema, ok, wantConfigSchema)
+	}
+}
+
+// TestRegistry_synchronizesTheTablesItPublishes covers the two accessors an editor
+// calls while another goroutine is still registering: the palette of node types
+// and one type's schema. The Registry documents that it is safe for concurrent
+// access, and its compilation path is already exercised that way, but nothing read
+// the tables through these two while a registration was writing them. The race
+// detector is the assertion; with a lock removed both keep answering plausibly.
+func TestRegistry_synchronizesTheTablesItPublishes(t *testing.T) {
+	registry := workflow.NewRegistry().
+		MustRegisterNode("first", addN()).
+		MustRegisterSchema("first", workflow.NodeSchema{Output: workflow.TypeNumber})
+
+	var group sync.WaitGroup
+	for index := range 4 {
+		name := "later" + strconv.Itoa(index)
+		group.Go(func() {
+			if err := registry.RegisterNode(name, addN()); err != nil {
+				t.Errorf("RegisterNode %s: %v", name, err)
+			}
+			if err := registry.RegisterSchema(name, workflow.NodeSchema{Output: workflow.TypeNumber}); err != nil {
+				t.Errorf("RegisterSchema %s: %v", name, err)
+			}
+		})
+		group.Go(func() { _ = registry.NodeTypes() })
+		group.Go(func() {
+			if _, ok := registry.NodeSchema("first"); !ok {
+				t.Error("NodeSchema lost the type registered before the others")
+			}
+		})
+	}
+	group.Wait()
+
+	if types := registry.NodeTypes(); len(types) != 5 {
+		t.Fatalf("NodeTypes = %v; want the first and all four later ones", types)
 	}
 }
