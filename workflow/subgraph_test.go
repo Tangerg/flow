@@ -571,6 +571,13 @@ func TestSubgraphFactory_reportsFixedDefinitionFailuresAtNodeType(t *testing.T) 
 				graphErr.Field != "type" {
 				t.Fatalf("CompileGraph error = %v; want type-scoped invalid registration", err)
 			}
+			// The registration a fixed body defect belongs to is the node's, and
+			// the error has to say which kind of registration that is: a caller
+			// repairs the factory it registered, not the graph node that used it.
+			var registrationErr *workflow.RegistrationError
+			if !errors.As(err, &registrationErr) || registrationErr.Kind != "node" {
+				t.Fatalf("registration error = %+v; want kind %q", registrationErr, "node")
+			}
 		})
 	}
 }

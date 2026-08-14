@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -913,9 +915,23 @@ func TestValidateGraph_rejectsInvalidGates(t *testing.T) {
 			if !errors.Is(err, test.want) {
 				t.Fatalf("error = %v; want %v", err, test.want)
 			}
-			if test.field != "" &&
-				(!errors.As(err, &graphErr) || graphErr.Field != test.field) {
-				t.Fatalf("error = %v; want GraphError field %q", err, test.field)
+			if test.field == "" {
+				// A cycle spans the graph, so it belongs to no single node.
+				return
+			}
+			// Every routing rule is checked at a node, so its failure names that
+			// node both ways a caller can look for it: the pointer to where the
+			// node is declared, and the ID the node declared for itself.
+			wantPath := fmt.Sprintf("/nodes/%d", slices.IndexFunc(
+				test.graph.Nodes,
+				func(node workflow.GraphNode) bool { return node.ID == "a" },
+			))
+			if !errors.As(err, &graphErr) || graphErr.Field != test.field ||
+				graphErr.Path != wantPath || graphErr.NodeID != "a" {
+				t.Fatalf(
+					"error = %v; want GraphError at %s on node %q field %q",
+					err, wantPath, "a", test.field,
+				)
 			}
 		})
 	}

@@ -174,7 +174,9 @@ func (d *definitionValidator) validateShape(
 		}
 		// A loop body is scoped by loop ID and iteration index. Its IDs do not
 		// collide with the surrounding workflow or another loop body. The loop
-		// ID remains reserved because its stop decision uses the same scope.
+		// ID remains reserved because its stop decision uses the same scope --
+		// unlike an iteration or a subgraph, which decide nothing there. See
+		// TestBodyMayReuseItsCompositeIDOnlyWhereNothingDecidesInThatScope.
 		bodyValidator := definitionValidator{firstID: definition.id}
 		return bodyValidator.validateStep(definition.body, depth+1)
 	case definitionIteration:

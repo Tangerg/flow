@@ -1,7 +1,6 @@
 package workflow
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"maps"
@@ -99,11 +98,28 @@ func (s specCompiler) compileAll(specs []Spec) ([]Step, error) {
 }
 
 func (s specCompiler) compileLeaf(spec Spec) (Step, error) {
-	step, field, err := s.leafCompiler.compile(spec)
+	step, field, err := s.leafCompiler.compile(spec.leafNode())
 	if err != nil {
 		return nil, spec.fieldError(field, err)
 	}
 	return step, nil
+}
+
+// leafNode is one leaf reduced to what building it takes: the registered type
+// that builds it and the construction inputs its [NodeFactory] receives. A
+// nested Spec and a flat GraphNode each convert to it, so the leaf compiler
+// never receives a composite definition whose remaining fields it would have to
+// ignore.
+type leafNode struct {
+	nodeType string
+	spec     NodeSpec
+}
+
+func (s Spec) leafNode() leafNode {
+	return leafNode{
+		nodeType: s.Type,
+		spec:     NodeSpec{ID: s.ID, Inputs: s.Inputs, Config: s.Config},
+	}
 }
 
 // leafCompiler builds one leaf without attaching a nested-Spec or flat-Graph
@@ -113,16 +129,12 @@ type leafCompiler struct {
 	registry registrySnapshot
 }
 
-func (l leafCompiler) compile(spec Spec) (definedStep, string, error) {
-	factory, ok := l.registry.lookupNode(spec.Type)
+func (l leafCompiler) compile(node leafNode) (definedStep, string, error) {
+	factory, ok := l.registry.lookupNode(node.nodeType)
 	if !ok {
-		return nil, fieldType, fmt.Errorf("%w %q", ErrUnknownNodeType, spec.Type)
+		return nil, fieldType, fmt.Errorf("%w %q", ErrUnknownNodeType, node.nodeType)
 	}
-	step, err := factory(NodeSpec{
-		ID:     spec.ID,
-		Inputs: maps.Clone(spec.Inputs),
-		Config: bytes.Clone(spec.Config),
-	})
+	step, err := factory(node.spec.clone())
 	if err != nil {
 		if errors.Is(err, ErrSuspended) {
 			// A factory constructs an immutable definition. Treat a suspension
@@ -135,15 +147,15 @@ func (l leafCompiler) compile(spec Spec) (definedStep, string, error) {
 	if isNilNode(step) {
 		return nil, fieldType, ErrNilStep
 	}
-	boundary, err := (nodeBoundary{id: spec.ID}).validate(step)
+	boundary, err := (nodeBoundary{id: node.spec.ID}).validate(step)
 	if err != nil {
 		return nil, fieldType, err
 	}
-	if registered, known := l.registry.lookupNodeSchema(spec.Type); known {
+	if registered, known := l.registry.lookupNodeSchema(node.nodeType); known {
 		if err := registered.validateOutput(boundary.definition().output); err != nil {
 			return nil, fieldType, &RegistrationError{
 				Kind: registrationSchema,
-				Name: spec.Type,
+				Name: node.nodeType,
 				Err:  err,
 			}
 		}

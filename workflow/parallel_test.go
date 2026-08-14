@@ -181,6 +181,15 @@ func TestParallel_singleSuspensionIsPreserved(t *testing.T) {
 	if _, ok := output.Lookup(workflow.Output("ready")); ok {
 		t.Fatal("suspended single branch created its awaited value")
 	}
+	// A wait is not a branch failure. Wrapping it in an IndexError would keep it
+	// classifiable as a suspension while telling a caller that branch 0 failed,
+	// which is the vocabulary reserved for a real error (see
+	// TestParallel_singleBranchPreservesIndexError).
+	var indexErr *flow.IndexError
+	waits := workflow.Suspensions(err)
+	if errors.As(err, &indexErr) || len(waits) != 1 || waits[0].ID != "wait" {
+		t.Fatalf("error = %v; want the branch's own wait, unlabelled by index", err)
+	}
 }
 
 func TestParallel_validatesEveryBranchBeforeRunning(t *testing.T) {

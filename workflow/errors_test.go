@@ -82,17 +82,55 @@ func TestRefError(t *testing.T) {
 	}
 }
 
+// TestRegistrationError covers the three ways a Registry refuses an entry --
+// an unusable name, a value that fails what its kind must prove, and a name
+// already taken -- because each builds its own error. All three have to name the
+// kind of registration and the name it was made under: that pair is what a
+// caller has to search for to find the call to fix, and the message is all the
+// panicking Must form leaves behind.
 func TestRegistrationError(t *testing.T) {
-	reg := workflow.NewRegistry()
-	if err := reg.RegisterNode("add", addN()); err != nil {
-		t.Fatalf("first registration: %v", err)
+	tests := map[string]struct {
+		register func(*workflow.Registry) error
+		name     string
+		cause    error
+	}{
+		"unusable name": {
+			register: func(reg *workflow.Registry) error {
+				return reg.RegisterNode("bad\xff", addN())
+			},
+			name: "bad\xff",
+		},
+		"nil factory": {
+			register: func(reg *workflow.Registry) error {
+				return reg.RegisterNode("add", nil)
+			},
+			name:  "add",
+			cause: flow.ErrNilFunc,
+		},
+		"name already taken": {
+			register: func(reg *workflow.Registry) error {
+				if err := reg.RegisterNode("add", addN()); err != nil {
+					return err
+				}
+				return reg.RegisterNode("add", addN())
+			},
+			name:  "add",
+			cause: workflow.ErrDuplicateRegistration,
+		},
 	}
-	err := reg.RegisterNode("add", addN())
-	var registrationErr *workflow.RegistrationError
-	if !errors.Is(err, workflow.ErrInvalidRegistration) ||
-		!errors.Is(err, workflow.ErrDuplicateRegistration) ||
-		!errors.As(err, &registrationErr) || registrationErr.Kind != "node" || registrationErr.Name != "add" {
-		t.Fatalf("err = %v; want invalid-registration duplicate node RegistrationError", err)
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := test.register(workflow.NewRegistry())
+			var registrationErr *workflow.RegistrationError
+			if !errors.Is(err, workflow.ErrInvalidRegistration) ||
+				!errors.As(err, &registrationErr) ||
+				registrationErr.Kind != "node" || registrationErr.Name != test.name {
+				t.Fatalf("err = %v; want an invalid node registration named %q", err, test.name)
+			}
+			if test.cause != nil && !errors.Is(err, test.cause) {
+				t.Fatalf("err = %v; want %v", err, test.cause)
+			}
+		})
 	}
 }
 

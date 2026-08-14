@@ -662,6 +662,16 @@ func TestSchemaInfrastructure_reportsEveryFailureBoundary(t *testing.T) {
 	}).compile(); err == nil || !strings.Contains(err.Error(), "add JSON Schema resource") {
 		t.Fatalf("invalid resource URL = %v; want the resource boundary", err)
 	}
+	// A document that decodes and registers can still be no schema at all, which
+	// is the one boundary the backend rather than this package detects.
+	if _, err := (schemaSource{
+		url:      "https://example.com/schema.json",
+		document: jsonDocument(`{"type": 5}`),
+	}).compile(); err == nil ||
+		!strings.HasPrefix(err.Error(), "compile JSON Schema: ") ||
+		!strings.Contains(err.Error(), "not valid against metaschema") {
+		t.Fatalf("unusable schema = %v; want the compile boundary and what it said", err)
+	}
 
 	loadErr := errors.New("load schema")
 	load := schemaLoader(func() (*compiledSchema, error) {
@@ -672,13 +682,16 @@ func TestSchemaInfrastructure_reportsEveryFailureBoundary(t *testing.T) {
 		t.Fatalf("decode error = %v; want load error", err)
 	}
 
-	validateErr := errors.New("validate")
+	// The backend's words are kept and its identity is not, so the sentinel here
+	// must share no text with the boundary that reports it -- otherwise the
+	// boundary's own name would satisfy the check that the words survived.
+	validateErr := errors.New("refused by the backend")
 	schema := &compiledSchema{validator: schemaValidatorFunc(func(any) error {
 		return validateErr
 	})}
 	if err := schema.validate(nil); errors.Is(err, validateErr) ||
-		!strings.Contains(err.Error(), validateErr.Error()) {
-		t.Fatalf("validate error = %v; want diagnostic without backend error identity", err)
+		!strings.Contains(err.Error(), "validate JSON Schema: "+validateErr.Error()) {
+		t.Fatalf("validate error = %v; want the named boundary carrying the backend's words", err)
 	}
 }
 
@@ -2073,6 +2086,53 @@ func TestSpecCompile_carriesEverySchedulingSettingIntoTheStep(t *testing.T) {
 			}
 			if got != 3 {
 				t.Fatalf("setting reached the step as %d; want the 3 the spec asked for", got)
+			}
+		})
+	}
+}
+
+// TestParallelRunMany_boundsItsBranchesWithTheLimitItHolds continues where
+// TestSpecCompile_carriesEverySchedulingSettingIntoTheStep stops: the limit is on
+// the step, and this is the step handing it to the mapper that schedules the
+// branches. Concurrency changes no answer, so the proof that it arrived is a
+// value flow.MapConfig refuses -- a mapper built without the limit runs the
+// branches unbounded and reports nothing at all.
+func TestParallelRunMany_boundsItsBranchesWithTheLimitItHolds(t *testing.T) {
+	step := parallelStep{branches: stepList{Sequence(), Sequence()}, limit: -1}
+
+	input := NewStore().WithOutput("start", 1)
+	out, err := step.runMany(t.Context(), input)
+	if !errors.Is(err, flow.ErrInvalidConfig) {
+		t.Fatalf("runMany error = %v; want the mapper to reject the limit it was given", err)
+	}
+	if len(out.Changes(input)) != 0 {
+		t.Fatalf("runMany changed %v; want the untouched input", out.Changes(input))
+	}
+}
+
+// TestInputsValidation_namesTheBindingItChecked pins the vocabulary rule
+// bindingVocabulary exists to state: a port and a seed each describe themselves
+// with one word, and the same word, whichever of the four checks found the
+// problem. The name of the binding is the only part of the message that says
+// which of two Inputs maps the caller wrote wrong, and dropping it leaves the
+// reference to explain itself.
+func TestInputsValidation_namesTheBindingItChecked(t *testing.T) {
+	// A reference no rule set accepts, so every check reaches the same report.
+	invalid := Inputs{"port": {NodeID: "bad\xff", Path: outputPath}}
+	tests := map[string]struct {
+		check func(Inputs) error
+		want  string
+	}{
+		"definition port": {check: Inputs.validatePorts, want: `input port "port"`},
+		"definition seed": {check: Inputs.validateSeeds, want: `subgraph seed "port"`},
+		"json text port":  {check: Inputs.validatePortJSONText, want: `input port "port"`},
+		"json text seed":  {check: Inputs.validateSeedJSONText, want: `subgraph seed "port"`},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := test.check(invalid)
+			if err == nil || !strings.HasPrefix(err.Error(), test.want+": ") {
+				t.Fatalf("error = %v; want it to open with %s", err, test.want)
 			}
 		})
 	}

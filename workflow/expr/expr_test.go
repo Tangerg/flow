@@ -905,22 +905,27 @@ func TestEval_typeErrors(t *testing.T) {
 		"list.output", []any{1},
 	)
 
-	for _, src := range []string{
-		`n.output + s.output`,        // number and string
-		`n.output && b.output`,       // number as bool
-		`!n.output`,                  // number as bool
-		`-s.output`,                  // string negation
-		`n.output < b.output`,        // bool ordering
-		`s.output - "a"`,             // string subtraction
-		`f.output % 2`,               // remainder on a float, via a float literal below
-		`1.5 % 2`,                    // remainder on a float
-		`len(n.output)`,              // len of a number
-		`list.output == list.output`, // slice equality
+	// Each case states what the operator wanted and what it got, because the type
+	// it got is the half that comes from the author's own data -- an operator that
+	// only said what it wanted would leave them looking for which operand it meant.
+	// Two rules describe themselves by what they refuse instead, having no operand
+	// type left to report once neither side can qualify.
+	for src, want := range map[string]string{
+		`n.output + s.output`:        "+ wants two numbers or two strings, got number and string",
+		`n.output && b.output`:       "&& wants bool, got number",
+		`!n.output`:                  "! wants bool, got number",
+		`-s.output`:                  "unary - wants number, got string",
+		`n.output < b.output`:        "< wants two numbers or two strings, got number and bool",
+		`s.output - "a"`:             "- does not accept strings",
+		`f.output % 2`:               "% wants two integers",
+		`1.5 % 2`:                    "% wants two integers",
+		`len(n.output)`:              "len wants string, array, or object, got number",
+		`list.output == list.output`: "== wants scalar operands, got []interface {} and []interface {}",
 	} {
 		t.Run(src, func(t *testing.T) {
 			_, err := expr.MustParse(src).Eval(s.WithCell("f", "output", 1.5))
-			if !errors.Is(err, expr.ErrType) && !errors.Is(err, expr.ErrUndefined) {
-				t.Fatalf("Eval err = %v; want ErrType", err)
+			if !errors.Is(err, expr.ErrType) || !strings.Contains(err.Error(), want) {
+				t.Fatalf("Eval err = %v; want ErrType saying %q", err, want)
 			}
 		})
 	}

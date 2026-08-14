@@ -608,3 +608,58 @@ func TestLoop_reportsJournalDecisionConflict(t *testing.T) {
 		t.Fatalf("error = %v; want ErrJournalConflict", err)
 	}
 }
+
+// TestBodyMayReuseItsCompositeIDOnlyWhereNothingDecidesInThatScope pins which
+// composite keeps its own ID reserved inside its body, and why the other two do
+// not. A loop records a stop decision under its own ID in the scope its body
+// runs in, so a body step taking that name would claim one identity twice in a
+// single iteration. An iteration and a subgraph decide nothing inside the body's
+// scope, so the same name there is a different step and stays legal -- reserving
+// it would reject a body that is only being reused under a new name.
+func TestBodyMayReuseItsCompositeIDOnlyWhereNothingDecidesInThatScope(t *testing.T) {
+	always := flow.NodeFunc[workflow.Store, bool](
+		func(context.Context, workflow.Store) (bool, error) { return true, nil },
+	)
+	tests := map[string]struct {
+		step workflow.Step
+		want error
+	}{
+		"loop reserves its own ID": {
+			step: workflow.Loop(workflow.LoopConfig{
+				ID:        "same",
+				Body:      leafStep("same"),
+				Condition: always,
+			}),
+			want: workflow.ErrDuplicateStep,
+		},
+		"iteration does not": {
+			step: workflow.Iteration(workflow.IterationConfig{
+				ID:         "same",
+				Input:      workflow.Output("start"),
+				Body:       leafStep("same"),
+				BodyOutput: workflow.Output("same"),
+			}),
+		},
+		"subgraph does not": {
+			step: workflow.Subgraph(workflow.SubgraphConfig{
+				ID:         "same",
+				Body:       leafStep("same"),
+				BodyOutput: workflow.Output("same"),
+			}),
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := flow.Validate(test.step)
+			if test.want == nil {
+				if err != nil {
+					t.Fatalf("Validate = %v; want the reused name to be a different step", err)
+				}
+				return
+			}
+			if !errors.Is(err, test.want) {
+				t.Fatalf("Validate = %v; want %v", err, test.want)
+			}
+		})
+	}
+}

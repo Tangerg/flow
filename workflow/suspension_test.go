@@ -786,6 +786,49 @@ func TestSuspend_awaitPassesThroughOnceSatisfied(t *testing.T) {
 	}
 }
 
+// TestAwait_reportsTheWaitItRaisedAndTheStoreItLetThrough pins everything an
+// Await tells anyone, which is all there is: it records nothing, so the wait it
+// raises and the one event it emits are its whole account of a run. The wait has
+// to name the step and the reference it is waiting on, the suspended event has to
+// carry that same wait, and the completed event has to carry the Store the step
+// let through -- for a step that writes nothing, an event with an empty Store
+// would report a completion an observer cannot see the effect of.
+func TestAwait_reportsTheWaitItRaisedAndTheStoreItLetThrough(t *testing.T) {
+	gate := workflow.Await("gate", workflow.Output("approval"))
+	var events []workflow.Event
+	cfg := workflow.RunConfig{Observer: workflow.ObserverFunc(
+		func(_ context.Context, event workflow.Event) { events = append(events, event) },
+	)}
+
+	_, err := workflow.Run(t.Context(), gate, workflow.NewStore(), cfg)
+	waits := workflow.Suspensions(err)
+	if len(waits) != 1 || waits[0].ID != "gate" || waits[0].Await != workflow.Output("approval") {
+		t.Fatalf("suspensions = %+v; want one wait named gate on the approval output", waits)
+	}
+	raised := workflow.Suspensions(events[0].Err)
+	if len(events) != 1 || events[0].Kind != workflow.EventSuspended ||
+		len(raised) != 1 || raised[0].ID != waits[0].ID || raised[0].Await != waits[0].Await {
+		t.Fatalf("events = %+v; want one suspended event carrying that same wait", events)
+	}
+
+	events = nil
+	if _, err := workflow.Run(
+		t.Context(),
+		gate,
+		workflow.NewStore().WithOutput("approval", true),
+		cfg,
+	); err != nil {
+		t.Fatalf("satisfied Await: %v", err)
+	}
+	if len(events) != 1 || events[0].Kind != workflow.EventCompleted || events[0].ID != "gate" {
+		t.Fatalf("events = %+v; want one completed event named gate", events)
+	}
+	approved, getErr := workflow.Get[bool](events[0].Store, workflow.Output("approval"))
+	if getErr != nil || !approved {
+		t.Fatalf("completed event Store = %v, %v; want the Store the wait let through", approved, getErr)
+	}
+}
+
 // An Await is never skipped by a Journal: it writes nothing, so there is nothing
 // to replay, and skipping it would mean never waiting again.
 func TestSuspend_awaitIsNotJournaled(t *testing.T) {
@@ -1410,11 +1453,17 @@ func TestInterrupt_eventsReportSuspensionThenReplay(t *testing.T) {
 		t.Fatalf("resume: %v", runErr)
 	}
 	if len(events) != 1 || events[0].Kind != workflow.EventSkipped ||
-		events[0].Err != nil {
-		t.Fatalf("resumed events = %+v; want one skipped event", events)
+		events[0].Err != nil || events[0].ID != "approval" {
+		t.Fatalf("resumed events = %+v; want one skipped event named approval", events)
 	}
 	if approved, err := workflow.Get[bool](out, workflow.Output("approval")); err != nil || !approved {
 		t.Fatalf("approval = %v, %v; want true", approved, err)
+	}
+	// A replayed wait produces its recorded answer without running anything, so
+	// the event's Store is the only place an observer can see the value the
+	// resumed run continued with.
+	if replayed, err := workflow.Get[bool](events[0].Store, workflow.Output("approval")); err != nil || !replayed {
+		t.Fatalf("skipped event Store = %v, %v; want the replayed answer", replayed, err)
 	}
 }
 

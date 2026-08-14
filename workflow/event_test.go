@@ -79,20 +79,38 @@ func TestEvents_distinguishValidationReplayAndAdmission(t *testing.T) {
 		}
 	}
 
-	t.Run("validation failure has no start", func(t *testing.T) {
-		var events []workflow.Event
-		_, err := workflow.Run(
-			t.Context(),
-			workflow.Leaf[int, int]("", workflow.From[int](workflow.Output("seed")), flow.NodeFunc[int, int](nil)),
-			workflow.NewStore(),
-			workflow.RunConfig{Observer: record(&events)},
-		)
-		if !errors.Is(err, workflow.ErrInvalidStepID) ||
-			len(events) != 1 ||
-			events[0].Kind != workflow.EventFailed {
-			t.Fatalf("error, events = %v, %+v; want one validation failure", err, events)
-		}
-	})
+	// A rejected definition is reported under the ID it declared. The two defects
+	// differ in whether there is an ID to report: an invalid one is the single
+	// case where the failure cannot name its step, so a valid ID with a defect
+	// behind it is what shows that the event names the step at all.
+	for name, invalid := range map[string]struct {
+		id   string
+		want error
+	}{
+		"invalid id": {id: "", want: workflow.ErrInvalidStepID},
+		"nil node":   {id: "leaf", want: flow.ErrNilNode},
+	} {
+		t.Run("validation failure has no start: "+name, func(t *testing.T) {
+			var events []workflow.Event
+			_, err := workflow.Run(
+				t.Context(),
+				workflow.Leaf[int, int](
+					invalid.id,
+					workflow.From[int](workflow.Output("seed")),
+					flow.NodeFunc[int, int](nil),
+				),
+				workflow.NewStore(),
+				workflow.RunConfig{Observer: record(&events)},
+			)
+			if !errors.Is(err, invalid.want) ||
+				len(events) != 1 ||
+				events[0].Kind != workflow.EventFailed ||
+				events[0].ID != invalid.id ||
+				!errors.Is(events[0].Err, invalid.want) {
+				t.Fatalf("error, events = %v, %+v; want one validation failure naming %q", err, events, invalid.id)
+			}
+		})
+	}
 
 	t.Run("replay has only skipped", func(t *testing.T) {
 		journal := workflow.NewJournal()
@@ -165,8 +183,8 @@ func TestEvents_distinguishValidationReplayAndAdmission(t *testing.T) {
 		if !slices.Equal(kinds, want) {
 			t.Fatalf("events = %v; want %v", kinds, want)
 		}
-		if !errors.Is(events[2].Err, workflow.ErrDuplicateStep) {
-			t.Fatalf("failure event error = %v; want ErrDuplicateStep", events[2].Err)
+		if !errors.Is(events[2].Err, workflow.ErrDuplicateStep) || events[2].ID != "leaf" {
+			t.Fatalf("failure event = %+v; want the duplicate claim named on leaf", events[2])
 		}
 	})
 

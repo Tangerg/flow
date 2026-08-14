@@ -107,6 +107,25 @@ go test ./example -run Example -v
   a single chain cannot: `TestCodec_boundsNestingNotBreadth`,
   `TestSpec_boundsNestingNotBreadth`, and `TestParse_boundsNestingNotBreadth`
   supply one per boundary.
+- Ask for what the callee builds from. `leafCompiler` takes a `leafNode` — the
+  registered node type and the `NodeSpec` a factory receives — so the nested-Spec
+  and flat-Graph paths each convert to it rather than presenting a composite
+  definition whose other members the callee has to ignore. The graph path used to
+  fabricate a whole `Spec`, `Kind: KindLeaf` included, for a callee that never
+  read a kind: a member nothing reads is a member nothing can be wrong about, and
+  it is indistinguishable from one that has quietly stopped being read. Naming
+  the real input also leaves one place to copy the caller's mutable values,
+  `NodeSpec.clone`, instead of one per caller.
+- Report the outcome in the event, not only in the return. Every boundary event
+  names its step and carries what that boundary produced: `EventCompleted` and
+  `EventSkipped` carry the Store, `EventSuspended` the wait, `EventFailed` the
+  failure — including the two admission failures, which return before anything
+  starts. An observer has no second source for any of it, and for a step that
+  writes nothing or ran nothing the event is the whole account:
+  `TestAwait_reportsTheWaitItRaisedAndTheStoreItLetThrough`,
+  `TestInterrupt_eventsReportSuspensionThenReplay`, and
+  `TestEvents_distinguishValidationReplayAndAdmission` read each one from the
+  event rather than from the returned Store or error.
 - Install a run before running children. Every composite calls `ensureRun`, which
   supplies one when the caller has none, because a `Step` may be invoked directly
   rather than through `Run`. The run owns the identities claimed so far, and

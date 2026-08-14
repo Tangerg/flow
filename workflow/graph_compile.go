@@ -28,7 +28,7 @@ func (r registrySnapshot) compileGraph(graph Graph) (Step, error) {
 	steps := make(stepList, len(graph.Nodes))
 	outputs := make(map[string]bool, len(graph.Nodes))
 	for index, node := range graph.Nodes {
-		step, field, err := (leafCompiler{registry: r}).compile(node.nodeSpec())
+		step, field, err := (leafCompiler{registry: r}).compile(node.leafNode())
 		if err != nil {
 			return nil, locateNode(index, node).fieldError(field, err)
 		}
@@ -148,12 +148,9 @@ func (r *Registry) CompileGraphJSON(data []byte) (Step, error) {
 	return r.CompileGraph(graph)
 }
 
-func (n GraphNode) nodeSpec() Spec {
-	return Spec{
-		Kind:   KindLeaf,
-		ID:     n.ID,
-		Type:   n.Type,
-		Inputs: n.Inputs,
-		Config: n.Config,
+func (n GraphNode) leafNode() leafNode {
+	return leafNode{
+		nodeType: n.Type,
+		spec:     NodeSpec{ID: n.ID, Inputs: n.Inputs, Config: n.Config},
 	}
 }

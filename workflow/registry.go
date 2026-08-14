@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"bytes"
 	"encoding/json"
 	"maps"
 	"slices"
@@ -63,6 +64,14 @@ type NodeSpec struct {
 	// Config is absent only when it has zero length. Non-empty bytes must contain
 	// one complete JSON value; whitespace alone is not an omitted value.
 	Config json.RawMessage
+}
+
+// clone copies the two mutable construction inputs, so a factory cannot reach
+// the caller's definition through the spec it is handed.
+func (n NodeSpec) clone() NodeSpec {
+	n.Inputs = maps.Clone(n.Inputs)
+	n.Config = bytes.Clone(n.Config)
+	return n
 }
 
 // NodeFactory builds the [Step] behind one registered node type. The result must

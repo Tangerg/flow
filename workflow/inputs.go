@@ -57,7 +57,8 @@ func (i Inputs) Refs() []Ref {
 // differs between a definition and the JSON text carrying one. Naming each axis
 // value once keeps the four combinations from drifting apart -- a port and a
 // seed must not describe themselves differently depending on which check found
-// the problem.
+// the problem, which TestInputsValidation_namesTheBindingItChecked holds all
+// four to.
 type bindingVocabulary struct {
 	nameKind    string
 	bindingKind string

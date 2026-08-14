@@ -57,21 +57,18 @@ type subgraphStep struct {
 
 func (s subgraphStep) Run(ctx context.Context, outer Store) (Store, error) {
 	ctx = ensureRun(ctx)
-	execution := subgraphExecution{
-		subgraph: s,
-		outer:    outer,
-		run:      runFrom(ctx),
-	}
+	execution := subgraphExecution{subgraph: s, outer: outer}
 	return execution.execute(ctx)
 }
 
-// subgraphExecution owns the two Store namespaces and identity state of one
-// invocation. Every method either advances the sealed inner execution or
-// returns the untouched outer Store, so projection cannot leak partial cells.
+// subgraphExecution owns the two Store namespaces of one invocation. Every
+// method either advances the sealed inner execution or returns the untouched
+// outer Store, so projection cannot leak partial cells. The run state stays in
+// the context alone: a subgraph derives a scope but never a second run, so it
+// has nothing to record against the run itself.
 type subgraphExecution struct {
 	subgraph subgraphStep
 	outer    Store
-	run      *runState
 }
 
 func (s *subgraphExecution) execute(ctx context.Context) (Store, error) {
