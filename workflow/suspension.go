@@ -171,7 +171,7 @@ func (s suspensionTree) collect() (suspensionList, bool) {
 		if many, ok := err.(interface{ Unwrap() []error }); ok {
 			children := many.Unwrap()
 			if slices.ContainsFunc(children, func(err error) bool { return err != nil }) {
-				return s.collectMany(children)
+				return collectBranches(children)
 			}
 			return s.collectIdentity()
 		}
@@ -209,7 +209,11 @@ func (s suspensionTree) collectIdentity() (suspensionList, bool) {
 	return nil, false
 }
 
-func (s suspensionTree) collectMany(children []error) (suspensionList, bool) {
+// collectBranches classifies the branches of an Unwrap() []error. It is not a
+// method on [suspensionTree] because none of these errors is the tree it would be
+// given: each branch is a tree of its own, and the answer is whether every one of
+// them is a wait.
+func collectBranches(children []error) (suspensionList, bool) {
 	var suspensions suspensionList
 	onlySuspensions := true
 	childCount := 0

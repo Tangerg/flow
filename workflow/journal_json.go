@@ -245,7 +245,7 @@ func (j *journalDecoder) decodeRecord(value any) error {
 	if err != nil {
 		return err
 	}
-	scope, err := j.decodeScope(record)
+	scope, err := decodeScope(record)
 	if err != nil {
 		return err
 	}
@@ -264,7 +264,9 @@ func (j *journalDecoder) decodeRecord(value any) error {
 	return nil
 }
 
-func (j *journalDecoder) decodeScope(record jsonObject) ([]ScopeFrame, error) {
+// decodeScope reads a record's scope. It reads nothing of the decoder's own
+// state, so it is a function: a scope is decided by the member in front of it.
+func decodeScope(record jsonObject) ([]ScopeFrame, error) {
 	value, present := record[journalFieldScope]
 	if !present {
 		return nil, nil

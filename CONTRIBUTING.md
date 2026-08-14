@@ -306,7 +306,11 @@ go test ./example -run Example -v
 - Own state or be a function. `graphPlanner`, `nodeConnector`, and `specValidator`
   are types because a traversal mutates them; `switchCompiler` had one immutable
   field and a method that ignored its receiver, so the shape promised state that
-  was not there. `Switch` is the compiler it always was.
+  was not there. `Switch` is the compiler it always was. A method that never names
+  its receiver says the same thing more quietly, and two did: `collectBranches`
+  classifies the branches of an `Unwrap() []error`, none of which is the tree it
+  was hung on, and `decodeScope` reads a member of the record in front of it and
+  nothing of the decoder's own state.
 - Let the type own an order it promises. Three exported results are documented as
   sorted references, and the order lived in `Ref.compare` for two of them while
   `expr` wrote it out again for the third — which is the one a caller is told to
@@ -406,6 +410,20 @@ go test ./example -run Example -v
   left behind by a removed one fails rather than reading as coverage. The name kinds
   in `errors.go` stay out of it, because a fragment of a sentence is prose and the
   contract here is the sentinel and the structured location.
+- Let measurement decide whether a degenerate shape gets a path of its own, and
+  write down which way it went. Two of them read identically in the source and were
+  not. `Store.cells` had a branch for a Store with no overlay that copied the
+  snapshot loop so it could skip building a tracking set; it made that function the
+  module's most complex at 25, it made the iterator's early-stop contract three
+  statements instead of two, and the set it saved costs nothing — a zero-hint map
+  that does not escape allocates no table, and `BenchmarkStoreChangesScaling` and
+  `BenchmarkStoreJSONScaling` report identical allocations without it. It is gone.
+  `definitionValidator` keeps its first claimed ID in a field rather than a set, and
+  collapsing that into the simpler "always use the set" costs two allocations per
+  validated boundary — `BenchmarkSequenceRunScaling/512` goes from 1612 to 2636 —
+  while passing every other test in this repository. It stays, and
+  `TestValidatingOneBoundaryAllocatesNoIdentitySet` is what refuses the
+  simplification now, because a comment claiming an allocation is not a guard.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

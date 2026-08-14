@@ -442,18 +442,14 @@ func (s Store) lookupRecord(identity storeKey) (cell, bool) {
 // [Store.materialize] also reports. Use it to read the whole Store without
 // copying it: the only set it allocates is bounded by the overlay length rather
 // than by the number of cells.
+//
+// A Store with no overlay walks the same two loops, the first of them zero times.
+// Giving that shape its own path would copy the snapshot loop, and the tracking
+// set it saves costs nothing measurable: a zero-hint map that does not escape
+// allocates no table, and BenchmarkStoreChangesScaling and BenchmarkStoreJSONScaling
+// report the same allocations either way.
 func (s Store) cells() iter.Seq2[storeKey, cell] {
 	return func(yield func(storeKey, cell) bool) {
-		if s.delta == nil {
-			// Nothing shadows the snapshot, so no tracking set is needed.
-			for key, record := range s.baseCells() {
-				if !yield(key, record) {
-					return
-				}
-			}
-			return
-		}
-
 		shadowed := make(map[storeKey]struct{}, s.depth)
 		for delta := s.delta; delta != nil; delta = delta.parent {
 			if _, seen := shadowed[delta.key]; seen {

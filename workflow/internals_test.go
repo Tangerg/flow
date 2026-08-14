@@ -2423,3 +2423,40 @@ func publishesText(constant string, declared ast.Expr) bool {
 	name, ok := declared.(*ast.Ident)
 	return ok && vocabularyTypes[name.Name]
 }
+
+// TestValidatingOneBoundaryAllocatesNoIdentitySet guards the one representation
+// choice in definitionValidator that measurement rather than taste decided. The
+// common definition names a single boundary -- a leaf validates itself on every
+// execution -- so the first claimed ID stays in a field and no set is built to hold
+// it.
+//
+// Collapsing that into "always use the set" is the simpler model, and it passes
+// every other test in this repository, which is why the cost is written down here:
+// two allocations per validated boundary. BenchmarkSequenceRunScaling/512 goes from
+// 1612 to 2636 allocations per run, and BenchmarkGraphRunScaling/chain/128 from 803
+// to 1059.
+//
+// The budget below is what one boundary costs today, not a target. The second
+// boundary is what may build the set, and does, which is what makes the budget a
+// property of the representation instead of validation in general.
+func TestValidatingOneBoundaryAllocatesNoIdentitySet(t *testing.T) {
+	const oneBoundary = 1
+	passThrough := flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+		return value, nil
+	})
+	single := Leaf("only", From[int](Output("seed")), passThrough)
+	pair := Sequence(single, Leaf("second", From[int](Output("seed")), passThrough))
+
+	if allocs := testing.AllocsPerRun(200, func() { _ = flow.Validate(single) }); allocs > oneBoundary {
+		t.Errorf(
+			"validating one boundary allocated %.0f times; want at most %d, because the "+
+				"first claimed ID is held inline instead of in a set",
+			allocs, oneBoundary)
+	}
+	if allocs := testing.AllocsPerRun(200, func() { _ = flow.Validate(pair) }); allocs <= oneBoundary {
+		t.Errorf(
+			"validating two boundaries allocated %.0f times; want more than %d, since the "+
+				"second claim is what builds the set the first one avoids",
+			allocs, oneBoundary)
+	}
+}
