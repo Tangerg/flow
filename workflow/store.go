@@ -416,7 +416,7 @@ func (s Store) lookupCell(nodeID, key string) (cell, bool) {
 	return c, true
 }
 
-// base returns the cell records under the overlay. A Store that has never been
+// baseCells returns the cell records under the overlay. A Store that has never been
 // flattened carries no snapshot; that is the same Store as one carrying an empty
 // snapshot, so this reports the empty map for both and readers below index,
 // range, and copy it without asking which they hold.

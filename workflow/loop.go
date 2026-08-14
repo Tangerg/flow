@@ -167,24 +167,12 @@ func (l *loopExecution) stop(ctx context.Context, s Store) (bool, error) {
 	if err := l.run.claim(scope(ctx), l.loop.config.ID); err != nil {
 		return false, newStepError(ctx, l.loop.config.ID, OpValidate, err)
 	}
-	recorded, replayed, err := l.run.replay(ctx, scope(ctx), l.loop.config.ID)
+	recorded, replayed, err := replayDecision[bool](ctx, l.run, KindLoop, l.loop.config.ID)
 	if err != nil {
 		return false, err
 	}
 	if replayed {
-		if stop, ok := recorded.(bool); ok {
-			return stop, nil
-		}
-		return false, newStepError(
-			ctx,
-			l.loop.config.ID,
-			OpRun,
-			fmt.Errorf(
-				"%w: journaled loop decision has type %T; want bool",
-				ErrTypeMismatch,
-				recorded,
-			),
-		)
+		return recorded, nil
 	}
 
 	stop, err := l.loop.config.Condition.Run(ctx, s)

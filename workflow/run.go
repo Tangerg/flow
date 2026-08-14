@@ -214,6 +214,37 @@ func (r *runState) replay(
 	return value, ok, context.Cause(ctx)
 }
 
+// replayDecision returns the control-flow decision id recorded before this run
+// began. A record of some other type is a corrupted Journal rather than a
+// resumable state, because the composite cannot tell what it decided last time.
+// [Branch] and [Loop] are the two composites that journal a decision instead of
+// an output, and the type each wants names itself here rather than in prose each
+// of them would spell separately -- see
+// TestAReplayedDecisionMustCarryTheTypeItsCompositeRecorded.
+func replayDecision[T any](
+	ctx context.Context,
+	run *runState,
+	kind Kind,
+	id string,
+) (T, bool, error) {
+	var decision T
+	recorded, replayed, err := run.replay(ctx, scope(ctx), id)
+	if err != nil || !replayed {
+		return decision, false, err
+	}
+	decision, ok := recorded.(T)
+	if !ok {
+		return decision, false, newStepError(ctx, id, OpRun, fmt.Errorf(
+			"%w: journaled %s decision has type %T; want %T",
+			ErrTypeMismatch,
+			kind,
+			recorded,
+			decision,
+		))
+	}
+	return decision, true, nil
+}
+
 // claim enforces the execution identity invariant independently of the
 // Journal. This catches duplicate IDs even when both invocations would replay
 // the same historical record, and it also covers opaque caller-defined wrappers

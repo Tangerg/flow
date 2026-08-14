@@ -107,6 +107,14 @@ linters:
       # small supported subset and reject everything else in one place.
       default-signifies-exhaustive: true
 
+    godoclint:
+      options:
+        start-with-name:
+          # The rule defaults to exported symbols only, which lets an internal
+          # doc comment name something other than what it documents. The tests
+          # are already held to it by TestTestCommentsNameTheirOwnTest.
+          include-unexported: true
+
     goconst:
       # Tests intentionally repeat values in readable case tables and are
       # excluded below. Ignore them while counting too, otherwise a test-only

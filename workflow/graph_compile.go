@@ -79,9 +79,10 @@ type graphStep struct {
 	limit                 int
 }
 
-// A graphStep exists only after Graph and every built node have passed their
-// own validation. Its recursive definition still exposes those nodes to the
-// whole-graph identity and depth checks.
+// validate has nothing of its own left to check: a graphStep exists only after
+// Graph and every built node have passed their own validation. Its recursive
+// definition still exposes those nodes to the whole-graph identity and depth
+// checks.
 func (graphStep) validate() error { return nil }
 
 func (g graphStep) Validate() error { return validateDefinition(g) }

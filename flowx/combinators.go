@@ -136,25 +136,26 @@ func (c *combineExecution[I, A, B, O]) Run(ctx context.Context, task combineTask
 //
 // Chain never returns a nil Node. A nil element yields one that reports
 // [flow.ErrNilNode] from Run and from [flow.Validate] instead of an interface nil
-// that would panic when called. With two or more nodes flow.Then already gives
-// that guarantee, and the single-node case matches it.
+// that would panic when called.
 func Chain[T any](nodes ...flow.Node[T, T]) flow.Node[T, T] {
-	switch len(nodes) {
-	case 0:
+	if len(nodes) == 0 {
 		return flow.NodeFunc[T, T](func(ctx context.Context, in T) (T, error) {
 			return in, context.Cause(ctx)
 		})
-	case 1:
-		if nodes[0] == nil {
-			return flow.NodeFunc[T, T](nil)
-		}
-		return nodes[0]
 	}
-	n := nodes[0]
+	// The typed nil adapter is how flow spells a nil Node: it reports ErrNilNode
+	// from both Run and flow.Validate, which is exactly what flow.Then does with a
+	// nil child. Substituting it for the first node holds the guarantee at every
+	// arity, so a single node needs no path of its own -- the fold below returns it
+	// unwrapped either way.
+	chained := nodes[0]
+	if chained == nil {
+		chained = flow.NodeFunc[T, T](nil)
+	}
 	for _, next := range nodes[1:] {
-		n = flow.Then(n, next)
+		chained = flow.Then(chained, next)
 	}
-	return n
+	return chained
 }
 
 // Fallback runs primary; if it fails while the parent context remains live, it

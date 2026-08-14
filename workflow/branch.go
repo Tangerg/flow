@@ -169,27 +169,15 @@ func (b branchStep) Validate() error { return validateDefinition(b) }
 // decide returns the branch to take, reusing the recorded decision when the run
 // is resuming. Run records a fresh decision only after verifying the case.
 func (b *branchExecution) decide(ctx context.Context) (string, bool, error) {
-	recorded, replayed, err := b.run.replay(ctx, scope(ctx), b.branch.id)
+	name, replayed, err := replayDecision[string](ctx, b.run, KindBranch, b.branch.id)
 	if err != nil {
 		return "", false, err
 	}
 	if replayed {
-		if name, ok := recorded.(string); ok {
-			return name, true, nil
-		}
-		return "", false, newStepError(
-			ctx,
-			b.branch.id,
-			OpRun,
-			fmt.Errorf(
-				"%w: journaled branch decision has type %T; want string",
-				ErrTypeMismatch,
-				recorded,
-			),
-		)
+		return name, true, nil
 	}
 
-	name, err := b.branch.resolve.Run(ctx, b.input)
+	name, err = b.branch.resolve.Run(ctx, b.input)
 	if err != nil {
 		if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
 			return "", false, suspensions.identify(b.branch.id, scope(ctx)).err()

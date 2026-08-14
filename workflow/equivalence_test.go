@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Tangerg/flow"
@@ -346,4 +347,72 @@ func nestedStep(depth int) workflow.Step {
 		step = workflow.Sequence(step)
 	}
 	return step
+}
+
+// TestAReplayedDecisionMustCarryTheTypeItsCompositeRecorded holds Branch and Loop
+// to one rule. Both journal a decision rather than an output, so both can meet a
+// record of another type -- an edited checkpoint, or one written by a different
+// workflow under the same ID -- and neither may guess what it decided last time.
+// The wanted type is named by the type the composite replays, so a message cannot
+// promise one thing while the assertion accepts another, and the refusal is
+// located at the composite that made the decision.
+func TestAReplayedDecisionMustCarryTheTypeItsCompositeRecorded(t *testing.T) {
+	body := workflow.Leaf("body",
+		workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+		flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) { return value, nil }))
+
+	for _, test := range []struct {
+		name string
+		id   string
+		// scope is where the composite keys its decision: a branch decides once, a
+		// loop once per iteration, so only the loop's key carries an indexed frame.
+		scope    []workflow.ScopeFrame
+		recorded any
+		want     string
+		step     workflow.Step
+	}{
+		{
+			name:     "a branch replays the case name it chose",
+			id:       "route",
+			recorded: true,
+			want:     "journaled branch decision has type bool; want string",
+			step: workflow.Branch(workflow.BranchConfig{
+				ID:       "route",
+				Resolver: resolverNode(func(context.Context, workflow.Store) (string, error) { return "ok", nil }),
+				Cases:    map[string]workflow.Step{"ok": leafStep("ok")},
+			}),
+		},
+		{
+			name:     "a loop replays whether it stopped",
+			id:       "repeat",
+			scope:    []workflow.ScopeFrame{{ID: "repeat", Indexed: true}},
+			recorded: "stop",
+			want:     "journaled loop decision has type string; want bool",
+			step: workflow.Loop(workflow.LoopConfig{
+				ID:        "repeat",
+				Body:      body,
+				Condition: flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) { return true, nil }),
+			}),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			journal := workflow.NewJournal()
+			key := workflow.JournalKey{ID: test.id, Scope: test.scope}
+			if err := journal.Record(key, test.recorded); err != nil {
+				t.Fatalf("Record: %v", err)
+			}
+
+			_, err := runJournal(test.step, workflow.NewStore().WithOutput("start", 1), journal)
+			var stepErr *workflow.StepError
+			if !errors.As(err, &stepErr) || stepErr.ID != test.id || stepErr.Op != workflow.OpRun {
+				t.Fatalf("err = %v; want a StepError at %q under OpRun", err, test.id)
+			}
+			if !errors.Is(err, workflow.ErrTypeMismatch) {
+				t.Fatalf("err = %v; want ErrTypeMismatch", err)
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("err = %v; want it to state %q", err, test.want)
+			}
+		})
+	}
 }

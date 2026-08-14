@@ -161,7 +161,10 @@ func (d *definitionValidator) validateShape(
 	depth int,
 ) error {
 	switch definition.kind {
-	case definitionSteps:
+	case definitionSteps, definitionGraph:
+		// A graph and a step list are both a list of steps sharing one identity
+		// namespace, which is all this walk checks. What separates them is what
+		// each guarantees about its outputs, and only guaranteedOutputs asks that.
 		return d.validateSteps(definition.steps, depth+1)
 	case definitionBranch:
 		if err := d.claim(definition.id); err != nil {
@@ -183,17 +186,12 @@ func (d *definitionValidator) validateShape(
 		if err := d.validateOwnBody(definition, depth); err != nil {
 			return err
 		}
-		return definition.validateIterationOutput()
+		return definition.locate(definition.iterationOutputCondition())
 	case definitionSubgraph:
 		if err := d.validateOwnBody(definition, depth); err != nil {
 			return err
 		}
-		return definition.validateSubgraphOutput()
-	case definitionGraph:
-		// A Graph may contain gates, so a successful run does not promise that
-		// every declared node produced an output. Its own compiler validates the
-		// visible node definitions and execution identities.
-		return d.validateSteps(definition.steps, depth+1)
+		return definition.locate(definition.subgraphOutputCondition())
 	default:
 		return d.claim(definition.id)
 	}
@@ -250,14 +248,6 @@ func (s stepDefinition) iterationOutputCondition() error {
 		return nil
 	}
 	return iterationOutputError(s.bodyOutput)
-}
-
-func (s stepDefinition) validateSubgraphOutput() error {
-	return s.locate(s.subgraphOutputCondition())
-}
-
-func (s stepDefinition) validateIterationOutput() error {
-	return s.locate(s.iterationOutputCondition())
 }
 
 // locate attaches this definition's execution identity to a condition, which is
@@ -382,9 +372,9 @@ func guaranteedOutputs(step Step) outputGuarantee {
 		}
 		return knownOutputs()
 	case definitionSteps:
-		return guaranteedStepListOutputs(definition.steps)
+		return unionOutputs(definition.steps, guaranteedOutputs)
 	case definitionBranch:
-		return guaranteedBranchOutputs(definition.cases)
+		return intersectOutputs(definition.cases, guaranteedOutputs)
 	case definitionLoop:
 		return guaranteedOutputs(definition.body)
 	case definitionIteration, definitionSubgraph:
@@ -395,14 +385,6 @@ func guaranteedOutputs(step Step) outputGuarantee {
 		// than a step this walk cannot see into.
 		return outputGuarantee{}
 	}
-}
-
-func guaranteedStepListOutputs(steps stepList) outputGuarantee {
-	return unionOutputs(steps, guaranteedOutputs)
-}
-
-func guaranteedBranchOutputs(cases map[string]Step) outputGuarantee {
-	return intersectOutputs(cases, guaranteedOutputs)
 }
 
 func (d *definitionValidator) validateSteps(

@@ -106,22 +106,12 @@ func (g graphJSONEncoder) marshal() ([]byte, error) {
 }
 
 func (n GraphNode) validateJSONText() (string, error) {
-	// Each member carries both halves of its vocabulary: the serialized field a
-	// GraphError points at, and the concept name the message states. Reusing the
-	// field for both would repeat it -- "field type: type is not valid UTF-8" --
-	// and would describe the same member differently from the definition check.
-	for _, member := range [...]struct {
-		field string
-		kind  string
-		value string
-	}{
+	if field, err := firstInvalidText([]textMember{
 		{field: fieldID, kind: nameStepID, value: n.ID},
 		{field: fieldType, kind: nameNodeType, value: n.Type},
 		{field: fieldTrigger, kind: nameTrigger, value: string(n.Trigger)},
-	} {
-		if err := validateText(member.kind, member.value); err != nil {
-			return member.field, err
-		}
+	}); err != nil {
+		return field, err
 	}
 	if err := n.Inputs.validatePortJSONText(); err != nil {
 		return fieldInputs, err
@@ -232,20 +222,14 @@ func (s *specJSONEncoder) encodeChild(spec Spec) (specJSONOutput, error) {
 }
 
 func (s Spec) validateJSONText() (string, error) {
-	for _, member := range [...]struct {
-		field string
-		kind  string
-		value string
-	}{
+	if field, err := firstInvalidText([]textMember{
 		{field: fieldKind, kind: nameKind, value: string(s.Kind)},
 		{field: fieldID, kind: nameStepID, value: s.ID},
 		{field: fieldType, kind: nameNodeType, value: s.Type},
 		{field: fieldResolver, kind: nameResolver, value: s.Resolver},
 		{field: fieldCondition, kind: nameCondition, value: s.Condition},
-	} {
-		if err := validateText(member.kind, member.value); err != nil {
-			return member.field, err
-		}
+	}); err != nil {
+		return field, err
 	}
 	if len(s.Config) > 0 {
 		if err := jsonDocument(s.Config).validate(); err != nil {

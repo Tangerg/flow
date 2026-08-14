@@ -70,10 +70,10 @@ type bindingRegistrar struct {
 }
 
 func (b *bindingRegistrar) register() error {
-	if err := b.compileConditions(); err != nil {
+	if err := compileNamed(b.bindings.Conditions, Condition, kindCondition, b.conditions); err != nil {
 		return err
 	}
-	if err := b.compileResolvers(); err != nil {
+	if err := compileNamed(b.bindings.Resolvers, Resolver, kindResolver, b.resolvers); err != nil {
 		return err
 	}
 	if err := b.compileSwitches(); err != nil {
@@ -92,17 +92,10 @@ func (b *bindingRegistrar) register() error {
 	return nil
 }
 
-func (b *bindingRegistrar) compileConditions() error {
-	return compileNamed(b.bindings.Conditions, Condition, kindCondition, b.conditions)
-}
-
-func (b *bindingRegistrar) compileResolvers() error {
-	return compileNamed(b.bindings.Resolvers, Resolver, kindResolver, b.resolvers)
-}
-
 // compileNamed compiles one table of named expressions in name order, so a
 // Bindings with several bad expressions always reports the same one. Both
-// tables differ only in what they compile to and what a diagnostic calls them.
+// tables differ only in what they compile to and what a diagnostic calls them,
+// which is why each names those two things where it is called.
 func compileNamed[T any](
 	source map[string]string,
 	compile func(string) (T, error),

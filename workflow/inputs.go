@@ -40,6 +40,9 @@ func (i Inputs) Default() (Ref, bool) { return i.Ref(DefaultPort) }
 // port names for a GraphNode or leaf Spec and inner seed IDs for a Subgraph.
 func (i Inputs) PortNames() []string { return i.names() }
 
+// names is the same order under the neutral spelling, for the boundaries whose
+// vocabulary is not "port": a subgraph seed is not a port, and the shared binding
+// check is told which of the two it is looking at.
 func (i Inputs) names() []string { return slices.Sorted(maps.Keys(i)) }
 
 // Refs returns the wired references ordered by port name. The returned slice is
@@ -52,13 +55,13 @@ func (i Inputs) Refs() []Ref {
 	return refs
 }
 
-// Inputs is validated along two independent axes: which data boundary it binds,
-// which supplies the diagnostic vocabulary, and how strict the check is, which
-// differs between a definition and the JSON text carrying one. Naming each axis
-// value once keeps the four combinations from drifting apart -- a port and a
-// seed must not describe themselves differently depending on which check found
-// the problem, which TestInputsValidation_namesTheBindingItChecked holds all
-// four to.
+// bindingVocabulary and bindingRules are the two independent axes Inputs
+// validation varies along: which data boundary it binds, which supplies the
+// diagnostic vocabulary, and how strict the check is, which differs between a
+// definition and the JSON text carrying one. Naming each axis value once keeps
+// the four combinations from drifting apart -- a port and a seed must not
+// describe themselves differently depending on which check found the problem,
+// which TestInputsValidation_namesTheBindingItChecked holds all four to.
 type bindingVocabulary struct {
 	nameKind    string
 	bindingKind string

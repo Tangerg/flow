@@ -86,6 +86,31 @@ func validateText(name, value string) error {
 	return nil
 }
 
+// textMember is one serialized member checked as text. It carries both halves of
+// its vocabulary: the field a diagnostic points at, and the concept name the
+// message states. Reusing the field for both would repeat it -- "field type: type
+// is not valid UTF-8" -- and would describe the same member differently from the
+// definition check.
+type textMember struct {
+	field string
+	kind  string
+	value string
+}
+
+// firstInvalidText names the first member whose text would not survive a JSON
+// round trip, and is how a document reports which of its members that was. Every
+// definition that reaches the wire checks its own members this way, so the order
+// -- first failure wins, in declaration order -- is stated here rather than once
+// per document type.
+func firstInvalidText(members []textMember) (string, error) {
+	for _, member := range members {
+		if err := validateText(member.kind, member.value); err != nil {
+			return member.field, err
+		}
+	}
+	return "", nil
+}
+
 // validateName checks the common contract of serialized names: they are
 // required and must cross UTF-8 boundaries unchanged. Concepts with a stronger
 // error category, such as step IDs, keep their dedicated validator.

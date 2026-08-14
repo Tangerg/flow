@@ -245,6 +245,30 @@ go test ./example -run Example -v
   already hands its bytes over. A new result that stays silent reads as
   uncertainty rather than as the convention it is; naming the ones that comply
   would be a list to maintain, and it drifted before this sentence replaced it.
+- Let the type name itself once. A read that requires a type states it in the
+  signature, in the assertion, and in the message it produces when something else
+  arrived, and the three drift apart quietly: a wanted type spelled as prose is a
+  claim nothing checks. `expr.evalAs` derives its message from its type argument,
+  and `replayDecision` does the same for the two composites that journal a
+  decision instead of an output — `Branch` wants a case name, `Loop` wants whether
+  it stopped, and neither spells that anywhere but the type it asks for.
+  `TestAReplayedDecisionMustCarryTheTypeItsCompositeRecorded` holds both to it.
+- Open a doc comment with the name it documents, unexported declarations
+  included. `godoclint`'s `start-with-name` checks exported symbols by default,
+  which is the half a reader is most likely to catch anyway; all three that had
+  drifted were internal — `baseCells` documented as "base", a `validate`
+  documented as the type it belongs to, a vocabulary type documented as the type
+  it describes. `start-with-name/include-unexported` closes it, and
+  `TestTestCommentsNameTheirOwnTest` holds a test's comment to the same rule.
+- Delete a single-call wrapper whose body is one call. Its name has to say more
+  than the call it hides, and eight of them said less: `guaranteedStepListOutputs`
+  named `unionOutputs(steps, guaranteedOutputs)`, which already reads as "every
+  step runs, so union what they produce", and `validateIterationOutput` hid the
+  `locate` that is the entire difference between how a definition and a `Spec`
+  report one condition. A wrapper does earn its place when a caller should not see
+  what it binds — but `compileNamed`'s two callers were the opposite case, because
+  the arguments they bound are exactly what distinguishes a condition table from a
+  resolver table.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

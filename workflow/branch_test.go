@@ -531,25 +531,3 @@ func TestBranch_reportsJournalDecisionConflict(t *testing.T) {
 		t.Fatalf("error = %v; want ErrJournalConflict", err)
 	}
 }
-
-func TestBranch_rejectsJournaledDecisionOfWrongType(t *testing.T) {
-	journal := workflow.NewJournal()
-	if err := journal.Record(workflow.JournalKey{ID: "route"}, 1); err != nil {
-		t.Fatalf("Record: %v", err)
-	}
-	branch := workflow.Branch(workflow.BranchConfig{
-		ID:       "route",
-		Resolver: resolverNode(func(context.Context, workflow.Store) (string, error) { return "ok", nil }),
-		Cases:    map[string]workflow.Step{"ok": leafStep("ok")},
-	})
-
-	_, err := workflow.Run(
-		t.Context(),
-		branch,
-		workflow.NewStore().WithOutput("start", 1),
-		workflow.RunConfig{Journal: journal},
-	)
-	if !errors.Is(err, workflow.ErrTypeMismatch) {
-		t.Fatalf("error = %v; want ErrTypeMismatch", err)
-	}
-}

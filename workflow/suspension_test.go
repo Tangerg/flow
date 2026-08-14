@@ -1550,40 +1550,28 @@ func TestSuspend_loopDecisionIsJournaled(t *testing.T) {
 	}
 }
 
-func TestSuspend_journaledDecisionOfTheWrongTypeIsReported(t *testing.T) {
+// TestSuspend_journaledDecisionThatNamesNoCaseIsReported covers the decision a
+// resumed run can replay faithfully and still not honor: the recorded name has
+// the type a branch records, so nothing about the record is malformed -- the
+// definition it was written for simply had a case this one does not.
+// TestAReplayedDecisionMustCarryTheTypeItsCompositeRecorded covers the other
+// half, where the record cannot be read as a decision at all.
+func TestSuspend_journaledDecisionThatNamesNoCaseIsReported(t *testing.T) {
 	journal := workflow.NewJournal()
-	// A journal from a different definition could hold anything under these keys.
-	// A loop records one decision per iteration, so its key carries the scope.
+	// A journal from a different definition could hold anything under this key.
 	if err := json.Unmarshal([]byte(`{"version":4,"records":[
-		{"id":"route","value":"not-a-case"},
-		{"scope":[{"id":"repeat","index":0}],"id":"repeat","value":"not-a-bool"}
+		{"id":"route","value":"not-a-case"}
 	]}`), journal); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	// A recorded string that names no case is a plain no-case error.
 	branch := workflow.Branch(workflow.BranchConfig{
 		ID:       "route",
 		Resolver: resolverNode(func(context.Context, workflow.Store) (string, error) { return "a", nil }),
 		Cases:    map[string]workflow.Step{"a": leafStep("a")},
 	})
 
-	_, err := runJournal(branch, workflow.NewStore(), journal)
-	if !errors.Is(err, flow.ErrNoCase) {
+	if _, err := runJournal(branch, workflow.NewStore(), journal); !errors.Is(err, flow.ErrNoCase) {
 		t.Fatalf("branch err = %v; want ErrNoCase", err)
-	}
-
-	// A recorded value of the wrong type is reported rather than ignored.
-	body := workflow.Leaf("b", workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
-		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
-	loop := workflow.Loop(workflow.LoopConfig{
-		ID:        "repeat",
-		Body:      body,
-		Condition: flow.NodeFunc[workflow.Store, bool](func(context.Context, workflow.Store) (bool, error) { return true, nil }),
-	})
-
-	_, err = runJournal(loop, workflow.NewStore(), journal)
-	if !errors.Is(err, workflow.ErrTypeMismatch) {
-		t.Fatalf("loop err = %v; want ErrTypeMismatch", err)
 	}
 }
 

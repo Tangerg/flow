@@ -75,6 +75,11 @@ func (s *specValidator) validate(spec Spec) error {
 		return err
 	}
 
+	// The dispatch is decided before the shared checks run, because deciding it is
+	// also how an unknown kind is refused: [Spec.unexpectedField] would otherwise
+	// report every populated field as invalid for a kind that means nothing. The
+	// variant then runs last, so a field the kind cannot carry at all is named
+	// before whatever that variant would have made of it.
 	var validateVariant func() error
 	switch spec.Kind {
 	case KindLeaf:
@@ -352,9 +357,9 @@ func (s *specValidator) guaranteedOutputs(spec Spec) outputGuarantee {
 		}
 		return knownOutputs()
 	case KindSequence, KindParallel:
-		return s.guaranteedStepOutputs(spec.Steps)
+		return unionOutputs(spec.Steps, s.guaranteedOutputs)
 	case KindBranch:
-		return s.guaranteedCaseOutputs(spec.Cases)
+		return intersectOutputs(spec.Cases, s.guaranteedOutputs)
 	case KindLoop:
 		if spec.Body == nil {
 			return outputGuarantee{}
@@ -365,14 +370,6 @@ func (s *specValidator) guaranteedOutputs(spec Spec) outputGuarantee {
 	default:
 		return outputGuarantee{}
 	}
-}
-
-func (s *specValidator) guaranteedStepOutputs(specs []Spec) outputGuarantee {
-	return unionOutputs(specs, s.guaranteedOutputs)
-}
-
-func (s *specValidator) guaranteedCaseOutputs(cases map[string]Spec) outputGuarantee {
-	return intersectOutputs(cases, s.guaranteedOutputs)
 }
 
 func (s *specValidator) child(stepIDs definitionIDs) specValidator {
