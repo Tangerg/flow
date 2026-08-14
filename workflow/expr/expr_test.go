@@ -467,6 +467,26 @@ func TestEval_stringIndexesAddressEveryJSONKey(t *testing.T) {
 	}
 }
 
+// TestEval_normalizesAnApplicationsOwnScalarTypes covers the other half of what
+// normalization is for. A numeric kind has to be normalized because int8 is not
+// int64, which TestEval_normalizesEveryNumericKind shows; a bool or a string
+// needs it only when the application gave the type a name of its own, since a
+// plain one is already what the evaluator asserts on. Without normalization such
+// a value reaches an operator as its own named type and is refused for not being
+// a bool, which is a value an application legitimately put in a Store.
+func TestEval_normalizesAnApplicationsOwnScalarTypes(t *testing.T) {
+	type approved bool
+	type label string
+
+	s := store("flag.output", approved(true), "name.output", label("beta"))
+	if got, err := expr.MustParse("flag.output && name.output == \"beta\"").Bool(s); err != nil || !got {
+		t.Fatalf("Bool = %v, %v; want true", got, err)
+	}
+	if got, err := expr.MustParse("name.output").String(s); err != nil || got != "beta" {
+		t.Fatalf("String = %q, %v; want %q", got, err, "beta")
+	}
+}
+
 func TestEval_normalizesEveryNumericKind(t *testing.T) {
 	// A value written as any Go numeric type must compare like the same number
 	// decoded from JSON as a float64.

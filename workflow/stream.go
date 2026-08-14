@@ -182,6 +182,12 @@ func (e *emissionSession) emit(ctx context.Context, value any) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	// Both of these are also refused by the emission context, which is why no test
+	// can tell them apart from it: recording a failure below cancels that context
+	// with the same error, and the invocation that opened the session defers the
+	// cancel next to the close. They stay because the session owns its own state --
+	// and because those two deferred statements are not one moment, so a yield that
+	// leaked out of the invocation can arrive after the close and before the cancel.
 	switch {
 	case e.err != nil:
 		return e.err

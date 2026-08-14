@@ -389,9 +389,10 @@ func guaranteedOutputs(step Step) outputGuarantee {
 		return guaranteedOutputs(definition.body)
 	case definitionIteration, definitionSubgraph:
 		return knownOutputs(definition.id)
-	case definitionGraph:
-		return outputGuarantee{}
 	default:
+		// A graph is here too: gates mean a successful run does not promise that
+		// every declared node produced its output, so a graph guarantees no more
+		// than a step this walk cannot see into.
 		return outputGuarantee{}
 	}
 }

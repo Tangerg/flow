@@ -62,15 +62,11 @@ func (s switchNode[K, I, O]) Validate() error {
 			))
 		}
 	}
-	switch len(caseErrors) {
-	case 0:
-		return nil
-	case 1:
-		return caseErrors[0]
-	}
 	// K need only be comparable, so case keys have no universal order. Sort the
 	// complete diagnostics instead. Equal diagnostics need no tie-breaker: their
 	// rendered order is indistinguishable, while errors.Join retains every cause.
+	// Join settles the small arities: none of them joins to nil, and one joins to
+	// a wrapper that renders and unwraps as that one diagnostic.
 	slices.SortFunc(caseErrors, func(left, right error) int {
 		return strings.Compare(left.Error(), right.Error())
 	})

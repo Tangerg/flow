@@ -736,6 +736,13 @@ func TestSpecCompiler_defendsItsValidatedInputContract(t *testing.T) {
 		MustRegisterNode("broken", func(NodeSpec) (Step, error) {
 			return nil, buildErr
 		}).
+		// A single-input factory reports the wiring it did not get, which is the
+		// one factory failure a caller repairs in inputs rather than in config.
+		MustRegisterNode("wired", Factory(func(struct{}) (flow.Node[int, int], error) {
+			return flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+				return value, nil
+			}), nil
+		})).
 		MustRegisterResolver("resolver", flow.NodeFunc[Store, string](func(context.Context, Store) (string, error) {
 			return "", nil
 		})).
@@ -771,6 +778,10 @@ func TestSpecCompiler_defendsItsValidatedInputContract(t *testing.T) {
 				Input: Output("a"),
 			},
 			want: `leaf "leaf" field config: build`,
+		},
+		"unwired leaf": {
+			spec: Spec{Kind: KindLeaf, ID: "leaf", Type: "wired"},
+			want: `leaf "leaf" field inputs: `,
 		},
 		"unknown resolver": {
 			spec: Spec{

@@ -173,6 +173,30 @@ func TestScopeFrame_JSONBoundaryIsStrictAndAtomic(t *testing.T) {
 	}
 }
 
+// TestScopeFrame_namesWhichKindOfIndexItRefused separates the two ways a frame's
+// index can be unusable, because a reader repairs them differently: a value no
+// uint64 can hold came from a producer that counts differently, while a negative
+// or fractional one is not a count at all. The strictness table above accepts
+// either complaint for both, which is what lets them merge into one.
+func TestScopeFrame_namesWhichKindOfIndexItRefused(t *testing.T) {
+	for name, test := range map[string]struct{ data, want string }{
+		"beyond uint64": {
+			data: `{"id":"loop","index":18446744073709551616}`,
+			want: "exceeds uint64",
+		},
+		"negative":   {data: `{"id":"loop","index":-1}`, want: "non-negative integer"},
+		"fractional": {data: `{"id":"loop","index":0.5}`, want: "non-negative integer"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var frame workflow.ScopeFrame
+			err := json.Unmarshal([]byte(test.data), &frame)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Unmarshal error = %v; want it to say %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestTopLevelScopeDiagnosticsNameTheRoot(t *testing.T) {
 	journal := workflow.NewJournal()
 	key := workflow.JournalKey{ID: "step"}
