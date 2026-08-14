@@ -406,3 +406,50 @@ func TestEveryIdentityBearingTypeRefusesToRenameItself(t *testing.T) {
 		})
 	}
 }
+
+// TestWireTextFailuresNameTheConceptNotTheField pins the other half of each wire
+// member's vocabulary. A member carries two names: the serialized field an error
+// points at, and the concept its message states. Using the field for both reads
+// as `field type: type is not valid UTF-8` and describes the same member
+// differently from the definition check, so each member states its concept -- and
+// nothing had read one, so any of them could have been left out.
+func TestWireTextFailuresNameTheConceptNotTheField(t *testing.T) {
+	notUTF8 := string([]byte{0xff})
+	oneNode := func(node workflow.GraphNode) workflow.Graph {
+		return workflow.Graph{Nodes: []workflow.GraphNode{node}}
+	}
+
+	tests := map[string]struct {
+		value   any
+		concept string
+	}{
+		"graph node ID": {
+			value:   oneNode(workflow.GraphNode{ID: notUTF8, Type: "t"}),
+			concept: "step ID",
+		},
+		"graph node type": {
+			value:   oneNode(workflow.GraphNode{ID: "a", Type: notUTF8}),
+			concept: "node type",
+		},
+		"graph trigger": {
+			value:   oneNode(workflow.GraphNode{ID: "a", Type: "t", Trigger: workflow.Trigger(notUTF8)}),
+			concept: "trigger",
+		},
+		"spec kind": {
+			value:   workflow.Spec{Kind: workflow.Kind(notUTF8), ID: "a", Type: "t"},
+			concept: "kind",
+		},
+		"spec ID": {
+			value:   workflow.Spec{Kind: workflow.KindLeaf, ID: notUTF8, Type: "t"},
+			concept: "step ID",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := json.Marshal(test.value)
+			if err == nil || !strings.Contains(err.Error(), test.concept+" is not valid UTF-8") {
+				t.Fatalf("Marshal error = %v; want it to name the %s", err, test.concept)
+			}
+		})
+	}
+}

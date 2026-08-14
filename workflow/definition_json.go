@@ -58,11 +58,12 @@ type specJSONOutput struct {
 	Body  *specJSONOutput           `json:"body,omitempty"`
 }
 
-// specJSONEncoder owns recursive path, depth, and cycle state for one marshal.
-// It builds a method-free wire tree in the same pass that proves text can cross
-// JSON without encoding/json replacing bytes.
+// specJSONEncoder owns the depth and cycle state of one marshal. It builds a
+// method-free wire tree in the same pass that proves text can cross JSON without
+// encoding/json replacing bytes. The spec being encoded is an argument rather
+// than state: only the outermost call needs the root, so carrying it would give
+// every child a copy of a field none of them reads.
 type specJSONEncoder struct {
-	root   Spec
 	active map[*Spec]struct{}
 	depth  int
 }
@@ -150,8 +151,8 @@ func (g Gate) validateJSONText() error {
 	return validateText(nameGateOutlet, g.Outlet)
 }
 
-func (s *specJSONEncoder) marshal() ([]byte, error) {
-	output, err := s.encode(s.root)
+func (s *specJSONEncoder) marshal(root Spec) ([]byte, error) {
+	output, err := s.encode(root)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +163,7 @@ func (s *specJSONEncoder) marshal() ([]byte, error) {
 	// output.
 	encoded, err := marshalJSON(output)
 	if err != nil {
-		return nil, s.root.fieldError(fieldJSON, err)
+		return nil, root.fieldError(fieldJSON, err)
 	}
 	return encoded, nil
 }
@@ -226,7 +227,7 @@ func (s *specJSONEncoder) encode(spec Spec) (specJSONOutput, error) {
 // tree the same way, and the two must agree because they share [Spec.checkDepth].
 // The cycle set stays shared: it tracks the walk, not the level.
 func (s *specJSONEncoder) encodeChild(spec Spec) (specJSONOutput, error) {
-	child := specJSONEncoder{root: s.root, active: s.active, depth: s.depth + 1}
+	child := specJSONEncoder{active: s.active, depth: s.depth + 1}
 	return child.encode(spec)
 }
 

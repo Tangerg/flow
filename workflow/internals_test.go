@@ -1993,3 +1993,87 @@ func TestStore_neverHoldsACellWithTheZeroIdentity(t *testing.T) {
 		}
 	}
 }
+
+// TestSpecCompile_carriesEverySchedulingSettingIntoTheStep pins the settings a
+// Spec carries that change only how work is scheduled. A step built without them
+// computes the same outputs from the same inputs, so no behavioural test of a
+// compiled spec can tell whether the value arrived -- a parallel spec asking for
+// two at a time and one asking for all of them agree on every answer. The step's
+// own limit is where the value either is or is not.
+func TestSpecCompile_carriesEverySchedulingSettingIntoTheStep(t *testing.T) {
+	registry := NewRegistry().
+		MustRegisterNode("leaf", InterruptFactory()).
+		MustRegisterCondition("again", flow.NodeFunc[Store, bool](
+			func(context.Context, Store) (bool, error) { return true, nil },
+		))
+	leaf := Spec{Kind: KindLeaf, ID: "inner", Type: "leaf"}
+
+	tests := map[string]struct {
+		spec Spec
+		want func(Step) (int, bool)
+	}{
+		"parallel concurrency": {
+			spec: Spec{Kind: KindParallel, Concurrency: 3, Steps: []Spec{leaf}},
+			want: func(step Step) (int, bool) {
+				parallel, ok := step.(parallelStep)
+				return parallel.limit, ok
+			},
+		},
+		"iteration concurrency": {
+			spec: Spec{
+				Kind:        KindIteration,
+				ID:          "each",
+				Input:       Output("items"),
+				Body:        &leaf,
+				BodyOutput:  Output("inner"),
+				Concurrency: 3,
+			},
+			want: func(step Step) (int, bool) {
+				iteration, ok := step.(iterationStep)
+				return iteration.limit, ok
+			},
+		},
+		"loop iterations": {
+			spec: Spec{
+				Kind:          KindLoop,
+				ID:            "repeat",
+				Body:          &leaf,
+				Condition:     "again",
+				MaxIterations: 3,
+			},
+			want: func(step Step) (int, bool) {
+				loop, ok := step.(loopStep)
+				return loop.config.MaxIterations, ok
+			},
+		},
+	}
+	t.Run("graph concurrency", func(t *testing.T) {
+		step, err := registry.CompileGraph(Graph{
+			Concurrency: 3,
+			Nodes:       []GraphNode{{ID: "only", Type: "leaf"}},
+		})
+		if err != nil {
+			t.Fatalf("CompileGraph: %v", err)
+		}
+		graph, ok := step.(graphStep)
+		if !ok || graph.limit != 3 {
+			t.Fatalf("graph step = %#v; want the 3 the graph asked for", step)
+		}
+	})
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			step, err := registry.CompileSpec(test.spec)
+			if err != nil {
+				t.Fatalf("CompileSpec: %v", err)
+			}
+			got, ok := test.want(step)
+			if !ok {
+				t.Fatalf("CompileSpec built %T; want the step the kind names", step)
+			}
+			if got != 3 {
+				t.Fatalf("setting reached the step as %d; want the 3 the spec asked for", got)
+			}
+		})
+	}
+}

@@ -463,6 +463,13 @@ func TestRegistry_rejectsSchemaOutputMismatchAtCompilation(t *testing.T) {
 					registrationErr.Kind != "schema" || registrationErr.Name != "node" {
 					t.Fatalf("CompileGraph error = %v; want graph and registration errors", err)
 				}
+				// The envelope names which registration disagreed; the cause says how.
+				// Both sentinels above are the envelope's own, so a lost cause reads as
+				// the same failure with no reason in it.
+				if registrationErr.Err == nil ||
+					!strings.Contains(err.Error(), registrationErr.Err.Error()) {
+					t.Fatalf("RegistrationError = %+v; want it to carry and render the mismatch", registrationErr)
+				}
 			})
 
 			t.Run("Spec", func(t *testing.T) {
@@ -900,6 +907,14 @@ func TestRegistry_rejectsNegativeConcurrency(t *testing.T) {
 	spec := workflow.Spec{Kind: workflow.KindParallel, Concurrency: -1}
 	if _, err := reg.CompileSpec(spec); !errors.Is(err, flow.ErrInvalidConfig) {
 		t.Fatalf("CompileSpec error = %v; want ErrInvalidConfig", err)
+	}
+	// Validation rejects it too, and says which field: the step this spec would
+	// build refuses the same value on its own, so compiling is not what asks. A
+	// caller validating a document before storing it needs the answer without one.
+	var specErr *workflow.SpecError
+	if err := reg.ValidateSpec(spec); !errors.Is(err, flow.ErrInvalidConfig) ||
+		!errors.As(err, &specErr) || specErr.Field != "concurrency" {
+		t.Fatalf("ValidateSpec error = %v; want ErrInvalidConfig at concurrency", err)
 	}
 }
 

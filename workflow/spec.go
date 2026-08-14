@@ -88,11 +88,8 @@ type Spec struct {
 // definition checks remain the responsibility of [Registry.ValidateSpec] or
 // compilation.
 func (s Spec) MarshalJSON() ([]byte, error) {
-	encoder := specJSONEncoder{
-		root:   s,
-		active: make(map[*Spec]struct{}),
-	}
-	return encoder.marshal()
+	encoder := specJSONEncoder{active: make(map[*Spec]struct{})}
+	return encoder.marshal(s)
 }
 
 // UnmarshalJSON atomically replaces s with one strictly decoded Spec. It uses

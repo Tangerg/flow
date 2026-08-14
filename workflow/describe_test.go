@@ -300,3 +300,33 @@ func TestBranchAndLoop_propagateDecisionErrors(t *testing.T) {
 		t.Fatalf("loop err = %v; want a suspension naming repeat", err)
 	}
 }
+
+// TestDescribe_reportsTheBodyOfEveryCompositeThatHasOne pins what a rendering
+// tool reads. A composite holding one body reports it as its single child, and
+// only Iteration and Subgraph project a body output, so those two assemble the
+// child list themselves rather than describing a slice they already hold.
+func TestDescribe_reportsTheBodyOfEveryCompositeThatHasOne(t *testing.T) {
+	body := leafStep("inner")
+	composites := map[string]workflow.Step{
+		"iteration": workflow.Iteration(workflow.IterationConfig{
+			ID:         "each",
+			Input:      workflow.Output("items"),
+			Body:       body,
+			BodyOutput: workflow.Output("inner"),
+		}),
+		"subgraph": workflow.Subgraph(workflow.SubgraphConfig{
+			ID:         "sealed",
+			Body:       body,
+			BodyOutput: workflow.Output("inner"),
+		}),
+		"loop": workflow.Loop(workflow.LoopConfig{ID: "repeat", Body: body}),
+	}
+	for name, composite := range composites {
+		t.Run(name, func(t *testing.T) {
+			described := workflow.Describe(composite)
+			if len(described.Children) != 1 || described.Children[0].ID != "inner" {
+				t.Fatalf("Describe = %+v; want the body as its only child", described)
+			}
+		})
+	}
+}
