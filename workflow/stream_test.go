@@ -1589,3 +1589,138 @@ func TestStreamFunc_outsideALeafOwnsItsOwnStreamOutcome(t *testing.T) {
 		}
 	})
 }
+
+// TestStreamFunc_aYieldRacingTheCloseReportsWhatItDid opens the window
+// emissionLease exists for: its doc calls the mutex "the linearization point
+// between admitting a yield and closing the invocation", and admission is the half
+// of it a test can reach on purpose. No streaming test had. The concurrent ones
+// wait for their yields before returning, as
+// TestStreamFunc_serializesConcurrentYieldCalls does, and the after-the-fact ones
+// sequence yield and close with channels, as
+// TestStreamFunc_rejectsYieldAfterItsInvocationReturns does — so the close had
+// never run while a yield was arriving, and admitting one afterward went unnoticed.
+//
+// A producer that returns while its goroutines are still yielding is what opens it.
+// Which side wins is the scheduler's to decide, so what is pinned is what may not
+// depend on that: a yield reports truthfully whether its value reached the Emitter,
+// no chunk arrives after Run returns, delivery stays serialized, and the indexes
+// stay a gapless prefix. A refused straggler is not a failure, so the leaf still
+// completes. Dropping the lock that admits a yield is a data race on every run of
+// this test; the lease's other three sections are the species its own comment
+// describes, reachable only by a timing no test chooses.
+func TestStreamFunc_aYieldRacingTheCloseReportsWhatItDid(t *testing.T) {
+	// Whether a straggler reaches the Emitter or is refused is the scheduler's
+	// answer, and both are correct, so the window is opened several times rather
+	// than assumed to land one way.
+	for attempt := range 4 {
+		race := stragglerRace{stragglers: 4}
+		race.run(t, attempt)
+		race.check(t, attempt)
+	}
+}
+
+// stragglerRace is one attempt at yielding across the close that ends an
+// invocation. It owns both sides of the window: what the producer's goroutines
+// were told their yields did, and what the Emitter actually received.
+type stragglerRace struct {
+	stragglers int
+
+	leaving  sync.WaitGroup
+	admitted sync.Mutex
+	accepted []int
+
+	returned atomic.Bool
+	late     atomic.Bool
+	active   atomic.Int64
+	overlap  atomic.Bool
+	delivery sync.Mutex
+	chunks   []workflow.Chunk
+
+	out workflow.Store
+	err error
+}
+
+// run streams from a producer that returns while its goroutines are still
+// yielding, which is what puts a yield and the deferred close in flight together.
+func (s *stragglerRace) run(t *testing.T, attempt int) {
+	t.Helper()
+	step := workflow.Leaf(
+		"stream",
+		workflow.From[int](workflow.Output("start")),
+		workflow.StreamFunc[int, int, int](
+			func(_ context.Context, input int, yield func(int) bool) (int, error) {
+				s.spawn(yield)
+				return input, nil
+			},
+		),
+	)
+	s.out, s.err = workflow.Run(
+		t.Context(),
+		step,
+		workflow.NewStore().WithOutput("start", attempt),
+		workflow.RunConfig{Emitter: workflow.EmitterFunc(s.emit)},
+	)
+	s.returned.Store(true)
+	s.leaving.Wait()
+}
+
+func (s *stragglerRace) spawn(yield func(int) bool) {
+	s.leaving.Add(s.stragglers)
+	for value := range s.stragglers {
+		go func() {
+			defer s.leaving.Done()
+			if !yield(value) {
+				return
+			}
+			s.admitted.Lock()
+			s.accepted = append(s.accepted, value)
+			s.admitted.Unlock()
+		}()
+	}
+}
+
+func (s *stragglerRace) emit(_ context.Context, chunk workflow.Chunk) error {
+	if s.returned.Load() {
+		s.late.Store(true)
+	}
+	if s.active.Add(1) != 1 {
+		s.overlap.Store(true)
+	}
+	s.delivery.Lock()
+	s.chunks = append(s.chunks, chunk)
+	s.delivery.Unlock()
+	s.active.Add(-1)
+	return nil
+}
+
+// check asserts only what the scheduler may not decide.
+func (s *stragglerRace) check(t *testing.T, attempt int) {
+	t.Helper()
+	if s.err != nil {
+		t.Fatalf("attempt %d: Run: %v", attempt, s.err)
+	}
+	got, err := workflow.Get[int](s.out, workflow.Output("stream"))
+	if err != nil || got != attempt {
+		t.Fatalf("attempt %d: output = %d, %v; want %d, nil", attempt, got, err, attempt)
+	}
+	if s.late.Load() {
+		t.Fatalf("attempt %d: a chunk reached the Emitter after Run returned", attempt)
+	}
+	if s.overlap.Load() {
+		t.Fatalf("attempt %d: Emitter was called concurrently for one invocation", attempt)
+	}
+	for index, chunk := range s.chunks {
+		if chunk.Index != uint64(index) {
+			t.Fatalf("attempt %d: chunk %d Index = %d; want %d", attempt, index, chunk.Index, index)
+		}
+	}
+	delivered := chunkValues(s.chunks)
+	slices.Sort(delivered)
+	slices.Sort(s.accepted)
+	if !slices.Equal(delivered, s.accepted) {
+		t.Fatalf(
+			"attempt %d: delivered %v but yield reported %v accepted",
+			attempt, delivered, s.accepted,
+		)
+	}
+}

@@ -236,6 +236,16 @@ func (e *emissionSession) close() error {
 // emissionLease restricts a yield callback to one StreamFunc invocation. The
 // mutex is the linearization point between admitting a yield and closing the
 // invocation; close then waits for every admitted call before Run returns.
+//
+// Only the admission is a window a test can enter on purpose, by returning from a
+// producer whose goroutines are still yielding —
+// TestStreamFunc_aYieldRacingTheCloseReportsWhatItDid does, and dropping that lock
+// races on every run of it. The other three sections need two leaked yields to
+// overlap, or one to overlap the close that already refused it, and close runs from
+// the same goroutine that ran the producer: which side of the write a straggler
+// lands on is the scheduler's choice rather than the test's, so dropping their
+// locks races only sometimes. They stay for the same reason
+// [emissionSession.close]'s does.
 type emissionLease struct {
 	mu      sync.Mutex
 	active  sync.WaitGroup

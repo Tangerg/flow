@@ -336,6 +336,32 @@ go test ./example -run Example -v
   inside them: `TestInputsWalkInNameOrderSoTheFirstOffenderIsAlwaysTheSame` and
   `TestADefinitionWithSeveralDefectsIsRefusedForTheSameOne`. Both were written
   against the map-order mutant that the whole suite had survived.
+- Pin the half of a concurrency window a test can choose, and say who chooses the
+  rest. Removing a lock is a data race only if something puts two accesses in flight
+  together, so a critical section no test exercises concurrently reads as protected
+  while being untested. Of this package's twelve exclusive sections, eight race under
+  `-race` the moment their lock goes. The other four are the emission lease's, and
+  every streaming test either waited for its yields before returning or sequenced
+  them with channels, so a close had never run while a yield was arriving. Admission
+  is the half a test can enter on purpose — a producer that returns while its
+  goroutines are still yielding — and
+  `TestStreamFunc_aYieldRacingTheCloseReportsWhatItDid` asserts only what timing may
+  not decide: a yield reports truthfully whether its value was delivered, nothing
+  arrives after `Run` returns, delivery stays serialized, indexes stay a gapless
+  prefix. The other three need two leaked yields to overlap, and `close` runs on the
+  goroutine that ran the producer, so dropping their locks races only sometimes —
+  `emissionLease` records that beside them rather than leaving the next reader to
+  hunt for the missing test.
+- State a value type's algebra even where nothing observes it. Thirty-three
+  defensive copies keep this module's constructors and accessors owning what they
+  hand out, and twenty-seven fail a test the moment one goes — the
+  `_owns…Structure` family. Of the six that do not, five are a second copy of a
+  clone that already happened on every path to a caller, and `outputGuarantee.union`
+  is the one whose clone carries meaning: it is a method on a struct passed by value,
+  so `a.union(b)` has to leave `a` alone, and `unionOutputs` folding the result back
+  over its accumulator is the only reason nothing notices today.
+  `TestOutputGuaranteeCombinatorsLeaveTheirOperandsAlone` says it instead of leaving
+  it for a second caller to discover.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

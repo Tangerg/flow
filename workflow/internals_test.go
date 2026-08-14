@@ -2236,3 +2236,31 @@ func TestADefinitionWithSeveralDefectsIsRefusedForTheSameOne(t *testing.T) {
 		}
 	}
 }
+
+// TestOutputGuaranteeCombinatorsLeaveTheirOperandsAlone states the value semantics
+// of the two set combinators, which is the whole reason union clones before
+// copying into the result. Both are methods on a struct passed by value, so a
+// reader assumes a.union(b) reports what the two guarantee together and leaves a
+// alone -- and the map inside is what makes that an assumption rather than a fact.
+// Nothing observes it today: unionOutputs folds the result straight back over the
+// accumulator, so an in-place union computes the same answer, and its clone is a
+// defense no caller can currently trip. It is stated here rather than left to the
+// next caller to discover.
+func TestOutputGuaranteeCombinatorsLeaveTheirOperandsAlone(t *testing.T) {
+	left := knownOutputs("a")
+	right := knownOutputs("b")
+
+	if both := left.union(right); !both.contains("a") || !both.contains("b") {
+		t.Fatalf("union of a and b contains a=%v b=%v; want both", both.contains("a"), both.contains("b"))
+	}
+	if left.contains("b") || right.contains("a") {
+		t.Fatalf("union mutated an operand: left has b=%v, right has a=%v", left.contains("b"), right.contains("a"))
+	}
+
+	if common := left.intersection(right); common.contains("a") || common.contains("b") {
+		t.Fatal("intersection of disjoint guarantees is not empty")
+	}
+	if !left.contains("a") || !right.contains("b") {
+		t.Fatal("intersection mutated an operand")
+	}
+}
