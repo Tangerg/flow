@@ -129,44 +129,24 @@ func (r Ref) Child(segments ...string) Ref {
 func Get[T any](store Store, ref Ref) (T, error) {
 	var zero T
 	target := reflect.TypeFor[T]()
-	want := target.String()
+	read := typedRead{ref: ref, want: target.String()}
+
 	raw, ok, err := store.resolve(ref)
 	if err != nil {
-		got := ""
-		if raw != nil {
-			got = reflect.TypeOf(raw).String()
-		}
-		return zero, &RefError{
-			Ref:  ref,
-			Want: want,
-			Got:  got,
-			Err: fmt.Errorf(
-				"%w: resolve nested value: %w",
-				ErrTypeMismatch,
-				err,
-			),
-		}
+		return zero, read.failed(raw, fmt.Errorf(
+			"%w: resolve nested value: %w",
+			ErrTypeMismatch,
+			err,
+		))
 	}
 	if !ok {
-		return zero, &RefError{Ref: ref, Want: want, Err: ErrNotFound}
+		return zero, read.failed(nil, ErrNotFound)
 	}
 	if raw == nil {
-		// These are exactly the Go kinds to which nil is assignable. Keep the
-		// classification independent of JSON support: an in-memory Store may hold
-		// nil even for a type whose non-nil values cannot be persisted, such as a
-		// channel or unsafe.Pointer.
-		switch target.Kind() {
-		case reflect.Chan,
-			reflect.Func,
-			reflect.Interface,
-			reflect.Map,
-			reflect.Pointer,
-			reflect.Slice,
-			reflect.UnsafePointer:
+		if nilAssignable(target.Kind()) {
 			return zero, nil
-		default:
-			return zero, &RefError{Ref: ref, Want: want, Err: ErrTypeMismatch}
 		}
+		return zero, read.failed(nil, ErrTypeMismatch)
 	}
 	if value, ok := raw.(T); ok {
 		return value, nil
@@ -174,14 +154,48 @@ func Get[T any](store Store, ref Ref) (T, error) {
 
 	value, err := convertJSON[T](raw)
 	if err != nil {
-		return zero, &RefError{
-			Ref:  ref,
-			Want: want,
-			Got:  reflect.TypeOf(raw).String(),
-			Err:  fmt.Errorf("%w: %w", ErrTypeMismatch, err),
-		}
+		return zero, read.failed(raw, fmt.Errorf("%w: %w", ErrTypeMismatch, err))
 	}
 	return value, nil
+}
+
+// typedRead is what one [Get] is asking for: the reference it resolves and the
+// type it wants back. Both are fixed for the whole call while four separate
+// conditions can end it, so the read states its own location once instead of
+// every return restating it.
+type typedRead struct {
+	ref  Ref
+	want string
+}
+
+// failed reports a condition at this read, naming the concrete type the Store
+// held. An untyped nil and an unresolved reference have no such type, which is
+// the empty [RefError.Got] a caller is documented to see.
+func (t typedRead) failed(raw any, err error) *RefError {
+	got := ""
+	if raw != nil {
+		got = reflect.TypeOf(raw).String()
+	}
+	return &RefError{Ref: t.ref, Want: t.want, Got: got, Err: err}
+}
+
+// nilAssignable reports the Go kinds a stored untyped nil can be read back as.
+// These are exactly the kinds nil is assignable to, independent of JSON support:
+// an in-memory Store may hold nil even for a type whose non-nil values cannot be
+// persisted, such as a channel or [unsafe.Pointer].
+func nilAssignable(kind reflect.Kind) bool {
+	switch kind {
+	case reflect.Chan,
+		reflect.Func,
+		reflect.Interface,
+		reflect.Map,
+		reflect.Pointer,
+		reflect.Slice,
+		reflect.UnsafePointer:
+		return true
+	default:
+		return false
+	}
 }
 
 // convertJSON converts a value to T through its JSON representation. It is the

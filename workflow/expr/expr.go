@@ -434,22 +434,8 @@ func (c *compiler) compileBinary(n *ast.BinaryExpr, depth int) (evalFunc, error)
 		return nil, err
 	}
 
-	// && and || short-circuit, so has(x) && x > 1 is a usable guard.
-	//
-	//nolint:exhaustive // Lifts out the two short-circuiting operators; the rest fall through.
-	switch n.Op {
-	case token.LAND, token.LOR:
-		stopAt := n.Op == token.LOR
-		return func(s workflow.Store) (any, error) {
-			lv, err := left.bool(s, n.Op)
-			if err != nil {
-				return nil, err
-			}
-			if lv == stopAt {
-				return stopAt, nil
-			}
-			return right.bool(s, n.Op)
-		}, nil
+	if n.Op == token.LAND || n.Op == token.LOR {
+		return shortCircuit(left, right, n.Op), nil
 	}
 
 	// The operator is built once and captured, so the closure holds the operator
@@ -458,17 +444,41 @@ func (c *compiler) compileBinary(n *ast.BinaryExpr, depth int) (evalFunc, error)
 	if !operator.supported() {
 		return nil, c.unsupported(n, "operator "+operator.String())
 	}
+	return operator.eval(left, right), nil
+}
+
+// shortCircuit evaluates the right operand only when the left one has not already
+// decided the answer, which is what makes has(x) && x > 1 a usable guard. Both
+// operands are read as booleans, so op names the operator each conversion failure
+// belongs to.
+func shortCircuit(left, right evalFunc, op token.Token) evalFunc {
+	stopAt := op == token.LOR
 	return func(s workflow.Store) (any, error) {
-		lv, err := left(s)
+		decided, err := left.bool(s, op)
 		if err != nil {
 			return nil, err
 		}
-		rv, err := right(s)
+		if decided == stopAt {
+			return stopAt, nil
+		}
+		return right.bool(s, op)
+	}
+}
+
+// eval applies the operator to both operands. It belongs to the operator because
+// nothing of the expression it came from survives compilation.
+func (b binaryOperator) eval(left, right evalFunc) evalFunc {
+	return func(s workflow.Store) (any, error) {
+		leftValue, err := left(s)
 		if err != nil {
 			return nil, err
 		}
-		return operator.apply(operand{raw: lv}, operand{raw: rv})
-	}, nil
+		rightValue, err := right(s)
+		if err != nil {
+			return nil, err
+		}
+		return b.apply(operand{raw: leftValue}, operand{raw: rightValue})
+	}
 }
 
 func (c *compiler) compileCall(n *ast.CallExpr, depth int) (evalFunc, error) {
@@ -478,47 +488,58 @@ func (c *compiler) compileCall(n *ast.CallExpr, depth int) (evalFunc, error) {
 	}
 	switch name.Name {
 	case "has":
-		if err := c.oneArgument(n, name.Name); err != nil {
-			return nil, err
-		}
-		// has reports whether a reference resolves, so it needs the reference
-		// itself rather than making absence an evaluation error. Other read
-		// failures still propagate: malformed data is not the same as no data.
-		ref, err := c.reference(n.Args[0])
-		if err != nil {
-			return nil, err
-		}
-		return func(s workflow.Store) (any, error) {
-			_, err := resolveReference(s, ref)
-			switch {
-			case err == nil:
-				return true, nil
-			case errors.Is(err, ErrUndefined):
-				return false, nil
-			default:
-				return nil, err
-			}
-		}, nil
+		return c.compileHas(n)
 	case "len":
-		if err := c.oneArgument(n, name.Name); err != nil {
-			return nil, err
-		}
-		arg, err := c.compile(n.Args[0], depth+1)
-		if err != nil {
-			return nil, err
-		}
-		return func(s workflow.Store) (any, error) {
-			v, err := arg(s)
-			if err != nil {
-				return nil, err
-			}
-			return (operand{raw: v}).length()
-		}, nil
+		return c.compileLen(n, depth)
 	default:
 		return nil, c.errorAt(n, fmt.Errorf(
 			"%w: unknown function %q; the only functions are has and len",
 			ErrUnsupported, name.Name))
 	}
+}
+
+// compileHas compiles has(ref). It takes the reference itself rather than a
+// compiled argument, because absence is the answer here instead of an evaluation
+// error. Every other read failure still propagates: malformed data is not the
+// same as no data.
+func (c *compiler) compileHas(n *ast.CallExpr) (evalFunc, error) {
+	if err := c.oneArgument(n, "has"); err != nil {
+		return nil, err
+	}
+	ref, err := c.reference(n.Args[0])
+	if err != nil {
+		return nil, err
+	}
+	return func(s workflow.Store) (any, error) {
+		_, err := resolveReference(s, ref)
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, ErrUndefined):
+			return false, nil
+		default:
+			return nil, err
+		}
+	}, nil
+}
+
+// compileLen compiles len(x) over an ordinary compiled argument, so its operand
+// may be any expression rather than only a reference.
+func (c *compiler) compileLen(n *ast.CallExpr, depth int) (evalFunc, error) {
+	if err := c.oneArgument(n, "len"); err != nil {
+		return nil, err
+	}
+	arg, err := c.compile(n.Args[0], depth+1)
+	if err != nil {
+		return nil, err
+	}
+	return func(s workflow.Store) (any, error) {
+		value, err := arg(s)
+		if err != nil {
+			return nil, err
+		}
+		return (operand{raw: value}).length()
+	}, nil
 }
 
 // oneArgument checks the arity of a call this package recognizes. Its caller

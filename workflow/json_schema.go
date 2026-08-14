@@ -128,24 +128,8 @@ func (s *schemaDialectValidator) validate(value any) error {
 		// validation.
 		return nil
 	}
-	if dialect, declared := object["$schema"]; declared {
-		name, ok := dialect.(string)
-		if !ok {
-			return fmt.Errorf(
-				"$schema at %s must be a string naming %q, got %s",
-				s.location(),
-				draft2020URL,
-				jsondoc.Kind(dialect),
-			)
-		}
-		if !isDraft2020(name) {
-			return fmt.Errorf(
-				"$schema at %s is %q; want %q",
-				s.location(),
-				name,
-				draft2020URL,
-			)
-		}
+	if err := s.checkDialect(object); err != nil {
+		return err
 	}
 
 	for _, keyword := range [...]string{
@@ -182,6 +166,35 @@ func (s *schemaDialectValidator) validate(value any) error {
 		if err := s.validateMap(object[keyword], keyword); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// checkDialect checks the one thing a schema object says about itself, leaving
+// [schemaDialectValidator.validate] to be about the positions it descends into.
+// An object that declares no dialect inherits the one this package compiles
+// under, which is why an absent $schema is not a failure.
+func (s *schemaDialectValidator) checkDialect(object map[string]any) error {
+	dialect, declared := object["$schema"]
+	if !declared {
+		return nil
+	}
+	name, ok := dialect.(string)
+	if !ok {
+		return fmt.Errorf(
+			"$schema at %s must be a string naming %q, got %s",
+			s.location(),
+			draft2020URL,
+			jsondoc.Kind(dialect),
+		)
+	}
+	if !isDraft2020(name) {
+		return fmt.Errorf(
+			"$schema at %s is %q; want %q",
+			s.location(),
+			name,
+			draft2020URL,
+		)
 	}
 	return nil
 }

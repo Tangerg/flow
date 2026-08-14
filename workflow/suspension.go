@@ -147,27 +147,9 @@ func (s suspensionTree) suspensions() (suspensionList, bool) {
 func (s suspensionTree) collect() (suspensionList, bool) {
 	for s.err != nil {
 		err := s.err
-		// This intentionally inspects the current node rather than using [errors.As]:
-		// As would skip wrappers and could misclassify a mixed joined tree as a pure
-		// suspension tree.
-		//
-		//nolint:errorlint // Unwrapping here would defeat the per-node classification.
-		if suspension, ok := err.(*Suspension); ok {
-			if suspension == nil {
-				// A typed nil still satisfies error and matches ErrSuspended through
-				// Suspension.Unwrap. Preserve that meaning as an anonymous wait
-				// instead of normalizing it away into a nil error.
-				return suspensionList{{}}, true
-			}
-			return suspensionList{suspension.clone()}, true
+		if wait, ok := waitAt(err); ok {
+			return wait, true
 		}
-		// Exact identity preserves a direct wrapper's message below.
-		//
-		//nolint:errorlint // [errors.Is] would match wrappers this must not consume.
-		if err == ErrSuspended {
-			return suspensionList{{}}, true
-		}
-
 		if many, ok := err.(interface{ Unwrap() []error }); ok {
 			children := many.Unwrap()
 			if slices.ContainsFunc(children, func(err error) bool { return err != nil }) {
@@ -194,6 +176,31 @@ func (s suspensionTree) collect() (suspensionList, bool) {
 			continue
 		}
 		return s.collectIdentity()
+	}
+	return nil, false
+}
+
+// waitAt reports the wait one error node already is, before anything unwraps it.
+// It deliberately inspects that node rather than using [errors.As], which would
+// skip wrappers and could read a mixed joined tree as a pure tree of waits.
+// Separating it from the walk keeps [suspensionTree.collect] about the shape of
+// the tree and this about what a single node means.
+func waitAt(err error) (suspensionList, bool) {
+	//nolint:errorlint // Unwrapping here would defeat the per-node classification.
+	if suspension, ok := err.(*Suspension); ok {
+		if suspension == nil {
+			// A typed nil still satisfies error and matches ErrSuspended through
+			// Suspension.Unwrap. Preserve that meaning as an anonymous wait instead
+			// of normalizing it away into a nil error.
+			return suspensionList{{}}, true
+		}
+		return suspensionList{suspension.clone()}, true
+	}
+	// Exact identity leaves a direct wrapper's message to the walk, which keeps it.
+	//
+	//nolint:errorlint // [errors.Is] would match wrappers this must not consume.
+	if err == ErrSuspended {
+		return suspensionList{{}}, true
 	}
 	return nil, false
 }

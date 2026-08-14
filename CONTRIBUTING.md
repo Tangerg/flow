@@ -424,6 +424,25 @@ go test ./example -run Example -v
   while passing every other test in this repository. It stays, and
   `TestValidatingOneBoundaryAllocatesNoIdentitySet` is what refuses the
   simplification now, because a comment claiming an allocation is not a guard.
+- Split a function that holds two subjects, and leave one that holds a single
+  irreducible subject alone. Probing at `gocognit` 12 and `gocyclo` 10 — far under
+  the gate's 30 — surfaced fourteen, and six of them were two things wearing one
+  name. `Get` located the same failed read at four returns, so `typedRead` says the
+  reference and the wanted type once and `nilAssignable` names the kinds a stored
+  nil reads back as. `suspensionTree.collect` mixed what one error node means with
+  how a tree is walked, and `waitAt` is the first of those. `specJSONEncoder.encode`
+  was one block while the decoder beside it was already three, so `encodeSteps`,
+  `encodeCases`, and `encodeBody` now mirror `decodeSteps`, `decodeCases`, and
+  `decodeBody`. `NodeSchema.validate` is the three declarations its own doc lists.
+  `compileCall` is dispatch again with `compileHas` and `compileLen` owning their
+  builtins, and `compileBinary` names its two closures — `shortCircuit` and
+  `binaryOperator.eval` — which also retires a `//nolint:exhaustive` covering a
+  switch with one case.
+  The eight left are each one subject: a scheduler loop, an error-tree walk, a
+  shadowing walk over two maps, an escape scanner, a number parser, a straight-line
+  factory pipeline, and two dispatches over the kind vocabulary — where
+  `Spec.requireKindFields` *is* the field matrix. Splitting those would hide the
+  thing they exist to show.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

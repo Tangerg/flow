@@ -166,47 +166,76 @@ func (s *specJSONEncoder) encode(spec Spec) (specJSONOutput, error) {
 		return specJSONOutput{}, spec.fieldError(field, err)
 	}
 
-	fields := specJSONFields(spec)
-	output := specJSONOutput{specJSONFields: &fields}
-	// The wire tags decide whether a child member appears: an empty container and
-	// an absent one encode alike. The guards below only skip allocating a container
-	// that no child will fill.
-	if len(spec.Steps) > 0 {
-		output.Steps = make([]specJSONOutput, len(spec.Steps))
-		for index, child := range spec.Steps {
-			encoded, err := s.encodeChild(child)
-			if err != nil {
-				return specJSONOutput{}, locateSpecError(err, fieldSteps, strconv.Itoa(index))
-			}
-			output.Steps[index] = encoded
-		}
+	steps, err := s.encodeSteps(spec.Steps)
+	if err != nil {
+		return specJSONOutput{}, err
 	}
-	if len(spec.Cases) > 0 {
-		output.Cases = make(map[string]specJSONOutput, len(spec.Cases))
-		for _, name := range slices.Sorted(maps.Keys(spec.Cases)) {
-			encoded, err := s.encodeChild(spec.Cases[name])
-			if err != nil {
-				return specJSONOutput{}, locateSpecError(err, fieldCases, name)
-			}
-			output.Cases[name] = encoded
-		}
+	cases, err := s.encodeCases(spec.Cases)
+	if err != nil {
+		return specJSONOutput{}, err
 	}
+	var body *specJSONOutput
 	if spec.Body != nil {
-		if _, cyclic := s.active[spec.Body]; cyclic {
-			return specJSONOutput{}, spec.fieldError(
-				fieldBody,
-				errors.New("cyclic spec body"),
-			)
-		}
-		s.active[spec.Body] = struct{}{}
-		encoded, err := s.encodeChild(*spec.Body)
-		delete(s.active, spec.Body)
+		encoded, err := s.encodeBody(spec)
 		if err != nil {
-			return specJSONOutput{}, locateSpecError(err, fieldBody)
+			return specJSONOutput{}, err
 		}
-		output.Body = &encoded
+		body = &encoded
 	}
-	return output, nil
+
+	fields := specJSONFields(spec)
+	return specJSONOutput{
+		specJSONFields: &fields,
+		Steps:          steps,
+		Cases:          cases,
+		Body:           body,
+	}, nil
+}
+
+// encodeSteps, encodeCases, and encodeBody mirror the three the decoder already
+// splits its own children into, so one child position is one function on both
+// sides of the wire. The two container kinds need no empty case: the wire tags
+// make an empty container and an absent one encode alike, so building one of the
+// length it was given says the same thing with no branch.
+func (s *specJSONEncoder) encodeSteps(steps []Spec) ([]specJSONOutput, error) {
+	encoded := make([]specJSONOutput, len(steps))
+	for index, child := range steps {
+		child, err := s.encodeChild(child)
+		if err != nil {
+			return nil, locateSpecError(err, fieldSteps, strconv.Itoa(index))
+		}
+		encoded[index] = child
+	}
+	return encoded, nil
+}
+
+func (s *specJSONEncoder) encodeCases(cases map[string]Spec) (map[string]specJSONOutput, error) {
+	encoded := make(map[string]specJSONOutput, len(cases))
+	for _, name := range slices.Sorted(maps.Keys(cases)) {
+		child, err := s.encodeChild(cases[name])
+		if err != nil {
+			return nil, locateSpecError(err, fieldCases, name)
+		}
+		encoded[name] = child
+	}
+	return encoded, nil
+}
+
+// encodeBody takes the whole Spec because a cycle is a defect of this spec rather
+// than of the body it points at, so it is located here and not one level down.
+// Whether there is a body at all is the caller's to decide, which keeps all three
+// child positions assembled in one place.
+func (s *specJSONEncoder) encodeBody(spec Spec) (specJSONOutput, error) {
+	if _, cyclic := s.active[spec.Body]; cyclic {
+		return specJSONOutput{}, spec.fieldError(fieldBody, errors.New("cyclic spec body"))
+	}
+	s.active[spec.Body] = struct{}{}
+	encoded, err := s.encodeChild(*spec.Body)
+	delete(s.active, spec.Body)
+	if err != nil {
+		return specJSONOutput{}, locateSpecError(err, fieldBody)
+	}
+	return encoded, nil
 }
 
 // encodeChild encodes spec one level down. The child is a new encoder rather

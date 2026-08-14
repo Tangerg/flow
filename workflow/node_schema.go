@@ -94,10 +94,23 @@ func (n NodeSchema) compile() (registeredNodeSchema, error) {
 	return registeredNodeSchema{schema: n, configValidator: validator}, nil
 }
 
+// validate checks the three declarations a schema makes, in the order the type
+// documents them: what the node outputs, which outlets that output may name, and
+// which ports it reads.
 func (n NodeSchema) validate() error {
 	if !n.Output.validOutput() {
 		return fmt.Errorf("output type %q is invalid", n.Output)
 	}
+	if err := n.validateOutlets(); err != nil {
+		return err
+	}
+	return n.validateInputPorts()
+}
+
+// validateOutlets checks the routing declaration. Outlets are the JSON strings a
+// router may produce as its output, so declaring any of them declares the node a
+// router and constrains what that output can be.
+func (n NodeSchema) validateOutlets() error {
 	if len(n.Outlets) > 0 && n.Output != TypeString {
 		return fmt.Errorf(
 			"routing output type is %q; want %q",
@@ -105,16 +118,23 @@ func (n NodeSchema) validate() error {
 			TypeString,
 		)
 	}
-	outlets := make(map[string]struct{}, len(n.Outlets))
+	declared := make(map[string]struct{}, len(n.Outlets))
 	for _, outlet := range n.Outlets {
 		if err := validateName(nameOutlet, outlet); err != nil {
 			return err
 		}
-		if _, duplicate := outlets[outlet]; duplicate {
+		if _, duplicate := declared[outlet]; duplicate {
 			return fmt.Errorf("outlet %q is declared more than once", outlet)
 		}
-		outlets[outlet] = struct{}{}
+		declared[outlet] = struct{}{}
 	}
+	return nil
+}
+
+// validateInputPorts checks the wiring declaration: every port names itself
+// usably and accepts an explicit type. Ports are walked in name order so a schema
+// with several defects reports the same one on every registration.
+func (n NodeSchema) validateInputPorts() error {
 	for _, port := range slices.Sorted(maps.Keys(n.Inputs)) {
 		if err := validateName(nameInputPort, port); err != nil {
 			return err
