@@ -31,6 +31,9 @@ func (s Store) MarshalJSON() ([]byte, error) {
 	return encoded, nil
 }
 
+// storeJSONDocument is the store wire format: nodeID -> key -> value.
+type storeJSONDocument map[string]map[string]any
+
 // encode runs the store wire format's three stages in order: names must cross
 // the boundary unchanged, application values are marshaled exactly once, and
 // the assembled document must stay inside the recursive-input limit.
@@ -43,8 +46,6 @@ func (s storeJSONDocument) encode() ([]byte, error) {
 	}
 	return s.marshal()
 }
-
-type storeJSONDocument map[string]map[string]any
 
 // cells iterates the document one cell at a time in the canonical order
 // [storeKey.compare] defines. Map iteration order is random, so every pass over

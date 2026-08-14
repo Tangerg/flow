@@ -467,6 +467,19 @@ go test ./example -run Example -v
   A comment is not a guard, and three callers each had to remember. `errAt` is the
   one operation, and there is nothing left to call in the wrong order. A sweep for
   calls on the same value in adjacent statements finds no other pair.
+- Say a two-route rule the same way on both routes. A skeleton sweep — function
+  bodies with identifiers and literals erased — pairs off much of this module by
+  design: Graph against Spec, condition against resolver, iteration against
+  subgraph. That symmetry is the point, so a match is evidence only where one side
+  names the rule and the other inlines it. `validateIteration` and
+  `validateSubgraph` inlined the projection check a built definition already names,
+  where a `*OutputCondition` reports why a body cannot satisfy its output and
+  `locate` attaches where it belongs. The Spec side has both now, and the two
+  routes read alike. `nodeSet` and `definitionIDs` keep their identical
+  constructors: one answers membership, the other is a claim set cloned along a
+  path, and a shared generic constructor would cost more machinery than the five
+  lines it saves. `unparam`, `wastedassign`, and `prealloc` find nothing here;
+  `gocritic`'s full tag set finds one type declared after its own methods.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

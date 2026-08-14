@@ -316,11 +316,7 @@ func (s *specValidator) validateIteration(spec Spec) error {
 	if err := s.validateOwnBody(spec); err != nil {
 		return err
 	}
-	outputs := s.guaranteedOutputs(*spec.Body)
-	if outputs.known && !iterationOutputGuaranteed(spec.ID, outputs, spec.BodyOutput) {
-		return spec.fieldError(fieldBodyOutput, iterationOutputError(spec.BodyOutput))
-	}
-	return nil
+	return spec.locate(fieldBodyOutput, s.iterationOutputCondition(spec))
 }
 
 func (s *specValidator) validateSubgraph(spec Spec) error {
@@ -333,11 +329,28 @@ func (s *specValidator) validateSubgraph(spec Spec) error {
 	if err := s.validateOwnBody(spec); err != nil {
 		return err
 	}
+	return spec.locate(fieldBodyOutput, s.subgraphOutputCondition(spec))
+}
+
+// iterationOutputCondition and subgraphOutputCondition are the Spec-side
+// counterparts of the two a built definition asks, and they answer the same way:
+// why a projection cannot be satisfied, or nil, naming no location. A Spec locates
+// by wire field and a definition by step identity, so neither condition may say it
+// -- see [stepDefinition.subgraphOutputCondition].
+func (s *specValidator) iterationOutputCondition(spec Spec) error {
 	outputs := s.guaranteedOutputs(*spec.Body)
-	if outputs.known && !subgraphOutputGuaranteed(spec.Inputs, outputs, spec.BodyOutput) {
-		return spec.fieldError(fieldBodyOutput, subgraphOutputError(spec.BodyOutput))
+	if !outputs.known || iterationOutputGuaranteed(spec.ID, outputs, spec.BodyOutput) {
+		return nil
 	}
-	return nil
+	return iterationOutputError(spec.BodyOutput)
+}
+
+func (s *specValidator) subgraphOutputCondition(spec Spec) error {
+	outputs := s.guaranteedOutputs(*spec.Body)
+	if !outputs.known || subgraphOutputGuaranteed(spec.Inputs, outputs, spec.BodyOutput) {
+		return nil
+	}
+	return subgraphOutputError(spec.BodyOutput)
 }
 
 // guaranteedOutputs reports the complete set of conventional output cells a
@@ -432,4 +445,14 @@ func (s Spec) populatedFields() []string {
 
 func (s Spec) fieldError(field string, err error) error {
 	return &SpecError{Kind: s.Kind, ID: s.ID, Field: field, Err: err}
+}
+
+// locate attaches the wire field a condition belongs to, or nothing when there is
+// no condition. It is how a Spec reports what [stepDefinition.locate] reports by
+// step identity.
+func (s Spec) locate(field string, condition error) error {
+	if condition == nil {
+		return nil
+	}
+	return s.fieldError(field, condition)
 }
