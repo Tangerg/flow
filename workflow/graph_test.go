@@ -540,9 +540,18 @@ func TestCompileGraph_keepsFactoryErrorsAtTheGraphBoundary(t *testing.T) {
 }
 
 func TestCompileGraph_rejectsDataFromAFactoryBoundaryWithoutOutput(t *testing.T) {
+	// use is built from a NodeSpec rather than by Factory, which admits only the
+	// ports its config declares: the consumer below needs a second one.
 	registry := workflow.NewRegistry().
 		MustRegisterNode("wait", workflow.AwaitFactory()).
-		MustRegisterNode("use", addN())
+		MustRegisterNode("use", func(spec workflow.NodeSpec) (workflow.Step, error) {
+			ref, _ := spec.Inputs.Default()
+			return workflow.LeafFunc(
+				spec.ID,
+				ref,
+				func(_ context.Context, value int) (int, error) { return value, nil },
+			), nil
+		})
 	graph := workflow.Graph{Nodes: []workflow.GraphNode{
 		{
 			ID:     "approval",
@@ -550,9 +559,15 @@ func TestCompileGraph_rejectsDataFromAFactoryBoundaryWithoutOutput(t *testing.T)
 			Inputs: workflow.OneInput(workflow.Output("external")),
 		},
 		{
-			ID:     "consumer",
-			Type:   "use",
-			Inputs: workflow.OneInput(workflow.Output("approval")),
+			ID:   "consumer",
+			Type: "use",
+			// The external port sorts first, and an external producer is not this
+			// check's business: it has to pass over that port and keep going rather
+			// than take it for the end of the node's inputs.
+			Inputs: workflow.Inputs{
+				"aux":                workflow.Output("external"),
+				workflow.DefaultPort: workflow.Output("approval"),
+			},
 		},
 	}}
 

@@ -107,6 +107,33 @@ func TestRace_allFail(t *testing.T) {
 	}
 }
 
+// TestRace_closesTheContextItDerived states for Race what the workflow package
+// states for its own boundaries in TestEveryBoundaryClosesTheContextItDerived:
+// the context a call derives is ended by that call, so a parent outliving it does
+// not keep accumulating children. Every node fails on purpose. A winner cancels
+// the losers itself, which would answer in place of the rule under test and leave
+// the only path that depends on it -- every node failing -- untested.
+func TestRace_closesTheContextItDerived(t *testing.T) {
+	failure := errors.New("failed")
+	contexts := make(chan context.Context, 2)
+	node := flow.NodeFunc[int, int](func(ctx context.Context, _ int) (int, error) {
+		contexts <- ctx
+		return 0, failure
+	})
+
+	if _, err := flow.Race(node, node).Run(t.Context(), 1); !errors.Is(err, failure) {
+		t.Fatalf("Run error = %v; want the nodes' failure", err)
+	}
+	close(contexts)
+	for ctx := range contexts {
+		select {
+		case <-ctx.Done():
+		default:
+			t.Fatal("a node's context remains live after Race returned")
+		}
+	}
+}
+
 func TestRace_allFailErrorOrderIsStable(t *testing.T) {
 	e1, e2 := errors.New("first"), errors.New("second")
 	secondFinished := make(chan struct{})

@@ -96,6 +96,26 @@ go test ./example -run Example -v
   cost; `TestStore_sharesOneBaseAcrossConcurrentDerivers` measures correctness, and
   it is what a flattening that decided to remember its result would fail — the race
   detector reports it writing into the snapshot every deriver is reading.
+- Measure nesting from something the walk already keeps, or pass it down. The
+  `jsondoc` reader reads `len(path)`, because entering a container is what
+  appends a segment; `specValidator` and the `Spec` encoder each descend into a
+  child holding `depth+1`; `expr`'s compiler takes it as a parameter, the way its
+  own reference flattening already did. A field raised on the way in and put back
+  on the way out states one fact twice, and only the second copy can be left
+  raised — which quietly turns a limit on nesting into a limit on how much a
+  document may hold. That failure needs a wide input to see, so a test that nests
+  a single chain cannot: `TestCodec_boundsNestingNotBreadth`,
+  `TestSpec_boundsNestingNotBreadth`, and `TestParse_boundsNestingNotBreadth`
+  supply one per boundary.
+- End a derived context where it was derived. Every `context.WithCancel` here
+  belongs to a boundary — `Run`, a graph run, a leaf's emission session, and
+  `flow.Race` — and each ends its own before returning, so work that outlived its
+  boundary stops and a long-lived parent does not accumulate children it will
+  never cancel. Each is asked where only its own cancel can answer, since a
+  boundary above closes everything under it on the way out:
+  `TestEveryBoundaryClosesTheContextItDerived` runs the graph on its own and asks
+  the leaf's from the following step, and `TestRace_closesTheContextItDerived`
+  fails every node, because a winner cancels the losers itself.
 - State a wire member set once where you can. `expr` encodes and decodes through
   the same struct tags, so its members cannot drift. `workflow` states some sets
   twice on purpose: an explicit member list, or the embedded JSON Schema, rejects

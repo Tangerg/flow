@@ -194,7 +194,6 @@ func (c Codec) valueAt(data []byte, at []string) (any, error) {
 		// Capping the capacity keeps the walk's appends from writing into the
 		// caller's array beyond the prefix it passed.
 		path:     at[:len(at):len(at)],
-		depth:    len(at),
 		maxDepth: c.MaxDepth,
 	}
 	value, err := reader.read()
@@ -304,11 +303,11 @@ func validateUTF8(data []byte) error {
 }
 
 // reader owns the cursor and path of a recursive token walk. path always
-// identifies the value currently being read.
+// identifies the value currently being read, and is therefore also how deep the
+// walk is: entering a container is what appends a segment.
 type reader struct {
 	decoder  *json.Decoder
 	path     []string
-	depth    int
 	maxDepth int
 }
 
@@ -321,10 +320,9 @@ func (r *reader) read() (any, error) {
 	if !ok {
 		return token, nil
 	}
-	if err := r.enter(); err != nil {
+	if err := r.checkDepth(); err != nil {
 		return nil, err
 	}
-	defer r.leave()
 
 	// A closing delimiter cannot appear where a value is expected: the top
 	// level starts a document, an object member follows its name, and an array
@@ -335,15 +333,18 @@ func (r *reader) read() (any, error) {
 	return r.readArray()
 }
 
-func (r *reader) enter() error {
-	if r.depth >= r.maxDepth {
-		return &DepthError{Path: encodePointer(r.path), Limit: r.maxDepth}
+// checkDepth rejects the container about to be read when it is nested past
+// maxDepth. The reader asks its own path rather than a counter it raises on the
+// way in and puts back on the way out: the two would state one fact twice, and
+// only the counter can be left raised by a return that forgets it, which turns a
+// limit on nesting into a limit on how many values a document may contain --
+// see TestCodec_boundsNestingNotBreadth.
+func (r *reader) checkDepth() error {
+	if len(r.path) < r.maxDepth {
+		return nil
 	}
-	r.depth++
-	return nil
+	return &DepthError{Path: encodePointer(r.path), Limit: r.maxDepth}
 }
-
-func (r *reader) leave() { r.depth-- }
 
 func (r *reader) readObject() (map[string]any, error) {
 	object := make(map[string]any)

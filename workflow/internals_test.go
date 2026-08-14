@@ -697,7 +697,9 @@ func TestJSONSchemaError_ordersDeduplicatesAndHidesBackend(t *testing.T) {
 			Causes:    causes,
 		}}
 	}
-	err := makeError(last, first, last)
+	// The repeat sits in the middle: a leaf already collected is skipped, not taken
+	// for the end of the list, and only a leaf behind the repeat says which.
+	err := makeError(last, last, first)
 	message := err.Error()
 	if message != makeError(first, last).Error() ||
 		strings.Count(message, "at '/a'") != 1 ||
@@ -1834,6 +1836,42 @@ func TestStoreOverlayBoundsAreExact(t *testing.T) {
 	if got := storeAtDepth(t, storeOverlayLimit).sharedBase().depth; got != 0 {
 		t.Fatalf("sharedBase at the limit = %d; want a base with the whole budget", got)
 	}
+}
+
+// TestStore_removalDoesNotHideTheChangesAroundIt uses withoutNodes because a
+// removal has no public spelling: a graph clears the cells its nodes own, and
+// what a caller then sees is a Store whose chain holds a removal underneath the
+// writes that replaced it. Both walks that skip a removal are asked here, and
+// each needs a different base to reach: a descendant base takes the delta walk,
+// an unrelated one the cell-by-cell comparison. A walk that stopped at a removal
+// instead of passing over it would report a Store as unchanged in one and
+// half-written in the other.
+func TestStore_removalDoesNotHideTheChangesAroundIt(t *testing.T) {
+	base := NewStore().WithCell("owned", "extra", 1).WithOutput("seed", 2)
+	next := base.withoutNodes(newNodeSet("owned")).WithOutput("owned", 3)
+
+	changes := next.Changes(base)
+	if len(changes) != 1 ||
+		changes[0].Ref() != Output("owned") || changes[0].Value.(int) != 3 {
+		t.Fatalf("Changes against the store it derives from = %+v; want the one write past the removal", changes)
+	}
+
+	// An unrelated base has never held the removed cell, so the removal says
+	// nothing and is skipped -- but the cells the Store did write remain. The base
+	// has to hold something: every Store descends from an empty one, which would
+	// take the delta walk again instead.
+	fresh := changesRefs(next.Changes(NewStore().WithOutput("elsewhere", 0)))
+	if !slices.Equal(fresh, []Ref{Output("seed"), Output("owned")}) {
+		t.Fatalf("Changes against an unrelated store = %v; want both writes in write order", fresh)
+	}
+}
+
+func changesRefs(changes []Write) []Ref {
+	refs := make([]Ref, 0, len(changes))
+	for _, change := range changes {
+		refs = append(refs, change.Ref())
+	}
+	return refs
 }
 
 // TestGraphExecution_admitsExactlyTheConcurrencyLimit pins the bound a graph's

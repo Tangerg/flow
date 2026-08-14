@@ -1157,6 +1157,38 @@ func TestSpec_enforcesProgrammaticNestingLimit(t *testing.T) {
 	}
 }
 
+// TestSpec_boundsNestingNotBreadth holds that same bound to nesting alone. The
+// test above nests a single chain, where every step encountered is also an
+// enclosing one, so it cannot tell a depth apart from a count. A sequence of more
+// steps than the limit allows is one level deep and says which was measured: a
+// walk that raised a depth per child and put it back on the way out would reject
+// this flat workflow the moment one return path forgot to.
+func TestSpec_boundsNestingNotBreadth(t *testing.T) {
+	registry := workflow.NewRegistry().MustRegisterNode(
+		"interrupt",
+		workflow.InterruptFactory(),
+	)
+	wide := workflow.Spec{Kind: workflow.KindSequence}
+	for index := range workflow.MaxNestingDepth + 2 {
+		wide.Steps = append(wide.Steps, workflow.Spec{
+			Kind: workflow.KindLeaf,
+			ID:   fmt.Sprintf("leaf%d", index),
+			Type: "interrupt",
+		})
+	}
+
+	if err := registry.ValidateSpec(wide); err != nil {
+		t.Fatalf("ValidateSpec of a wide spec: %v", err)
+	}
+	encoded, err := json.Marshal(wide)
+	if err != nil {
+		t.Fatalf("Marshal of a wide spec: %v", err)
+	}
+	if steps := strings.Count(string(encoded), `"kind":"leaf"`); steps != len(wide.Steps) {
+		t.Fatalf("encoded %d leaf steps; want all %d", steps, len(wide.Steps))
+	}
+}
+
 func TestValidateSpec_rejectsEveryStructuralBoundary(t *testing.T) {
 	reg := workflow.NewRegistry().
 		MustRegisterNode("addN", addN()).

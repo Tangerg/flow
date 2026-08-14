@@ -24,20 +24,29 @@ func (c cancelingJSON) MarshalJSON() ([]byte, error) {
 	return []byte(c.encoded), nil
 }
 
-func TestRunClosesItsExecutionContext(t *testing.T) {
+// TestEveryBoundaryClosesTheContextItDerived holds all three derived-context
+// boundaries in this package to one rule: a boundary that hands its children a
+// context of its own ends that context before it returns, so a child goroutine
+// left behind stops and the parent stops accumulating children it will never
+// cancel. Each boundary is asked where only its own cancel can answer -- the
+// graph runs on its own, and the leaf's emission context is checked from the
+// following step, because by the time Run has returned its own cancel would have
+// closed everything below it. [flow.Race] derives one too and is held to the
+// same rule by TestRace_closesTheContextItDerived.
+func TestEveryBoundaryClosesTheContextItDerived(t *testing.T) {
 	assertClosed := func(t *testing.T, ctx context.Context) {
 		t.Helper()
 		select {
 		case <-ctx.Done():
 			if !errors.Is(context.Cause(ctx), context.Canceled) {
-				t.Fatalf("execution context cause = %v; want context.Canceled", context.Cause(ctx))
+				t.Fatalf("derived context cause = %v; want context.Canceled", context.Cause(ctx))
 			}
 		default:
-			t.Fatal("execution context remains live after Run ended")
+			t.Fatal("derived context remains live after its boundary ended")
 		}
 	}
 
-	t.Run("return", func(t *testing.T) {
+	t.Run("run", func(t *testing.T) {
 		executionContexts := make(chan context.Context, 1)
 		step := flow.NodeFunc[workflow.Store, workflow.Store](
 			func(ctx context.Context, store workflow.Store) (workflow.Store, error) {
@@ -51,7 +60,7 @@ func TestRunClosesItsExecutionContext(t *testing.T) {
 		assertClosed(t, <-executionContexts)
 	})
 
-	t.Run("panic", func(t *testing.T) {
+	t.Run("run panic", func(t *testing.T) {
 		const panicValue = "run panic"
 		executionContexts := make(chan context.Context, 1)
 		step := flow.NodeFunc[workflow.Store, workflow.Store](
@@ -70,6 +79,85 @@ func TestRunClosesItsExecutionContext(t *testing.T) {
 			_, _ = workflow.Run(t.Context(), step, workflow.NewStore(), workflow.RunConfig{})
 		}()
 		assertClosed(t, <-executionContexts)
+	})
+
+	// The graph step runs directly on the test's context, so nothing above it can
+	// close what its nodes ran under.
+	t.Run("graph", func(t *testing.T) {
+		nodeContexts := make(chan context.Context, 1)
+		registry := workflow.NewRegistry().MustRegisterNode(
+			"capture",
+			workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
+				return flow.NodeFunc[int, int](func(ctx context.Context, input int) (int, error) {
+					nodeContexts <- ctx
+					return input, nil
+				}), nil
+			}),
+		)
+		step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
+			ID:     "owned",
+			Type:   "capture",
+			Inputs: workflow.OneInput(workflow.Output("seed")),
+		}}})
+		if err != nil {
+			t.Fatalf("CompileGraph: %v", err)
+		}
+
+		if _, err := step.Run(t.Context(), workflow.NewStore().WithOutput("seed", 1)); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		assertClosed(t, <-nodeContexts)
+	})
+
+	// A leaf derives an emission context only when the run has an Emitter, and it
+	// is that context the node runs under. The next step asks while the run is
+	// still going, which is the only place the leaf's own cancel is visible.
+	t.Run("leaf emission", func(t *testing.T) {
+		// The following step is the one that has to look: by the time Run has
+		// returned, its own cancel has closed everything under it whatever the leaf
+		// did. So that step reports only what it saw, and the assertions run below.
+		emissionContexts := make(chan context.Context, 1)
+		closedInTime := make(chan bool, 1)
+		step := workflow.Sequence(
+			workflow.LeafFunc(
+				"first",
+				workflow.Output("seed"),
+				func(ctx context.Context, input int) (int, error) {
+					emissionContexts <- ctx
+					return input, nil
+				},
+			),
+			workflow.LeafFunc(
+				"second",
+				workflow.Output("first"),
+				func(_ context.Context, input int) (int, error) {
+					emissionCtx := <-emissionContexts
+					select {
+					case <-emissionCtx.Done():
+						closedInTime <- true
+					default:
+						closedInTime <- false
+					}
+					emissionContexts <- emissionCtx // Put it back for the assertions below.
+					return input, nil
+				},
+			),
+		)
+
+		if _, err := workflow.Run(
+			t.Context(),
+			step,
+			workflow.NewStore().WithOutput("seed", 1),
+			workflow.RunConfig{Emitter: workflow.EmitterFunc(
+				func(context.Context, workflow.Chunk) error { return nil },
+			)},
+		); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if !<-closedInTime {
+			t.Fatal("the leaf's emission context was still live in the following step")
+		}
+		assertClosed(t, <-emissionContexts)
 	})
 }
 

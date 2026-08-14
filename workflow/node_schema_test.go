@@ -187,9 +187,16 @@ func TestValidateGraph_rejectsInternalCellOutsideNodeOutput(t *testing.T) {
 	registry := workflow.NewRegistry().
 		MustRegisterNode("source", addN()).
 		MustRegisterNode("target", addN())
+	// The target reads an external cell on a port that sorts before the offending
+	// one. Ports are checked in name order, and an external producer is not this
+	// rule's business, so the check has to pass over that port and go on to the
+	// next rather than stop at it.
 	graph := workflow.Graph{Nodes: []workflow.GraphNode{
 		{ID: "source", Type: "source", Inputs: workflow.OneInput(workflow.Output("external"))},
-		{ID: "target", Type: "target", Inputs: workflow.OneInput(workflow.At("source", "private"))},
+		{ID: "target", Type: "target", Inputs: workflow.Inputs{
+			"aux":                workflow.Output("external"),
+			workflow.DefaultPort: workflow.At("source", "private"),
+		}},
 	}}
 
 	err := registry.ValidateGraph(graph)
@@ -291,6 +298,15 @@ func TestRegistry_introspection(t *testing.T) {
 	again, _ := reg.NodeSchema("sum")
 	if len(again.Inputs) != 2 || !bytes.Equal(again.ConfigSchema, configSchema) {
 		t.Fatalf("Registry state changed through the returned copy: %+v", again)
+	}
+
+	// Reading a Registry does not seal it. Introspection takes the same lock a
+	// later registration waits for, so a read that answered correctly but kept the
+	// lock would not report a wrong schema -- it would stop the next registration
+	// from ever returning, which no assertion about the answers above can see.
+	reg.MustRegisterNode("addM", addN())
+	if got := reg.NodeTypes(); !slices.Equal(got, []string{"addM", "addN", "sum"}) {
+		t.Fatalf("NodeTypes after registering behind an introspecting reader = %v", got)
 	}
 }
 

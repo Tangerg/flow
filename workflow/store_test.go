@@ -258,6 +258,36 @@ func TestStore_ChangesKeepsOnlyTheFinalWritePerCell(t *testing.T) {
 	}
 }
 
+// TestStore_supersededWriteDoesNotHideWhatCameBeforeIt states what both walks
+// over an overlay chain share: an entry a newer write already answered for is
+// skipped, not taken for the end of the chain. The chain runs newest first, so
+// only a cell written before the rewritten one lies past the superseded entry --
+// which the test above cannot see, because with a single cell in the chain the
+// superseded write is always last. Which walk runs depends on the base: one that
+// the Store descends from is subtracted through the overlay, while an unrelated
+// one is compared cell by cell over the same chain.
+func TestStore_supersededWriteDoesNotHideWhatCameBeforeIt(t *testing.T) {
+	base := workflow.NewStore()
+	next := base.WithOutput("first", 1).WithOutput("second", 2).WithOutput("second", 3)
+
+	changes := next.Changes(base)
+	if len(changes) != 2 ||
+		changes[0].Ref() != workflow.Output("first") || changes[0].Value.(int) != 1 ||
+		changes[1].Ref() != workflow.Output("second") || changes[1].Value.(int) != 3 {
+		t.Fatalf("Changes against the store it descends from = %+v; want first = 1 then the final second = 3", changes)
+	}
+
+	// A shared empty Store would not do here: with nothing in its overlay, every
+	// Store descends from it, and the walk above would run again.
+	unrelated := workflow.NewStore().WithOutput("elsewhere", 0)
+	changes = next.Changes(unrelated)
+	if len(changes) != 2 ||
+		changes[0].Ref() != workflow.Output("first") || changes[0].Value.(int) != 1 ||
+		changes[1].Ref() != workflow.Output("second") || changes[1].Value.(int) != 3 {
+		t.Fatalf("Changes against an unrelated store = %+v; want the same two cells", changes)
+	}
+}
+
 func TestStore_ChangesAcrossCompaction(t *testing.T) {
 	// Past the overlay limit a Store materializes, so Changes falls back to
 	// comparing write identities. Order must still be the order of writing.

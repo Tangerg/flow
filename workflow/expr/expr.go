@@ -37,7 +37,7 @@ func Parse(src string) (*Expr, error) {
 	}
 
 	c := compiler{source: src}
-	eval, err := c.compile(node)
+	eval, err := c.compile(node, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -127,11 +127,12 @@ func (e *Expr) wrap(err error) error {
 }
 
 // compiler turns one AST into a tree of closures, collecting the references it
-// reads along the way.
+// reads along the way. Only what the whole expression accumulates lives here;
+// how deep a node sits is passed down, the way [compiler.flattenAt] passes it,
+// because a field would have to be put back on every return.
 type compiler struct {
 	source string
 	refs   []workflow.Ref
-	depth  int
 }
 
 func (c *compiler) errorAt(node ast.Node, err error) error {
@@ -142,16 +143,17 @@ func (c *compiler) unsupported(node ast.Node, what string) error {
 	return c.errorAt(node, fmt.Errorf("%w: %s", ErrUnsupported, what))
 }
 
-func (c *compiler) compile(node ast.Expr) (evalFunc, error) {
-	if c.depth >= workflow.MaxNestingDepth {
+// compile turns one node into its closure. depth is how many nodes enclose it,
+// so the limit bounds nesting alone: a wide expression stays compilable however
+// many operands it has -- see TestParse_boundsNestingNotBreadth.
+func (c *compiler) compile(node ast.Expr, depth int) (evalFunc, error) {
+	if depth >= workflow.MaxNestingDepth {
 		return nil, c.depthError(node)
 	}
-	c.depth++
-	defer func() { c.depth-- }()
 
 	switch n := node.(type) {
 	case *ast.ParenExpr:
-		return c.compile(n.X)
+		return c.compile(n.X, depth+1)
 	case *ast.BasicLit:
 		return c.compileLiteral(n)
 	case *ast.Ident:
@@ -159,11 +161,11 @@ func (c *compiler) compile(node ast.Expr) (evalFunc, error) {
 	case *ast.SelectorExpr, *ast.IndexExpr:
 		return c.compileRef(node)
 	case *ast.UnaryExpr:
-		return c.compileUnary(n)
+		return c.compileUnary(n, depth)
 	case *ast.BinaryExpr:
-		return c.compileBinary(n)
+		return c.compileBinary(n, depth)
 	case *ast.CallExpr:
-		return c.compileCall(n)
+		return c.compileCall(n, depth)
 	default:
 		return nil, c.unsupported(node, fmt.Sprintf("%T", node))
 	}
@@ -395,8 +397,8 @@ func (c *compiler) malformedIndex(lit *ast.BasicLit, cause error) error {
 	return c.errorAt(lit, fmt.Errorf("%w: index %s: %w", ErrSyntax, lit.Value, cause))
 }
 
-func (c *compiler) compileUnary(n *ast.UnaryExpr) (evalFunc, error) {
-	eval, err := c.compile(n.X)
+func (c *compiler) compileUnary(n *ast.UnaryExpr, depth int) (evalFunc, error) {
+	eval, err := c.compile(n.X, depth+1)
 	if err != nil {
 		return nil, err
 	}
@@ -426,12 +428,12 @@ func (c *compiler) compileUnary(n *ast.UnaryExpr) (evalFunc, error) {
 	}
 }
 
-func (c *compiler) compileBinary(n *ast.BinaryExpr) (evalFunc, error) {
-	left, err := c.compile(n.X)
+func (c *compiler) compileBinary(n *ast.BinaryExpr, depth int) (evalFunc, error) {
+	left, err := c.compile(n.X, depth+1)
 	if err != nil {
 		return nil, err
 	}
-	right, err := c.compile(n.Y)
+	right, err := c.compile(n.Y, depth+1)
 	if err != nil {
 		return nil, err
 	}
@@ -471,7 +473,7 @@ func (c *compiler) compileBinary(n *ast.BinaryExpr) (evalFunc, error) {
 	}, nil
 }
 
-func (c *compiler) compileCall(n *ast.CallExpr) (evalFunc, error) {
+func (c *compiler) compileCall(n *ast.CallExpr, depth int) (evalFunc, error) {
 	name, ok := n.Fun.(*ast.Ident)
 	if !ok {
 		return nil, c.unsupported(n.Fun, "call target must be a builtin name")
@@ -503,7 +505,7 @@ func (c *compiler) compileCall(n *ast.CallExpr) (evalFunc, error) {
 		if err := c.oneArgument(n, name.Name); err != nil {
 			return nil, err
 		}
-		arg, err := c.compile(n.Args[0])
+		arg, err := c.compile(n.Args[0], depth+1)
 		if err != nil {
 			return nil, err
 		}

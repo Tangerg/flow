@@ -131,6 +131,10 @@ func TestCodec_rejectsAmbiguousOrLossyDocuments(t *testing.T) {
 		// 0xE000 is the first code unit above the surrogate range: too high to
 		// complete a pair after a high surrogate, and valid on its own.
 		{name: "high then above the range", data: []byte(`"\ud800\ue000"`), want: "unpaired UTF-16 surrogate"},
+		// Every other case opens its string with the escape, where a scan that read
+		// only the first character would still find it. Ordinary text in front is
+		// what says the scan reads on through a string rather than just into it.
+		{name: "escape after text", data: []byte(`"ab\ud800"`), want: "unpaired UTF-16 surrogate"},
 		// The offset is 1-based and names the backslash that opened the escape, not
 		// the code unit inside it.
 		{name: "reported position", data: []byte(`{"k":"\ud800"}`), want: "unpaired UTF-16 surrogate escape at byte 7"},
@@ -192,6 +196,23 @@ func TestCodec_depth(t *testing.T) {
 	if depthErr.Path != "/a/0" || depthErr.Limit != 2 ||
 		depthErr.Error() != "JSON nesting at /a/0 exceeds limit 2" {
 		t.Fatalf("DepthError = %#v, %q", depthErr, depthErr.Error())
+	}
+}
+
+// MaxDepth bounds how deeply a document nests, never how much it holds. The two
+// are the same measurement only while every container entered is also left, so a
+// walk that tracked depth apart from the path it reports could silently turn the
+// limit into a cap on a document's size. Each member here sits at the limit, and
+// there are more of them than the limit allows.
+func TestCodec_boundsNestingNotBreadth(t *testing.T) {
+	codec := Codec{MaxDepth: 2}
+	document := []byte(`{"a":[1],"b":{"c":2},"d":[3],"e":{"f":4},"g":[5]}`)
+	value, err := codec.Value(document)
+	if err != nil {
+		t.Fatalf("Value of a wide document within the depth limit: %v", err)
+	}
+	if members, ok := value.(map[string]any); !ok || len(members) != 5 {
+		t.Fatalf("Value = %#v; want all five members", value)
 	}
 }
 

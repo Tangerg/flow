@@ -294,6 +294,31 @@ func TestParse_enforcesTheWorkflowNestingLimit(t *testing.T) {
 	}
 }
 
+// TestParse_boundsNestingNotBreadth holds the limit to nesting alone. Doubling a
+// balanced sum ten times gives an expression around three thousand nodes deep in
+// only twenty levels, so a compiler that counted the nodes it had visited rather
+// than the ones enclosing this one would reject an expression well inside the
+// limit -- and would do it only for an expression large enough that no test of the
+// limit itself, which nests a single chain, would notice.
+func TestParse_boundsNestingNotBreadth(t *testing.T) {
+	source := "1"
+	for range 10 {
+		source = "(" + source + "+" + source + ")"
+	}
+
+	expression, err := expr.Parse(source)
+	if err != nil {
+		t.Fatalf("Parse of a wide expression within the nesting limit: %v", err)
+	}
+	value, err := expression.Eval(workflow.NewStore())
+	if err != nil {
+		t.Fatalf("Eval: %v", err)
+	}
+	if got, ok := value.(int64); !ok || got != 1024 {
+		t.Fatalf("Eval = %#v; want the 1024 operands summed", value)
+	}
+}
+
 // TestEval_reportsWhyAnOperandFailed states once what every operator that reads
 // an operand owes its caller: the operand's own failure, unchanged. Each of these
 // operators checks its operand's type next, so a swallowed failure arrives there

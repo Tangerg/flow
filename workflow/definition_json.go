@@ -218,10 +218,16 @@ func (s *specJSONEncoder) encode(spec Spec) (specJSONOutput, error) {
 	return output, nil
 }
 
+// encodeChild encodes spec one level down. The child is a new encoder rather
+// than a depth this one raises and puts back, so no return path can leave a
+// sibling starting deeper than it is -- which would bound how many specs a
+// document may hold rather than how deeply they nest, see
+// TestSpec_boundsNestingNotBreadth. [specValidator.child] walks the same
+// tree the same way, and the two must agree because they share [Spec.checkDepth].
+// The cycle set stays shared: it tracks the walk, not the level.
 func (s *specJSONEncoder) encodeChild(spec Spec) (specJSONOutput, error) {
-	s.depth++
-	defer func() { s.depth-- }()
-	return s.encode(spec)
+	child := specJSONEncoder{root: s.root, active: s.active, depth: s.depth + 1}
+	return child.encode(spec)
 }
 
 func (s Spec) validateJSONText() (string, error) {
