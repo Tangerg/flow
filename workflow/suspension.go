@@ -248,11 +248,11 @@ type suspensionList []*Suspension
 // reaching it came from [suspensionList.normalized] and therefore holds clones —
 // see [Suspension.clone]. Assigning an ID also changes the sort key, so a caller
 // that needs order must normalize again afterwards, which err does.
-func (s suspensionList) identify(id string, scope []ScopeFrame) suspensionList {
+func (s suspensionList) identify(key JournalKey) suspensionList {
 	for _, suspension := range s {
 		if suspension.ID == "" {
-			suspension.ID = id
-			suspension.Scope = slices.Clone(scope)
+			suspension.ID = key.ID
+			suspension.Scope = slices.Clone(key.Scope)
 		}
 	}
 	return s

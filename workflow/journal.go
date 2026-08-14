@@ -121,11 +121,11 @@ func (j *Journal) Record(key JournalKey, value any) error {
 
 // record stores a step's output. A nil Journal discards it, so callers need not
 // check whether resumption is enabled.
-func (j *Journal) record(scope []ScopeFrame, id string, value any) error {
+func (j *Journal) record(key JournalKey, value any) error {
 	if j == nil {
 		return nil
 	}
-	return j.insert(JournalKey{ID: id, Scope: scope}, value)
+	return j.insert(key, value)
 }
 
 // insert is the write path both Record and record share. Its errors locate a
@@ -157,6 +157,11 @@ func (j JournalKey) validate() error {
 	return validateScope(j.Scope)
 }
 
+// record inserts value and reports whether the identity was new. It takes the two
+// halves of a [JournalKey] rather than the key, because this is the layer where an
+// identity stops being one value: the scope is a path this trie descends and the ID
+// is a member it acts on, and forget consumes that path one frame at a time.
+// Everything above here passes the key whole.
 func (j *journalNode) record(scope []ScopeFrame, id string, value journalValue) bool {
 	for _, frame := range scope {
 		if j.children == nil {
@@ -182,10 +187,10 @@ func (j *journalNode) record(scope []ScopeFrame, id string, value journalValue) 
 // lookupAt returns a record no newer than revision, which is how a run replays
 // only work that predates it. The receiver is never nil: [runState.replay]
 // resolves a nil Journal to "no record" before calling.
-func (j *Journal) lookupAt(scope []ScopeFrame, id string, revision uint64) (any, bool) {
+func (j *Journal) lookupAt(key JournalKey, revision uint64) (any, bool) {
 	j.mu.RLock()
 	defer j.mu.RUnlock()
-	value, ok := j.root.lookup(scope, id)
+	value, ok := j.root.lookup(key.Scope, key.ID)
 	if !ok || value.revision > revision {
 		return nil, false
 	}

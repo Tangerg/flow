@@ -895,10 +895,10 @@ func TestJournalUnmarshal_stampsDecodedRecordsAsNewerThanEverySnapshot(t *testin
 	if err := json.Unmarshal(document, journal); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if value, ok := journal.lookupAt(nil, "loaded", snapshot); ok {
+	if value, ok := journal.lookupAt(JournalKey{ID: "loaded"}, snapshot); ok {
 		t.Fatalf("a snapshot taken before the decode saw %v", value)
 	}
-	if value, ok := journal.lookupAt(nil, "loaded", journal.snapshotRevision()); !ok || value != json.Number("2") {
+	if value, ok := journal.lookupAt(JournalKey{ID: "loaded"}, journal.snapshotRevision()); !ok || value != json.Number("2") {
 		t.Fatalf("lookupAt after the decode = %v, %v; want the loaded record", value, ok)
 	}
 }

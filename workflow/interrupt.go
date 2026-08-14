@@ -35,7 +35,7 @@ func (i interruptStep) Run(ctx context.Context, store Store) (Store, error) {
 	if err != nil {
 		return store, err
 	}
-	response, replayed, err := run.replay(ctx, scope(ctx), i.id)
+	response, replayed, err := run.replay(ctx, boundaryKey(ctx, i.id))
 	if err != nil {
 		return store, err
 	}

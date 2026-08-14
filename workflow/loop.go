@@ -164,7 +164,7 @@ func (l *loopExecution) admit(ctx context.Context, next Store, err error) error 
 // stop returns whether the loop ends after this iteration, reusing the recorded
 // decision when the run is resuming.
 func (l *loopExecution) stop(ctx context.Context, s Store) (bool, error) {
-	if err := l.run.claim(scope(ctx), l.loop.config.ID); err != nil {
+	if err := l.run.claim(boundaryKey(ctx, l.loop.config.ID)); err != nil {
 		return false, newStepError(ctx, l.loop.config.ID, OpValidate, err)
 	}
 	recorded, replayed, err := replayDecision[bool](ctx, l.run, KindLoop, l.loop.config.ID)
@@ -181,11 +181,11 @@ func (l *loopExecution) stop(ctx context.Context, s Store) (bool, error) {
 	}
 	if err != nil {
 		if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
-			return false, suspensions.identify(l.loop.config.ID, scope(ctx)).err()
+			return false, suspensions.identify(boundaryKey(ctx, l.loop.config.ID)).err()
 		}
 		return false, newStepError(ctx, l.loop.config.ID, OpRun, err)
 	}
-	journalErr := l.run.journal().record(scope(ctx), l.loop.config.ID, stop)
+	journalErr := l.run.journal().record(boundaryKey(ctx, l.loop.config.ID), stop)
 	if contextErr := context.Cause(ctx); contextErr != nil {
 		return false, contextErr
 	}

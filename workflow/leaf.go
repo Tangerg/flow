@@ -263,7 +263,7 @@ func (l *leafExecution[I, O]) runNode(ctx context.Context, input I) (O, error) {
 }
 
 func (l *leafExecution[I, O]) replay(ctx context.Context) (Store, bool, error) {
-	value, ok, err := l.run.replay(ctx, scope(ctx), l.leaf.id)
+	value, ok, err := l.run.replay(ctx, boundaryKey(ctx, l.leaf.id))
 	if err != nil {
 		return Store{}, false, err
 	}
@@ -317,7 +317,7 @@ func (l *leafExecution[I, O]) suspend(
 	ctx context.Context,
 	suspensions suspensionList,
 ) (Store, error) {
-	err := suspensions.identify(l.leaf.id, scope(ctx)).err()
+	err := suspensions.identify(boundaryKey(ctx, l.leaf.id)).err()
 	if l.run.observing() {
 		if contextErr := l.run.emitAndCheck(ctx, Event{
 			Kind:    EventSuspended,
@@ -333,7 +333,7 @@ func (l *leafExecution[I, O]) suspend(
 
 func (l *leafExecution[I, O]) complete(ctx context.Context, output O) (Store, error) {
 	next := l.store.WithOutput(l.leaf.id, output)
-	journalErr := l.run.journal().record(scope(ctx), l.leaf.id, output)
+	journalErr := l.run.journal().record(boundaryKey(ctx, l.leaf.id), output)
 	if err := context.Cause(ctx); err != nil {
 		return l.store, err
 	}

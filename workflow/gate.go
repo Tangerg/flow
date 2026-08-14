@@ -97,13 +97,13 @@ func (g gatedStep) Run(ctx context.Context, store Store) (Store, error) {
 	}
 	run := runFrom(ctx)
 	id := g.stepID()
-	if err := run.claim(scope(ctx), id); err != nil {
+	if err := run.claim(boundaryKey(ctx, id)); err != nil {
 		return g.fail(ctx, store, OpValidate, err)
 	}
 	if err := context.Cause(ctx); err != nil {
 		return store, err
 	}
-	run.markBypassed(scope(ctx), id)
+	run.markBypassed(boundaryKey(ctx, id))
 	if err := context.Cause(ctx); err != nil {
 		return store, err
 	}
@@ -180,7 +180,7 @@ func (c compiledGate) selectOutlet(
 	ctx context.Context,
 	store Store,
 ) (routingSelection, error) {
-	if runFrom(ctx).wasBypassed(scope(ctx), c.NodeID) {
+	if runFrom(ctx).wasBypassed(boundaryKey(ctx, c.NodeID)) {
 		return routingSelection{bypassed: true}, nil
 	}
 	selected, err := Get[string](store, Output(c.NodeID))

@@ -122,7 +122,7 @@ func admitBoundary(ctx context.Context, id string, invalid error) (*runState, er
 		run.emit(ctx, Event{Kind: EventFailed, ID: id, Err: invalid})
 		return run, invalid
 	}
-	if err := run.claim(scope(ctx), id); err != nil {
+	if err := run.claim(boundaryKey(ctx, id)); err != nil {
 		err = newStepError(ctx, id, OpValidate, err)
 		run.emit(ctx, Event{Kind: EventFailed, ID: id, Err: err})
 		return run, err
@@ -155,7 +155,7 @@ func admitScopedStep(ctx context.Context, id string, invalid error) error {
 	if err := validateChildScope(scope(ctx)); err != nil {
 		return newStepError(ctx, id, OpValidate, err)
 	}
-	if err := runFrom(ctx).claim(scope(ctx), id); err != nil {
+	if err := runFrom(ctx).claim(boundaryKey(ctx, id)); err != nil {
 		return newStepError(ctx, id, OpValidate, err)
 	}
 	return context.Cause(ctx)

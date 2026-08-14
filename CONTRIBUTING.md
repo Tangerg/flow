@@ -443,6 +443,19 @@ go test ./example -run Example -v
   factory pipeline, and two dispatches over the kind vocabulary — where
   `Spec.requireKindFields` *is* the field matrix. Splitting those would hide the
   thing they exist to show.
+- Let a declared identity travel as one value until the layer that consumes its
+  halves. Sweeping for parameter pairs that appear together in three or more
+  signatures put `(scope []ScopeFrame, id string)` at the top with eleven, and that
+  pair already has a name: `JournalKey` is what a boundary invocation is known by,
+  and the exported `Journal.Record` and `Journal.Forget` carry it. Below them it was
+  taken apart at every step — `Journal.record` and `runState.claim` each rebuilt the
+  key from a pair their own caller had just split, `scopedSet` stored it in the same
+  trie either way, and `suspensionList.identify` took the two in the opposite order.
+  `boundaryKey(ctx, id)` builds it once where a boundary knows both halves, and the
+  pair survives only in `journalNode`, where the scope is a path to descend and the
+  ID a member to act on; `journalNode.record` says so where it happens. The weaker
+  clumps stay: a registration's kind and name exist to build a `RegistrationError`,
+  and a binary operator's two operands are two things.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

@@ -56,16 +56,16 @@ type scopedSet struct {
 }
 
 // add records one identity and reports whether it was new.
-func (s *scopedSet) add(scope []ScopeFrame, id string) bool {
+func (s *scopedSet) add(key JournalKey) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.root.record(scope, id, journalValue{})
+	return s.root.record(key.Scope, key.ID, journalValue{})
 }
 
-func (s *scopedSet) has(scope []ScopeFrame, id string) bool {
+func (s *scopedSet) has(key JournalKey) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	_, ok := s.root.lookup(scope, id)
+	_, ok := s.root.lookup(key.Scope, key.ID)
 	return ok
 }
 
@@ -202,15 +202,11 @@ func (r *runState) nextSeq() uint64 {
 // claimed the same identity, not that the later step is being resumed. Journal
 // lookup may wait on concurrent access, so cancellation is sampled again after
 // the lookup before a caller restores state or invokes application code.
-func (r *runState) replay(
-	ctx context.Context,
-	scope []ScopeFrame,
-	id string,
-) (any, bool, error) {
+func (r *runState) replay(ctx context.Context, key JournalKey) (any, bool, error) {
 	if r == nil || r.config.Journal == nil {
 		return nil, false, context.Cause(ctx)
 	}
-	value, ok := r.config.Journal.lookupAt(scope, id, r.journalRevision)
+	value, ok := r.config.Journal.lookupAt(key, r.journalRevision)
 	return value, ok, context.Cause(ctx)
 }
 
@@ -228,7 +224,7 @@ func replayDecision[T any](
 	id string,
 ) (T, bool, error) {
 	var decision T
-	recorded, replayed, err := run.replay(ctx, scope(ctx), id)
+	recorded, replayed, err := run.replay(ctx, boundaryKey(ctx, id))
 	if err != nil || !replayed {
 		return decision, false, err
 	}
@@ -249,8 +245,7 @@ func replayDecision[T any](
 // Journal. This catches duplicate IDs even when both invocations would replay
 // the same historical record, and it also covers opaque caller-defined wrappers
 // that static definition validation cannot see through.
-func (r *runState) claim(scope []ScopeFrame, id string) error {
-	key := JournalKey{ID: id, Scope: scope}
+func (r *runState) claim(key JournalKey) error {
 	if err := key.validate(); err != nil {
 		return err
 	}
@@ -258,12 +253,12 @@ func (r *runState) claim(scope []ScopeFrame, id string) error {
 		return nil
 	}
 
-	if !r.claims.add(scope, id) {
+	if !r.claims.add(key) {
 		return fmt.Errorf(
 			"%w: step %q in scope %q was invoked more than once in one run",
 			ErrDuplicateStep,
-			id,
-			formatScope(scope),
+			key.ID,
+			formatScope(key.Scope),
 		)
 	}
 	return nil
@@ -271,12 +266,19 @@ func (r *runState) claim(scope []ScopeFrame, id string) error {
 
 // markBypassed records that a gate declined to run id, so a node downstream of
 // it can tell "did not run" from "has not run yet".
-func (r *runState) markBypassed(scope []ScopeFrame, id string) {
-	r.bypassed.add(scope, id)
+func (r *runState) markBypassed(key JournalKey) {
+	r.bypassed.add(key)
 }
 
-func (r *runState) wasBypassed(scope []ScopeFrame, id string) bool {
-	return r.bypassed.has(scope, id)
+func (r *runState) wasBypassed(key JournalKey) bool {
+	return r.bypassed.has(key)
+}
+
+// boundaryKey names the boundary invocation running under ctx. A scope and a step
+// ID are one identity, so above the trie that stores them they travel as the one
+// type that already says so.
+func boundaryKey(ctx context.Context, id string) JournalKey {
+	return JournalKey{ID: id, Scope: scope(ctx)}
 }
 
 // emit completes event with the run's sequence number and scope, then delivers

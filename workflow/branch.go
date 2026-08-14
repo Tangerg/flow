@@ -95,7 +95,7 @@ func (b *branchExecution) validate(ctx context.Context) error {
 	if err := b.branch.Validate(); err != nil {
 		return err
 	}
-	if err := b.run.claim(scope(ctx), b.branch.id); err != nil {
+	if err := b.run.claim(boundaryKey(ctx, b.branch.id)); err != nil {
 		return newStepError(ctx, b.branch.id, OpValidate, err)
 	}
 	return context.Cause(ctx)
@@ -123,7 +123,7 @@ func (b *branchExecution) selectCase(ctx context.Context) (Step, error) {
 	// unknown name would poison the Journal and make every later run fail before
 	// the resolver had a chance to recover.
 	if !replayed {
-		journalErr := b.run.journal().record(scope(ctx), b.branch.id, name)
+		journalErr := b.run.journal().record(boundaryKey(ctx, b.branch.id), name)
 		if contextErr := context.Cause(ctx); contextErr != nil {
 			return nil, contextErr
 		}
@@ -180,7 +180,7 @@ func (b *branchExecution) decide(ctx context.Context) (string, bool, error) {
 	name, err = b.branch.resolve.Run(ctx, b.input)
 	if err != nil {
 		if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
-			return "", false, suspensions.identify(b.branch.id, scope(ctx)).err()
+			return "", false, suspensions.identify(boundaryKey(ctx, b.branch.id)).err()
 		}
 		return "", false, newStepError(ctx, b.branch.id, OpRun, err)
 	}
