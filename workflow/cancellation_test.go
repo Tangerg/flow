@@ -441,6 +441,13 @@ func TestGraph_cancellationBeforeAdmissionPreservesInput(t *testing.T) {
 	if value, ok := output.Lookup(workflow.Output("owned")); !ok || value != "stale" {
 		t.Fatalf("owned output = %v, %t; want unchanged stale value", value, ok)
 	}
+	// Preserving the values is not the whole of it: a node that never ran wrote
+	// nothing, so the Store it hands back must report nothing either. Restamped
+	// cells carry the same values and would read as untouched here while telling a
+	// caller that persists Changes to write every one of them again.
+	if changes := output.Changes(input); len(changes) != 0 {
+		t.Fatalf("Changes after a graph that never admitted a node = %+v; want none", changes)
+	}
 }
 
 func TestGraph_cancellationAfterAdmissionCommitsAcceptedNodesAndClearsStaleCells(t *testing.T) {

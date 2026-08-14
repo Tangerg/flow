@@ -1965,3 +1965,31 @@ func TestGraphExecution_dropsAnOutcomeFinishingAfterAFailure(t *testing.T) {
 		t.Fatal("the returned Store carries a write made after the failure")
 	}
 }
+
+// TestStore_neverHoldsACellWithTheZeroIdentity pins what lets a reader treat the
+// cell a Store lacks as the zero cell: revision and lineage 0 belong to that zero
+// alone. Every cell a Store holds is therefore stamped from the counter, and the
+// two whose identity is assembled rather than inherited from an earlier version
+// are the ones that could forget -- a removal marker, and a cell arriving from
+// the wire with no history behind it.
+func TestStore_neverHoldsACellWithTheZeroIdentity(t *testing.T) {
+	live := NewStore().WithCell("owned", "extra", 1).WithOutput("kept", 2)
+	removed := live.withoutNodes(newNodeSet("owned"))
+
+	encoded, err := json.Marshal(removed)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded Store
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	for name, store := range map[string]Store{"removed": removed, "decoded": decoded} {
+		for key, record := range store.cells() {
+			if record.revision == 0 || record.lineage == 0 {
+				t.Fatalf("%s cell %+v = %+v; want an identity taken from the counter", name, key, record)
+			}
+		}
+	}
+}

@@ -922,3 +922,57 @@ func TestStore_asksEachValueForItsBytesOnce(t *testing.T) {
 		t.Fatalf("encoded = %s; want the marshaler's own bytes", encoded)
 	}
 }
+
+// TestGet_reportsWhatItAskedForAndWhatItFound pins the structured error Get
+// hands back rather than only the sentinel inside it. All four failures arrive as
+// a RefError, whose text is assembled from its fields, and a caller branching on
+// one reads those fields: which reference failed, the type it asked for, and the
+// type it found. Every assertion elsewhere stops at the sentinel, which each of
+// these shapes shares with another.
+func TestGet_reportsWhatItAskedForAndWhatItFound(t *testing.T) {
+	store := workflow.NewStore().
+		WithOutput("text", "hello").
+		WithOutput("unencodable", func() {}).
+		WithOutput("nothing", nil)
+
+	tests := map[string]struct {
+		ref  workflow.Ref
+		want string
+	}{
+		"nested value that cannot be read": {
+			ref: workflow.Output("unencodable").Child("member"),
+			want: "workflow: ref unencodable#/output/member: value type mismatch: " +
+				"resolve nested value: encode value as JSON: json: unsupported type: func(): " +
+				"got func(), want int",
+		},
+		// A missing value names no type it found, because it found none.
+		"absent": {
+			ref:  workflow.Output("absent"),
+			want: "workflow: ref absent#/output: value not found",
+		},
+		"nil where the type cannot hold it": {
+			ref:  workflow.Output("nothing"),
+			want: "workflow: ref nothing#/output: value type mismatch: got <nil>, want int",
+		},
+		"another type": {
+			ref: workflow.Output("text"),
+			want: "workflow: ref text#/output: value type mismatch: " +
+				"json: cannot unmarshal string into Go value of type int: got string, want int",
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := workflow.Get[int](store, test.ref)
+			var refErr *workflow.RefError
+			if !errors.As(err, &refErr) || err.Error() != test.want {
+				t.Fatalf("Get error = %v; want %q", err, test.want)
+			}
+			// The wanted type is a field even where the message omits it, because a
+			// caller reporting the mismatch itself needs it either way.
+			if refErr.Ref != test.ref || refErr.Want != "int" {
+				t.Fatalf("RefError = %+v; want %s and int", refErr, test.ref)
+			}
+		})
+	}
+}

@@ -664,8 +664,12 @@ func TestCompileGraph_rejectsRuntimeRoutingContractViolations(t *testing.T) {
 				}
 			}
 			close(events)
-			if !hasEvent(events, workflow.EventFailed, "target") {
-				t.Fatal("gate failure did not report EventFailed")
+			// The event carries the same failure the run returned. A tracker watching
+			// events is told why the step failed there and nowhere else, so an event
+			// that reported only the kind would leave it guessing.
+			failure := eventFailure(events, "target")
+			if failure == nil || failure.Error() != err.Error() {
+				t.Fatalf("EventFailed error = %v; want the failure Run reported, %v", failure, err)
 			}
 		})
 	}
@@ -995,4 +999,15 @@ func hasEvent(events <-chan workflow.Event, kind workflow.EventKind, id string) 
 		}
 	}
 	return false
+}
+
+// eventFailure returns the error reported with id's failure, or nil if no
+// failure was reported for it.
+func eventFailure(events <-chan workflow.Event, id string) error {
+	for event := range events {
+		if event.Kind == workflow.EventFailed && event.ID == id {
+			return event.Err
+		}
+	}
+	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
@@ -153,6 +154,7 @@ func TestSuspend_leafObserverReceivesSuspension(t *testing.T) {
 		}),
 	)
 	var event workflow.Event
+	before := time.Now()
 	_, err := workflow.Run(
 		t.Context(),
 		step,
@@ -165,12 +167,19 @@ func TestSuspend_leafObserverReceivesSuspension(t *testing.T) {
 			},
 		)},
 	)
+	within := time.Since(before)
 	if !errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("Run error = %v; want ErrSuspended", err)
 	}
 	if event.Kind != workflow.EventSuspended || event.ID != "wait" ||
 		!errors.Is(event.Err, workflow.ErrSuspended) {
 		t.Fatalf("suspension event = %+v", event)
+	}
+	// A suspended attempt ran until it decided it could not finish, and that is
+	// timed like a completion or a failure. Await and Interrupt are the boundaries
+	// that report no duration, because they do no work of their own.
+	if event.Elapsed <= 0 || event.Elapsed > within {
+		t.Fatalf("suspended Elapsed = %v; want the attempt's own duration, at most %v", event.Elapsed, within)
 	}
 }
 
@@ -1058,10 +1067,14 @@ func TestSuspensions_ofOtherErrors(t *testing.T) {
 	if got := workflow.Suspensions(errors.New("boom")); got != nil {
 		t.Fatalf("Suspensions(plain error) = %v; want nil", got)
 	}
-	// A caller may wrap the sentinel without the richer value.
+	// A caller may wrap the sentinel without the richer value. The wrapper's own
+	// text is then all the reason there is, so the wait carries it as its value --
+	// otherwise wrapping the sentinel to say what is being waited for would report
+	// a wait that gives no reason at all.
 	wrapped := fmt.Errorf("outer: %w", workflow.ErrSuspended)
-	if got := workflow.Suspensions(wrapped); len(got) != 1 {
-		t.Fatalf("Suspensions(wrapped sentinel) = %v; want one", got)
+	if got := workflow.Suspensions(wrapped); len(got) != 1 ||
+		got[0].Value != wrapped.Error() {
+		t.Fatalf("Suspensions(wrapped sentinel) = %+v; want one carrying %q", got, wrapped)
 	}
 
 	joined := errors.Join(

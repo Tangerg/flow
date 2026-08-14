@@ -54,7 +54,9 @@ func TestEvents_failure(t *testing.T) {
 		events = append(events, event)
 	})}
 
+	before := time.Now()
 	_, _ = workflow.Run(t.Context(), bad, workflow.NewStore().WithOutput("start", 1), cfg)
+	within := time.Since(before)
 
 	if len(events) != 2 {
 		t.Fatalf("got %d events, want 2", len(events))
@@ -62,6 +64,11 @@ func TestEvents_failure(t *testing.T) {
 	f := events[1]
 	if f.Kind != workflow.EventFailed || f.ID != "bad" || !errors.Is(f.Err, boom) {
 		t.Fatalf("event 1 = %#v, want failed bad with boom", events[1])
+	}
+	// An attempt that failed was still an attempt, and it is timed like any other:
+	// the work it did before failing is what a tracker is watching for.
+	if f.Elapsed <= 0 || f.Elapsed > within {
+		t.Fatalf("failed Elapsed = %v; want the attempt's own duration, at most %v", f.Elapsed, within)
 	}
 }
 
@@ -109,6 +116,12 @@ func TestEvents_distinguishValidationReplayAndAdmission(t *testing.T) {
 		)
 		if err != nil || len(events) != 1 || events[0].Kind != workflow.EventSkipped {
 			t.Fatalf("error, events = %v, %+v; want one skipped event", err, events)
+		}
+		// A skipped step produced its output by replay rather than by running, and
+		// the event carries that Store the same way a completed one does. It is the
+		// only report a tracker gets for a replayed boundary.
+		if value, getErr := workflow.Get[int](events[0].Store, workflow.Output("leaf")); getErr != nil || value != 7 {
+			t.Fatalf("skipped Store leaf = %v, %v; want the replayed 7", value, getErr)
 		}
 	})
 
@@ -221,11 +234,11 @@ func TestEvents_carrySequenceElapsedAndStore(t *testing.T) {
 	if started.Elapsed != 0 {
 		t.Fatalf("started Elapsed = %v; want 0", started.Elapsed)
 	}
-	// The completed event times the attempt, so it cannot exceed the run that
-	// contained it. An attempt whose start was never stamped reports the age of
-	// the zero time, which is absurd rather than merely imprecise.
-	if completed.Elapsed > within {
-		t.Fatalf("completed Elapsed = %v; want at most the %v the run took", completed.Elapsed, within)
+	// The completed event times the attempt, so it is a duration the run itself
+	// contained: an unstamped start reports the age of the zero time, and no
+	// measurement at all reports nothing happened.
+	if completed.Elapsed <= 0 || completed.Elapsed > within {
+		t.Fatalf("completed Elapsed = %v; want the attempt's own duration, at most %v", completed.Elapsed, within)
 	}
 	// A completed event carries the Store the step produced, which is what an
 	// external tracker or persister records.

@@ -143,6 +143,21 @@ func TestDecodersNameAMissingRequiredMember(t *testing.T) {
 			into:     new(workflow.JournalKey),
 			want:     `journal key field "id" is missing`,
 		},
+		// The document holding the records names itself too, so a member missing
+		// from the envelope reads like one missing from a record rather than like a
+		// nameless field.
+		{
+			name:     "journal document version",
+			document: `{"records":[]}`,
+			into:     workflow.NewJournal(),
+			want:     `document field "version" is missing`,
+		},
+		{
+			name:     "journal document records",
+			document: `{"version":4}`,
+			into:     workflow.NewJournal(),
+			want:     `document field "records" is missing`,
+		},
 		{
 			name:     "journal record id",
 			document: `{"version":4,"records":[{"value":1}]}`,
