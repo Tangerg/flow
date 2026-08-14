@@ -287,7 +287,7 @@ func (g *graphJSON) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &document); err != nil {
 		return err
 	}
-	concurrency, err := decodeDefinitionInt("concurrency", document.Concurrency)
+	concurrency, err := decodeDefinitionInt(fieldConcurrency, document.Concurrency)
 	if err != nil {
 		return err
 	}
@@ -323,11 +323,11 @@ func (s *specJSONDecoder) decode(data []byte) error {
 	s.concurrency = document.Concurrency
 	s.maxIterations = document.MaxIterations
 
-	concurrency, err := decodeDefinitionInt("concurrency", s.concurrency)
+	concurrency, err := decodeDefinitionInt(fieldConcurrency, s.concurrency)
 	if err != nil {
 		return err
 	}
-	maxIterations, err := decodeDefinitionInt("maxIterations", s.maxIterations)
+	maxIterations, err := decodeDefinitionInt(fieldMaxIterations, s.maxIterations)
 	if err != nil {
 		return err
 	}

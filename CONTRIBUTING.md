@@ -107,6 +107,15 @@ go test ./example -run Example -v
   a single chain cannot: `TestCodec_boundsNestingNotBreadth`,
   `TestSpec_boundsNestingNotBreadth`, and `TestParse_boundsNestingNotBreadth`
   supply one per boundary.
+- Adding a configurable step kind is six edits in two languages, and none of them
+  is optional: the `Kind` constant, an entry in `specKindFields`, a validator
+  case, a compiler case, the `definitionKind` the built step reports, and a branch
+  in `jsonschema/spec.schema.json`. Three of the six are held to each other by
+  `TestSpecFieldMatricesAgreeWithTheSpecStruct`, which compares the matrix, the
+  schema, and the `Spec` struct field by field and kind by kind; the other three
+  fail as an unknown kind rather than silently. A code-built boundary that is not
+  a Spec shape — `Await`, `Interrupt`, a graph, an opaque Step — needs only the
+  kind `Describe` reports, which is why those constants form a second block.
 - One arity, one path. A composite runs its children through one implementation
   however many there are: `Parallel` had a single-branch path that re-derived the
   suspension classification, the merge, and the index a real failure is reported
