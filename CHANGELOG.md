@@ -56,6 +56,10 @@ being presented as migrations from a version that was never published.
   JSON round trip cannot silently rename steps, ports, references, or routes.
 - `Ref.Validate` and `ScopeFrame.Validate` expose the same definition checks to
   caller-defined Binders, Steps, and repeated composites.
+- `Ref.Compare` is the canonical order of a reference list. `Graph.Inputs` and
+  `Graph.MissingInputs` return it, and a caller that assembles its own list — an
+  editor collecting what a rule set reads, as `expr.Bindings.Refs` does — orders
+  it the same way instead of choosing a second order to diff against.
 - `Condition` is `flow.Node[Store, bool]`, matching `Resolver`'s
   `flow.Node[Store, string]`, so the two decision shapes differ only in what
   they return. A condition composes with `Then`, `Map`, and the other typed

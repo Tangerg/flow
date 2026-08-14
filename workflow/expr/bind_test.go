@@ -244,6 +244,50 @@ func TestBindings_reportOneBadExpressionTheSameWayEverywhere(t *testing.T) {
 	}
 }
 
+// TestBindings_RefsMatchTheOrderAGraphPresents holds the two packages to one
+// reference order. Bindings.Refs exists so an editor can check that a rule set
+// only reads values the graph produces, which means diffing it against
+// Graph.Inputs -- and a diff of two sorted lists is nonsense unless both were
+// sorted the same way. workflow.Ref.Compare is that order, and it is exported for
+// exactly this: a caller assembling its own list gets the order workflow's own
+// results are in, rather than a second order that happens to agree today.
+func TestBindings_RefsMatchTheOrderAGraphPresents(t *testing.T) {
+	bindings := expr.Bindings{
+		Conditions: map[string]string{"done": `zeta.output > 1 && alpha.output.b > 0`},
+		Resolvers:  map[string]string{"pick": `alpha.output.a`},
+	}
+	read, err := bindings.Refs()
+	if err != nil {
+		t.Fatalf("Refs: %v", err)
+	}
+
+	// The ports are named so their own order disagrees with the reference order,
+	// which is what makes this an assertion about sorting references.
+	graph := workflow.Graph{Nodes: []workflow.GraphNode{{
+		ID:   "consume",
+		Type: "double",
+		Inputs: workflow.Inputs{
+			"a": workflow.Output("zeta"),
+			"y": workflow.At("alpha", "output", "b"),
+			"z": workflow.At("alpha", "output", "a"),
+		},
+	}}}
+	// Spelled out rather than derived from the comparator: asking both lists to
+	// agree would pass however Compare orders them, which is the drift the two
+	// producers used to be able to have.
+	want := []workflow.Ref{
+		workflow.At("alpha", "output", "a"),
+		workflow.At("alpha", "output", "b"),
+		workflow.Output("zeta"),
+	}
+	if !slices.Equal(read, want) {
+		t.Fatalf("Bindings.Refs = %v; want %v, node ID before path", read, want)
+	}
+	if presented := graph.Inputs(); !slices.Equal(presented, want) {
+		t.Fatalf("Graph.Inputs = %v; want the same order %v", presented, want)
+	}
+}
+
 func TestSwitch(t *testing.T) {
 	resolver, err := expr.Switch(expr.SwitchSpec{
 		Cases: []expr.Case{

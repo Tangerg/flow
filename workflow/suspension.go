@@ -287,7 +287,7 @@ func (s *Suspension) compare(other *Suspension) int {
 	return cmp.Or(
 		strings.Compare(s.ID, other.ID),
 		compareScope(s.Scope, other.Scope),
-		s.Await.compare(other.Await),
+		s.Await.Compare(other.Await),
 	)
 }
 

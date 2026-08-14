@@ -125,7 +125,7 @@ func (g Graph) Inputs() []Ref {
 	}
 	// Sorting is part of the contract, so duplicates end up adjacent and need no
 	// separate set to detect.
-	slices.SortFunc(externalRefs, Ref.compare)
+	slices.SortFunc(externalRefs, Ref.Compare)
 	return slices.Compact(externalRefs)
 }
 

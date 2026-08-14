@@ -1,7 +1,6 @@
 package expr
 
 import (
-	"cmp"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -47,14 +46,13 @@ func Parse(src string) (*Expr, error) {
 
 type refList []workflow.Ref
 
+// sortedUnique is the reference list this package hands back: the canonical
+// reference order, which [workflow.Ref.Compare] owns, with duplicates removed.
+// An editor compares one of these against what a graph produces, so the order has
+// to be the same one workflow's own results use rather than a second one.
 func (r refList) sortedUnique() []workflow.Ref {
 	r = slices.Clone(r)
-	slices.SortFunc(r, func(left, right workflow.Ref) int {
-		return cmp.Or(
-			strings.Compare(left.NodeID, right.NodeID),
-			strings.Compare(left.Path, right.Path),
-		)
-	})
+	slices.SortFunc(r, workflow.Ref.Compare)
 	return slices.Compact(r)
 }
 
@@ -405,15 +403,13 @@ func (c *compiler) compileUnary(n *ast.UnaryExpr, depth int) (evalFunc, error) {
 	switch n.Op {
 	case token.NOT:
 		return func(s workflow.Store) (any, error) {
-			v, err := eval(s)
+			// The operator names itself in the failure, so ! states its own spelling
+			// once -- here it is the same rule && and || ask for, and one message.
+			value, err := eval.bool(s, n.Op)
 			if err != nil {
 				return nil, err
 			}
-			b, ok := v.(bool)
-			if !ok {
-				return nil, fmt.Errorf("%w: ! wants bool, got %s", ErrType, (operand{raw: v}).typeName())
-			}
-			return !b, nil
+			return !value, nil
 		}, nil
 	case token.SUB:
 		return func(s workflow.Store) (any, error) {
@@ -456,9 +452,11 @@ func (c *compiler) compileBinary(n *ast.BinaryExpr, depth int) (evalFunc, error)
 		}, nil
 	}
 
-	op := n.Op
-	if !(binaryOperator{Token: op}).supported() {
-		return nil, c.unsupported(n, "operator "+op.String())
+	// The operator is built once and captured, so the closure holds the operator
+	// rather than the AST node it came from.
+	operator := binaryOperator{Token: n.Op}
+	if !operator.supported() {
+		return nil, c.unsupported(n, "operator "+operator.String())
 	}
 	return func(s workflow.Store) (any, error) {
 		lv, err := left(s)
@@ -469,7 +467,7 @@ func (c *compiler) compileBinary(n *ast.BinaryExpr, depth int) (evalFunc, error)
 		if err != nil {
 			return nil, err
 		}
-		return (binaryOperator{Token: op}).apply(operand{raw: lv}, operand{raw: rv})
+		return operator.apply(operand{raw: lv}, operand{raw: rv})
 	}, nil
 }
 

@@ -289,6 +289,14 @@ go test ./example -run Example -v
   no behavior can reveal, so `TestPackageDependenciesPointOneWay` reads the imports
   and `TestModuleImportsCoversEveryPackage` keeps the table from permitting a
   package it forgot to mention.
+- Let the type own an order it promises. Three exported results are documented as
+  sorted references, and the order lived in `Ref.compare` for two of them while
+  `expr` wrote it out again for the third — which is the one a caller is told to
+  diff against `Graph.Inputs`, and a diff of two sorted lists is nonsense unless
+  both were sorted the same way. `Ref.Compare` is exported for that reason, not for
+  repository-local convenience. Its test spells the expected order out rather than
+  deriving it from the comparator, because asking two producers to agree passes
+  however the comparator orders them — the drift it exists to prevent.
 - Point a doc link at something that exists. A `[Name]` that resolves becomes a
   link in godoc and one that does not is rendered as bracketed text, so a rename
   leaves 574 of them degrading silently. `TestGoDocLinksResolve` checks the ones it

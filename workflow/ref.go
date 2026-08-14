@@ -41,7 +41,14 @@ func Output(nodeID string) Ref { return Ref{NodeID: nodeID, Path: outputPath} }
 // pointer segment may themselves contain '#'.
 func (r Ref) String() string { return r.NodeID + "#" + r.Path }
 
-func (r Ref) compare(other Ref) int {
+// Compare orders two references by node ID, then by path, and reports the usual
+// negative, zero, or positive result. It is the canonical order of a reference
+// list: [Graph.Inputs] and [Graph.MissingInputs] already return it, and it is
+// exported so that a caller assembling its own list — an editor collecting what a
+// rule set reads, which is what [expr.Bindings.Refs] does — produces the order
+// those results can be compared against, instead of a second order that happens
+// to agree today.
+func (r Ref) Compare(other Ref) int {
 	return cmp.Or(
 		strings.Compare(r.NodeID, other.NodeID),
 		strings.Compare(r.Path, other.Path),
