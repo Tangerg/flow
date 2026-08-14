@@ -5,9 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"maps"
+	"os"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -2263,4 +2268,158 @@ func TestOutputGuaranteeCombinatorsLeaveTheirOperandsAlone(t *testing.T) {
 	if !left.contains("a") || !right.contains("b") {
 		t.Fatal("intersection mutated an operand")
 	}
+}
+
+// publishedVocabularies spells out every enumerated value this package publishes
+// as text that leaves it. A Kind names a step in a Spec document and a node in a
+// Description, an EventKind and a StepOp reach an application that traces or
+// persists a run, a ValueType is a member of the NodeSchema an editor encodes, a
+// Trigger is a Graph member, and the registration kinds are the Kind field of a
+// RegistrationError.
+//
+// A caller compares against the constant, and so does almost every test here,
+// which makes both invariant to the spelling: renaming twenty-two of these values
+// failed nothing. The ones that did fail were incidental -- a test that happened to
+// write the word out -- which is why TypeString and TypeNumber were held and the
+// four beside them were not.
+//
+// The name kinds beside StepOp in errors.go are deliberately absent. Each is a
+// fragment of a sentence, and this package's stated contract is the sentinel and
+// the structured location rather than the words around them.
+var publishedVocabularies = map[string]string{
+	"KindLeaf":      "leaf",
+	"KindSequence":  "sequence",
+	"KindParallel":  "parallel",
+	"KindBranch":    "branch",
+	"KindLoop":      "loop",
+	"KindIteration": "iteration",
+	"KindSubgraph":  "subgraph",
+	"KindAwait":     "await",
+	"KindGraph":     "graph",
+	"KindInterrupt": "interrupt",
+	"KindOpaque":    "opaque",
+
+	"EventStarted":   "started",
+	"EventCompleted": "completed",
+	"EventFailed":    "failed",
+	"EventSuspended": "suspended",
+	"EventSkipped":   "skipped",
+	"EventBypassed":  "bypassed",
+
+	"TypeAny":    "any",
+	"TypeString": "string",
+	"TypeNumber": "number",
+	"TypeBool":   "bool",
+	"TypeArray":  "array",
+	"TypeObject": "object",
+
+	"TriggerAll": "",
+	"TriggerAny": "any",
+
+	"OpValidate": "validate",
+	"OpBind":     "bind",
+	"OpRun":      "run",
+
+	"registrationCondition": "condition",
+	"registrationNode":      "node",
+	"registrationResolver":  "resolver",
+	"registrationSchema":    "schema",
+}
+
+// vocabularyTypes are the declared types whose every constant the table above must
+// spell. The registration kinds have no type of their own -- they are the string a
+// RegistrationError carries -- so they are recognized by name instead.
+var vocabularyTypes = map[string]bool{
+	"Kind":      true,
+	"EventKind": true,
+	"ValueType": true,
+	"Trigger":   true,
+	"StepOp":    true,
+}
+
+// TestEveryPublishedVocabularySpellsItselfOut reads the constants out of the
+// package source rather than the table's own keys, so a new member of a published
+// vocabulary has to be spelled before it can ship, and a spelling left behind by a
+// removed one fails instead of reading as coverage.
+func TestEveryPublishedVocabularySpellsItselfOut(t *testing.T) {
+	found := publishedConstants(t)
+	if len(found) == 0 {
+		t.Fatal("no vocabulary constant found; the scan stopped seeing the package")
+	}
+	for _, constant := range slices.Sorted(maps.Keys(found)) {
+		want, listed := publishedVocabularies[constant]
+		switch {
+		case !listed:
+			t.Errorf("%s publishes %q, which is spelled nowhere", constant, found[constant])
+		case found[constant] != want:
+			t.Errorf("%s = %q; the value this package publishes is %q", constant, found[constant], want)
+		}
+	}
+	for _, constant := range slices.Sorted(maps.Keys(publishedVocabularies)) {
+		if _, ok := found[constant]; !ok {
+			t.Errorf("%s is spelled out but the package declares no such constant", constant)
+		}
+	}
+}
+
+// publishedConstants returns the declared value of every constant belonging to a
+// published vocabulary, read from this package's own source.
+func publishedConstants(t *testing.T) map[string]string {
+	t.Helper()
+	fileSet := token.NewFileSet()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read package directory: %v", err)
+	}
+
+	found := make(map[string]string)
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fileSet, name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, declaration := range file.Decls {
+			general, ok := declaration.(*ast.GenDecl)
+			if !ok || general.Tok != token.CONST {
+				continue
+			}
+			collectVocabulary(t, general, found)
+		}
+	}
+	return found
+}
+
+func collectVocabulary(t *testing.T, declaration *ast.GenDecl, found map[string]string) {
+	t.Helper()
+	for _, spec := range declaration.Specs {
+		value, ok := spec.(*ast.ValueSpec)
+		if !ok || len(value.Names) != 1 || len(value.Values) != 1 {
+			continue
+		}
+		constant := value.Names[0].Name
+		if !publishesText(constant, value.Type) {
+			continue
+		}
+		literal, ok := value.Values[0].(*ast.BasicLit)
+		if !ok || literal.Kind != token.STRING {
+			t.Fatalf("%s belongs to a published vocabulary but is not a string literal", constant)
+		}
+		text, err := strconv.Unquote(literal.Value)
+		if err != nil {
+			t.Fatalf("%s: %v", constant, err)
+		}
+		found[constant] = text
+	}
+}
+
+func publishesText(constant string, declared ast.Expr) bool {
+	if strings.HasPrefix(constant, "registration") {
+		return true
+	}
+	name, ok := declared.(*ast.Ident)
+	return ok && vocabularyTypes[name.Name]
 }

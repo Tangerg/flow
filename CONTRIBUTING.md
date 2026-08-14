@@ -391,6 +391,21 @@ go test ./example -run Example -v
   and breaking for every editor, which is what both types are documented to serve.
   `TestEditorFacingTypesPublishTheWireNamesTheyCarry` spells their bytes out,
   including which members an absent value may omit.
+- Spell an enumerated value that leaves the package, and let the source decide the
+  list. A caller compares against `KindLeaf` or `EventFailed` rather than against
+  `"leaf"` or `"failed"`, and so does almost every test here, which makes both
+  invariant to the spelling: respelling twenty-two of this package's ninety-four
+  string constants failed nothing at all. Which ones were held was incidental —
+  `TypeString` and `TypeNumber` only because a golden encoding happened to write
+  the words out, and the four `ValueType`s beside them not at all. A `Kind` names a
+  step in a `Spec` document, an `EventKind` and a `StepOp` reach an application that
+  traces or persists a run, a `ValueType` is a `NodeSchema` member an editor
+  encodes, and the registration kinds are a `RegistrationError` field, so
+  `TestEveryPublishedVocabularySpellsItselfOut` reads the constants out of the
+  package source: a new member has to be spelled before it ships, and a spelling
+  left behind by a removed one fails rather than reading as coverage. The name kinds
+  in `errors.go` stay out of it, because a fragment of a sentence is prose and the
+  contract here is the sentinel and the structured location.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out
