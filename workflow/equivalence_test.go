@@ -3,6 +3,7 @@ package workflow_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
 
@@ -243,4 +244,106 @@ func TestAProjectionDefectReadsTheSameWhicheverCheckFindsIt(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestTheTwoValidatorsRefuseTheSameDefects pins the agreement between the two
+// checks that judge structure: ValidateSpec walks a Spec before anything is
+// built, and definition validation walks the built Steps. Neither can be derived
+// from the other -- validating a Spec must not run factories, and a built Step
+// exposes its children only through its own boundary -- so each states the same
+// four rules over its own shape. Nothing but this holds the two statements to the
+// same verdict, and a rule that drifted would make a workflow's legality depend
+// on which form its author happened to write it in.
+//
+// The sentinel is the agreement; the message deliberately is not. A Spec locates
+// a defect by wire path and a definition locates it by step identity, which
+// TestAProjectionDefectReadsTheSameWhicheverCheckFindsIt covers for the one
+// defect both can phrase the same way.
+func TestTheTwoValidatorsRefuseTheSameDefects(t *testing.T) {
+	registry := workflow.NewRegistry().
+		MustRegisterNode("leaf", workflow.InterruptFactory()).
+		MustRegisterCondition("again", flow.NodeFunc[workflow.Store, bool](
+			func(context.Context, workflow.Store) (bool, error) { return true, nil },
+		))
+	always := flow.NodeFunc[workflow.Store, bool](
+		func(context.Context, workflow.Store) (bool, error) { return true, nil },
+	)
+	leafSpec := func(id string) workflow.Spec {
+		return workflow.Spec{Kind: workflow.KindLeaf, ID: id, Type: "leaf"}
+	}
+	waitStep := func(id string) workflow.Step { return workflow.Interrupt(id, nil) }
+
+	// Each defect is written twice: once as a Spec for the registry to validate,
+	// once as the Steps that Spec compiles to, for definition validation.
+	tests := map[string]struct {
+		spec workflow.Spec
+		step workflow.Step
+		want error
+	}{
+		"a step ID taken twice among siblings": {
+			spec: workflow.Spec{
+				Kind:  workflow.KindSequence,
+				Steps: []workflow.Spec{leafSpec("same"), leafSpec("same")},
+			},
+			step: workflow.Sequence(waitStep("same"), waitStep("same")),
+			want: workflow.ErrDuplicateStep,
+		},
+		// Both validators hold one claim inline and allocate a set only for a
+		// second distinct ID, so a repeat with another step between it and the
+		// original is refused by different code than an immediate repeat.
+		"a step ID taken twice with another between": {
+			spec: workflow.Spec{
+				Kind:  workflow.KindSequence,
+				Steps: []workflow.Spec{leafSpec("same"), leafSpec("other"), leafSpec("same")},
+			},
+			step: workflow.Sequence(waitStep("same"), waitStep("other"), waitStep("same")),
+			want: workflow.ErrDuplicateStep,
+		},
+		"a loop body taking the loop's own ID": {
+			spec: workflow.Spec{
+				Kind: workflow.KindLoop, ID: "same",
+				Condition: "again",
+				Body:      new(leafSpec("same")),
+			},
+			step: workflow.Loop(workflow.LoopConfig{
+				ID: "same", Body: waitStep("same"), Condition: always,
+			}),
+			want: workflow.ErrDuplicateStep,
+		},
+		"nesting past the depth limit": {
+			spec: nestedSpec(workflow.MaxNestingDepth + 1),
+			step: nestedStep(workflow.MaxNestingDepth + 1),
+			want: workflow.ErrMaxDepth,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			specErr := registry.ValidateSpec(test.spec)
+			stepErr := flow.Validate(test.step)
+			if !errors.Is(specErr, test.want) || !errors.Is(stepErr, test.want) {
+				t.Fatalf(
+					"the two checks disagree on %v:\n  ValidateSpec: %v\n  definition:   %v",
+					test.want, specErr, stepErr,
+				)
+			}
+		})
+	}
+}
+
+// nestedSpec and nestedStep build the same sequence nested depth levels deep, so
+// the two validators are asked about one shape rather than two.
+func nestedSpec(depth int) workflow.Spec {
+	spec := workflow.Spec{Kind: workflow.KindSequence}
+	for range depth {
+		spec = workflow.Spec{Kind: workflow.KindSequence, Steps: []workflow.Spec{spec}}
+	}
+	return spec
+}
+
+func nestedStep(depth int) workflow.Step {
+	step := workflow.Sequence()
+	for range depth {
+		step = workflow.Sequence(step)
+	}
+	return step
 }

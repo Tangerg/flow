@@ -1018,10 +1018,8 @@ func TestEmitterContextCannotJoinProducingRun(t *testing.T) {
 		outer,
 		workflow.NewStore().WithOutput("seed", 1),
 		workflow.RunConfig{
-			Journal: journal,
-			Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
-				events = append(events, event)
-			}),
+			Journal:  journal,
+			Observer: record(&events),
 			Emitter: workflow.EmitterFunc(func(ctx context.Context, _ workflow.Chunk) error {
 				_, callbackErr = callback.Run(ctx, workflow.NewStore())
 				return callbackErr

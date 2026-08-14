@@ -354,38 +354,33 @@ func TestJournalCommitErrorsDoNotHideParentCancellation(t *testing.T) {
 	})
 }
 
-func TestParallelMerge_resamplesParentCancellation(t *testing.T) {
+func TestParallelBranches_resamplesParentCancellation(t *testing.T) {
 	cause := errors.New("cancel during parallel merge")
 	input := NewStore().WithOutput("seed", 1)
 	branch := opaqueTestStepFunc(func(_ context.Context, store Store) (Store, error) {
 		return store.WithOutput("result", 2), nil
 	})
 
-	t.Run("one branch", func(t *testing.T) {
-		ctx := ctxtest.CancelAtCheck(t.Context(), 2, cause)
-		output, err := (parallelStep{branches: stepList{branch}}).runOne(ctx, input)
-		if !errors.Is(err, cause) {
-			t.Fatalf("runOne error = %v; want cancellation cause", err)
+	// One branch runs the same path as many, so both arities are asked at every
+	// check that path makes: one per collected outcome, then one after the merge.
+	for _, arity := range []int{1, 2} {
+		branches := make(stepList, arity)
+		for index := range branches {
+			branches[index] = branch
 		}
-		if _, published := output.Lookup(Output("result")); published {
-			t.Fatal("runOne published merged output after cancellation")
-		}
-	})
-
-	t.Run("many branches", func(t *testing.T) {
-		for _, cancelAt := range []int{2, 4} {
-			t.Run(fmt.Sprintf("check %d", cancelAt), func(t *testing.T) {
+		for cancelAt := 2; cancelAt <= arity+2; cancelAt++ {
+			t.Run(fmt.Sprintf("%d branches, check %d", arity, cancelAt), func(t *testing.T) {
 				ctx := ctxtest.CancelAtCheck(t.Context(), cancelAt, cause)
-				output, err := (parallelStep{branches: stepList{branch, branch}}).runMany(ctx, input)
+				output, err := (parallelStep{branches: branches}).runBranches(ctx, input)
 				if !errors.Is(err, cause) {
-					t.Fatalf("runMany error = %v; want cancellation cause", err)
+					t.Fatalf("runBranches error = %v; want cancellation cause", err)
 				}
 				if _, published := output.Lookup(Output("result")); published {
-					t.Fatal("runMany published merged output after cancellation")
+					t.Fatal("runBranches published merged output after cancellation")
 				}
 			})
 		}
-	})
+	}
 }
 
 func TestIterationCollect_resamplesParentCancellation(t *testing.T) {
@@ -2091,22 +2086,22 @@ func TestSpecCompile_carriesEverySchedulingSettingIntoTheStep(t *testing.T) {
 	}
 }
 
-// TestParallelRunMany_boundsItsBranchesWithTheLimitItHolds continues where
+// TestParallelRunBranches_boundsThemWithTheLimitItHolds continues where
 // TestSpecCompile_carriesEverySchedulingSettingIntoTheStep stops: the limit is on
 // the step, and this is the step handing it to the mapper that schedules the
 // branches. Concurrency changes no answer, so the proof that it arrived is a
 // value flow.MapConfig refuses -- a mapper built without the limit runs the
 // branches unbounded and reports nothing at all.
-func TestParallelRunMany_boundsItsBranchesWithTheLimitItHolds(t *testing.T) {
+func TestParallelRunBranches_boundsThemWithTheLimitItHolds(t *testing.T) {
 	step := parallelStep{branches: stepList{Sequence(), Sequence()}, limit: -1}
 
 	input := NewStore().WithOutput("start", 1)
-	out, err := step.runMany(t.Context(), input)
+	out, err := step.runBranches(t.Context(), input)
 	if !errors.Is(err, flow.ErrInvalidConfig) {
-		t.Fatalf("runMany error = %v; want the mapper to reject the limit it was given", err)
+		t.Fatalf("runBranches error = %v; want the mapper to reject the limit it was given", err)
 	}
 	if len(out.Changes(input)) != 0 {
-		t.Fatalf("runMany changed %v; want the untouched input", out.Changes(input))
+		t.Fatalf("runBranches changed %v; want the untouched input", out.Changes(input))
 	}
 }
 
@@ -2135,5 +2130,30 @@ func TestInputsValidation_namesTheBindingItChecked(t *testing.T) {
 				t.Fatalf("error = %v; want it to open with %s", err, test.want)
 			}
 		})
+	}
+}
+
+// TestEmbeddedSchemas_compileUnderTheIdentityTheyDeclare pins the one agreement
+// between a schema constant and the schema file it names: the URL this package
+// compiles a document under is the $id that document publishes. The backend takes
+// its identity from the $id, so a disagreement breaks nothing at run time -- it
+// leaves the package naming a schema by a URL the schema itself does not claim,
+// and the two copies are in two languages and edited by hand. configSchemaURL has
+// no counterpart here: it is the base URI given to an application's config schema,
+// which publishes no identity of its own.
+func TestEmbeddedSchemas_compileUnderTheIdentityTheyDeclare(t *testing.T) {
+	for url, document := range map[string][]byte{
+		specSchemaURL:  specSchemaJSON,
+		graphSchemaURL: graphSchemaJSON,
+	} {
+		var declared struct {
+			ID string `json:"$id"`
+		}
+		if err := json.Unmarshal(document, &declared); err != nil {
+			t.Fatalf("decode %s: %v", url, err)
+		}
+		if declared.ID != url {
+			t.Fatalf("schema declares $id %q; the package compiles it under %q", declared.ID, url)
+		}
 	}
 }

@@ -12,6 +12,15 @@ import (
 	"github.com/Tangerg/flow/workflow"
 )
 
+// record collects every event a run reports, which is what a test asserting the
+// sequence of outcomes needs. A test that wants only some of them filters in its
+// own closure, because the filter is part of what it is asserting.
+func record(events *[]workflow.Event) workflow.ObserverFunc {
+	return func(_ context.Context, event workflow.Event) {
+		*events = append(*events, event)
+	}
+}
+
 func TestEvents_emittedForSequence(t *testing.T) {
 	from := func(id string) workflow.Binder[int] {
 		return workflow.From[int](workflow.Output(id))
@@ -20,9 +29,7 @@ func TestEvents_emittedForSequence(t *testing.T) {
 	b := workflow.Leaf("b", from("a"), flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
 
 	var events []workflow.Event
-	cfg := workflow.RunConfig{Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
-		events = append(events, event)
-	})}
+	cfg := workflow.RunConfig{Observer: record(&events)}
 
 	_, err := workflow.Run(t.Context(), workflow.Sequence(a, b),
 		workflow.NewStore().WithOutput("start", 1), cfg)
@@ -50,9 +57,7 @@ func TestEvents_failure(t *testing.T) {
 	)
 
 	var events []workflow.Event
-	cfg := workflow.RunConfig{Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
-		events = append(events, event)
-	})}
+	cfg := workflow.RunConfig{Observer: record(&events)}
 
 	before := time.Now()
 	_, _ = workflow.Run(t.Context(), bad, workflow.NewStore().WithOutput("start", 1), cfg)
@@ -73,12 +78,6 @@ func TestEvents_failure(t *testing.T) {
 }
 
 func TestEvents_distinguishValidationReplayAndAdmission(t *testing.T) {
-	record := func(events *[]workflow.Event) workflow.ObserverFunc {
-		return func(_ context.Context, event workflow.Event) {
-			*events = append(*events, event)
-		}
-	}
-
 	// A rejected definition is reported under the ID it declared. The two defects
 	// differ in whether there is an ID to report: an invalid one is the single
 	// case where the failure cannot name its step, so a valid ID with a defect
@@ -231,9 +230,7 @@ func TestEvents_carrySequenceElapsedAndStore(t *testing.T) {
 	)
 
 	var events []workflow.Event
-	cfg := workflow.RunConfig{Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
-		events = append(events, event)
-	})}
+	cfg := workflow.RunConfig{Observer: record(&events)}
 
 	in := workflow.NewStore().WithOutput("start", 21)
 	before := time.Now()

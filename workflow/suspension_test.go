@@ -796,9 +796,7 @@ func TestSuspend_awaitPassesThroughOnceSatisfied(t *testing.T) {
 func TestAwait_reportsTheWaitItRaisedAndTheStoreItLetThrough(t *testing.T) {
 	gate := workflow.Await("gate", workflow.Output("approval"))
 	var events []workflow.Event
-	cfg := workflow.RunConfig{Observer: workflow.ObserverFunc(
-		func(_ context.Context, event workflow.Event) { events = append(events, event) },
-	)}
+	cfg := workflow.RunConfig{Observer: record(&events)}
 
 	_, err := workflow.Run(t.Context(), gate, workflow.NewStore(), cfg)
 	waits := workflow.Suspensions(err)
@@ -1430,10 +1428,8 @@ func TestInterrupt_eventsReportSuspensionThenReplay(t *testing.T) {
 	journal := workflow.NewJournal()
 	var events []workflow.Event
 	cfg := workflow.RunConfig{
-		Journal: journal,
-		Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
-			events = append(events, event)
-		}),
+		Journal:  journal,
+		Observer: record(&events),
 	}
 	step := workflow.Interrupt("approval", map[string]any{"question": "approve?"})
 

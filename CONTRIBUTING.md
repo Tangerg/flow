@@ -107,6 +107,42 @@ go test ./example -run Example -v
   a single chain cannot: `TestCodec_boundsNestingNotBreadth`,
   `TestSpec_boundsNestingNotBreadth`, and `TestParse_boundsNestingNotBreadth`
   supply one per boundary.
+- One arity, one path. A composite runs its children through one implementation
+  however many there are: `Parallel` had a single-branch path that re-derived the
+  suspension classification, the merge, and the index a real failure is reported
+  under, and the round that deleted it found that path one deletion away from
+  labelling a wait as branch 0 failing. It bought two allocations, because
+  `flow.Map` already runs a single element on the calling goroutine rather than
+  through an errgroup — the layer below had the optimisation, and the layer above
+  had a second copy of the meaning. An empty composite may still return early:
+  doing nothing is a base case, not a second implementation.
+- Let a cancellation outrank what a child reported, at every boundary, and expect
+  to write it out. Some forty sites ask `context.Cause(ctx)` right after a child
+  returns, because work that failed while its context was ending must not be
+  reported as failing on its own terms. That repetition is not a missing helper:
+  each site supplies its own fallback Store, and what a *suspension* means differs
+  between them — a loop promotes the waiting body's writes, its stop decision
+  re-identifies the wait under the loop's own ID, a subgraph passes it through
+  untouched, and an iteration has already turned its elements' waits into values.
+  Factoring the first line would hide the line that differs. `loopExecution.admit`
+  is the one place the pattern is named, because both halves of one iteration do
+  share a policy. Each boundary is held to the rule where it decides:
+  `TestBranch_parentCancellationWinsAtEveryCallBoundary`,
+  `TestSubgraph_parentCancellationWinsAtEveryBoundary`,
+  `TestIteration_parentCancellationWinsAtEveryCallBoundary`, and
+  `TestParallelBranches_resamplesParentCancellation` walk the checks one at a time
+  with `ctxtest.CancelAtCheck`.
+- Two checks of one rule must be held to one verdict. `ValidateSpec` walks a Spec
+  before anything is built and definition validation walks the built Steps;
+  neither can be derived from the other, so duplicate identities, the ID a loop
+  reserves inside its body, and the nesting limit are each stated twice. Nothing
+  but a test keeps the two statements together, and a rule that drifted would make
+  a workflow's legality depend on which form its author wrote it in:
+  `TestTheTwoValidatorsRefuseTheSameDefects` asks both about one defect at a time.
+  The sentinel is the agreement and the message deliberately is not — a Spec
+  locates a defect by wire path, a definition by step identity — except where both
+  can phrase it the same way, which
+  `TestAProjectionDefectReadsTheSameWhicheverCheckFindsIt` holds to the full text.
 - Ask for what the callee builds from. `leafCompiler` takes a `leafNode` — the
   registered node type and the `NodeSpec` a factory receives — so the nested-Spec
   and flat-Graph paths each convert to it rather than presenting a composite

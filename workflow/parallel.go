@@ -66,14 +66,10 @@ func (p parallelStep) Run(ctx context.Context, s Store) (Store, error) {
 	if err := context.Cause(ctx); err != nil {
 		return s, err
 	}
-	switch len(p.branches) {
-	case 0:
+	if len(p.branches) == 0 {
 		return s, nil
-	case 1:
-		return p.runOne(ctx, s)
-	default:
-		return p.runMany(ctx, s)
 	}
+	return p.runBranches(ctx, s)
 }
 
 func (p parallelStep) validate() error {
@@ -85,29 +81,12 @@ func (p parallelStep) validate() error {
 
 func (p parallelStep) Validate() error { return validateDefinition(p) }
 
-func (p parallelStep) runOne(ctx context.Context, s Store) (Store, error) {
-	result, err := p.branches[0].Run(ctx, s)
-	if contextErr := context.Cause(ctx); contextErr != nil {
-		return s, contextErr
-	}
-
-	var resultErr error
-	if err != nil {
-		if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
-			resultErr = suspensions.err()
-		} else {
-			return s, &flow.IndexError{Index: 0, Err: err}
-		}
-	}
-
-	merged := s.merge(result)
-	if contextErr := context.Cause(ctx); contextErr != nil {
-		return s, contextErr
-	}
-	return merged, resultErr
-}
-
-func (p parallelStep) runMany(ctx context.Context, s Store) (Store, error) {
+// runBranches runs every branch, however many there are. One branch takes this
+// path too: flow.Map already runs a single element on the calling goroutine
+// rather than through an errgroup, so a fast path here would buy two allocations
+// and owe a second copy of what a branch outcome means — the suspension
+// classification, the merge, and the index a real failure is reported under.
+func (p parallelStep) runBranches(ctx context.Context, s Store) (Store, error) {
 	branchInput := s.sharedBase()
 
 	// A suspension comes back as a value so it does not cancel the siblings; a
