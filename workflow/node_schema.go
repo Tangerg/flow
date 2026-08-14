@@ -257,12 +257,11 @@ func (n NodeSchema) validateInputs(
 			return fmt.Errorf("%w %q", ErrMissingPort, port)
 		}
 	}
-	for _, port := range inputs.PortNames() {
+	for port, ref := range inputs.All() {
 		want, ok := declared[port]
 		if !ok {
 			return fmt.Errorf("%w %q", ErrUnknownPort, port)
 		}
-		ref := inputs[port]
 		out, ok := producerOutput(ref)
 		if !ok {
 			continue

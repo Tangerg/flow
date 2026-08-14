@@ -117,8 +117,8 @@ func newRenderer(graph workflow.Graph) *renderer {
 
 func (r *renderer) collectEdges() {
 	for targetIndex, node := range r.graph.Nodes {
-		for _, port := range node.Inputs.PortNames() {
-			r.addDataEdge(targetIndex, port, node.Inputs[port])
+		for port, ref := range node.Inputs.All() {
+			r.addDataEdge(targetIndex, port, ref)
 		}
 		for _, dependency := range node.DependsOn {
 			r.edges = append(r.edges, edge{

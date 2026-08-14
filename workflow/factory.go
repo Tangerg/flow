@@ -35,7 +35,7 @@ func Factory[C, I, O any](build func(C) (flow.Node[I, O], error)) NodeFactory {
 // Stating it once keeps those factories from disagreeing about which sentinel
 // names which mistake.
 func defaultPortRef(inputs Inputs) (Ref, error) {
-	for _, port := range inputs.PortNames() {
+	for port := range inputs.All() {
 		if port != DefaultPort {
 			return Ref{}, fmt.Errorf("%w %q", ErrUnknownPort, port)
 		}

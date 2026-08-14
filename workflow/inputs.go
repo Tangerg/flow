@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"fmt"
+	"iter"
 	"maps"
 	"slices"
 )
@@ -36,23 +37,25 @@ func (i Inputs) Ref(port string) (Ref, bool) {
 // Default returns the reference wired to [DefaultPort].
 func (i Inputs) Default() (Ref, bool) { return i.Ref(DefaultPort) }
 
-// PortNames returns the bound names in sorted order, as a fresh slice. They are
-// port names for a GraphNode or leaf Spec and inner seed IDs for a Subgraph.
-func (i Inputs) PortNames() []string { return i.names() }
-
-// names is the same order under the neutral spelling, for the boundaries whose
-// vocabulary is not "port": a subgraph seed is not a port, and the shared binding
-// check is told which of the two it is looking at.
-func (i Inputs) names() []string { return slices.Sorted(maps.Keys(i)) }
-
-// Refs returns the wired references ordered by port name. The returned slice is
-// a copy.
-func (i Inputs) Refs() []Ref {
-	refs := make([]Ref, 0, len(i))
-	for _, port := range i.PortNames() {
-		refs = append(refs, i[port])
+// All iterates the bindings in name order, yielding each name together with the
+// [Ref] it reads. It is the one ordered walk of an Inputs, because a name and the
+// reference it binds are one fact: a caller that wants only one half ignores the
+// other rather than asking a second method for a projection this walk already
+// contains.
+//
+// The order is canonical, so a check reports the same first offending binding on
+// every pass and a rendering lists the same edges in the same places twice. A name
+// is an input port for a [GraphNode] or leaf [Spec] and an inner seed ID for a
+// [Subgraph]; this walk names neither, so both boundaries can use it and each
+// supplies its own vocabulary in diagnostics.
+func (i Inputs) All() iter.Seq2[string, Ref] {
+	return func(yield func(string, Ref) bool) {
+		for _, name := range slices.Sorted(maps.Keys(i)) {
+			if !yield(name, i[name]) {
+				return
+			}
+		}
 	}
-	return refs
 }
 
 // bindingVocabulary and bindingRules are the two independent axes Inputs
@@ -98,11 +101,11 @@ func (i Inputs) validateSeedJSONText() error {
 
 // validateBindings is the single validation traversal behind all four.
 func (i Inputs) validateBindings(vocabulary bindingVocabulary, rules bindingRules) error {
-	for _, name := range i.names() {
+	for name, ref := range i.All() {
 		if err := rules.name(vocabulary.nameKind, name); err != nil {
 			return err
 		}
-		if err := rules.ref(i[name]); err != nil {
+		if err := rules.ref(ref); err != nil {
 			return fmt.Errorf("%s %q: %w", vocabulary.bindingKind, name, err)
 		}
 	}

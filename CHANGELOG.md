@@ -56,6 +56,10 @@ being presented as migrations from a version that was never published.
   JSON round trip cannot silently rename steps, ports, references, or routes.
 - `Ref.Validate` and `ScopeFrame.Validate` expose the same definition checks to
   caller-defined Binders, Steps, and repeated composites.
+- `Inputs.All` is the one ordered walk of a wiring: it yields each bound name
+  with the `Ref` that name reads, in name order. It replaces `PortNames` and
+  `Refs`, which were the two halves of the same walk published separately, so a
+  caller that needs both stops re-indexing the map to recover the other one.
 - `Ref.Compare` is the canonical order of a reference list. `Graph.Inputs` and
   `Graph.MissingInputs` return it, and a caller that assembles its own list — an
   editor collecting what a rule set reads, as `expr.Bindings.Refs` does — orders

@@ -322,6 +322,20 @@ go test ./example -run Example -v
   capital, and a lowercase name below a declared type — because a comment writing
   `scope[index]` is the same shape as a link to an unexported name, and only the
   type in front of the dot distinguishes them.
+- Publish one ordered walk, and pin the order where a diagnostic spends it.
+  `Inputs` is a map, so name order is the only reason a check reports the same
+  first offending binding twice — and it published that one order three times: as
+  `PortNames`, as `Refs`, and as an internal neutral spelling that existed only
+  because "port" is the wrong word for a subgraph seed. Six callers wanting a name
+  and its reference re-indexed the map to recover the half their walk had dropped.
+  `Inputs.All` yields the pair and names neither boundary, so each caller still
+  supplies its own vocabulary. Determinism bought this way is invisible in the
+  sorted spelling and breaks no accepted definition, only rejected ones, so it is
+  pinned where it is spent — a factory reading one port or none, a schema's
+  declared and undeclared ports, subgraph seeds, branch cases, and the steps
+  inside them: `TestInputsWalkInNameOrderSoTheFirstOffenderIsAlwaysTheSame` and
+  `TestADefinitionWithSeveralDefectsIsRefusedForTheSameOne`. Both were written
+  against the map-order mutant that the whole suite had survived.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

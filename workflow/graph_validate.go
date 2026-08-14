@@ -92,8 +92,7 @@ func (g graphValidator) producerOutput(ref Ref) (ValueType, bool) {
 // absent, CompileGraph performs the corresponding output-presence check against
 // the concrete boundary returned by the NodeFactory.
 func (g graphValidator) validateOutputRefs(location nodeLocation, node GraphNode) error {
-	for _, port := range node.Inputs.PortNames() {
-		ref := node.Inputs[port]
+	for port, ref := range node.Inputs.All() {
 		producer, internal := g.plan.nodesByID[ref.NodeID]
 		if !internal {
 			continue

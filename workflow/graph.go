@@ -116,7 +116,7 @@ func (g Graph) Inputs() []Ref {
 
 	externalRefs := make([]Ref, 0, len(g.Nodes))
 	for _, node := range g.Nodes {
-		for _, ref := range node.Inputs.Refs() {
+		for _, ref := range node.Inputs.All() {
 			if internal.has(ref.NodeID) {
 				continue
 			}

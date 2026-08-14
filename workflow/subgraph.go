@@ -133,11 +133,10 @@ func (s subgraphStep) Validate() error { return validateDefinition(s) }
 
 func (s *subgraphExecution) bind(ctx context.Context) (Store, error) {
 	inner := NewStore()
-	for _, seedID := range s.subgraph.inputs.names() {
+	for seedID, ref := range s.subgraph.inputs.All() {
 		if err := context.Cause(ctx); err != nil {
 			return Store{}, err
 		}
-		ref := s.subgraph.inputs[seedID]
 		value, err := Get[any](s.outer, ref)
 		if contextErr := context.Cause(ctx); contextErr != nil {
 			return Store{}, contextErr

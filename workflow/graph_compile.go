@@ -55,8 +55,7 @@ func (r registrySnapshot) compileGraph(graph Graph) (Step, error) {
 // even when that node type has no registered schema.
 func (g graphPlan) validateBuiltOutputs(graph Graph, outputs map[string]bool) error {
 	for index, node := range graph.Nodes {
-		for _, port := range node.Inputs.PortNames() {
-			ref := node.Inputs[port]
+		for port, ref := range node.Inputs.All() {
 			if _, internal := g.nodesByID[ref.NodeID]; !internal || outputs[ref.NodeID] {
 				continue
 			}

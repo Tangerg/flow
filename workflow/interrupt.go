@@ -83,8 +83,10 @@ func (i interruptStep) definition() stepDefinition {
 //	// {"id":"approval","type":"interrupt","config":{"question":"approve?"}}
 func InterruptFactory() NodeFactory {
 	return func(spec NodeSpec) (Step, error) {
-		if ports := spec.Inputs.PortNames(); len(ports) > 0 {
-			return nil, fmt.Errorf("%w %q", ErrUnknownPort, ports[0])
+		// An interrupt reads nothing, so every wired port is unknown and the
+		// canonical walk names the first of them.
+		for port := range spec.Inputs.All() {
+			return nil, fmt.Errorf("%w %q", ErrUnknownPort, port)
 		}
 
 		var value any

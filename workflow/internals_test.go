@@ -2168,3 +2168,71 @@ func TestEmbeddedSchemas_compileUnderTheIdentityTheyDeclare(t *testing.T) {
 		}
 	}
 }
+
+// TestADefinitionWithSeveralDefectsIsRefusedForTheSameOne pins the determinism
+// three validators buy by walking a sorted map: a branch checking its case list, a
+// branch descending into those cases, and a NodeSchema looking for the ports it
+// declared. Each returns the first defect it meets, so the sort is the only reason
+// a definition broken in three places is refused for the same one on every pass.
+// Nothing in the sorted spelling says that, and dropping it breaks no accepted
+// definition -- it only makes a rejected one report a different reason each time an
+// editor asks. TestInputsWalkInNameOrderSoTheFirstOffenderIsAlwaysTheSame holds the
+// wiring side of the same rule.
+func TestADefinitionWithSeveralDefectsIsRefusedForTheSameOne(t *testing.T) {
+	resolve := flow.NodeFunc[Store, string](
+		func(context.Context, Store) (string, error) { return "alpha", nil },
+	)
+	unreadable := func(id string) Step {
+		return LeafFunc(id, Ref{}, func(_ context.Context, x int) (int, error) { return x, nil })
+	}
+	registry := NewRegistry().
+		MustRegisterNode("declared", Factory(func(struct{}) (flow.Node[int, int], error) {
+			return flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }), nil
+		})).
+		MustRegisterSchema("declared", NodeSchema{
+			Inputs: Ports{"alpha": TypeAny, "mike": TypeAny, "zulu": TypeAny},
+			Output: TypeAny,
+		})
+
+	// Every definition below is broken at alpha, mike, and zulu at once, so the one
+	// named is decided by the walk rather than by the definition.
+	boundaries := map[string]func() error{
+		"a branch case list": func() error {
+			return flow.Validate(Branch(BranchConfig{
+				ID:       "b",
+				Resolver: resolve,
+				Cases:    map[string]Step{"alpha": nil, "mike": nil, "zulu": nil},
+			}))
+		},
+		"the steps inside those cases": func() error {
+			return flow.Validate(Branch(BranchConfig{
+				ID:       "b",
+				Resolver: resolve,
+				Cases: map[string]Step{
+					"alpha": unreadable("alpha"),
+					"mike":  unreadable("mike"),
+					"zulu":  unreadable("zulu"),
+				},
+			}))
+		},
+		"the ports a schema declared": func() error {
+			return registry.ValidateGraph(Graph{
+				Nodes: []GraphNode{{ID: "n", Type: "declared"}},
+			})
+		},
+	}
+	for _, name := range slices.Sorted(maps.Keys(boundaries)) {
+		err := boundaries[name]()
+		if err == nil {
+			t.Fatalf("%s: accepted a definition broken in three places", name)
+		}
+		if !strings.Contains(err.Error(), `"alpha"`) {
+			t.Errorf("%s: error = %v; want it to name the first defect, alpha", name, err)
+		}
+		for _, later := range []string{"mike", "zulu"} {
+			if strings.Contains(err.Error(), `"`+later+`"`) {
+				t.Errorf("%s: error = %v; want it to stop at alpha, not reach %s", name, err, later)
+			}
+		}
+	}
+}

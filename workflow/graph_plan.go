@@ -216,7 +216,7 @@ type nodeConnector struct {
 // gates are linked first so that a DependsOn entry naming the same node can be
 // reported as already implied rather than silently deduplicated.
 func (n *nodeConnector) connect(node GraphNode) error {
-	for _, ref := range node.Inputs.Refs() {
+	for _, ref := range node.Inputs.All() {
 		if err := n.connectInput(ref.NodeID); err != nil {
 			return err
 		}

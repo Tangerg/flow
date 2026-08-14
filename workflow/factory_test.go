@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -176,7 +178,11 @@ func sumPorts() workflow.NodeFactory {
 			a, aOK := inputs.Ref("a")
 			b, bOK := inputs.Ref("b")
 			if !aOK || !bOK {
-				return nil, fmt.Errorf("%w: want a and b, have %v", workflow.ErrMissingPort, inputs.PortNames())
+				return nil, fmt.Errorf(
+					"%w: want a and b, have %v",
+					workflow.ErrMissingPort,
+					slices.Sorted(maps.Keys(inputs)),
+				)
 			}
 			return workflow.BinderFunc[[2]int](func(s workflow.Store) ([2]int, error) {
 				av, err := workflow.Get[int](s, a)
