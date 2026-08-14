@@ -193,7 +193,7 @@ func (c compiledGate) selectOutlet(
 }
 
 // normalizeJSONString mirrors encoding/json's treatment of malformed UTF-8:
-// each invalid byte becomes U+FFFD. strings.ToValidUTF8 replaces a consecutive
+// each invalid byte becomes U+FFFD. [strings.ToValidUTF8] replaces a consecutive
 // invalid run only once, so mapping the runes is the exact operation here.
 func normalizeJSONString(value string) string {
 	if utf8.ValidString(value) {

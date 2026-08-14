@@ -137,10 +137,10 @@ func journalRecordError(entry journalEntry, err error) error {
 	)
 }
 
-// encode assembles a document from JSON fragments produced by json.Marshal.
+// encode assembles a document from JSON fragments produced by [json.Marshal].
 // It cannot invoke application code or fail.
 func (j journalDocument) encode() []byte {
-	// Every RawMessage was just produced by json.Marshal, and the remaining
+	// Every RawMessage was just produced by [json.Marshal], and the remaining
 	// fields contain only strings, booleans, and integers, so this structural
 	// encoding cannot fail.
 	//

@@ -141,6 +141,16 @@ go test ./example -run Example -v
   `TestIteration_parentCancellationWinsAtEveryCallBoundary`, and
   `TestParallelBranches_resamplesParentCancellation` walk the checks one at a time
   with `ctxtest.CancelAtCheck`.
+- Admission is the one cancellation check that does factor. Claiming an execution
+  identity can wait on another goroutine, so `admitBoundary` and
+  `admitScopedStep` sample the cause before returning, and their callers pair that
+  one error with their own untouched Store — there is no fallback or suspension
+  difference to hide, which is what separates this from the forty above. Expect no
+  test to distinguish it: whatever runs next samples the cause too, so deleting
+  either sample changes nothing observable. It stays because the boundary that
+  decides admission is where "no work begins under a cancelled context" belongs,
+  rather than in each caller's next act — a new composite would inherit the rule by
+  calling the helper and lose it by hand.
 - Two checks of one rule must be held to one verdict. `ValidateSpec` walks a Spec
   before anything is built and definition validation walks the built Steps;
   neither can be derived from the other, so duplicate identities, the ID a loop

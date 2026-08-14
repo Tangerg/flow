@@ -2,6 +2,7 @@ package expr
 
 import (
 	"fmt"
+	"iter"
 	"maps"
 	"slices"
 
@@ -36,6 +37,38 @@ const (
 	kindResolver  = "resolver"
 	kindSwitch    = "switch"
 )
+
+// namedSource is one expression a Bindings carries, together with the kind a
+// diagnostic calls it by.
+type namedSource struct {
+	kind string
+	name string
+	src  string
+}
+
+// sources walks the tables whose value is a single expression, table by table and
+// then by name, so every operation over one Bindings meets several bad
+// expressions in the same order and reports the same one. Switches are absent
+// because a switch is a table of expressions itself: each operation has its own
+// thing to do with that nesting, and none of them can treat it as one source.
+func (b Bindings) sources() iter.Seq[namedSource] {
+	return func(yield func(namedSource) bool) {
+		for _, table := range [...]struct {
+			kind    string
+			entries map[string]string
+		}{
+			{kind: kindCondition, entries: b.Conditions},
+			{kind: kindResolver, entries: b.Resolvers},
+		} {
+			for _, name := range slices.Sorted(maps.Keys(table.entries)) {
+				source := namedSource{kind: table.kind, name: name, src: table.entries[name]}
+				if !yield(source) {
+					return
+				}
+			}
+		}
+	}
+}
 
 // Register compiles every expression and registers it under its name. It
 // compiles all of them before registering any, so a Bindings with a bad
@@ -135,24 +168,12 @@ func (b *bindingRegistrar) compileSwitches() error {
 // reads values the graph produces.
 func (b Bindings) Refs() ([]workflow.Ref, error) {
 	var refs []workflow.Ref
-	collect := func(kind, name, src string) error {
-		e, err := Parse(src)
+	for source := range b.sources() {
+		parsed, err := Parse(source.src)
 		if err != nil {
-			return fmt.Errorf("%s %q: %w", kind, name, err)
+			return nil, fmt.Errorf("%s %q: %w", source.kind, source.name, err)
 		}
-		refs = append(refs, e.Refs()...)
-		return nil
-	}
-
-	for _, name := range slices.Sorted(maps.Keys(b.Conditions)) {
-		if err := collect(kindCondition, name, b.Conditions[name]); err != nil {
-			return nil, err
-		}
-	}
-	for _, name := range slices.Sorted(maps.Keys(b.Resolvers)) {
-		if err := collect(kindResolver, name, b.Resolvers[name]); err != nil {
-			return nil, err
-		}
+		refs = append(refs, parsed.Refs()...)
 	}
 	for _, name := range slices.Sorted(maps.Keys(b.Switches)) {
 		caseRefs, err := b.Switches[name].Refs()

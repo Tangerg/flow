@@ -86,13 +86,8 @@ func translateJSONError(err error) error {
 }
 
 func (b Bindings) validateJSONText() error {
-	for _, name := range slices.Sorted(maps.Keys(b.Conditions)) {
-		if err := validateNamedText(kindCondition, name, b.Conditions[name]); err != nil {
-			return err
-		}
-	}
-	for _, name := range slices.Sorted(maps.Keys(b.Resolvers)) {
-		if err := validateNamedText(kindResolver, name, b.Resolvers[name]); err != nil {
+	for source := range b.sources() {
+		if err := validateNamedText(source.kind, source.name, source.src); err != nil {
 			return err
 		}
 	}

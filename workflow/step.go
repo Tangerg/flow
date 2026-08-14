@@ -156,9 +156,12 @@ func bodyOutputError(output Ref, err error) error {
 
 // admitScopedStep is the admission a composite performs when it will push a new
 // scope frame: reject an invalid definition, refuse a scope already at the depth
-// limit, and claim the execution identity. Unlike [admitBoundary] it publishes
-// nothing, because a composite is transparent and adds no lifecycle events of its
-// own.
+// limit, and claim the execution identity. Like [admitBoundary] it also reports
+// any cancellation observed once admitted -- claiming an identity may wait on
+// another goroutine -- so no composite begins work under a cancelled context and
+// none of them has to remember to sample it again. Unlike admitBoundary it
+// publishes nothing, because a composite is transparent and adds no lifecycle
+// events of its own.
 //
 // Branch is deliberately not a caller. It selects a case in the current scope
 // rather than pushing a frame, so running at the depth limit is legal for it.
@@ -172,5 +175,5 @@ func admitScopedStep(ctx context.Context, id string, invalid error) error {
 	if err := runFrom(ctx).claim(scope(ctx), id); err != nil {
 		return newStepError(ctx, id, OpValidate, err)
 	}
-	return nil
+	return context.Cause(ctx)
 }

@@ -118,7 +118,7 @@ func validateBody(id string, body Step) error {
 // on the same side of the execution boundary. Suspension is meaningful only
 // after a run has begun; a validator or factory returning one has produced an
 // invalid definition, not a resumable outcome. The original error is rendered
-// rather than wrapped so errors.Is cannot misclassify it as ErrSuspended.
+// rather than wrapped so [errors.Is] cannot misclassify it as ErrSuspended.
 func normalizeDefinitionError(source string, err error) error {
 	if !errors.Is(err, ErrSuspended) {
 		return err

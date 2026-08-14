@@ -41,7 +41,7 @@ func (s Suspension) encode() ([]byte, error) {
 // nesting, and malformed engine identity are rejected. Only the canonical
 // lower-case member names are accepted: value is application-owned, so a second
 // spelling of it must not be able to replace the persisted payload. Application
-// values decode into the lossless JSON domain, including json.Number rather than
+// values decode into the lossless JSON domain, including [json.Number] rather than
 // float64.
 func (s *Suspension) UnmarshalJSON(data []byte) error {
 	return decodeJSONInto(s, data, decodeSuspension, unmarshalError("suspension"))

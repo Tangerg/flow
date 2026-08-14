@@ -108,6 +108,11 @@ linters:
       default-signifies-exhaustive: true
 
     godoclint:
+      enable:
+        # A stdlib name in a doc comment is a link everywhere else in this module,
+        # so the ones written as bare text read as a different kind of reference
+        # than they are.
+        - require-stdlib-doclink
       options:
         start-with-name:
           # The rule defaults to exported symbols only, which lets an internal

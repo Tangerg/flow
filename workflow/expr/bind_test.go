@@ -214,6 +214,36 @@ func TestBindings_RefsReportsTheOffendingExpression(t *testing.T) {
 	}
 }
 
+// TestBindings_reportOneBadExpressionTheSameWayEverywhere pins the traversal the
+// operations over a Bindings share. Each of them stops at the first expression it
+// cannot use, so with more than one to choose from, which one a caller hears about
+// is decided by the order the tables are walked in and by the order of names
+// within a table. Reading a rule set and encoding it must agree on that choice,
+// or the same file reports a different problem depending on what was asked of it.
+func TestBindings_reportOneBadExpressionTheSameWayEverywhere(t *testing.T) {
+	bindings := expr.Bindings{
+		Conditions: map[string]string{"zzz": "counter", "aaa": "counter"},
+		Resolvers:  map[string]string{"aaa": "counter"},
+	}
+	// The condition table is walked first, and "aaa" before "zzz" within it.
+	const want = `condition "aaa"`
+
+	_, refsErr := bindings.Refs()
+	if refsErr == nil || !strings.Contains(refsErr.Error(), want) {
+		t.Fatalf("Refs err = %v; want it to name %s", refsErr, want)
+	}
+
+	bad := string([]byte{0xff})
+	invalid := expr.Bindings{
+		Conditions: map[string]string{"zzz": bad, "aaa": bad},
+		Resolvers:  map[string]string{"aaa": bad},
+	}
+	_, marshalErr := json.Marshal(invalid)
+	if marshalErr == nil || !strings.Contains(marshalErr.Error(), want) {
+		t.Fatalf("Marshal err = %v; want it to name %s", marshalErr, want)
+	}
+}
+
 func TestSwitch(t *testing.T) {
 	resolver, err := expr.Switch(expr.SwitchSpec{
 		Cases: []expr.Case{

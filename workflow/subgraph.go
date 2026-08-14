@@ -72,7 +72,7 @@ type subgraphExecution struct {
 }
 
 func (s *subgraphExecution) execute(ctx context.Context) (Store, error) {
-	if err := s.validate(ctx); err != nil {
+	if err := admitScopedStep(ctx, s.subgraph.id, s.subgraph.Validate()); err != nil {
 		return s.outer, err
 	}
 
@@ -94,13 +94,6 @@ func (s *subgraphExecution) execute(ctx context.Context) (Store, error) {
 		return s.outer, newStepError(ctx, s.subgraph.id, OpRun, err)
 	}
 	return s.project(ctx, result)
-}
-
-func (s *subgraphExecution) validate(ctx context.Context) error {
-	if err := admitScopedStep(ctx, s.subgraph.id, s.subgraph.Validate()); err != nil {
-		return err
-	}
-	return context.Cause(ctx)
 }
 
 func (s *subgraphExecution) project(ctx context.Context, inner Store) (Store, error) {

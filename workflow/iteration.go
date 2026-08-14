@@ -104,9 +104,6 @@ func (i iterationStep) Run(ctx context.Context, s Store) (Store, error) {
 	if err := admitScopedStep(ctx, i.id, i.Validate()); err != nil {
 		return s, err
 	}
-	if contextErr := context.Cause(ctx); contextErr != nil {
-		return s, contextErr
-	}
 	items, err := Get[[]any](s, i.input)
 	if contextErr := context.Cause(ctx); contextErr != nil {
 		return s, contextErr

@@ -29,7 +29,7 @@ type Node[I, O any] interface {
 }
 
 // NodeFunc adapts an ordinary function into a [Node], analogous to
-// net/http.HandlerFunc.
+// [net/http.HandlerFunc].
 //
 //	double := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
 //		return x * 2, nil

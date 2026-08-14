@@ -237,7 +237,7 @@ func (b binaryOperator) applyArithmetic(left, right operand) (any, error) {
 	}
 	if li, ok := left.raw.(int64); ok {
 		if ri, ok := right.raw.(int64); ok {
-			return b.applyInt(li, ri)
+			return applyIntegral(b, li, ri)
 		}
 	}
 	if value, handled, err := b.applyUnsigned(left, right); handled {
@@ -438,11 +438,6 @@ func (b binaryOperator) applyString(left, right string) (any, error) {
 	}
 }
 
-// applyInt keeps integer arithmetic exact. Like Go, it wraps on overflow.
-func (b binaryOperator) applyInt(left, right int64) (any, error) {
-	return applyIntegral(b, left, right)
-}
-
 // applyIntegral is the arithmetic both integer widths perform identically. It
 // wraps on overflow as Go does, and takes a remainder, which is the one operator
 // whose meaning depends on the numeric kind. A method cannot take a type
@@ -458,7 +453,7 @@ func applyIntegral[T int64 | uint64](b binaryOperator, left, right T) (any, erro
 }
 
 // applyDividable is the arithmetic every numeric kind performs the same way.
-// Its callers have already taken token.REM, the only operator they disagree on.
+// Its callers have already taken [token.REM], the only operator they disagree on.
 func applyDividable[T int64 | uint64 | float64](b binaryOperator, left, right T) (any, error) {
 	switch b.Token {
 	case token.ADD:
@@ -501,7 +496,7 @@ func (b binaryOperator) applyUnsigned(
 		)
 	}
 
-	value, err := b.applyUint(leftInteger.value, rightInteger.value)
+	value, err := applyIntegral(b, leftInteger.value, rightInteger.value)
 	return value, true, err
 }
 
@@ -517,10 +512,6 @@ func (o operand) integer() (integerOperand, bool) {
 	default:
 		return integerOperand{}, false
 	}
-}
-
-func (b binaryOperator) applyUint(left, right uint64) (any, error) {
-	return applyIntegral(b, left, right)
 }
 
 func (b binaryOperator) applyFloat(left, right float64) (any, error) {

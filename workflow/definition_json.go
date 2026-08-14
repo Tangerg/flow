@@ -30,7 +30,7 @@ type specJSON struct {
 // adapter and keeps application Config bytes out of the normalization path.
 //
 // A child failure is located by wrapping on the way out — "steps[0]: case ..." —
-// because json.Unmarshaler cannot be handed a position on the way in. That reads
+// because [json.Unmarshaler] cannot be handed a position on the way in. That reads
 // differently from the JSON Pointer the schema reports, and only for the failures
 // the schema cannot see, which is an integer beyond int64. Threading a path down
 // would mean bypassing the Unmarshaler seam and turning these into SpecError

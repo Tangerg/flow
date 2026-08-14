@@ -518,7 +518,7 @@ func TestEval_normalizesEveryNumericKind(t *testing.T) {
 }
 
 // Ordinary JSON-compatible values must behave the same on a fresh Store and on
-// one restored from JSON, where every number is a json.Number.
+// one restored from JSON, where every number is a [json.Number].
 func TestEval_afterJSONRoundTrip(t *testing.T) {
 	original := store(
 		"n.output", 7,

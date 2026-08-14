@@ -25,10 +25,10 @@ import (
 //
 // A Store can hold arbitrary Go values in memory, but only values with a
 // faithful JSON representation can be persisted and restored. A deserialized
-// Store holds JSON-domain values: json.Number, string, bool, nil, []any, and
+// Store holds JSON-domain values: [json.Number], string, bool, nil, []any, and
 // map[string]any. [Get] converts those values to the requested type, so a typed
 // step sees the same value before and after persistence when that type has a
-// faithful JSON round trip. A type with only a custom json.Marshaler, for
+// faithful JSON round trip. A type with only a custom [json.Marshaler], for
 // example, must also define the corresponding decoding contract. [Store.Lookup]
 // does not convert: it returns whatever is stored, which after a round trip is
 // the JSON-domain value.
@@ -40,10 +40,10 @@ import (
 // it removes cells named by its GraphNode IDs before rebuilding them.
 //
 // Every method takes a value receiver so a Store cannot be mutated through a
-// copy. UnmarshalJSON is the one exception: json.Unmarshaler requires a pointer,
+// copy. UnmarshalJSON is the one exception: [json.Unmarshaler] requires a pointer,
 // and replacing a Store wholesale is the only way to decode one.
 //
-//nolint:recvcheck // UnmarshalJSON must be a pointer method to satisfy json.Unmarshaler.
+//nolint:recvcheck // UnmarshalJSON must be a pointer method to satisfy [json.Unmarshaler].
 type Store struct {
 	snapshot *storeSnapshot
 	delta    *storeDelta

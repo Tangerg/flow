@@ -31,7 +31,7 @@
 // documents what it discards or rolls back when this applies.
 //
 // Errors preserve their causes. Concurrent collection operations report item
-// positions with [IndexError], allowing callers to use errors.Is and errors.As
+// positions with [IndexError], allowing callers to use [errors.Is] and [errors.As]
 // instead of matching strings. Built-in composites validate their complete
 // visible definition before invoking any child, so nesting one cannot hide an
 // invalid descendant. [Validate] exposes the same read-only check to boundaries

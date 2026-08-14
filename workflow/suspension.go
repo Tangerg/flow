@@ -31,7 +31,7 @@ var ErrSuspended = errors.New("workflow: suspended")
 // its engine-owned identity. An anonymous suspension has neither ID nor Scope;
 // once a step identifies it, an empty Scope means the workflow root. Value uses
 // encoding/json's application-value semantics when encoding and decodes into
-// the lossless JSON domain, including json.Number for numbers.
+// the lossless JSON domain, including [json.Number] for numbers.
 //
 // The name deliberately omits an Error suffix. A suspension travels as an error
 // so that it propagates without a parallel return path, but it reports a third
@@ -142,7 +142,7 @@ func (s suspensionTree) suspensions() (suspensionList, bool) {
 func (s suspensionTree) collect() (suspensionList, bool) {
 	for s.err != nil {
 		err := s.err
-		// This intentionally inspects the current node rather than using errors.As:
+		// This intentionally inspects the current node rather than using [errors.As]:
 		// As would skip wrappers and could misclassify a mixed joined tree as a pure
 		// suspension tree.
 		//
@@ -158,7 +158,7 @@ func (s suspensionTree) collect() (suspensionList, bool) {
 		}
 		// Exact identity preserves a direct wrapper's message below.
 		//
-		//nolint:errorlint // errors.Is would match wrappers this must not consume.
+		//nolint:errorlint // [errors.Is] would match wrappers this must not consume.
 		if err == ErrSuspended {
 			return suspensionList{{}}, true
 		}
@@ -178,7 +178,7 @@ func (s suspensionTree) collect() (suspensionList, bool) {
 			// Exact identity distinguishes a wrapper directly around ErrSuspended
 			// from a wrapper whose deeper tree merely contains one.
 			//
-			//nolint:errorlint // errors.Is cannot tell those shapes apart.
+			//nolint:errorlint // [errors.Is] cannot tell those shapes apart.
 			if child == ErrSuspended {
 				return suspensionList{{Value: err.Error()}}, true
 			}
@@ -193,9 +193,9 @@ func (s suspensionTree) collect() (suspensionList, bool) {
 	return nil, false
 }
 
-// collectIdentity handles a leaf that participates in errors.Is without being
+// collectIdentity handles a leaf that participates in [errors.Is] without being
 // a Suspension value. An error exposing only nil children is still a leaf:
-// errors.Is checks its Is method before consulting Unwrap, so classification
+// [errors.Is] checks its Is method before consulting Unwrap, so classification
 // must preserve the same meaning.
 func (s suspensionTree) collectIdentity() (suspensionList, bool) {
 	if errors.Is(s.err, ErrSuspended) {
@@ -310,8 +310,8 @@ type multiSuspension struct {
 
 func (m *multiSuspension) Error() string { return m.message }
 
-// Unwrap returns a copy of each suspension so errors.As finds the first and
-// errors.Is matches [ErrSuspended] without exposing multiSuspension's immutable
+// Unwrap returns a copy of each suspension so [errors.As] finds the first and
+// [errors.Is] matches [ErrSuspended] without exposing multiSuspension's immutable
 // error tree to mutation through Suspension's exported fields.
 func (m *multiSuspension) Unwrap() []error {
 	errs := make([]error, len(m.suspensions))

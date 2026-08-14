@@ -304,7 +304,7 @@ func (c *compiledSchema) validate(doc any) error {
 }
 
 // schemaBackendError preserves the backend diagnostic without making its
-// concrete error vocabulary part of this package's errors.As contract.
+// concrete error vocabulary part of this package's [errors.As] contract.
 type schemaBackendError struct {
 	operation string
 	message   string

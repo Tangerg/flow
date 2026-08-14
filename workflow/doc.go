@@ -281,8 +281,8 @@
 // would require a stable serialization and replay contract and could
 // accidentally swallow cancellation, invalid definitions, or suspension.
 //
-// Errors preserve caller errors and stable package causes for errors.Is and
-// errors.As, except that a definition-time validator or NodeFactory error
+// Errors preserve caller errors and stable package causes for [errors.Is] and
+// [errors.As], except that a definition-time validator or NodeFactory error
 // matching [ErrSuspended] is deliberately normalized to
 // [flow.ErrInvalidConfig]: construction cannot expose a resumable run-time
 // outcome. Replaceable backend types such as the JSON Schema validator remain

@@ -257,7 +257,7 @@ func TestOrderingTokensAgreeAcrossNumbersAndStrings(t *testing.T) {
 }
 
 // A NaN on either side makes a comparison unordered. Requiring both would let
-// cmp.Compare answer for the pair, which orders NaN below every number.
+// [cmp.Compare] answer for the pair, which orders NaN below every number.
 func TestFloatComparisonIsUnorderedWhenEitherSideIsNaN(t *testing.T) {
 	tests := []struct {
 		name  string
