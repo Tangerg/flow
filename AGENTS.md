@@ -70,7 +70,9 @@
 - Package dependencies point in one direction. `flow` is the primitive layer and depends on nothing
   here; `flowx` derives combinators from it; `workflow` adds named state, durability, and
   serialization; `workflow/expr` and `workflow/diagram` stay optional and derived; `internal/...`
-  is not API. A higher layer may add vocabulary, never a second copy of a lower layer's rule.
+  is not API. A higher layer may add vocabulary, never a second copy of a lower layer's rule. No
+  behavior can reveal a broken layer, so the import graph is checked directly —
+  `TestPackageDependenciesPointOneWay`.
 - A contract stated twice is pinned twice. The embedded JSON Schemas, the field matrices, and the Go
   validators are deliberate second statements, and each has a test that fails when the copies
   disagree — `TestSpecFieldMatricesAgreeWithTheSpecStruct`,
@@ -99,8 +101,9 @@
   worth protecting, confirm that the test fails when the protected behavior is removed rather than
   assuming it would.
 - Keep documentation, exported comments, runtime behavior, and the repository's own guards
-  consistent within one change. A comment that cites a test has to resolve, and a documented API
-  name has to exist — `TestCitedTestsResolve`, `TestDocumentedAPINamesResolve`.
+  consistent within one change. A comment that cites a test has to resolve, a documented API name
+  has to exist, and a doc link has to point at something — `TestCitedTestsResolve`,
+  `TestDocumentedAPINamesResolve`, `TestGoDocLinksResolve`.
 - Use explicit `Config` structs for related construction settings, and give optional fields useful
   zero meanings.
 - Treat repository-local usage as no evidence for or against a public API. This is a library: retain

@@ -57,19 +57,31 @@ type gateEvaluation struct {
 	selections map[string]routingSelection
 }
 
+// gatedStep decides whether the step it wraps runs at all, and is transparent in
+// every other respect: validation, execution identity, output shape, and the
+// public description are the wrapped step's own. Routing is a property of a
+// Graph's edges, not a node's definition, so a gate must not appear as one.
 type gatedStep struct {
-	decoratedStep
+	step    definedStep
 	gates   []compiledGate
 	trigger Trigger
 }
 
 func gated(gates []compiledGate, trigger Trigger, step definedStep) definedStep {
 	return gatedStep{
-		decoratedStep: decoratedStep{step: step},
-		gates:         slices.Clone(gates),
-		trigger:       trigger,
+		step:    step,
+		gates:   slices.Clone(gates),
+		trigger: trigger,
 	}
 }
+
+func (g gatedStep) validate() error { return g.step.validate() }
+
+func (g gatedStep) Describe() Description { return g.step.Describe() }
+
+func (g gatedStep) definition() stepDefinition { return g.step.definition() }
+
+func (g gatedStep) stepID() string { return g.definition().id }
 
 func (g gatedStep) Run(ctx context.Context, store Store) (Store, error) {
 	ctx = ensureRun(ctx)

@@ -31,23 +31,6 @@ import (
 // validator that returns [ErrSuspended] is reported as [flow.ErrInvalidConfig].
 type Step = flow.Node[Store, Store]
 
-// decoratedStep is the transparent base shared by internal wrappers. It
-// preserves validation, identity, output shape, and public descriptions instead
-// of duplicating metadata or turning a built-in step opaque.
-type decoratedStep struct {
-	step definedStep
-}
-
-func (d decoratedStep) validate() error { return d.step.validate() }
-
-func (d decoratedStep) Describe() Description { return d.step.Describe() }
-
-func (d decoratedStep) definition() stepDefinition {
-	return d.step.definition()
-}
-
-func (d decoratedStep) stepID() string { return d.definition().id }
-
 // scopedStep owns one child-step invocation in a repeated execution scope.
 // Context remains an explicit method argument, following the standard context
 // contract instead of being retained in a struct.

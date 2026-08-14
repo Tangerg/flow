@@ -279,6 +279,23 @@ go test ./example -run Example -v
   what it binds — but `compileNamed`'s two callers were the opposite case, because
   the arguments they bound are exactly what distinguishes a condition table from a
   resolver table.
+- Register a new package in `moduleImports` before importing it. That table is the
+  module's dependency direction written out, and it states what each layer permits
+  rather than what it happens to use, so the edge that inverts the module is
+  refused by name: a sibling reaching sideways, the primitive layer borrowing a
+  private helper, an internal package depending on the layer it exists to serve.
+  Every other axiom in [AGENTS.md](./AGENTS.md) is about what a package means and
+  is held by tests of its behavior; this one is a property of the import graph that
+  no behavior can reveal, so `TestPackageDependenciesPointOneWay` reads the imports
+  and `TestModuleImportsCoversEveryPackage` keeps the table from permitting a
+  package it forgot to mention.
+- Point a doc link at something that exists. A `[Name]` that resolves becomes a
+  link in godoc and one that does not is rendered as bracketed text, so a rename
+  leaves 574 of them degrading silently. `TestGoDocLinksResolve` checks the ones it
+  can tell from prose — a qualified name from this module, a name starting with a
+  capital, and a lowercase name below a declared type — because a comment writing
+  `scope[index]` is the same shape as a link to an unexported name, and only the
+  type in front of the dot distinguishes them.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out
