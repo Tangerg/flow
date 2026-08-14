@@ -107,6 +107,16 @@ go test ./example -run Example -v
   a single chain cannot: `TestCodec_boundsNestingNotBreadth`,
   `TestSpec_boundsNestingNotBreadth`, and `TestParse_boundsNestingNotBreadth`
   supply one per boundary.
+- Install a run before running children. Every composite calls `ensureRun`, which
+  supplies one when the caller has none, because a `Step` may be invoked directly
+  rather than through `Run`. The run owns the identities claimed so far, and
+  claiming against no run silently succeeds, so a composite that skipped this
+  would let one step ID run twice in a scope and notice nothing.
+  `TestEveryCompositeRunDirectlyStillFormsOneRun` invokes each composite outside
+  `Run`, with a body that reaches one leaf twice through a `flow` combinator:
+  a nested workflow composite would install a run of its own and answer in place
+  of the one under test, and two visible children sharing an ID are rejected by
+  definition validation before anything runs.
 - End a derived context where it was derived. Every `context.WithCancel` here
   belongs to a boundary — `Run`, a graph run, a leaf's emission session, and
   `flow.Race` — and each ends its own before returning, so work that outlived its

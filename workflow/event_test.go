@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
@@ -204,9 +205,11 @@ func TestEvents_carrySequenceElapsedAndStore(t *testing.T) {
 	})}
 
 	in := workflow.NewStore().WithOutput("start", 21)
+	before := time.Now()
 	if _, err := workflow.Run(t.Context(), a, in, cfg); err != nil {
 		t.Fatalf("run: %v", err)
 	}
+	within := time.Since(before)
 
 	if len(events) != 2 {
 		t.Fatalf("got %d events, want 2", len(events))
@@ -217,6 +220,12 @@ func TestEvents_carrySequenceElapsedAndStore(t *testing.T) {
 	}
 	if started.Elapsed != 0 {
 		t.Fatalf("started Elapsed = %v; want 0", started.Elapsed)
+	}
+	// The completed event times the attempt, so it cannot exceed the run that
+	// contained it. An attempt whose start was never stamped reports the age of
+	// the zero time, which is absurd rather than merely imprecise.
+	if completed.Elapsed > within {
+		t.Fatalf("completed Elapsed = %v; want at most the %v the run took", completed.Elapsed, within)
 	}
 	// A completed event carries the Store the step produced, which is what an
 	// external tracker or persister records.

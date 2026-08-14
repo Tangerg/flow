@@ -22,6 +22,11 @@ func TestParseInteger(t *testing.T) {
 		{text: "-42", want: jsonnum.Integer{Magnitude: 42, Negative: true}},
 		{text: "42.000", want: jsonnum.Integer{Magnitude: 42}},
 		{text: "0.004200e4", want: jsonnum.Integer{Magnitude: 42}},
+		// An exponent that cancels a long fraction leaves the value behind a run of
+		// zeros. Every other case here is short enough to fit whether or not those
+		// zeros are dropped first; this one has 22 digits and a value of 1, so it
+		// says the width judged is the number's, not the text's.
+		{text: "0.000000000000000000001e21", want: jsonnum.Integer{Magnitude: 1}},
 		{text: "4200e-2", want: jsonnum.Integer{Magnitude: 42}},
 		{text: "4.2e1", want: jsonnum.Integer{Magnitude: 42}},
 		{text: "1e2", want: jsonnum.Integer{Magnitude: 100}},

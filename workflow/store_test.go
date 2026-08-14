@@ -891,3 +891,34 @@ func TestStore_MarshalRejectsUnpairedSurrogateFromApplicationMarshaler(t *testin
 		t.Fatalf("Marshal error = %v; want cell-scoped Unicode error", err)
 	}
 }
+
+// countingJSON reports how often encoding asked it for its bytes.
+type countingJSON struct{ marshals *int }
+
+func (c countingJSON) MarshalJSON() ([]byte, error) {
+	*c.marshals++
+	return []byte(`"value"`), nil
+}
+
+// TestStore_asksEachValueForItsBytesOnce pins what encoding promises about
+// application code: it runs each marshaler once and then works with the bytes.
+// The Store is encoded in three passes -- one per cell to produce the fragments,
+// one per cell to prove each is readable on its own, and one over the assembled
+// document -- so a value left in place rather than replaced by its fragment is
+// asked again by every later pass, and a marshaler with a side effect performs
+// it three times.
+func TestStore_asksEachValueForItsBytesOnce(t *testing.T) {
+	marshals := 0
+	store := workflow.NewStore().WithOutput("counted", countingJSON{marshals: &marshals})
+
+	encoded, err := json.Marshal(store)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if marshals != 1 {
+		t.Fatalf("marshaler ran %d times; want exactly once", marshals)
+	}
+	if !strings.Contains(string(encoded), `"value"`) {
+		t.Fatalf("encoded = %s; want the marshaler's own bytes", encoded)
+	}
+}

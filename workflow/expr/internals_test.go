@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/token"
 	"math"
+	"slices"
 	"testing"
 )
 
@@ -274,5 +275,25 @@ func TestFloatComparisonIsUnorderedWhenEitherSideIsNaN(t *testing.T) {
 				t.Fatalf("compareOperand = %d, %t, %t; want 0, true, true", order, unordered, ok)
 			}
 		})
+	}
+}
+
+// TestRefListSortedUnique_leavesItsCallerSliceAlone pins the copy every helper
+// here owes the slice it was handed. Sorting in place would reorder the caller's
+// own slice, and the one caller inside this package never looks at it again --
+// so the copy is load-bearing for anyone else and observable for nobody today.
+func TestRefListSortedUnique_leavesItsCallerSliceAlone(t *testing.T) {
+	collected := refList{
+		{NodeID: "b", Path: "/output"},
+		{NodeID: "a", Path: "/output"},
+		{NodeID: "b", Path: "/output"},
+	}
+	original := slices.Clone(collected)
+
+	if unique := collected.sortedUnique(); len(unique) != 2 {
+		t.Fatalf("sortedUnique = %v; want the two distinct references", unique)
+	}
+	if !slices.Equal(collected, original) {
+		t.Fatalf("sortedUnique reordered its caller's slice: %v; want %v", collected, original)
 	}
 }

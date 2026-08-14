@@ -51,9 +51,15 @@ import (
 // Journal is empty and ready to use. A Journal must not be copied after first
 // use.
 type Journal struct {
-	mu       sync.RWMutex
-	root     journalNode
-	count    int
+	mu    sync.RWMutex
+	root  journalNode
+	count int
+	// revision numbers records, not mutations. Every record carries the revision
+	// it was stored at, and a run replays only records stored at or before it
+	// began, so what has to hold is that a record stored after a run started
+	// outranks that run's snapshot -- which insert guarantees by taking the next
+	// revision for itself. Removing records stores nothing and leaves this alone;
+	// a tick there would advance a Journal that holds nothing newer.
 	revision uint64
 }
 
@@ -258,7 +264,6 @@ func (j *Journal) Reset() {
 	defer j.mu.Unlock()
 	j.root = journalNode{}
 	j.count = 0
-	j.revision++
 }
 
 // Forget removes exactly one recorded step, so the next run repeats that
@@ -281,7 +286,6 @@ func (j *Journal) Forget(key JournalKey) error {
 	defer j.mu.Unlock()
 	if j.root.forget(key.Scope, key.ID) {
 		j.count--
-		j.revision++
 	}
 	return nil
 }

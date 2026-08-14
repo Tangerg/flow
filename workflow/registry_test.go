@@ -680,6 +680,12 @@ func TestRegistry_reportsInvalidAndDuplicateRegistrations(t *testing.T) {
 			t.Fatalf("RegisterNode(%q) unexpectedly succeeded", name)
 		}
 	}
+	// A rejected registration says which concept the name belongs to, and a node
+	// registers under a node type rather than under a bare name. Only the empty
+	// case can say so: the message for an invalid name is about its bytes.
+	if err := reg.RegisterNode("", factory); !strings.Contains(err.Error(), "node type is empty") {
+		t.Fatalf("RegisterNode(\"\") error = %v; want it to name the node type", err)
+	}
 	if err := reg.RegisterNode("addN", factory); err != nil {
 		t.Fatalf("first registration: %v", err)
 	}

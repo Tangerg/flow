@@ -647,17 +647,20 @@ func TestJSONDocument_rejectsUnpairedUnicodeSurrogates(t *testing.T) {
 }
 
 func TestSchemaInfrastructure_reportsEveryFailureBoundary(t *testing.T) {
+	// Each boundary is named, not just detected. The stages run in order and a
+	// later one fails on the same input, so a stage that dropped its own error
+	// would still return one -- from the stage after it, about something else.
 	if _, err := (schemaSource{
 		url:      "https://example.com/schema.json",
 		document: jsonDocument(`{`),
-	}).compile(); err == nil {
-		t.Fatal("compile unexpectedly accepted malformed schema JSON")
+	}).compile(); err == nil || !strings.Contains(err.Error(), "decode JSON Schema") {
+		t.Fatalf("malformed schema JSON = %v; want the decode boundary", err)
 	}
 	if _, err := (schemaSource{
 		url:      "%",
 		document: jsonDocument(`{}`),
-	}).compile(); err == nil {
-		t.Fatal("compile unexpectedly accepted an invalid resource URL")
+	}).compile(); err == nil || !strings.Contains(err.Error(), "add JSON Schema resource") {
+		t.Fatalf("invalid resource URL = %v; want the resource boundary", err)
 	}
 
 	loadErr := errors.New("load schema")
@@ -1331,12 +1334,12 @@ func specMemberNames(t *testing.T) []string {
 	return names
 }
 
-// TestJournalForgetPrunesTheScopeItEmptied pins what forget promises and
-// nothing outside observes: it prunes the scope nodes it empties on the way back
-// up. Keys and the wire format report records, and an emptied scope holds none,
-// so a node that outlives its last record leaks silently — one per repeated
-// boundary a long-lived Journal forgets.
-func TestJournalForgetPrunesTheScopeItEmptied(t *testing.T) {
+// TestJournalForgetKeepsNothingThatHoldsNothing pins what forget promises and
+// nothing outside observes: it leaves behind neither a scope node nor a record
+// map with nothing in it. Keys and the wire format report records, and an
+// emptied scope holds none, so either one outliving its last record leaks
+// silently — one per repeated boundary a long-lived Journal forgets.
+func TestJournalForgetKeepsNothingThatHoldsNothing(t *testing.T) {
 	journal := NewJournal()
 	scope := []ScopeFrame{{ID: "loop", Indexed: true}, {ID: "body"}}
 	kept := JournalKey{ID: "kept", Scope: scope}
@@ -1346,6 +1349,13 @@ func TestJournalForgetPrunesTheScopeItEmptied(t *testing.T) {
 			t.Fatalf("Record %v: %v", key, err)
 		}
 	}
+	// A record directly on the outer scope, which therefore has a child. Emptying
+	// it cannot be answered by pruning the node, because the child still holds
+	// something -- so the map it emptied is what would be left behind instead.
+	outer := JournalKey{ID: "outer", Scope: scope[:1]}
+	if err := journal.Record(outer, 1); err != nil {
+		t.Fatalf("Record %v: %v", outer, err)
+	}
 
 	if err := journal.Forget(forgotten); err != nil {
 		t.Fatalf("Forget: %v", err)
@@ -1353,6 +1363,17 @@ func TestJournalForgetPrunesTheScopeItEmptied(t *testing.T) {
 	if journal.root.children == nil {
 		t.Fatal("forget dropped a scope that still holds a record")
 	}
+	if err := journal.Forget(outer); err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
+	outerNode := journal.root.children[scope[0]]
+	if outerNode == nil {
+		t.Fatal("forget dropped a scope whose child still holds a record")
+	}
+	if outerNode.records != nil {
+		t.Fatalf("forget left a record map holding nothing at %q", scope[0].ID)
+	}
+
 	if err := journal.Forget(kept); err != nil {
 		t.Fatalf("Forget: %v", err)
 	}

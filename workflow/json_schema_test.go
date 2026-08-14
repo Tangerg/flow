@@ -1137,6 +1137,17 @@ func TestRegisterSchemaEnforcesDraft2020WithoutInspectingInstanceValues(t *testi
 			schema: json.RawMessage(`{"$schema":{"draft":2020}}`),
 			path:   "<root>",
 		},
+		// Every case above holds one subschema, so the walk reaches it with nothing
+		// appended yet and reports the right place whether or not each level puts
+		// the path back. Here a valid sibling is walked several levels deep first,
+		// and keyword order puts it before the offending one.
+		"legacy after a deeper sibling": {
+			schema: json.RawMessage(`{
+				"not":{"properties":{"deep":{"type":"string"}}},
+				"$defs":{"legacy":{"$id":"legacy","$schema":"http://json-schema.org/draft-04/schema"}}
+			}`),
+			path: "/$defs/legacy",
+		},
 	}
 	for name, test := range rejected {
 		t.Run(name, func(t *testing.T) {
@@ -1144,8 +1155,11 @@ func TestRegisterSchemaEnforcesDraft2020WithoutInspectingInstanceValues(t *testi
 				Output:       workflow.TypeAny,
 				ConfigSchema: test.schema,
 			})
+			// The location is matched with its surrounding words: a path that had
+			// grown by a sibling's segments would still contain the right one as a
+			// suffix, and read as correct.
 			if !errors.Is(err, workflow.ErrInvalidRegistration) ||
-				!strings.Contains(err.Error(), test.path) ||
+				!strings.Contains(err.Error(), "at "+test.path+" ") ||
 				!strings.Contains(err.Error(), draft2020) {
 				t.Fatalf(
 					"RegisterSchema error = %v; want invalid registration at %s requiring Draft 2020-12",

@@ -1528,3 +1528,34 @@ func TestSuspend_journaledDecisionOfTheWrongTypeIsReported(t *testing.T) {
 		t.Fatalf("loop err = %v; want ErrTypeMismatch", err)
 	}
 }
+
+// TestSuspend_anonymousWaitTakesTheScopeItWasRaisedIn covers the other half of
+// what a boundary fills in for a wait that arrives with no identity. Every wait
+// elsewhere carries its own ID -- Await and Interrupt name themselves -- so only
+// one raised by application code reaches the boundary anonymous, and every test
+// that does raise one raises it at the root, where the scope it should take and
+// the one it would keep are the same empty slice.
+func TestSuspend_anonymousWaitTakesTheScopeItWasRaisedIn(t *testing.T) {
+	iteration := workflow.Iteration(workflow.IterationConfig{
+		ID:    "iter",
+		Input: workflow.Output("items"),
+		Body: workflow.Leaf(
+			"ask",
+			workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+			flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+				return 0, workflow.Suspend("approve?")
+			}),
+		),
+		BodyOutput: workflow.Output("ask"),
+	})
+
+	_, err := iteration.Run(
+		t.Context(),
+		workflow.NewStore().WithOutput("items", []any{1}),
+	)
+	suspensions := workflow.Suspensions(err)
+	if len(suspensions) != 1 || suspensions[0].ID != "ask" ||
+		!slices.Equal(suspensions[0].Scope, indexedScope("iter", 0)) {
+		t.Fatalf("suspensions = %+v; want ask waiting in iter[0]", suspensions)
+	}
+}

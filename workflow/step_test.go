@@ -1099,3 +1099,99 @@ func TestGet_nilValue(t *testing.T) {
 		t.Fatal("Get[int](nil) unexpectedly succeeded")
 	}
 }
+
+// TestEveryCompositeRunDirectlyStillFormsOneRun states what a composite does
+// before running anything: it installs a run when the caller has none. That run
+// owns the set of identities claimed so far, and claiming against no run
+// silently succeeds, so a composite invoked outside [workflow.Run] would let the
+// same step ID run twice in one scope. Every other duplicate-ID test goes
+// through Run, which installs the boundary itself and so would pass whether or
+// not the composite did.
+//
+// Each body invokes one leaf twice through a flow combinator, for two reasons:
+// a second workflow composite would install a run of its own and answer in place
+// of the one under test, and two visible children with one ID are rejected by
+// definition validation before anything runs, which is a different check.
+func TestEveryCompositeRunDirectlyStillFormsOneRun(t *testing.T) {
+	twice := func() workflow.Step {
+		leaf := passthrough("same")
+		return flow.Then(leaf, leaf)
+	}
+	stop := flow.NodeFunc[workflow.Store, bool](
+		func(context.Context, workflow.Store) (bool, error) { return false, nil },
+	)
+	only := flow.NodeFunc[workflow.Store, string](
+		func(context.Context, workflow.Store) (string, error) { return "only", nil },
+	)
+
+	composites := map[string]workflow.Step{
+		"sequence": workflow.Sequence(twice()),
+		"parallel": workflow.Parallel(workflow.ParallelConfig{Steps: []workflow.Step{twice()}}),
+		"branch": workflow.Branch(workflow.BranchConfig{
+			ID:       "branch",
+			Resolver: only,
+			Cases:    map[string]workflow.Step{"only": twice()},
+		}),
+		"loop": workflow.Loop(workflow.LoopConfig{
+			ID:        "loop",
+			Body:      twice(),
+			Condition: stop,
+		}),
+		"iteration": workflow.Iteration(workflow.IterationConfig{
+			ID:         "iteration",
+			Input:      workflow.Output("items"),
+			Body:       twice(),
+			BodyOutput: workflow.Output("same"),
+		}),
+		// A subgraph body reads an isolated Store, so the leaf's input has to be
+		// declared rather than inherited.
+		"subgraph": workflow.Subgraph(workflow.SubgraphConfig{
+			ID:         "subgraph",
+			Inputs:     workflow.Inputs{"seed": workflow.Output("seed")},
+			Body:       twice(),
+			BodyOutput: workflow.Output("same"),
+		}),
+	}
+
+	input := workflow.NewStore().WithOutput("seed", 1).WithOutput("items", []any{1})
+	for name, composite := range composites {
+		t.Run(name, func(t *testing.T) {
+			if _, err := composite.Run(t.Context(), input); !errors.Is(err, workflow.ErrDuplicateStep) {
+				t.Fatalf("Run outside a run = %v; want ErrDuplicateStep", err)
+			}
+		})
+	}
+}
+
+// TestSequence_rejectsADuplicateOfAnyStepID covers the second half of how a
+// definition tracks the IDs it has seen: it holds the first one alone and builds
+// a set only once a second, different ID arrives. Two steps can therefore only
+// ever collide with the first, so a definition of two says nothing about whether
+// that set is ever built -- and without it, a later pair collides with nothing.
+//
+// That the duplicate is rejected is not enough to say so, because a run also
+// claims each identity as it goes and would report the same failure once the
+// first of the pair had run. Whether anything ran is what tells the two apart.
+func TestSequence_rejectsADuplicateOfAnyStepID(t *testing.T) {
+	ran := 0
+	counted := func(id string) workflow.Step {
+		return workflow.LeafFunc(id, workflow.Output("seed"),
+			func(_ context.Context, value int) (int, error) {
+				ran++
+				return value, nil
+			})
+	}
+
+	_, err := workflow.Run(
+		t.Context(),
+		workflow.Sequence(counted("first"), counted("same"), counted("same")),
+		workflow.NewStore().WithOutput("seed", 1),
+		workflow.RunConfig{},
+	)
+	if !errors.Is(err, workflow.ErrDuplicateStep) {
+		t.Fatalf("Run = %v; want ErrDuplicateStep", err)
+	}
+	if ran != 0 {
+		t.Fatalf("%d steps ran; want the definition rejected before any of them", ran)
+	}
+}

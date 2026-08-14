@@ -1539,3 +1539,55 @@ func chunkValues(chunks []workflow.Chunk) []int {
 	}
 	return values
 }
+
+// TestStreamFunc_outsideALeafOwnsItsOwnStreamOutcome states the two things
+// StreamFunc.Run answers for itself, at the only boundary where it must: outside
+// a Leaf there is no emission session and no leaf around it, so nothing else can
+// notice that the consumer stopped or that the invocation has ended. Inside one,
+// the leaf checks the context and closes the session itself, and would answer in
+// StreamFunc's place.
+func TestStreamFunc_outsideALeafOwnsItsOwnStreamOutcome(t *testing.T) {
+	t.Run("a stopped consumer outranks the producer's answer", func(t *testing.T) {
+		stopped := errors.New("consumer stopped")
+		ctx, cancel := context.WithCancelCause(t.Context())
+		cancel(stopped)
+
+		node := workflow.StreamFunc[int, int, int](
+			func(_ context.Context, input int, yield func(int) bool) (int, error) {
+				if yield(input) {
+					t.Error("yield under a cancelled context returned true")
+				}
+				// Success reported after the consumer stopped: the value is partial
+				// whatever the producer believes.
+				return input, nil
+			},
+		)
+
+		output, err := node.Run(ctx, 7)
+		if !errors.Is(err, stopped) {
+			t.Fatalf("Run error = %v; want the reason the stream stopped", err)
+		}
+		if output != 0 {
+			t.Fatalf("Run output = %d; want no value beside a failure", output)
+		}
+	})
+
+	t.Run("a retained yield stops at the invocation that ended", func(t *testing.T) {
+		var retained func(int) bool
+		node := workflow.StreamFunc[int, int, int](
+			func(_ context.Context, input int, yield func(int) bool) (int, error) {
+				retained = yield
+				return input, nil
+			},
+		)
+
+		if _, err := node.Run(t.Context(), 1); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		// The context is still live and there is no session to refuse the value, so
+		// the closed invocation is the only thing that can.
+		if retained(2) {
+			t.Fatal("a yield retained past Run reported the value as delivered")
+		}
+	})
+}

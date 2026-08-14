@@ -261,7 +261,10 @@ func (r *renderer) mermaidSource(
 func mermaidLabel(label string) string {
 	// Mermaid is a UTF-8 text format. Replacement is appropriate at this
 	// presentation boundary: external identity remains structured, while the
-	// rendered document must not carry malformed text.
+	// rendered document must not carry malformed text. The control-character pass
+	// below re-encodes every rune and would replace a malformed byte on its way
+	// through, so removing this line changes no output; the rule is stated here
+	// rather than left resting on that.
 	label = strings.ToValidUTF8(label, "\uFFFD")
 	label = strings.ReplaceAll(label, "\r\n", "\n")
 	label = strings.ReplaceAll(label, "\r", "\n")
