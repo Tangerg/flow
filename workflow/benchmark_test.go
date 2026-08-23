@@ -125,7 +125,7 @@ func BenchmarkSequenceRun(b *testing.B) {
 		node := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 			return in + 1, nil
 		})
-		return workflow.Leaf(id, workflow.From[int](workflow.Output(input)), node)
+		return workflow.Leaf(id, workflow.Output(input).Bind[int](), node)
 	}
 	step := workflow.Sequence(
 		inc("a", "seed"),
@@ -154,7 +154,7 @@ func BenchmarkStreamFunc(b *testing.B) {
 	)
 	step := workflow.Leaf(
 		"stream",
-		workflow.From[int](workflow.Output("seed")),
+		workflow.Output("seed").Bind[int](),
 		node,
 	)
 	input := workflow.NewStore().WithOutput("seed", 1)
@@ -496,7 +496,7 @@ func BenchmarkJournalRecordScaling(b *testing.B) {
 func benchmarkIncrement(id, input string) workflow.Step {
 	return workflow.Leaf(
 		id,
-		workflow.From[int](workflow.Output(input)),
+		workflow.Output(input).Bind[int](),
 		flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
 			return value + 1, nil
 		}),

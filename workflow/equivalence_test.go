@@ -35,7 +35,7 @@ func equivalentForms(t *testing.T, wait bool) map[string]workflow.Step {
 		MustRegisterNode("wait", workflow.InterruptFactory())
 
 	code := []workflow.Step{
-		workflow.Leaf("a", workflow.From[int](workflow.Output("seed")), doubler()),
+		workflow.Leaf("a", workflow.Output("seed").Bind[int](), doubler()),
 	}
 	specs := []workflow.Spec{{
 		Kind: workflow.KindLeaf, ID: "a", Type: "double",
@@ -58,7 +58,7 @@ func equivalentForms(t *testing.T, wait bool) map[string]workflow.Step {
 		})
 		last = "w"
 	}
-	code = append(code, workflow.Leaf("z", workflow.From[int](workflow.Output(last)), doubler()))
+	code = append(code, workflow.Leaf("z", workflow.Output(last).Bind[int](), doubler()))
 	specs = append(specs, workflow.Spec{
 		Kind: workflow.KindLeaf, ID: "z", Type: "double",
 		Inputs: workflow.OneInput(workflow.Output(last)),
@@ -121,7 +121,7 @@ func observeRun(
 		result.err = err.Error()
 	}
 	for _, id := range ids {
-		value, _ := workflow.Get[int](out, workflow.Output(id))
+		value, _ := out.Get[int](workflow.Output(id))
 		result.values = append(result.values, value)
 	}
 	// Concurrent graph nodes report in completion order, which is not part of the

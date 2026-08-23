@@ -60,7 +60,7 @@ func Example_jsonDSL() {
 		fmt.Println("error:", err)
 		return
 	}
-	result, err := workflow.Get[int](out, workflow.Output("b"))
+	result, err := out.Get[int](workflow.Output("b"))
 	if err != nil {
 		fmt.Println("error:", err)
 		return

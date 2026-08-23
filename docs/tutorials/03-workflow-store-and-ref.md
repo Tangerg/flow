@@ -55,13 +55,13 @@ greet := workflow.LeafFunc(
 
 Use the lower-level `Leaf(id, bind, node)` form when binding needs several
 references or an existing typed `flow.Node` already carries decorators. A
-`Binder[I]` prepares the node's typed input from the current Store. Use `From`
+`Binder[I]` prepares the node's typed input from the current Store. Use `Ref.Bind`
 for one reference, `FirstOf` with at least one mutually exclusive alternative,
 and adapt a custom binding function with `BinderFunc[I]`. Binding is local data
 preparation, so it has no context; put blocking or cancellable work in the typed
 `Node`.
 
-`From` and `FirstOf` retain their references as definitions, so `Leaf` validates
+`Ref.Bind` and `FirstOf` retain their references as definitions, so `Leaf` validates
 them before Journal replay. A malformed reference therefore cannot be hidden by
 an older completed record. A custom Binder with static state can provide the
 same guarantee with a pure `Validate() error` method and can call
@@ -80,10 +80,7 @@ if err != nil {
 	return err
 }
 
-message, err := workflow.Get[string](
-	out,
-	workflow.Output("greet"),
-)
+message, err := out.Get[string](workflow.Output("greet"))
 ```
 
 `Sequence` passes each returned Store to the next step. `Store` is a persistent
@@ -100,7 +97,7 @@ replay.
 Stored values themselves are not deep-copied. Treat a map, slice, pointer, or
 other mutable value as immutable after insertion and after reading it back;
 mutating it would affect every snapshot that shares it and could introduce a
-data race. An exact-type `Get[T]` result is borrowed from the Store. A read that
+data race. An exact-type `Store.Get[T]` result is borrowed from the Store. A read that
 needs JSON conversion produces a newly decoded value instead.
 
 ## 4. References are JSON Pointers
@@ -126,16 +123,16 @@ caller-defined Binders and Steps that retain references.
 Application code should normally use:
 
 ```go
-value, err := workflow.Get[Order](store, ref)
+value, err := store.Get[Order](ref)
 ```
 
-`Get[T]` also converts JSON-domain values after a Store has been serialized and
+`Store.Get[T]` also converts JSON-domain values after a Store has been serialized and
 restored, provided `T` has a faithful JSON round trip. A type with a custom
 `MarshalJSON` method needs the corresponding decoding contract if callers expect
 to recover that Go type. `store.Lookup(ref)` is useful when infrastructure code
 genuinely needs raw `any`. A raw lookup after JSON decoding may return `json.Number`,
 `[]any`, or `map[string]any`, so business code should keep the expected type at
-the call site with `Get[T]`. Built-in scalar conversion is lossless by design:
+the call site with `store.Get[T](ref)`. Built-in scalar conversion is lossless by design:
 numeric kinds are not rounded or parsed from strings, and decoding into an
 ordinary struct rejects unknown JSON members instead of silently dropping them.
 A type implementing `json.Unmarshaler` defines its own decoding contract.
@@ -180,7 +177,7 @@ signal sequence.
 
 Make `clean` return a struct with a `Name` field. Read
 `workflow.Output("clean").Child("Name")` in `greet`, then serialize and restore
-the Store and verify that `Get[string]` still reads the field.
+the Store and verify that `Store.Get[string]` still reads the field.
 
 [Previous: Composition and concurrency](./02-composition-and-concurrency.md) ·
 [Next: Registries, ports, and DAGs](./04-graph-registry-and-ports.md)

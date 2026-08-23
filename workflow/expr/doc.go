@@ -67,8 +67,10 @@
 // structs, and other host values report [ErrType] rather than silently choosing
 // deep equality.
 //
-// There is no implicit truthiness and no implicit conversion. A condition must
-// evaluate to a bool and a resolver to a string, or the result is [ErrType].
+// There is no implicit truthiness and no implicit conversion. [Expr.Eval]
+// requires the result type supplied by its caller; use any when the dynamic
+// result is wanted. A condition must evaluate to a bool and a resolver to a
+// string, or the result is [ErrType].
 // References and Switch branch names must be valid UTF-8, matching workflow's
 // persistent definition boundaries.
 // Reading a missing reference is [ErrUndefined]; guard it with has() when a

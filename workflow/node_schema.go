@@ -76,7 +76,7 @@ type registeredNodeSchema struct {
 // definition is compiled, and Graph compilation still rejects an internal data
 // edge when the concrete factory boundary produces no output.
 func (r *Registry) RegisterSchema(nodeType string, schema NodeSchema) error {
-	return register(r, &r.schemas, registrationSchema, nodeType, schema.compile)
+	return r.register(&r.schemas, registrationSchema, nodeType, schema.compile)
 }
 
 func (n NodeSchema) compile() (registeredNodeSchema, error) {

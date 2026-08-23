@@ -81,8 +81,9 @@ func (n NodeSpec) clone() NodeSpec {
 // graph with Subgraph before returning it; this keeps child cells and execution
 // identities from leaking through the GraphNode that contains it.
 //
-// [Factory] covers the common single-input case; write a NodeFactory directly
-// when a node reads several ports.
+// [Factory] covers the common single-input case, and [BindFactory] covers
+// declared multi-port input. Write a NodeFactory directly only when the boundary
+// has a non-standard construction contract that those adapters cannot express.
 //
 // A Registry may call a factory concurrently when callers compile definitions
 // concurrently. A factory must therefore keep per-build state local. Registry
@@ -151,7 +152,7 @@ func NewRegistry() *Registry {
 // RegisterNode registers the factory for a node type. It reports an
 // empty or non-UTF-8 name, nil factory, or duplicate registration immediately.
 func (r *Registry) RegisterNode(nodeType string, factory NodeFactory) error {
-	return register(r, &r.nodes, registrationNode, nodeType, func() (NodeFactory, error) {
+	return r.register(&r.nodes, registrationNode, nodeType, func() (NodeFactory, error) {
 		if factory == nil {
 			return nil, flow.ErrNilFunc
 		}
@@ -165,8 +166,7 @@ func (r *Registry) RegisterNode(nodeType string, factory NodeFactory) error {
 // sees failures in is stated here once rather than per kind. prepare returns the
 // value to store, which lets a kind that compiles its input register the compiled
 // form without a second shape for that case.
-func register[T any](
-	r *Registry,
+func (r *Registry) register[T any](
 	table *registrationTable[T],
 	kind, name string,
 	prepare func() (T, error),
@@ -201,7 +201,7 @@ func (r *Registry) MustRegisterNode(nodeType string, factory NodeFactory) *Regis
 // validated at registration, so Registry validation cannot accept a name whose
 // implementation is already invalid.
 func (r *Registry) RegisterResolver(name string, resolver Resolver) error {
-	return registerDecision(r, &r.resolvers, registrationResolver, name, resolver)
+	return r.registerDecision(&r.resolvers, registrationResolver, name, resolver)
 }
 
 // MustRegisterResolver is like [Registry.RegisterResolver] but panics on error.
@@ -217,7 +217,7 @@ func (r *Registry) MustRegisterResolver(name string, resolver Resolver) *Registr
 // validated at registration, so Registry validation cannot accept a name whose
 // implementation is already invalid.
 func (r *Registry) RegisterCondition(name string, condition Condition) error {
-	return registerDecision(r, &r.conditions, registrationCondition, name, condition)
+	return r.registerDecision(&r.conditions, registrationCondition, name, condition)
 }
 
 // MustRegisterCondition is like [Registry.RegisterCondition] but panics on
@@ -232,13 +232,12 @@ func (r *Registry) MustRegisterCondition(name string, condition Condition) *Regi
 // registerDecision registers one of the two decision shapes. [Resolver] and
 // [Condition] differ only in what they return, so what they must prove is the
 // same: the node's complete visible definition.
-func registerDecision[O any](
-	r *Registry,
+func (r *Registry) registerDecision[O any](
 	table *registrationTable[flow.Node[Store, O]],
 	kind, name string,
 	node flow.Node[Store, O],
 ) error {
-	return register(r, table, kind, name, func() (flow.Node[Store, O], error) {
+	return r.register(table, kind, name, func() (flow.Node[Store, O], error) {
 		if err := validateNode(node); err != nil {
 			return nil, err
 		}

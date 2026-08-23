@@ -180,7 +180,7 @@ names.
 - Omitting `Outlets` on a node used as a gate source.
 - Using `TriggerAny` without any gates.
 - Expecting a missing input to imply bypass.
-- Binding a merge with `From` when only one mutually exclusive input exists.
+- Binding a merge with `Ref.Bind` when only one mutually exclusive input exists.
 - Treating Mermaid rendering as validation.
 - Routing infrastructure errors instead of returning them.
 

@@ -36,7 +36,7 @@ func (a awaitStep) Run(ctx context.Context, store Store) (Store, error) {
 	if err != nil {
 		return store, err
 	}
-	_, resolveErr := Get[any](store, a.ref)
+	_, resolveErr := store.Get[any](a.ref)
 	if err := context.Cause(ctx); err != nil {
 		return store, err
 	}

@@ -12,7 +12,7 @@ import (
 
 func leafStep(id string) workflow.Step {
 	return workflow.Leaf(id,
-		workflow.From[int](workflow.Ref{NodeID: "start", Path: "/output"}),
+		workflow.Ref{NodeID: "start", Path: "/output"}.Bind[int](),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 }
@@ -111,6 +111,71 @@ func TestDescribe_returnsAnOwnedRecursiveSnapshot(t *testing.T) {
 	})
 }
 
+// A caller-defined Describer is allowed to return any Description tree; it is
+// not a workflow definition and therefore does not pass through definition
+// depth validation. Taking the ownership copy must spend heap, not one call
+// frame per presentation node.
+func TestDescribeDeepCallerTreeDoesNotSpendStackPerNode(t *testing.T) {
+	withBoundedStack(t, func() {
+		const depth = 20_000
+		root := workflow.Description{Kind: "root"}
+		cursor := &root
+		for range depth {
+			cursor.Children = []workflow.Description{{Kind: "child"}}
+			cursor = &cursor.Children[0]
+		}
+
+		description := workflow.Describe(&borrowedDescriptionStep{description: root})
+		got := 0
+		for len(description.Children) != 0 {
+			description = description.Children[0]
+			got++
+		}
+		if got != depth {
+			t.Fatalf("description depth = %d; want %d", got, depth)
+		}
+	})
+}
+
+// TestDescribeNormalizesCallerCyclesWithoutCollapsingSharedSubtrees keeps the
+// public result a finite, independently mutable tree even when a caller-defined
+// Describer returns slice topology that a Description tree cannot express.
+func TestDescribeNormalizesCallerCyclesWithoutCollapsingSharedSubtrees(t *testing.T) {
+	t.Run("cycle", func(t *testing.T) {
+		children := make([]workflow.Description, 1)
+		root := workflow.Description{ID: "root", Kind: "root", Children: children}
+		children[0] = workflow.Description{ID: "cycle", Kind: "cycle", Children: children}
+
+		got := workflow.Describe(&borrowedDescriptionStep{description: root})
+		if len(got.Children) != 1 || got.Children[0].ID != "cycle" ||
+			len(got.Children[0].Children) != 0 {
+			t.Fatalf("Describe = %+v; want the repeated node preserved as a leaf", got)
+		}
+		got.Children[0].ID = "changed"
+		if children[0].ID != "cycle" {
+			t.Fatalf("source cycle = %+v; cloned tree retained its storage", children[0])
+		}
+	})
+
+	t.Run("shared subtree", func(t *testing.T) {
+		shared := []workflow.Description{{ID: "leaf", Kind: "leaf"}}
+		root := workflow.Description{Kind: "root", Children: []workflow.Description{
+			{Kind: "left", Children: shared},
+			{Kind: "right", Children: shared},
+		}}
+
+		got := workflow.Describe(&borrowedDescriptionStep{description: root})
+		if len(got.Children) != 2 || len(got.Children[0].Children) != 1 ||
+			len(got.Children[1].Children) != 1 {
+			t.Fatalf("Describe = %+v; want both shared-subtree occurrences", got)
+		}
+		got.Children[0].Children[0].ID = "changed"
+		if got.Children[1].Children[0].ID != "leaf" || shared[0].ID != "leaf" {
+			t.Fatalf("Describe = %+v, source = %+v; shared storage crossed the clone", got, shared)
+		}
+	})
+}
+
 func TestBuiltInDescriber_returnsAnOwnedRecursiveSnapshot(t *testing.T) {
 	custom := newBorrowedDescriptionStep()
 	describer := workflow.Sequence(custom).(workflow.Describer)
@@ -120,7 +185,7 @@ func TestBuiltInDescriber_returnsAnOwnedRecursiveSnapshot(t *testing.T) {
 func TestDescribe_streamFuncUsesLeafBoundary(t *testing.T) {
 	step := workflow.Leaf(
 		"stream",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		workflow.StreamFunc[int, int, int](
 			func(_ context.Context, input int, _ func(int) bool) (int, error) {
 				return input, nil

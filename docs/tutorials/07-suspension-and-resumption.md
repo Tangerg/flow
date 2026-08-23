@@ -188,10 +188,7 @@ if err != nil {
 	return err
 }
 
-result, err := workflow.Get[string](
-	finished,
-	workflow.Output("publish"),
-)
+result, err := finished.Get[string](workflow.Output("publish"))
 ```
 
 The run re-enters at the root; it does not continue a serialized call stack.

@@ -21,7 +21,7 @@ func (r registrySnapshot) compileSpec(spec Spec) (Step, error) {
 		return nil, err
 	}
 	compiled, err := (specCompiler{
-		leafCompiler: leafCompiler{registry: r},
+		registry: r,
 	}).compile(spec)
 	if err != nil {
 		return nil, err
@@ -143,13 +143,14 @@ func (l leafCompiler) compile(node leafNode) (definedStep, string, error) {
 	}
 	step, err := factory(node.spec.clone())
 	if err != nil {
-		if errors.Is(err, ErrSuspended) {
+		suspended, normalized := normalizeDefinitionError("node factory", err)
+		if suspended {
 			// A factory constructs an immutable definition. Treat a suspension
 			// here as a broken node-type contract, never as a resumable run or
 			// a JSON config error the caller could repair.
-			return nil, fieldType, normalizeDefinitionError("node factory", err)
+			return nil, fieldType, normalized
 		}
-		return nil, l.errorField(err), err
+		return nil, factoryErrorField(err), err
 	}
 	if isNilNode(step) {
 		return nil, fieldType, ErrNilStep
@@ -170,20 +171,21 @@ func (l leafCompiler) compile(node leafNode) (definedStep, string, error) {
 	return boundary, "", nil
 }
 
-// errorField maps the stable error vocabulary of a NodeFactory to the part of
+// factoryErrorField maps the stable error vocabulary of a NodeFactory to the part of
 // a definition a caller can fix. Missing wiring is an input error; registration
 // failures and nil construction functions or nodes are type errors. Other
 // factory failures are attributed to config, the only application-defined
 // construction input left after ID and wiring have passed validation.
-func (leafCompiler) errorField(err error) string {
+func factoryErrorField(err error) string {
+	tree := errorTree{root: err}
 	switch {
-	case errors.Is(err, ErrInvalidRegistration):
+	case tree.matches(ErrInvalidRegistration):
 		return fieldType
-	case errors.Is(err, ErrMissingPort), errors.Is(err, ErrUnknownPort):
+	case tree.matches(ErrMissingPort), tree.matches(ErrUnknownPort):
 		return fieldInputs
-	case errors.Is(err, flow.ErrNilFunc),
-		errors.Is(err, flow.ErrNilNode),
-		errors.Is(err, ErrNilStep):
+	case tree.matches(flow.ErrNilFunc),
+		tree.matches(flow.ErrNilNode),
+		tree.matches(ErrNilStep):
 		return fieldType
 	default:
 		return fieldConfig

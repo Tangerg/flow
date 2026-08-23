@@ -169,7 +169,7 @@ func (b branchStep) Validate() error { return validateDefinition(b) }
 // decide returns the branch to take, reusing the recorded decision when the run
 // is resuming. Run records a fresh decision only after verifying the case.
 func (b *branchExecution) decide(ctx context.Context) (string, bool, error) {
-	name, replayed, err := replayDecision[string](ctx, b.run, KindBranch, b.branch.id)
+	name, replayed, err := b.run.replayDecision[string](ctx, KindBranch, b.branch.id)
 	if err != nil {
 		return "", false, err
 	}

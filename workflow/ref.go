@@ -11,7 +11,7 @@ import (
 // Ref points at a value in the [Store]: a node ID plus an RFC 6901 JSON Pointer
 // under it. The first pointer segment is the key written by that node; further
 // segments index into nested data.
-type Ref struct { //nolint:recvcheck // UnmarshalJSON requires a pointer receiver.
+type Ref struct {
 	NodeID string `json:"nodeID"`
 	Path   string `json:"path"`
 }
@@ -126,12 +126,12 @@ func (r Ref) Child(segments ...string) Ref {
 // string. Conversion into an ordinary struct rejects unknown JSON members
 // instead of silently discarding data; a type implementing [json.Unmarshaler]
 // defines its own decoding contract.
-func Get[T any](store Store, ref Ref) (T, error) {
+func (s Store) Get[T any](ref Ref) (T, error) {
 	var zero T
 	target := reflect.TypeFor[T]()
 	read := typedRead{ref: ref, want: target.String()}
 
-	raw, ok, err := store.resolve(ref)
+	raw, ok, err := s.resolve(ref)
 	if err != nil {
 		return zero, read.failed(raw, fmt.Errorf(
 			"%w: resolve nested value: %w",
@@ -159,8 +159,8 @@ func Get[T any](store Store, ref Ref) (T, error) {
 	return value, nil
 }
 
-// typedRead is what one [Get] is asking for: the reference it resolves and the
-// type it wants back. Both are fixed for the whole call while four separate
+// typedRead is what one [Store.Get] is asking for: the reference it resolves and
+// the type it wants back. Both are fixed for the whole call while four separate
 // conditions can end it, so the read states its own location once instead of
 // every return restating it.
 type typedRead struct {

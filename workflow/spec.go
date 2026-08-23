@@ -38,8 +38,6 @@ const (
 // Treat nested Specs and their maps, slices, pointers, and raw config as
 // immutable while validating or compiling. A compiled Step does not retain the
 // Spec or any of those mutable values.
-//
-//nolint:recvcheck // UnmarshalJSON must be a pointer method to satisfy json.Unmarshaler.
 type Spec struct {
 	Kind Kind `json:"kind"`
 
@@ -96,5 +94,5 @@ func (s Spec) MarshalJSON() ([]byte, error) {
 // the same JSON Schema, duplicate-member, Unicode, integer, unknown-field, and
 // nesting rules as [ValidateSpecJSON] and [Registry.CompileSpecJSON].
 func (s *Spec) UnmarshalJSON(data []byte) error {
-	return decodeJSONInto(s, data, decodeSpecDocument, specJSONError)
+	return jsonDocument(data).decodeInto(s, decodeSpecDocument, specJSONError)
 }

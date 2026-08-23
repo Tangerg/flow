@@ -33,11 +33,11 @@ func Example_subgraph() {
 				)
 			}
 			return workflow.BinderFunc[[2]int](func(store workflow.Store) ([2]int, error) {
-				a, err := workflow.Get[int](store, left)
+				a, err := store.Get[int](left)
 				if err != nil {
 					return [2]int{}, err
 				}
-				b, err := workflow.Get[int](store, right)
+				b, err := store.Get[int](right)
 				return [2]int{a, b}, err
 			}), nil
 		},
@@ -101,7 +101,7 @@ func Example_subgraph() {
 		fmt.Println("error:", err)
 		return
 	}
-	total, err := workflow.Get[int](output, workflow.Output("total"))
+	total, err := output.Get[int](workflow.Output("total"))
 	if err != nil {
 		fmt.Println("error:", err)
 		return

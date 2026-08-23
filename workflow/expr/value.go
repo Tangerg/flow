@@ -237,7 +237,7 @@ func (b binaryOperator) applyArithmetic(left, right operand) (any, error) {
 	}
 	if li, ok := left.raw.(int64); ok {
 		if ri, ok := right.raw.(int64); ok {
-			return applyIntegral(b, li, ri)
+			return b.applyIntegral(li, ri)
 		}
 	}
 	if value, handled, err := b.applyUnsigned(left, right); handled {
@@ -440,21 +440,20 @@ func (b binaryOperator) applyString(left, right string) (any, error) {
 
 // applyIntegral is the arithmetic both integer widths perform identically. It
 // wraps on overflow as Go does, and takes a remainder, which is the one operator
-// whose meaning depends on the numeric kind. A method cannot take a type
-// parameter, so the operator arrives as an argument.
-func applyIntegral[T int64 | uint64](b binaryOperator, left, right T) (any, error) {
+// whose meaning depends on the numeric kind.
+func (b binaryOperator) applyIntegral[T int64 | uint64](left, right T) (any, error) {
 	if b.Token == token.REM {
 		if right == 0 {
 			return nil, ErrDivideByZero
 		}
 		return left % right, nil
 	}
-	return applyDividable(b, left, right)
+	return b.applyDividable(left, right)
 }
 
 // applyDividable is the arithmetic every numeric kind performs the same way.
 // Its callers have already taken [token.REM], the only operator they disagree on.
-func applyDividable[T int64 | uint64 | float64](b binaryOperator, left, right T) (any, error) {
+func (b binaryOperator) applyDividable[T int64 | uint64 | float64](left, right T) (any, error) {
 	switch b.Token {
 	case token.ADD:
 		return left + right, nil
@@ -496,7 +495,7 @@ func (b binaryOperator) applyUnsigned(
 		)
 	}
 
-	value, err := applyIntegral(b, leftInteger.value, rightInteger.value)
+	value, err := b.applyIntegral(leftInteger.value, rightInteger.value)
 	return value, true, err
 }
 
@@ -518,7 +517,7 @@ func (b binaryOperator) applyFloat(left, right float64) (any, error) {
 	if b.Token == token.REM {
 		return nil, fmt.Errorf("%w: %% wants two integers", ErrType)
 	}
-	return applyDividable(b, left, right)
+	return b.applyDividable(left, right)
 }
 
 func (o operand) asFloat() (float64, bool) {

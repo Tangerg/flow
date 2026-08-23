@@ -20,7 +20,7 @@ func ExampleParse() {
 	fmt.Println("reads:", e.Refs())
 
 	store := workflow.NewStore().WithOutput("review", map[string]any{"score": 0.91})
-	fmt.Println(e.Bool(store))
+	fmt.Println(e.Eval[bool](store))
 
 	// Output:
 	// reads: [review#/output/blocked review#/output/score]
@@ -109,7 +109,7 @@ func ExampleBindings() {
 		fmt.Println(err)
 		return
 	}
-	fmt.Println(workflow.Get[string](out, workflow.Output("out")))
+	fmt.Println(out.Get[string](workflow.Output("out")))
 
 	// Output:
 	// medium:112 <nil>

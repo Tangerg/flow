@@ -36,11 +36,11 @@ func Example_dag() {
 				return nil, fmt.Errorf("%w: want left and right", workflow.ErrMissingPort)
 			}
 			return workflow.BinderFunc[pair](func(store workflow.Store) (pair, error) {
-				a, err := workflow.Get[int](store, left)
+				a, err := store.Get[int](left)
 				if err != nil {
 					return pair{}, err
 				}
-				b, err := workflow.Get[int](store, right)
+				b, err := store.Get[int](right)
 				return pair{Left: a, Right: b}, err
 			}), nil
 		},
@@ -108,7 +108,7 @@ func Example_dag() {
 		fmt.Println("error:", err)
 		return
 	}
-	total, err := workflow.Get[int](out, workflow.Output("total"))
+	total, err := out.Get[int](workflow.Output("total"))
 	if err != nil {
 		fmt.Println("error:", err)
 		return

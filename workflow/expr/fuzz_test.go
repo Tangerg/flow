@@ -79,11 +79,11 @@ func FuzzParse(f *testing.F) {
 			}
 		}
 
-		// Every accessor must return, not panic, whatever the Store holds.
-		_, _ = e.Eval(s)
-		_, _ = e.Bool(s)
-		_, _ = e.String(s)
-		_, _ = e.Eval(workflow.NewStore())
+		// Every requested result type must return, not panic, whatever the Store holds.
+		_, _ = e.Eval[any](s)
+		_, _ = e.Eval[bool](s)
+		_, _ = e.Eval[string](s)
+		_, _ = e.Eval[any](workflow.NewStore())
 	})
 }
 

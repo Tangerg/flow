@@ -30,14 +30,15 @@
 // concurrent work does not return before that work does. Each operation
 // documents what it discards or rolls back when this applies.
 //
-// Errors preserve their causes. Concurrent collection operations report item
-// positions with [IndexError], allowing callers to use [errors.Is] and [errors.As]
-// instead of matching strings. Built-in composites validate their complete
-// visible definition before invoking any child, so nesting one cannot hide an
-// invalid descendant. [Validate] exposes the same read-only check to boundaries
-// that may replay a result without calling the Node. Caller-defined composites
-// can participate with a side-effect-free Validate() error method; other Nodes
-// are opaque and remain responsible for execution-time validation.
+// Errors preserve their causes. Collection and selection operations report
+// positions with [IndexError] and [CaseError], allowing callers to use
+// [errors.Is] and [errors.As] instead of matching strings. Built-in composites
+// validate their complete visible definition before invoking any child, so
+// nesting one cannot hide an invalid descendant. [Validate] exposes the same
+// read-only check to boundaries that may replay a result without calling the
+// Node. Caller-defined composites can participate with a side-effect-free
+// Validate() error method; other Nodes are opaque and remain responsible for
+// execution-time validation.
 //
 // The core owns no durable execution state. Package workflow adds named state,
 // streaming identity, and checkpoint-and-restart at explicit step boundaries;

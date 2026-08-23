@@ -97,7 +97,7 @@ func TestCompileGraph_routesAndRemovesStaleBranchOutputs(t *testing.T) {
 	if compileErr != nil {
 		t.Fatalf("first run: %v", compileErr)
 	}
-	if got, err := workflow.Get[int](first, workflow.Output("yes")); err != nil || got != 11 {
+	if got, err := first.Get[int](workflow.Output("yes")); err != nil || got != 11 {
 		t.Fatalf("yes output = %d, %v; want 11, nil", got, err)
 	}
 	if _, ok := first.Lookup(workflow.Output("no")); ok {
@@ -120,7 +120,7 @@ func TestCompileGraph_routesAndRemovesStaleBranchOutputs(t *testing.T) {
 	if _, ok := second.Lookup(workflow.Output("yes")); ok {
 		t.Fatal("stale yes output survived the next graph run")
 	}
-	if got, err := workflow.Get[int](second, workflow.Output("no")); err != nil || got != -11 {
+	if got, err := second.Get[int](workflow.Output("no")); err != nil || got != -11 {
 		t.Fatalf("no output = %d, %v; want -11, nil", got, err)
 	}
 	if yesCalls.Load() != 1 || noCalls.Load() != 1 {
@@ -168,7 +168,7 @@ func TestCompileGraph_routesOnPersistentJSONString(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Run: %v", err)
 	}
-	if value, getErr := workflow.Get[int](first, workflow.Output("target")); getErr != nil || value != 2 {
+	if value, getErr := first.Get[int](workflow.Output("target")); getErr != nil || value != 2 {
 		t.Fatalf("first target output = %d, %v; want 2, nil", value, getErr)
 	}
 
@@ -189,7 +189,7 @@ func TestCompileGraph_routesOnPersistentJSONString(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resumed Run: %v", err)
 	}
-	if value, getErr := workflow.Get[int](second, workflow.Output("target")); getErr != nil || value != 2 {
+	if value, getErr := second.Get[int](workflow.Output("target")); getErr != nil || value != 2 {
 		t.Fatalf("resumed target output = %d, %v; want 2, nil", value, getErr)
 	}
 	if routeCalls.Load() != 1 || targetCalls.Load() != 1 {
@@ -280,7 +280,7 @@ func TestCompileGraph_triggerAnyAndFirstOfMerge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got, err := workflow.Get[int](out, workflow.Output("merge")); err != nil || got != 42 {
+	if got, err := out.Get[int](workflow.Output("merge")); err != nil || got != 42 {
 		t.Fatalf("merge = %d, %v; want 42, nil", got, err)
 	}
 }
@@ -371,7 +371,7 @@ func TestCompileGraph_triggerAnyReadsEachRoutingSourceOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if value, getErr := workflow.Get[int](output, workflow.Output("target")); getErr != nil || value != 1 {
+	if value, getErr := output.Get[int](workflow.Output("target")); getErr != nil || value != 1 {
 		t.Fatalf("target output = %d, %v; want 1, nil", value, getErr)
 	}
 	if encodes := routeEncodes.Load(); encodes != 1 {
@@ -435,7 +435,7 @@ func TestCompileGraph_recomputesGatesAfterJournalReplay(t *testing.T) {
 	if routeCalls.Load() != 1 {
 		t.Fatalf("route calls = %d; want replay without a second call", routeCalls.Load())
 	}
-	if got, err := workflow.Get[int](out, workflow.Output("wait")); err != nil || got != 99 {
+	if got, err := out.Get[int](workflow.Output("wait")); err != nil || got != 99 {
 		t.Fatalf("wait output = %d, %v; want 99, nil", got, err)
 	}
 	if _, ok := out.Lookup(workflow.Output("reject")); ok {
@@ -619,7 +619,7 @@ func TestCompileGraph_rejectsRuntimeRoutingContractViolations(t *testing.T) {
 		"wrong output type": func(spec workflow.NodeSpec) (workflow.Step, error) {
 			return workflow.Leaf(
 				spec.ID,
-				workflow.From[int](spec.Inputs[workflow.DefaultPort]),
+				spec.Inputs[workflow.DefaultPort].Bind[int](),
 				flow.NodeFunc[int, int](func(_ context.Context, input int) (int, error) {
 					return input, nil
 				}),

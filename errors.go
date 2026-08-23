@@ -3,6 +3,9 @@ package flow
 import (
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
+	"strings"
 )
 
 // Sentinel errors returned by the root combinators. Test for them with
@@ -39,8 +42,125 @@ type IndexError struct {
 // wrapping them; a location that repeated the name would say it twice, and
 // nested locations would say it once per level.
 func (i *IndexError) Error() string {
-	return fmt.Sprintf("index %d: %v", i.Index, i.Err)
+	return formatLocationError(i)
 }
 
 // Unwrap returns the underlying element error.
-func (i *IndexError) Unwrap() error { return i.Err }
+func (i *IndexError) Unwrap() error {
+	if i == nil {
+		return nil
+	}
+	return i.Err
+}
+
+// CaseError reports an error associated with one case of [Switch]. Key retains
+// the value used to register that case, so callers can locate an invalid branch
+// with [errors.As] without parsing diagnostic text. Its dynamic type is the K
+// accepted by Switch.
+type CaseError struct {
+	Key any
+	Err error
+}
+
+// Error states the case key and defers to the cause. Like [IndexError], the
+// location does not repeat this package's name; root sentinels carry it and a
+// nested error retains the package name of its own boundary.
+func (c *CaseError) Error() string {
+	return formatLocationError(c)
+}
+
+var standardJoinTypes = [...]reflect.Type{
+	standardJoinType(errors.Join(ErrInvalidConfig)),
+	standardJoinType(errors.Join(ErrInvalidConfig, ErrNilNode)),
+}
+
+func standardJoinType(err error) reflect.Type {
+	if _, ok := err.(interface{ Unwrap() []error }); !ok {
+		return nil
+	}
+	return reflect.TypeOf(err)
+}
+
+func standardJoinChildren(err error) ([]error, bool) {
+	typeOf := reflect.TypeOf(err)
+	if typeOf == nil || (typeOf != standardJoinTypes[0] && typeOf != standardJoinTypes[1]) {
+		return nil, false
+	}
+	// The type table contains only values that passed this exact assertion.
+	joined := err.(interface{ Unwrap() []error }) //nolint:forcetypeassert // Proven by the type table.
+	return joined.Unwrap(), true
+}
+
+// formatLocationError is the one presentation path for exact location wrappers
+// owned by this package. A composite can freely nest collection and selection
+// locations across standard [errors.Join] branches without turning their depth
+// into call-stack depth. Every other error remains opaque, so this package never
+// reinterprets a caller's wrapper.
+func formatLocationError(err error) string {
+	formatter := locationFormatter{tasks: []locationFormatTask{{err: err}}}
+	return formatter.format()
+}
+
+type locationFormatTask struct {
+	err     error
+	newline bool
+}
+
+type locationFormatter struct {
+	message strings.Builder
+	tasks   []locationFormatTask
+}
+
+func (f *locationFormatter) format() string {
+	for len(f.tasks) > 0 {
+		last := len(f.tasks) - 1
+		task := f.tasks[last]
+		f.tasks = f.tasks[:last]
+		f.render(task)
+	}
+	return f.message.String()
+}
+
+func (f *locationFormatter) render(task locationFormatTask) {
+	if task.newline {
+		f.message.WriteByte('\n')
+	}
+	err := task.err
+	for {
+		if children, joined := standardJoinChildren(err); joined {
+			for index, child := range slices.Backward(children) {
+				f.tasks = append(f.tasks, locationFormatTask{err: child, newline: index > 0})
+			}
+			return
+		}
+
+		//nolint:errorlint // Exact wrapper identity determines formatting ownership.
+		switch located := err.(type) {
+		case *IndexError:
+			if located == nil {
+				fmt.Fprint(&f.message, nil)
+				return
+			}
+			fmt.Fprintf(&f.message, "index %d: ", located.Index)
+			err = located.Err
+		case *CaseError:
+			if located == nil {
+				fmt.Fprint(&f.message, nil)
+				return
+			}
+			fmt.Fprintf(&f.message, "switch case %#v: ", located.Key)
+			err = located.Err
+		default:
+			fmt.Fprint(&f.message, err)
+			return
+		}
+	}
+}
+
+// Unwrap returns the underlying case error.
+func (c *CaseError) Unwrap() error {
+	if c == nil {
+		return nil
+	}
+	return c.Err
+}

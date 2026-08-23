@@ -130,7 +130,7 @@ func Example_conditionalGraph() {
 		fmt.Println("error:", err)
 		return
 	}
-	result, err := workflow.Get[string](out, workflow.Output("result"))
+	result, err := out.Get[string](workflow.Output("result"))
 	if err != nil {
 		fmt.Println("error:", err)
 		return

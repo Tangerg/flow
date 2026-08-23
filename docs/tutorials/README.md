@@ -4,7 +4,7 @@ The series starts with one typed function and ends with JSON-defined,
 resumable workflows. Each implementation level has an output-checked counterpart
 in the [`example`](../../example/README.md) package.
 
-Install Go 1.26 or newer, then run every example from the repository root:
+Install Go 1.27 or newer, then run every example from the repository root:
 
 ```sh
 go test ./example -run Example -v

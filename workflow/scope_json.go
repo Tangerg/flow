@@ -70,7 +70,7 @@ func scopeWire(scope []ScopeFrame) []scopeFrameJSON {
 // UnmarshalJSON atomically replaces a ScopeFrame from its strict canonical
 // object. Unknown, duplicate, or noncanonical members are rejected.
 func (s *ScopeFrame) UnmarshalJSON(data []byte) error {
-	return decodeJSONInto(s, data, decodeScopeFrame, unmarshalError("scope frame"))
+	return jsonDocument(data).decodeInto(s, decodeScopeFrame, unmarshalError("scope frame"))
 }
 
 func decodeScopeFrame(data []byte) (ScopeFrame, error) {

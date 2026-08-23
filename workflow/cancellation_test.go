@@ -172,7 +172,7 @@ func TestSequence_parentCancellationStopsAndRollsBackAChild(t *testing.T) {
 		if !errors.Is(err, cause) {
 			t.Fatalf("Run error = %v; want cancellation cause", err)
 		}
-		if value, getErr := workflow.Get[int](output, workflow.Output("seed")); getErr != nil || value != 1 {
+		if value, getErr := output.Get[int](workflow.Output("seed")); getErr != nil || value != 1 {
 			t.Fatalf("seed = %v, %v; want unchanged input", value, getErr)
 		}
 	})
@@ -196,7 +196,7 @@ func TestSequence_parentCancellationStopsAndRollsBackAChild(t *testing.T) {
 		if called {
 			t.Fatal("child ran under an already-cancelled context")
 		}
-		if value, getErr := workflow.Get[int](output, workflow.Output("seed")); getErr != nil || value != 1 {
+		if value, getErr := output.Get[int](workflow.Output("seed")); getErr != nil || value != 1 {
 			t.Fatalf("seed = %v, %v; want unchanged input", value, getErr)
 		}
 	})
@@ -229,7 +229,7 @@ func TestLeaf_parentCancellationStopsEveryPreNodeCallback(t *testing.T) {
 		called := false
 		step := workflow.Leaf(
 			"leaf",
-			workflow.From[int](workflow.Output("seed")),
+			workflow.Output("seed").Bind[int](),
 			flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
 				called = true
 				return 2, nil
@@ -508,7 +508,7 @@ func TestGraph_cancellationAfterAdmissionCommitsAcceptedNodesAndClearsStaleCells
 	if !errors.Is(outcome.err, cause) {
 		t.Fatalf("Run error = %v; want cancellation cause", outcome.err)
 	}
-	if value, getErr := workflow.Get[string](outcome.store, workflow.Output("completed")); getErr != nil || value != "fresh" {
+	if value, getErr := outcome.store.Get[string](workflow.Output("completed")); getErr != nil || value != "fresh" {
 		t.Fatalf("completed output = %q, %v; want fresh, nil", value, getErr)
 	}
 	if _, present := outcome.store.Lookup(workflow.Output("blocked")); present {

@@ -15,14 +15,14 @@ func ExampleLeaf() {
 	double := flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) {
 		return in * 2, nil
 	})
-	step := workflow.Leaf("double", workflow.From[int](workflow.Output("input")), double)
+	step := workflow.Leaf("double", workflow.Output("input").Bind[int](), double)
 
 	out, err := step.Run(context.Background(), workflow.NewStore().WithOutput("input", 21))
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	value, err := workflow.Get[int](out, workflow.Output("double"))
+	value, err := out.Get[int](workflow.Output("double"))
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -34,7 +34,7 @@ func ExampleLeaf() {
 func ExampleStreamFunc() {
 	step := workflow.Leaf(
 		"count",
-		workflow.From[int](workflow.Output("input")),
+		workflow.Output("input").Bind[int](),
 		workflow.StreamFunc[int, int, int](
 			func(ctx context.Context, input int, yield func(int) bool) (int, error) {
 				for value := range input {
@@ -63,7 +63,7 @@ func ExampleStreamFunc() {
 		fmt.Println(err)
 		return
 	}
-	fmt.Println(workflow.Get[int](out, workflow.Output("count")))
+	fmt.Println(out.Get[int](workflow.Output("count")))
 
 	// Output:
 	// chunk 0 0
@@ -76,7 +76,7 @@ func ExampleSequence() {
 	add := func(id, input string, n int) workflow.Step {
 		return workflow.Leaf(
 			id,
-			workflow.From[int](workflow.Output(input)),
+			workflow.Output(input).Bind[int](),
 			flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
 				return value + n, nil
 			}),
@@ -96,8 +96,8 @@ func ExampleSequence() {
 		fmt.Println(err)
 		return
 	}
-	saved, _ := workflow.Get[int](out, workflow.Output("save"))
-	audited, _ := workflow.Get[int](out, workflow.Output("audit"))
+	saved, _ := out.Get[int](workflow.Output("save"))
+	audited, _ := out.Get[int](workflow.Output("audit"))
 	fmt.Println(saved, audited)
 	// Output: 12 102
 }
@@ -149,11 +149,11 @@ func ExampleBindFactory() {
 				return nil, fmt.Errorf("%w: want left and right", workflow.ErrMissingPort)
 			}
 			return workflow.BinderFunc[[2]int](func(s workflow.Store) ([2]int, error) {
-				a, err := workflow.Get[int](s, left)
+				a, err := s.Get[int](left)
 				if err != nil {
 					return [2]int{}, err
 				}
-				b, err := workflow.Get[int](s, right)
+				b, err := s.Get[int](right)
 				return [2]int{a, b}, err
 			}), nil
 		},
@@ -193,7 +193,7 @@ func ExampleBindFactory() {
 		fmt.Println(err)
 		return
 	}
-	total, _ := workflow.Get[int](out, workflow.Output("total"))
+	total, _ := out.Get[int](workflow.Output("total"))
 	fmt.Println(total) // 7*2 + 7
 	// Output: 21
 }
@@ -228,9 +228,9 @@ func ExampleGraph_Inputs() {
 // either concern.
 func ExampleRun() {
 	step := workflow.Sequence(
-		workflow.Leaf("load", workflow.From[int](workflow.Output("start")),
+		workflow.Leaf("load", workflow.Output("start").Bind[int](),
 			flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil })),
-		workflow.Leaf("save", workflow.From[int](workflow.Output("load")),
+		workflow.Leaf("save", workflow.Output("load").Bind[int](),
 			flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 10, nil })),
 	)
 
@@ -240,7 +240,7 @@ func ExampleRun() {
 			return
 		}
 		for _, write := range event.Store.Changes(previous) {
-			fmt.Printf("%d %s wrote %s=%v\n", event.Seq, event.ID, write.Ref(), write.Value)
+			fmt.Printf("%d %s wrote %s=%v\n", event.Seq, event.ID, write.Ref, write.Value)
 		}
 		previous = event.Store
 	})
@@ -265,12 +265,12 @@ func ExampleAwait() {
 		Words int    `json:"words"`
 	}
 
-	write := workflow.Leaf("write", workflow.From[string](workflow.Output("topic")),
+	write := workflow.Leaf("write", workflow.Output("topic").Bind[string](),
 		flow.NodeFunc[string, draft](func(_ context.Context, topic string) (draft, error) {
 			fmt.Println("writing the draft")
 			return draft{Title: topic, Words: 800}, nil
 		}))
-	publish := workflow.Leaf("publish", workflow.From[draft](workflow.Output("write")),
+	publish := workflow.Leaf("publish", workflow.Output("write").Bind[draft](),
 		flow.NodeFunc[draft, string](func(_ context.Context, d draft) (string, error) {
 			return fmt.Sprintf("published %q (%d words)", d.Title, d.Words), nil
 		}))
@@ -321,7 +321,7 @@ func ExampleAwait() {
 		fmt.Println(runErr)
 		return
 	}
-	fmt.Println(workflow.Get[string](out, workflow.Output("publish")))
+	fmt.Println(out.Get[string](workflow.Output("publish")))
 
 	// Output:
 	// writing the draft
@@ -369,7 +369,7 @@ func ExampleInterrupt() {
 		fmt.Println(runErr)
 		return
 	}
-	fmt.Println(workflow.Get[response](out, workflow.Output("approval")))
+	fmt.Println(out.Get[response](workflow.Output("approval")))
 
 	// Output:
 	// {"question":"publish?","actions":["approve","reject"]}
@@ -386,11 +386,11 @@ func ExampleIteration() {
 		"label",
 		// Bind both the element and its position from the iteration's scope.
 		workflow.BinderFunc[string](func(store workflow.Store) (string, error) {
-			name, err := workflow.Get[string](store, workflow.Item("rows"))
+			name, err := store.Get[string](workflow.Item("rows"))
 			if err != nil {
 				return "", err
 			}
-			index, err := workflow.Get[int](store, workflow.ItemIndex("rows"))
+			index, err := store.Get[int](workflow.ItemIndex("rows"))
 			if err != nil {
 				return "", err
 			}
@@ -417,14 +417,14 @@ func ExampleIteration() {
 		return
 	}
 	// Results are collected in element order regardless of completion order.
-	labels, err := workflow.Get[[]string](out, workflow.Output("rows"))
+	labels, err := out.Get[[]string](workflow.Output("rows"))
 	fmt.Println(labels, err)
 	// Output: [0:ADA 1:GRACE] <nil>
 }
 
 // This example shows that a branch waiting on one side does not cancel the other.
 func ExampleParallel_suspension() {
-	report := workflow.Leaf("report", workflow.From[int](workflow.Output("start")),
+	report := workflow.Leaf("report", workflow.Output("start").Bind[int](),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
 			fmt.Println("building the report")
 			return x * 2, nil
@@ -439,7 +439,7 @@ func ExampleParallel_suspension() {
 		workflow.NewStore().WithOutput("start", 21), cfg)
 	fmt.Println("suspended:", errors.Is(err, workflow.ErrSuspended))
 	// The finished branch is in the merged Store, not thrown away.
-	fmt.Println(workflow.Get[int](paused, workflow.Output("report")))
+	fmt.Println(paused.Get[int](workflow.Output("report")))
 
 	// Resuming does not rebuild the report.
 	out, err := workflow.Run(context.Background(), both,
@@ -448,7 +448,7 @@ func ExampleParallel_suspension() {
 		fmt.Println(err)
 		return
 	}
-	fmt.Println(workflow.Get[int](out, workflow.Output("report")))
+	fmt.Println(out.Get[int](workflow.Output("report")))
 
 	// Output:
 	// building the report

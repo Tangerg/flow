@@ -74,7 +74,7 @@ func TestCompileGraph_portsInferDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if v, err := workflow.Get[int](out, workflow.Output("b")); err != nil || v != 11 {
+	if v, err := out.Get[int](workflow.Output("b")); err != nil || v != 11 {
 		t.Fatalf("b = %v, %v; want 11", v, err) // (5+1) + 5
 	}
 }
@@ -160,7 +160,7 @@ func TestCompileGraph_emptyGraphIsAnIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if value, getErr := workflow.Get[int](output, workflow.Output("seed")); getErr != nil || value != 1 {
+	if value, getErr := output.Get[int](workflow.Output("seed")); getErr != nil || value != 1 {
 		t.Fatalf("seed = %v, %v; want 1", value, getErr)
 	}
 	if description := workflow.Describe(step); description.Kind != workflow.KindGraph || len(description.Children) != 0 {
@@ -196,7 +196,7 @@ func TestCompileGraph_ownsTheFactoryDefinitionSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if value, getErr := workflow.Get[int](out, workflow.Output("node")); getErr != nil || value != 11 {
+	if value, getErr := out.Get[int](workflow.Output("node")); getErr != nil || value != 11 {
 		t.Fatalf("node output = %d, %v; want 11, nil", value, getErr)
 	}
 	if _, ok := out.Lookup(workflow.Output("changed-node")); ok {
@@ -345,7 +345,7 @@ func TestCompileGraph_failureKeepsCompletedNodesAndCancelsSiblings(t *testing.T)
 	if cause := <-blockedCause; !errors.Is(cause, boom) {
 		t.Fatalf("blocking sibling cause = %v; want failing node error", cause)
 	}
-	if value, getErr := workflow.Get[string](output, workflow.Output("complete")); getErr != nil || value != "committed" {
+	if value, getErr := output.Get[string](workflow.Output("complete")); getErr != nil || value != "committed" {
 		t.Fatalf("completed output = %v, %v; want committed", value, getErr)
 	}
 	if descendantCalls != 0 {
@@ -376,7 +376,7 @@ func TestCompileGraph_nodesSeeOnlyDeclaredDependencies(t *testing.T) {
 			// reference instead of declaring it in spec.Inputs.
 			return workflow.Leaf(
 				spec.ID,
-				workflow.From[int](workflow.Output("unrelated")),
+				workflow.Output("unrelated").Bind[int](),
 				flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
 					return value, nil
 				}),
@@ -406,10 +406,10 @@ func TestCompileGraph_nodesSeeOnlyDeclaredDependencies(t *testing.T) {
 	if !errors.Is(err, workflow.ErrNotFound) {
 		t.Fatalf("Run error = %v; want hidden read to remain unavailable", err)
 	}
-	if value, getErr := workflow.Get[int](output, workflow.Output("unrelated")); getErr != nil || value != 1 {
+	if value, getErr := output.Get[int](workflow.Output("unrelated")); getErr != nil || value != 1 {
 		t.Fatalf("unrelated output = %v, %v; want retained value 1", value, getErr)
 	}
-	if value, getErr := workflow.Get[int](output, workflow.Output("middle")); getErr != nil || value != 1 {
+	if value, getErr := output.Get[int](workflow.Output("middle")); getErr != nil || value != 1 {
 		t.Fatalf("middle output = %v, %v; want retained value 1", value, getErr)
 	}
 }
@@ -1100,7 +1100,7 @@ func TestCompileGraph_suspensionBlocksDependentsButNotUnrelatedWork(t *testing.T
 	if targetCalls != 0 {
 		t.Fatalf("target calls = %d; want 0 while route is suspended", targetCalls)
 	}
-	if value, getErr := workflow.Get[int](first, workflow.Output("unrelated")); getErr != nil || value != 1 {
+	if value, getErr := first.Get[int](workflow.Output("unrelated")); getErr != nil || value != 1 {
 		t.Fatalf("unrelated output = %v, %v; want 1", value, getErr)
 	}
 
@@ -1117,7 +1117,7 @@ func TestCompileGraph_suspensionBlocksDependentsButNotUnrelatedWork(t *testing.T
 	if targetCalls != 1 {
 		t.Fatalf("target calls = %d; want 1", targetCalls)
 	}
-	if value, getErr := workflow.Get[string](second, workflow.Output("target")); getErr != nil || value != "ran" {
+	if value, getErr := second.Get[string](workflow.Output("target")); getErr != nil || value != "ran" {
 		t.Fatalf("target output = %v, %v; want ran", value, getErr)
 	}
 }

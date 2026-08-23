@@ -42,6 +42,15 @@ func (definitionFixture) validate() error                           { return nil
 func (definitionFixture) Describe() Description                     { return Description{} }
 func (d definitionFixture) definition() stepDefinition              { return d.shape }
 
+func TestErrorTreeMatchesNilByIdentity(t *testing.T) {
+	if !(errorTree{}).matches(nil) {
+		t.Fatal("zero errorTree does not match nil")
+	}
+	if (errorTree{root: errors.New("failure")}).matches(nil) {
+		t.Fatal("non-empty errorTree matches nil")
+	}
+}
+
 func TestReplayBoundaries_resampleCancellationAfterLookup(t *testing.T) {
 	cause := errors.New("cancel during replay lookup")
 
@@ -134,6 +143,32 @@ func TestLoopStop_resamplesCancellationAfterJournalRecord(t *testing.T) {
 				t.Fatalf("Journal.Len = %d; want completed checkpoint write", journal.Len())
 			}
 		})
+	}
+}
+
+// TestLoopRejectsCancellationBeforeFirstBodyAdmission pins the checkpoint
+// between admitting the loop boundary and admitting its first body. The body may
+// be an opaque caller-defined Step with no cancellation check of its own, so the
+// loop must not enter it after cancellation becomes observable.
+func TestLoopRejectsCancellationBeforeFirstBodyAdmission(t *testing.T) {
+	cause := errors.New("cancel before first loop body")
+	bodyCalled := false
+	step := Loop(LoopConfig{
+		ID: "loop",
+		Body: opaqueTestStepFunc(func(context.Context, Store) (Store, error) {
+			bodyCalled = true
+			return NewStore(), nil
+		}),
+		Condition: flow.NodeFunc[Store, bool](func(context.Context, Store) (bool, error) {
+			return true, nil
+		}),
+	})
+	input := NewStore().WithOutput("seed", 1)
+	ctx := ctxtest.CancelAtCheck(t.Context(), 2, cause)
+
+	output, err := step.Run(ctx, input)
+	if !errors.Is(err, cause) || bodyCalled || len(output.Changes(input)) != 0 {
+		t.Fatalf("Run = output %+v, error %v, body called %t; want unchanged input and cancellation", output, err, bodyCalled)
 	}
 }
 
@@ -626,8 +661,8 @@ func TestJSONDocument_rejectsUnpairedUnicodeSurrogates(t *testing.T) {
 		{name: "low surrogate", data: []byte(`"\udc00"`), wantErr: "unpaired UTF-16 surrogate"},
 		{name: "high then scalar", data: []byte(`"\ud800\u0041"`), wantErr: "unpaired UTF-16 surrogate"},
 		{name: "high then malformed", data: []byte(`"\ud800\uXXXX"`), wantErr: "unpaired UTF-16 surrogate"},
-		{name: "short unicode escape", data: []byte(`"\u12"`), wantErr: "invalid character"},
-		{name: "unknown escape", data: []byte(`"\q"`), wantErr: "invalid character"},
+		{name: "short unicode escape", data: []byte(`"\u12"`), wantErr: "escape"},
+		{name: "unknown escape", data: []byte(`"\q"`), wantErr: "escape"},
 		{name: "trailing escape", data: []byte{'"', '\\'}, wantErr: "unexpected EOF"},
 	}
 	for _, test := range tests {
@@ -729,8 +764,7 @@ func TestJSONSchemaError_ordersDeduplicatesAndHidesBackend(t *testing.T) {
 	if strings.HasPrefix(message, "; ") || strings.Contains(message, "; ; ") {
 		t.Fatalf("Error = %q; want no empty diagnostic among the leaves", message)
 	}
-	var backend *jschema.ValidationError
-	if errors.As(err, &backend) {
+	if _, ok := errors.AsType[*jschema.ValidationError](err); ok {
 		t.Fatal("JSON Schema backend escaped through the public error chain")
 	}
 }
@@ -754,7 +788,7 @@ func TestSpecCompiler_defendsItsValidatedInputContract(t *testing.T) {
 		MustRegisterCondition("condition", flow.NodeFunc[Store, bool](func(context.Context, Store) (bool, error) {
 			return false, nil
 		}))
-	compiler := specCompiler{leafCompiler: leafCompiler{registry: registry.snapshot()}}
+	compiler := specCompiler{registry: registry.snapshot()}
 	broken := Spec{Kind: KindLeaf, ID: "broken", Type: "broken"}
 
 	tests := map[string]struct {
@@ -934,7 +968,7 @@ func deriveConcurrently(t *testing.T, base Store) []Store {
 	var group sync.WaitGroup
 	for index := range storeDerivers {
 		group.Go(func() {
-			value, err := Get[int](base, At("seed", "key-00"))
+			value, err := base.Get[int](At("seed", "key-00"))
 			if err != nil {
 				t.Errorf("deriver %d read the shared base: %v", index, err)
 			}
@@ -956,7 +990,7 @@ func deriveConcurrently(t *testing.T, base Store) []Store {
 func assertDerivationIsPrivate(t *testing.T, derived []Store) {
 	t.Helper()
 	for index, store := range derived {
-		if got, err := Get[int](store, Output(fmt.Sprintf("node-%d", index))); err != nil || got != index {
+		if got, err := store.Get[int](Output(fmt.Sprintf("node-%d", index))); err != nil || got != index {
 			t.Fatalf("deriver %d = %d, %v; want %d", index, got, err, index)
 		}
 		for other := range storeDerivers {
@@ -976,10 +1010,10 @@ func assertBaseSurvives(t *testing.T, derived []Store, base Store) {
 	t.Helper()
 	last := fmt.Sprintf("key-%02d", storeOverlayLimit-1)
 	for index, store := range derived {
-		if got, err := Get[int](store, At("seed", last)); err != nil || got != storeOverlayLimit-1 {
+		if got, err := store.Get[int](At("seed", last)); err != nil || got != storeOverlayLimit-1 {
 			t.Fatalf("deriver %d lost the snapshot: %d, %v", index, got, err)
 		}
-		if got, err := Get[int](store, At("overlay", last)); err != nil || got != storeOverlayLimit-1 {
+		if got, err := store.Get[int](At("overlay", last)); err != nil || got != storeOverlayLimit-1 {
 			t.Fatalf("deriver %d lost the overlay: %d, %v", index, got, err)
 		}
 	}
@@ -1056,7 +1090,7 @@ func TestStoreChanges_orderSurvivesCompaction(t *testing.T) {
 			changes := store.Changes(base)
 			got := make([]Ref, len(changes))
 			for index, change := range changes {
-				got[index] = change.Ref()
+				got[index] = change.Ref
 			}
 			if !slices.Equal(got, want) {
 				t.Fatalf("Changes = %v; want write order %v", got, want)
@@ -1133,13 +1167,13 @@ func TestStoreWithoutNodes_removalMergesLikeTheWriteItIs(t *testing.T) {
 
 	unrelated := NewStore().WithOutput("node", 4)
 	merged := unrelated.merge(cleared)
-	if value, err := Get[int](merged, Output("node")); err != nil || value != 4 {
+	if value, err := merged.Get[int](Output("node")); err != nil || value != 4 {
 		t.Fatalf("unrelated Store value = %d, %v; private removal leaked across lineages", value, err)
 	}
 
 	removed := base.withoutNodes(nodes)
 	written := base.WithOutput("node", 5)
-	if value, err := Get[int](base.merge(removed, written), Output("node")); err != nil || value != 5 {
+	if value, err := base.merge(removed, written).Get[int](Output("node")); err != nil || value != 5 {
 		t.Fatalf("later write = %d, %v; want 5, nil", value, err)
 	}
 	if value, present := base.merge(written, removed).Lookup(Output("node")); present {
@@ -1224,7 +1258,7 @@ func TestGraphCall_doesNotEnterStepAfterCancellation(t *testing.T) {
 	if outcome.index != 3 || !errors.Is(outcome.err, context.Canceled) {
 		t.Fatalf("outcome = %+v; want index 3 with context cancellation", outcome)
 	}
-	if value, err := Get[int](outcome.store, Output("seed")); err != nil || value != 1 {
+	if value, err := outcome.store.Get[int](Output("seed")); err != nil || value != 1 {
 		t.Fatalf("preserved input = %d, %v; want 1, nil", value, err)
 	}
 }
@@ -1897,7 +1931,7 @@ func TestStore_removalDoesNotHideTheChangesAroundIt(t *testing.T) {
 
 	changes := next.Changes(base)
 	if len(changes) != 1 ||
-		changes[0].Ref() != Output("owned") || changes[0].Value.(int) != 3 {
+		changes[0].Ref != Output("owned") || changes[0].Value.(int) != 3 {
 		t.Fatalf("Changes against the store it derives from = %+v; want the one write past the removal", changes)
 	}
 
@@ -1914,7 +1948,7 @@ func TestStore_removalDoesNotHideTheChangesAroundIt(t *testing.T) {
 func changesRefs(changes []Write) []Ref {
 	refs := make([]Ref, 0, len(changes))
 	for _, change := range changes {
-		refs = append(refs, change.Ref())
+		refs = append(refs, change.Ref)
 	}
 	return refs
 }
@@ -2444,8 +2478,8 @@ func TestValidatingOneBoundaryAllocatesNoIdentitySet(t *testing.T) {
 	passThrough := flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
 		return value, nil
 	})
-	single := Leaf("only", From[int](Output("seed")), passThrough)
-	pair := Sequence(single, Leaf("second", From[int](Output("seed")), passThrough))
+	single := Leaf("only", Output("seed").Bind[int](), passThrough)
+	pair := Sequence(single, Leaf("second", Output("seed").Bind[int](), passThrough))
 
 	if allocs := testing.AllocsPerRun(200, func() { _ = flow.Validate(single) }); allocs > oneBoundary {
 		t.Errorf(

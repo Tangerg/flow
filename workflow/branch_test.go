@@ -26,7 +26,7 @@ func (*nilSafeResolver) Run(context.Context, workflow.Store) (string, error) {
 func TestBranch_routes(t *testing.T) {
 	label := func(text string) workflow.Step {
 		return workflow.Leaf(text,
-			workflow.From[int](workflow.Ref{NodeID: "start", Path: "/output"}),
+			workflow.Ref{NodeID: "start", Path: "/output"}.Bind[int](),
 			flow.NodeFunc[int, string](func(_ context.Context, _ int) (string, error) { return text, nil }),
 		)
 	}
@@ -65,7 +65,7 @@ func TestBranch_ownsCaseMapStructure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got, getErr := workflow.Get[int](out, workflow.Output("original")); getErr != nil || got != 1 {
+	if got, getErr := out.Get[int](workflow.Output("original")); getErr != nil || got != 1 {
 		t.Fatalf("original output = %d, %v; want 1, nil", got, getErr)
 	}
 	if _, ok := out.Lookup(workflow.Output("changed")); ok {
@@ -76,7 +76,7 @@ func TestBranch_ownsCaseMapStructure(t *testing.T) {
 func TestBranch_acceptsComposedResolverNode(t *testing.T) {
 	read := flow.NodeFunc[workflow.Store, int](
 		func(_ context.Context, store workflow.Store) (int, error) {
-			return workflow.Get[int](store, workflow.Output("start"))
+			return store.Get[int](workflow.Output("start"))
 		},
 	)
 	classify := flow.NodeFunc[int, string](
@@ -141,7 +141,7 @@ func TestValidateSpec_branchCasesMayShareAStepID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if v, err := workflow.Get[int](out, workflow.Output("after")); err != nil || v != 16 {
+	if v, err := out.Get[int](workflow.Output("after")); err != nil || v != 16 {
 		t.Fatalf("after = %v, %v; want 16", v, err) // (5+1) + 10
 	}
 }
@@ -506,7 +506,7 @@ func TestBranch_preservesTheSelectedCaseStoreOnError(t *testing.T) {
 	if !errors.Is(err, boom) {
 		t.Fatalf("Run error = %v; want case failure", err)
 	}
-	value, getErr := workflow.Get[bool](output, workflow.Output("partial"))
+	value, getErr := output.Get[bool](workflow.Output("partial"))
 	if getErr != nil || !value {
 		t.Fatalf("partial output = %v, %v; want true, nil", value, getErr)
 	}

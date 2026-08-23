@@ -12,21 +12,23 @@ being presented as migrations from a version that was never published.
 
 ### Added
 
-- A Go 1.26 typed core built around `Node[I, O]`, `NodeFunc`, `Then`, `Switch`,
+- A Go 1.27 typed core built around `Node[I, O]`, `NodeFunc`, `Then`, `Switch`,
   `Loop`, `Map`, and `Race`, with cooperative cancellation and `Validate` for
   deterministic, recursively composable definition checks.
 - Derived composition in `flowx`: `Chain`, `FanOut`, `Combine`, and `Fallback`.
 - `flow`, `flowx`, and `workflow` composites participate in the same recursive,
   side-effect-free `flow.Validate` contract, including before Journal replay.
-- Workflow loop and parallel configs are semantic aliases of the corresponding
-  core configs; Graph, Spec, parallel, and iteration bounds now share their
-  validation and `flow.ErrInvalidConfig` category.
+- Workflow loop and parallel configs delegate shared settings to the
+  corresponding core configs; Graph, Spec, parallel, and iteration bounds share
+  their validation and `flow.ErrInvalidConfig` category.
 - The optional `workflow` runtime for immutable named state, typed references,
   reusable Steps, sequence, parallel, branch, loop, iteration, and sealed
   subgraphs.
 - A small `Binder[I]` protocol for preparing typed leaf inputs, with
-  `BinderFunc[I]` as its function adapter and definition-aware `From` and
+  `BinderFunc[I]` as its function adapter and definition-aware `Ref.Bind` and
   `FirstOf` implementations that validate references before Journal replay.
+  `Store.Get[T]` and `Expr.Eval[T]` use Go 1.27 generic methods so typed reads
+  live on the values that own them rather than in the package namespace.
   Custom Binders may participate through the same optional `Validate() error`
   convention used by composite nodes.
 - `Resolver` is a semantic alias for `flow.Node[Store, string]`, so composed
@@ -44,10 +46,12 @@ being presented as migrations from a version that was never published.
   registration, Graph definitions, and nested Spec definitions. Runtime
   `StepError` values carry the same structured execution scope as events,
   chunks, suspensions, and Journal keys, while definition errors remain
-  deliberately unscoped.
+  deliberately unscoped. Core collection and selection locations use
+  `IndexError` and `CaseError`, so callers never parse an index or case key from
+  diagnostic text.
 - Nil factory and condition registrations preserve `flow.ErrNilFunc` beneath
   their `workflow.ErrInvalidRegistration` category.
-- Nested typed-value resolution preserves JSON encoding failures through `Get`,
+- Nested typed-value resolution preserves JSON encoding failures through `Store.Get`,
   `Await`, and expression evaluation instead of misreporting them as missing
   references. The expression `has()` predicate suppresses only true absence;
   malformed nested values remain type errors instead of silently becoming
@@ -64,6 +68,9 @@ being presented as migrations from a version that was never published.
   `Graph.MissingInputs` return it, and a caller that assembles its own list — an
   editor collecting what a rule set reads, as `expr.Bindings.Refs` does — orders
   it the same way instead of choosing a second order to diff against.
+- `Store.Changes` reports each `Write` with one `Ref` cell identity rather than
+  splitting that identity into node and key fields that callers had to assemble
+  again.
 - `Condition` is `flow.Node[Store, bool]`, matching `Resolver`'s
   `flow.Node[Store, string]`, so the two decision shapes differ only in what
   they return. A condition composes with `Then`, `Map`, and the other typed
@@ -127,13 +134,58 @@ being presented as migrations from a version that was never published.
 
 ### Fixed
 
+- Structured flow and workflow location errors now render exact caller-built
+  chains and standard joined branches iteratively, without repeating the
+  workflow package qualifier or exhausting the goroutine stack. Typed-nil
+  location values terminate as `<nil>` instead of recursively re-entering their
+  own formatter.
+- CI now uses `golangci-lint` v2.13.1, whose analyzers support the Go 1.27
+  generic-method syntax required by the module; the previous pinned analyzer
+  panicked before reporting a verdict.
+- Wide Graph and Store merges no longer spend one call frame per completed
+  write while compacting a temporary batch. Overlay replay is iterative, so
+  graph breadth cannot exhaust the goroutine stack.
+- Defensively copying a caller-defined workflow description now uses an
+  iterative tree walk, so a deeply nested presentation tree cannot exhaust the
+  goroutine stack while crossing the ownership boundary. Cyclic child slices
+  are truncated at the repeated node while shared acyclic subtrees remain
+  independent copies.
+- Suspension classification now traverses both linear wrappers and nested
+  standard multi-error trees iteratively. Deeply joined application errors no
+  longer consume one call frame per branch level.
+- Observer snapshots now copy exact workflow-owned error-wrapper chains and
+  standard joined branches iteratively, so mutable workflow locations
+  hidden below `IndexError`, `CaseError`, or `errors.Join` cannot be rewritten
+  through a callback or exhaust the goroutine stack at that boundary.
+- Definition validation now detects suspensions in deeply joined application
+  error trees iteratively, so normalizing a forbidden third outcome cannot
+  exhaust the goroutine stack.
+- Node-factory error attribution now traverses deeply joined application errors
+  iteratively, preserving the failing definition field without making graph
+  compilation depth consume the goroutine stack.
+- `RefError` now classifies a caller-assembled joined cause iteratively while
+  formatting it, so exported structured error depth cannot exhaust the
+  goroutine stack.
+- A directly invoked Leaf now establishes the same run identity boundary as
+  workflow composites before entering its composed Node. A nested Step can no
+  longer reuse the Leaf's ID merely because the caller omitted `workflow.Run`.
+- Definition-time suspension normalization retains a leaf's structured
+  `StepError` location while removing the invalid `ErrSuspended` outcome, so a
+  suspending Binder validator no longer loses its step ID and `OpValidate`.
+- Observer callbacks receive independent workflow error wrappers, so mutating
+  an Event's `StepError`, `RefError`, or `Suspension` cannot rewrite the error or
+  resume key returned by the producing boundary.
+- A zero `expr.Expr` or nil `*expr.Expr` now returns a structured invalid-config
+  error from `Eval`, `Condition`, and `Resolver`; expression adapters preserve
+  that validation through composition and Registry registration instead of
+  validating successfully and panicking only when run.
 - Joined suspensions no longer expose their internal error tree through
   `errors.As`; mutating a returned `Suspension` cannot change later
   `Suspensions` results from the same error.
 - Iteration validation now rejects a child path below `ItemIndex`, whose value
   is always a scalar integer, instead of accepting an output reference that can
   only fail while collecting results at run time.
-- `Get` now accepts a stored `nil` for every Go type to which `nil` is
+- `Store.Get` accepts a stored `nil` for every Go type to which `nil` is
   assignable, including `unsafe.Pointer`, instead of misclassifying that one
   nilable kind as a type mismatch.
 - `Bindings.UnmarshalJSON` and `SwitchSpec.UnmarshalJSON` now reject nil

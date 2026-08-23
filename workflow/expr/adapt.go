@@ -10,7 +10,7 @@ import (
 	"github.com/Tangerg/flow/workflow"
 )
 
-// evaluate runs eval between two cancellation checks, so parent cancellation
+// evaluate runs e between two cancellation checks, so parent cancellation
 // observed before or during evaluation takes precedence over whatever the
 // expression itself produced. Every adapter in this file shares that rule, so
 // it is stated here rather than reassembled per adapter.
@@ -19,16 +19,15 @@ import (
 // This package restates it because a compiled adapter is also a [workflow.Step]
 // a caller can run directly, and the helper that applies it in flow is that
 // package's own.
-func evaluate[T any](
+func (e *Expr) evaluate[T any](
 	ctx context.Context,
 	store workflow.Store,
-	eval func(workflow.Store) (T, error),
 ) (T, error) {
 	var zero T
 	if err := context.Cause(ctx); err != nil {
 		return zero, err
 	}
-	value, err := eval(store)
+	value, err := e.Eval[T](store)
 	if contextErr := context.Cause(ctx); contextErr != nil {
 		return zero, contextErr
 	}
@@ -53,13 +52,11 @@ func Condition(src string) (workflow.Condition, error) {
 
 // Condition adapts the Expr into a [workflow.Condition], the node shape a
 // [workflow.Loop] checks after each iteration. Parent cancellation observed
-// before or during evaluation takes precedence.
+// before or during evaluation takes precedence. The adapter retains the Expr's
+// definition validation, so a zero Expr or nil *Expr is rejected before a
+// composite begins work.
 func (e *Expr) Condition() workflow.Condition {
-	return flow.NodeFunc[workflow.Store, bool](
-		func(ctx context.Context, s workflow.Store) (bool, error) {
-			return evaluate(ctx, s, e.Bool)
-		},
-	)
+	return expressionNode[bool]{expression: e}
 }
 
 // Resolver compiles src into a [workflow.Branch] resolver that returns the
@@ -77,12 +74,23 @@ func Resolver(src string) (workflow.Resolver, error) {
 // Resolver adapts the Expr into a [workflow.Resolver], the node shape that
 // selects a name for [workflow.Branch] and publishes an outlet for
 // [workflow.Route]. Parent cancellation observed before or during evaluation
-// takes precedence.
+// takes precedence. Like [Expr.Condition], it preserves definition validation.
 func (e *Expr) Resolver() workflow.Resolver {
-	return flow.NodeFunc[workflow.Store, string](func(ctx context.Context, s workflow.Store) (string, error) {
-		return evaluate(ctx, s, e.String)
-	})
+	return expressionNode[string]{expression: e}
 }
+
+// expressionNode is the one node adapter for every statically required result
+// type. Keeping the Expr itself, rather than closing over it in a NodeFunc, is
+// what leaves its definition visible to flow.Validate and Registry registration.
+type expressionNode[O any] struct {
+	expression *Expr
+}
+
+func (e expressionNode[O]) Run(ctx context.Context, store workflow.Store) (O, error) {
+	return e.expression.evaluate[O](ctx, store)
+}
+
+func (e expressionNode[O]) Validate() error { return e.expression.validate() }
 
 // Case pairs a boolean expression with the branch name to select when it holds.
 type Case struct {
@@ -93,7 +101,7 @@ type Case struct {
 // SwitchSpec is the serializable form of a [Switch]: ordered cases plus the
 // branch to take when none match. Its JSON boundary requires an object and is
 // strict, lossless, and failure-atomic, matching [Bindings].
-type SwitchSpec struct { //nolint:recvcheck // UnmarshalJSON must use a pointer receiver.
+type SwitchSpec struct {
 	Cases []Case `json:"cases"`
 	// Fallback is the case name used when no When holds. An empty Fallback makes
 	// "no match" an error instead.
@@ -186,7 +194,7 @@ func compileCase(index int, spec Case) (compiledCase, error) {
 
 func (s switchResolver) Run(ctx context.Context, store workflow.Store) (string, error) {
 	for _, entry := range s.cases {
-		hold, err := evaluate(ctx, store, entry.when.Bool)
+		hold, err := entry.when.evaluate[bool](ctx, store)
 		if err != nil {
 			return "", err
 		}
@@ -201,7 +209,8 @@ func (s switchResolver) Run(ctx context.Context, store workflow.Store) (string, 
 }
 
 // Refs returns every reference a SwitchSpec's cases read, deduplicated and
-// sorted. The returned slice is a copy. It reports a parse error in any case.
+// sorted. The returned slice is a fresh value the caller owns. It reports a
+// parse error in any case.
 func (s SwitchSpec) Refs() ([]workflow.Ref, error) {
 	var refs []workflow.Ref
 	for index, c := range s.Cases {

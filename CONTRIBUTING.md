@@ -6,8 +6,8 @@ exported API, read the package boundaries in the
 
 ## Requirements
 
-- Go 1.26 or newer.
-- `golangci-lint` v2 (CI currently pins v2.12.2).
+- Go 1.27 or newer.
+- `golangci-lint` v2 (CI currently pins v2.13.1).
 - `actionlint` (CI currently pins v1.7.10).
 - `govulncheck` (CI currently pins v1.6.0).
 - Node.js 22 or newer when changing Markdown documentation.
@@ -72,6 +72,12 @@ go test ./example -run Example -v
   validation path, and need no second execution protocol. Do not add a
   parameter that the execution context already carries: a repeated boundary
   publishes its index through the scope, which `Scope` reports.
+- Preserve definition validation when adapting one value into another. A
+  closure in `NodeFunc` makes captured state opaque to `flow.Validate`; an
+  adapter that owns a definition keeps it in a node whose `Validate` method
+  forwards the invariant. `TestExpressionAdaptersRejectUncompiledExpressions`
+  guards the expression adapters that once validated successfully and then
+  panicked only when run.
 - Keep one construction shape per category of workflow step. A composite that
   contains other steps and names itself takes exactly one `Config` struct that
   owns every field, including its ID and body: `Branch`, `Loop`, `Iteration`,
@@ -82,14 +88,25 @@ go test ./example -run Example -v
   positional parameters: `Leaf`, `Await`, `Interrupt`, `Route`. Delegate the
   meaning of a shared setting to the `flow` config that defines it rather than
   restating the rule.
+- Put a generic operation on the concrete value that owns it. Go 1.27 lets
+  `Store.Get[T]`, `Ref.Bind[T]`, and `Expr.Eval[T]` keep typed behavior in the
+  receiver's namespace instead of publishing a package function or one method
+  per result type. Do not invent a receiver merely to make a generic function a
+  method: `Then`, `Map`, `Leaf`, `Factory`, and the other composition operators
+  combine peers and remain package functions. Interfaces cannot declare generic
+  methods, so `Node` and `Binder` retain their single ordinary protocol method.
 - Let `Store` own every decision about its own representation. A composite must
   not read `Store.depth` or compare it against `storeOverlayLimit`; it calls the
   named `Store` method for what it is about to do. `Store.bounded` is the single
   place the overlay limit is enforced, so every path that extends an overlay
-  ends there rather than restating the threshold. A composite that hands one
-  Store to concurrent derivers — parallel branches, iteration elements, graph
-  nodes — passes it through `Store.sharedBase` first, or each deriver flattens
-  the snapshot separately and the fan-out costs one copy per deriver.
+  ends there rather than restating the threshold. Internal batch assembly may
+  temporarily exceed that returned-store limit, so flattening an overlay must
+  be iterative: graph width is not call-stack depth.
+  `TestStoreWideBatchDoesNotSpendStackPerWrite` guards the distinction. A
+  composite that hands one Store to concurrent derivers — parallel branches,
+  iteration elements, graph nodes — passes it through `Store.sharedBase` first,
+  or each deriver flattens the snapshot separately and the fan-out costs one copy
+  per deriver.
   `BenchmarkParallelBaseScaling`, `BenchmarkIterationBaseScaling`, and
   `BenchmarkGraphRunBaseScaling` vary the input overlay length so a new fan-out
   site that skips this shows up as an allocation cliff at the limit. Those measure
@@ -116,6 +133,15 @@ go test ./example -run Example -v
   fail as an unknown kind rather than silently. A code-built boundary that is not
   a Spec shape — `Await`, `Interrupt`, a graph, an opaque Step — needs only the
   kind `Describe` reports, which is why those constants form a second block.
+- Treat a caller-defined `Description` as an untrusted presentation tree. The
+  ownership boundary copies every node, but the copy is iterative because a
+  description is not a workflow definition and has not passed through
+  `MaxNestingDepth`. A cycle through caller-owned child slices is truncated at
+  the repeated node; a shared acyclic subtree is copied independently at each
+  occurrence, so the public result remains the finite, independently mutable
+  tree it promises. `TestDescribeDeepCallerTreeDoesNotSpendStackPerNode` and
+  `TestDescribeNormalizesCallerCyclesWithoutCollapsingSharedSubtrees` keep those
+  three properties together.
 - One arity, one path. A composite runs its children through one implementation
   however many there are: `Parallel` had a single-branch path that re-derived the
   suspension classification, the merge, and the index a real failure is reported
@@ -181,16 +207,19 @@ go test ./example -run Example -v
   `TestInterrupt_eventsReportSuspensionThenReplay`, and
   `TestEvents_distinguishValidationReplayAndAdmission` read each one from the
   event rather than from the returned Store or error.
-- Install a run before running children. Every composite calls `ensureRun`, which
-  supplies one when the caller has none, because a `Step` may be invoked directly
-  rather than through `Run`. The run owns the identities claimed so far, and
-  claiming against no run silently succeeds, so a composite that skipped this
-  would let one step ID run twice in a scope and notice nothing.
+- Install a run before running children. Every composite and `Leaf` calls
+  `ensureRun`, which supplies one when the caller has none, because a `Step` may
+  be invoked directly rather than through `Run`, and a `Step` may itself appear
+  inside Leaf's composed `flow.Node`. The run owns the identities claimed so far,
+  and claiming against no run silently succeeds, so a composite that skipped
+  this would let one step ID run twice in a scope and notice nothing.
   `TestEveryCompositeRunDirectlyStillFormsOneRun` invokes each composite outside
   `Run`, with a body that reaches one leaf twice through a `flow` combinator:
   a nested workflow composite would install a run of its own and answer in place
   of the one under test, and two visible children sharing an ID are rejected by
   definition validation before anything runs.
+  `TestLeafRunDirectlyStillFormsOneRunForAComposedStep` guards the same boundary
+  for a Leaf whose typed Node contains a Step.
 - End a derived context where it was derived. Every `context.WithCancel` here
   belongs to a boundary — `Run`, a graph run, a leaf's emission session, and
   `flow.Race` — and each ends its own before returning, so work that outlived its
@@ -228,7 +257,7 @@ go test ./example -run Example -v
 - Name the package exactly once in an error. Each package reaches that
   differently, and the difference is forced rather than chosen: `flow`'s
   sentinels carry `flow:` because most of them reach a caller with nothing
-  wrapping them, so the locations it adds — `IndexError`, a switch case — state
+  wrapping them, so the locations it adds — `IndexError` and `CaseError` — state
   only where. `workflow` and `expr` are the mirror image, because a `StepError`,
   `GraphError`, `SpecError`, or `expr.Error` always supplies the name, so the
   sentinels they wrap state only the condition. An error assembled from several
@@ -237,6 +266,21 @@ go test ./example -run Example -v
   `TestErrorsNameThePackageAtMostOnce` in `flow` and `expr`,
   `TestSurfacedErrorsNamePackageExactlyOnce`, and
   `TestAJoinedSuspensionNamesThePackageOncePerWait` hold each package to it.
+- Render and snapshot package-owned location trees without recursive calls. An
+  application may assemble exported `IndexError`, `CaseError`, `StepError`,
+  `RefError`, `RegistrationError`, `GraphError`, and `SpecError` values without
+  first crossing a bounded definition. Their exact owned chains and standard
+  `errors.Join` branches are iterative, keep one package qualifier, and are
+  copied before an Observer can mutate them. A caller-defined wrapper or
+  multi-error remains opaque: looking through it would make this module
+  reinterpret another package's presentation and ownership. A typed-nil
+  structured location is a `<nil>` terminal rather than a reason to ask `fmt`
+  to invoke the same method again.
+  `TestLocationErrorsFormatDeepMixedChainIteratively`,
+  `TestWorkflowErrorsFormatDeepOwnedChainIteratively`,
+  `TestWorkflowErrorsFormatTypedNilAsNil`, and
+  `TestEventsCopyDeepJoinedOwnedErrorTreeWithoutStackPerBranch` protect the
+  linear, mixed, nil, and branched failure modes.
 - Decode through `jsondoc.DecodeInto`. Every exported `UnmarshalJSON` here makes
   the same promise — a nil receiver reported rather than a panic, the whole
   document decoded, and the destination replaced only after complete success —
@@ -265,7 +309,7 @@ go test ./example -run Example -v
 - Let the type name itself once. A read that requires a type states it in the
   signature, in the assertion, and in the message it produces when something else
   arrived, and the three drift apart quietly: a wanted type spelled as prose is a
-  claim nothing checks. `expr.evalAs` derives its message from its type argument,
+  claim nothing checks. `Expr.Eval` derives its message from its type argument,
   and `replayDecision` does the same for the two composites that journal a
   decision instead of an output — `Branch` wants a case name, `Loop` wants whether
   it stopped, and neither spells that anywhere but the type it asks for.
@@ -307,10 +351,15 @@ go test ./example -run Example -v
   are types because a traversal mutates them; `switchCompiler` had one immutable
   field and a method that ignored its receiver, so the shape promised state that
   was not there. `Switch` is the compiler it always was. A method that never names
-  its receiver says the same thing more quietly, and two did: `collectBranches`
-  classifies the branches of an `Unwrap() []error`, none of which is the tree it
-  was hung on, and `decodeScope` reads a member of the record in front of it and
-  nothing of the decoder's own state.
+  its receiver says the same thing more quietly; `decodeScope` reads a member of
+  the record in front of it and nothing of the decoder's own state. Conversely,
+  `suspensionCollector` owns the worklist and classification state of its
+  complete traversal rather than delegating joined branches to recursive calls.
+- Do not apply workflow nesting limits to application error trees, and therefore
+  do not rely on recursive error traversal. Both `Unwrap() error` chains and
+  nested `Unwrap() []error` joins use one iterative walk;
+  `TestSuspensions_walksDeepBranchedWrappingWithoutRecursiveStackGrowth` guards
+  the branch shape that a linear-wrapper test cannot reach.
 - Let the type own an order it promises. Three exported results are documented as
   sorted references, and the order lived in `Ref.compare` for two of them while
   `expr` wrote it out again for the third — which is the one a caller is told to
@@ -366,6 +415,33 @@ go test ./example -run Example -v
   over its accumulator is the only reason nothing notices today.
   `TestOutputGuaranteeCombinatorsLeaveTheirOperandsAlone` says it instead of leaving
   it for a second caller to discover.
+- An observation boundary owns the mutable workflow structure it hands to
+  application code. `Event.Scope` and workflow runtime errors are snapshots;
+  the immutable `Store` and Node-provided error causes remain borrowed by their
+  documented contracts. A synchronous callback must not be able to rewrite the
+  result its producer returns after the callback completes —
+  `TestEvents_ownMutableWorkflowErrors` mutates failures and a suspension from
+  inside an Observer. The exact package-owned wrapper chain is copied
+  iteratively because exported error values can be assembled outside a validated
+  definition; `TestEventsCopyDeepOwnedErrorChainWithoutStackPerWrapper` keeps
+  ownership depth from becoming stack depth.
+- Reject a third outcome at a definition boundary without erasing its location.
+  A validator or factory suspension becomes `flow.ErrInvalidConfig`, but a
+  direct `StepError` still names the leaf and `OpValidate` —
+  `TestValidationErrorsCannotBecomeSuspensions` guards both halves. Validator
+  errors are application error trees, not validated workflow definitions, so
+  detecting that third outcome uses a private iterative matcher with the full
+  semantics of `errors.Is`. Run-time classification stays specialized because
+  it must distinguish pure suspension leaves from a joined failure;
+  `TestValidationClassifiesDeepBranchedSuspensionWithoutStackPerWrapper`
+  and `TestRegistry_factoryClassifiesDeepBranchedSuspensionWithoutStackPerWrapper`
+  keep validator and factory error depth from becoming call-stack depth. The
+  factory field classifier walks the same untrusted shape iteratively as well;
+  `TestRegistry_factoryClassifiesDeepBranchedCategoryWithoutStackPerWrapper`
+  protects the non-suspending route. Exported structured errors are another
+  application-owned ingress: `TestRefErrorFormatsDeepJoinedCauseWithoutStackPerWrapper`
+  keeps a caller-assembled `RefError` stack-safe while it classifies its cause
+  for presentation.
 - Match a category on every route that reports it. `%w` and `%v` render the same
   bytes, and a sentinel handed to a structured error is indistinguishable from any
   other error of the same text, so a wrap is a promise only where something matches
@@ -427,7 +503,7 @@ go test ./example -run Example -v
 - Split a function that holds two subjects, and leave one that holds a single
   irreducible subject alone. Probing at `gocognit` 12 and `gocyclo` 10 — far under
   the gate's 30 — surfaced fourteen, and six of them were two things wearing one
-  name. `Get` located the same failed read at four returns, so `typedRead` says the
+  name. `Store.Get` located the same failed read at four returns, so `typedRead` says the
   reference and the wanted type once and `nilAssignable` names the kinds a stored
   nil reads back as. `suspensionTree.collect` mixed what one error node means with
   how a tree is walked, and `waitAt` is the first of those. `specJSONEncoder.encode`

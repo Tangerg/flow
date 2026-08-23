@@ -36,7 +36,7 @@ func TestSubgraph_sealsItsStoreAndProjectsOneOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if value, getErr := workflow.Get[int](output, workflow.Output("calculation")); getErr != nil || value != 42 {
+	if value, getErr := output.Get[int](workflow.Output("calculation")); getErr != nil || value != 42 {
 		t.Fatalf("calculation output = %v, %v; want 42", value, getErr)
 	}
 	for _, id := range []string{"value", "double"} {
@@ -69,7 +69,7 @@ func TestSubgraph_ownsInputMapStructure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if value, getErr := workflow.Get[int](output, workflow.Output("calculation")); getErr != nil || value != 2 {
+	if value, getErr := output.Get[int](workflow.Output("calculation")); getErr != nil || value != 2 {
 		t.Fatalf("calculation output = %v, %v; want 2, nil", value, getErr)
 	}
 }
@@ -100,10 +100,10 @@ func TestSubgraph_reusesOneBodyUnderIndependentScopes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if left, err := workflow.Get[int](output, workflow.Output("left")); err != nil || left != 2 {
+	if left, err := output.Get[int](workflow.Output("left")); err != nil || left != 2 {
 		t.Fatalf("left = %v, %v; want 2", left, err)
 	}
-	if right, err := workflow.Get[int](output, workflow.Output("right")); err != nil || right != 11 {
+	if right, err := output.Get[int](workflow.Output("right")); err != nil || right != 11 {
 		t.Fatalf("right = %v, %v; want 11", right, err)
 	}
 	description := workflow.Describe(workflow.Subgraph(workflow.SubgraphConfig{
@@ -169,10 +169,10 @@ func TestSubgraph_resumeReplaysInnerBodyAcrossJSONRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	if value, getErr := workflow.Get[string](resumed, workflow.Output("approval")); getErr != nil || value != "yes" {
+	if value, getErr := resumed.Get[string](workflow.Output("approval")); getErr != nil || value != "yes" {
 		t.Fatalf("approval = %v, %v; want yes", value, getErr)
 	}
-	if value, getErr := workflow.Get[string](resumed, workflow.Output("keep")); getErr != nil || value != "outer" {
+	if value, getErr := resumed.Get[string](workflow.Output("keep")); getErr != nil || value != "outer" {
 		t.Fatalf("outer value = %v, %v; want outer", value, getErr)
 	}
 }
@@ -314,6 +314,9 @@ func TestSubgraph_locatesOrdinaryBodyFailuresAtItsSealedBoundary(t *testing.T) {
 		!slices.Equal(bodyErr.Scope, ordinaryScope("instance")) {
 		t.Fatalf("inner error = %v; want work StepError in instance scope", boundaryErr.Err)
 	}
+	if count := strings.Count(err.Error(), "workflow:"); count != 1 {
+		t.Fatalf("Run error names workflow %d times, want once: %v", count, err)
+	}
 }
 
 func TestSubgraph_preservesSuspensionIdentity(t *testing.T) {
@@ -413,7 +416,7 @@ func TestSubgraph_acceptsGuaranteedVisibleOutputs(t *testing.T) {
 			t.Context(),
 			workflow.NewStore().WithOutput("outer", 7),
 		)
-		if value, getErr := workflow.Get[int](output, workflow.Output("sub")); err != nil || getErr != nil || value != 7 {
+		if value, getErr := output.Get[int](workflow.Output("sub")); err != nil || getErr != nil || value != 7 {
 			t.Fatalf("Run = %d, %v, Get = %v; want 7, nil, nil", value, err, getErr)
 		}
 	})
@@ -438,7 +441,7 @@ func TestSubgraph_acceptsGuaranteedVisibleOutputs(t *testing.T) {
 			ID: "sub", Body: body, BodyOutput: workflow.Output("result"),
 		})
 		output, err := step.Run(t.Context(), workflow.NewStore())
-		if value, getErr := workflow.Get[int](output, workflow.Output("sub")); err != nil || getErr != nil || value != 1 {
+		if value, getErr := output.Get[int](workflow.Output("sub")); err != nil || getErr != nil || value != 1 {
 			t.Fatalf("Run = %d, %v, Get = %v; want 1, nil, nil", value, err, getErr)
 		}
 	})
@@ -633,7 +636,7 @@ func TestSubgraphFactory_makesBoundaryVisibleToGraphValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if value, getErr := workflow.Get[int](output, workflow.Output("sub")); getErr != nil || value != 6 {
+	if value, getErr := output.Get[int](workflow.Output("sub")); getErr != nil || value != 6 {
 		t.Fatalf("sub = %v, %v; want 6", value, getErr)
 	}
 
@@ -696,7 +699,7 @@ func TestCompiledGraph_withSubgraphIsSafeForConcurrentReuse(t *testing.T) {
 				errs <- err
 				return
 			}
-			value, err := workflow.Get[int](output, workflow.Output("sub"))
+			value, err := output.Get[int](workflow.Output("sub"))
 			if err != nil {
 				errs <- err
 				return
@@ -741,7 +744,7 @@ func TestCompileSpecJSON_subgraph(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if value, getErr := workflow.Get[int](output, workflow.Output("sub")); getErr != nil || value != 8 {
+	if value, getErr := output.Get[int](workflow.Output("sub")); getErr != nil || value != 8 {
 		t.Fatalf("sub = %v, %v; want 8", value, getErr)
 	}
 }

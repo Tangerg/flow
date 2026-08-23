@@ -106,7 +106,7 @@ func Example_resume() {
 		fmt.Println("error:", runErr)
 		return
 	}
-	result, runErr := workflow.Get[string](finished, workflow.Output("publish"))
+	result, runErr := finished.Get[string](workflow.Output("publish"))
 	if runErr != nil {
 		fmt.Println("error:", runErr)
 		return

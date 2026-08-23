@@ -19,7 +19,7 @@ import (
 // counting returns a leaf that adds n to its input and counts how often it ran,
 // so a test can tell replayed work from repeated work.
 func counting(runs *atomic.Int64, id, from string, n int) workflow.Step {
-	return workflow.Leaf(id, workflow.From[int](workflow.Output(from)),
+	return workflow.Leaf(id, workflow.Output(from).Bind[int](),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
 			runs.Add(1)
 			return x + n, nil
@@ -96,7 +96,7 @@ func TestSuspend_sequenceResumesWithoutRepeatingWork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resumed run: %v", err)
 	}
-	if got, err := workflow.Get[int](final, workflow.Output("b")); err != nil || got != 12 {
+	if got, err := final.Get[int](workflow.Output("b")); err != nil || got != 12 {
 		t.Fatalf("b = %v, %v; want 12", got, err)
 	}
 	if aRuns.Load() != 1 {
@@ -112,7 +112,7 @@ func TestSuspend_structuredLeafValueCanBeResolved(t *testing.T) {
 		Document string   `json:"document"`
 		Actions  []string `json:"actions"`
 	}
-	approval := workflow.Leaf("approval", workflow.From[string](workflow.Output("document")),
+	approval := workflow.Leaf("approval", workflow.Output("document").Bind[string](),
 		flow.NodeFunc[string, bool](func(_ context.Context, document string) (bool, error) {
 			return false, workflow.Suspend(approvalRequest{
 				Document: document,
@@ -140,7 +140,7 @@ func TestSuspend_structuredLeafValueCanBeResolved(t *testing.T) {
 	if runErr != nil {
 		t.Fatalf("resume: %v", runErr)
 	}
-	if approved, err := workflow.Get[bool](out, workflow.Output("approval")); err != nil || !approved {
+	if approved, err := out.Get[bool](workflow.Output("approval")); err != nil || !approved {
 		t.Fatalf("approval = %v, %v; want true", approved, err)
 	}
 }
@@ -195,7 +195,7 @@ func TestInterrupt_resumesAsARecordedStepOutput(t *testing.T) {
 		Question: "publish?",
 		Actions:  []string{"approve", "reject"},
 	})
-	after := workflow.Leaf("after", workflow.From[bool](workflow.Output("approval")),
+	after := workflow.Leaf("after", workflow.Output("approval").Bind[bool](),
 		flow.NodeFunc[bool, string](func(_ context.Context, approved bool) (string, error) {
 			afterRuns.Add(1)
 			return strconv.FormatBool(approved), nil
@@ -241,10 +241,10 @@ func TestInterrupt_resumesAsARecordedStepOutput(t *testing.T) {
 	if runErr != nil {
 		t.Fatalf("resumed run: %v", runErr)
 	}
-	if approved, err := workflow.Get[bool](out, workflow.Output("approval")); err != nil || !approved {
+	if approved, err := out.Get[bool](workflow.Output("approval")); err != nil || !approved {
 		t.Fatalf("approval = %v, %v; want true", approved, err)
 	}
-	if result, err := workflow.Get[string](out, workflow.Output("after")); err != nil || result != "true" {
+	if result, err := out.Get[string](workflow.Output("after")); err != nil || result != "true" {
 		t.Fatalf("after = %q, %v; want true", result, err)
 	}
 	if beforeRuns.Load() != 1 || afterRuns.Load() != 1 {
@@ -295,7 +295,7 @@ func TestInterrupt_resolvesRepeatedScopesIndependently(t *testing.T) {
 	if runErr != nil {
 		t.Fatalf("final run: %v", runErr)
 	}
-	got, runErr := workflow.Get[[]bool](out, workflow.Output("items"))
+	got, runErr := out.Get[[]bool](workflow.Output("items"))
 	if runErr != nil || !slices.Equal(got, []bool{true, false, true}) {
 		t.Fatalf("items = %v, %v; want [true false true]", got, runErr)
 	}
@@ -378,7 +378,7 @@ func TestSuspend_journalAloneIsEnoughToResume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resumed run: %v", err)
 	}
-	if got, err := workflow.Get[int](final, workflow.Output("b")); err != nil || got != 12 {
+	if got, err := final.Get[int](workflow.Output("b")); err != nil || got != 12 {
 		t.Fatalf("b = %v, %v; want 12", got, err)
 	}
 	if aRuns.Load() != 1 {
@@ -393,13 +393,13 @@ func TestSuspend_durableResumeAcrossSerialization(t *testing.T) {
 	}
 
 	var draftRuns, publishRuns atomic.Int64
-	draft := workflow.Leaf("draft", workflow.From[int](workflow.Output("start")),
+	draft := workflow.Leaf("draft", workflow.Output("start").Bind[int](),
 		flow.NodeFunc[int, report](func(_ context.Context, seed int) (report, error) {
 			draftRuns.Add(1)
 			return report{Title: "draft", Score: seed * 2}, nil
 		}))
 	// A typed read of a struct is exactly what a naive Store round trip breaks.
-	publish := workflow.Leaf("publish", workflow.From[report](workflow.Output("draft")),
+	publish := workflow.Leaf("publish", workflow.Output("draft").Bind[report](),
 		flow.NodeFunc[report, string](func(_ context.Context, r report) (string, error) {
 			publishRuns.Add(1)
 			return r.Title + ":" + strconv.Itoa(r.Score), nil
@@ -435,7 +435,7 @@ func TestSuspend_durableResumeAcrossSerialization(t *testing.T) {
 	if runErr != nil {
 		t.Fatalf("resumed run: %v", runErr)
 	}
-	if got, err := workflow.Get[string](final, workflow.Output("publish")); err != nil || got != "draft:42" {
+	if got, err := final.Get[string](workflow.Output("publish")); err != nil || got != "draft:42" {
 		t.Fatalf("publish = %q, %v; want draft:42", got, err)
 	}
 	if draftRuns.Load() != 1 {
@@ -462,7 +462,7 @@ func TestSuspend_parallelLetsSiblingsFinish(t *testing.T) {
 	if slowRuns.Load() != 1 {
 		t.Fatalf("sibling ran %d times; want 1 — it was cancelled", slowRuns.Load())
 	}
-	if got, err := workflow.Get[int](out, workflow.Output("slow")); err != nil || got != 2 {
+	if got, err := out.Get[int](workflow.Output("slow")); err != nil || got != 2 {
 		t.Fatalf("completed branch missing from the merged Store: %v, %v", got, err)
 	}
 
@@ -474,7 +474,7 @@ func TestSuspend_parallelLetsSiblingsFinish(t *testing.T) {
 	if slowRuns.Load() != 1 {
 		t.Fatalf("sibling ran %d times in total; want 1", slowRuns.Load())
 	}
-	if _, err := workflow.Get[int](final, workflow.Output("slow")); err != nil {
+	if _, err := final.Get[int](workflow.Output("slow")); err != nil {
 		t.Fatalf("resumed Store lost the sibling's output: %v", err)
 	}
 }
@@ -534,7 +534,7 @@ func TestSuspend_nestedParallelPreservesSuspensionsAndCompletedWork(t *testing.T
 	if !slices.Equal(ids, []string{"a", "b", "c"}) {
 		t.Fatalf("suspended IDs = %v; want every nested wait", ids)
 	}
-	if got, getErr := workflow.Get[int](out, workflow.Output("done")); getErr != nil || got != 1 {
+	if got, getErr := out.Get[int](workflow.Output("done")); getErr != nil || got != 1 {
 		t.Fatalf("completed nested branch = %v, %v; want 1", got, getErr)
 	}
 }
@@ -624,13 +624,13 @@ func TestSuspend_iterationResumesElementByElement(t *testing.T) {
 	// Every element doubles its item, but element 1 waits for approval.
 	var runs atomic.Int64
 	body := workflow.Sequence(
-		workflow.Leaf("double", workflow.From[int](workflow.Item("iter")),
+		workflow.Leaf("double", workflow.Item("iter").Bind[int](),
 			flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) {
 				runs.Add(1)
 				return x * 2, nil
 			})),
 		workflow.Leaf("check", workflow.BinderFunc[int](func(s workflow.Store) (int, error) {
-			index, err := workflow.Get[int](s, workflow.ItemIndex("iter"))
+			index, err := s.Get[int](workflow.ItemIndex("iter"))
 			if err != nil {
 				return 0, err
 			}
@@ -639,7 +639,7 @@ func TestSuspend_iterationResumesElementByElement(t *testing.T) {
 					return 0, workflow.Suspend("element 1 needs approval")
 				}
 			}
-			return workflow.Get[int](s, workflow.Output("double"))
+			return s.Get[int](workflow.Output("double"))
 		}), flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil })),
 	)
 	step := workflow.Iteration(workflow.IterationConfig{
@@ -677,13 +677,13 @@ func TestSuspend_iterationResumesElementByElement(t *testing.T) {
 	if runs.Load() != 3 {
 		t.Fatalf("body ran %d times in total; want 3", runs.Load())
 	}
-	got, err := workflow.Get[[]any](final, workflow.Output("iter"))
+	got, err := final.Get[[]any](workflow.Output("iter"))
 	if err != nil {
 		t.Fatalf("collected: %v", err)
 	}
 	want := []any{2, 4, 6}
 	for i := range want {
-		if v, _ := workflow.Get[int](final, workflow.At("iter", "output", strconv.Itoa(i))); v != want[i] {
+		if v, _ := final.Get[int](workflow.At("iter", "output", strconv.Itoa(i))); v != want[i] {
 			t.Fatalf("collected = %v; want %v", got, want)
 		}
 	}
@@ -691,7 +691,7 @@ func TestSuspend_iterationResumesElementByElement(t *testing.T) {
 
 func TestSuspend_iterationWritesNoPartialCollection(t *testing.T) {
 	body := workflow.Leaf("el", workflow.BinderFunc[int](func(s workflow.Store) (int, error) {
-		index, err := workflow.Get[int](s, workflow.ItemIndex("iter"))
+		index, err := s.Get[int](workflow.ItemIndex("iter"))
 		if err != nil {
 			return 0, err
 		}
@@ -719,7 +719,7 @@ func TestSuspend_iterationWritesNoPartialCollection(t *testing.T) {
 func TestSuspend_loopResumesAtTheWaitingIteration(t *testing.T) {
 	var runs atomic.Int64
 	body := workflow.Leaf("tick", workflow.BinderFunc[int](func(s workflow.Store) (int, error) {
-		current, err := workflow.Get[int](s, workflow.Output("tick"))
+		current, err := s.Get[int](workflow.Output("tick"))
 		if err != nil {
 			current = 0
 		}
@@ -734,7 +734,7 @@ func TestSuspend_loopResumesAtTheWaitingIteration(t *testing.T) {
 		return x + 1, nil
 	}))
 	done := flow.NodeFunc[workflow.Store, bool](func(_ context.Context, s workflow.Store) (bool, error) {
-		v, err := workflow.Get[int](s, workflow.Output("tick"))
+		v, err := s.Get[int](workflow.Output("tick"))
 		return err == nil && v >= 4, nil
 	})
 
@@ -760,7 +760,7 @@ func TestSuspend_loopResumesAtTheWaitingIteration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resumed run: %v", err)
 	}
-	if got, err := workflow.Get[int](final, workflow.Output("tick")); err != nil || got != 4 {
+	if got, err := final.Get[int](workflow.Output("tick")); err != nil || got != 4 {
 		t.Fatalf("tick = %v, %v; want 4", got, err)
 	}
 	// The completed iterations replayed from the journal instead of re-running.
@@ -778,7 +778,7 @@ func TestSuspend_awaitPassesThroughOnceSatisfied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Await: %v", err)
 	}
-	if got, err := workflow.Get[string](out, workflow.At("inbox", "decision")); err != nil || got != "approve" {
+	if got, err := out.Get[string](workflow.At("inbox", "decision")); err != nil || got != "approve" {
 		t.Fatalf("Await altered the Store: %v, %v", got, err)
 	}
 	if description := workflow.Describe(gate); description.Kind != workflow.KindAwait || description.ID != "gate" {
@@ -821,7 +821,7 @@ func TestAwait_reportsTheWaitItRaisedAndTheStoreItLetThrough(t *testing.T) {
 	if len(events) != 1 || events[0].Kind != workflow.EventCompleted || events[0].ID != "gate" {
 		t.Fatalf("events = %+v; want one completed event named gate", events)
 	}
-	approved, getErr := workflow.Get[bool](events[0].Store, workflow.Output("approval"))
+	approved, getErr := events[0].Store.Get[bool](workflow.Output("approval"))
 	if getErr != nil || !approved {
 		t.Fatalf("completed event Store = %v, %v; want the Store the wait let through", approved, getErr)
 	}
@@ -1190,6 +1190,27 @@ func TestSuspensions_walksDeepLinearWrappingWithoutRecursiveStackGrowth(t *testi
 	}
 }
 
+// Unwrap() []error is as much a standard error shape as linear wrapping. A
+// caller can produce a deep join tree without crossing any workflow nesting
+// boundary, so classifying it must not spend one call frame per branch level.
+func TestSuspensions_walksDeepBranchedWrappingWithoutRecursiveStackGrowth(t *testing.T) {
+	withBoundedStack(t, func() {
+		const depth = 20_000
+		var err error = &workflow.Suspension{ID: "wait", Value: "ready"}
+		for range depth {
+			err = errorChildren{err}
+		}
+
+		waits := workflow.Suspensions(err)
+		if len(waits) != 1 || waits[0].ID != "wait" || waits[0].Value != "ready" {
+			t.Fatalf("Suspensions = %+v; want the suspension below %d branches", waits, depth)
+		}
+		if !workflow.SuspendedOnly(err) {
+			t.Fatalf("SuspendedOnly returned false below %d branches", depth)
+		}
+	})
+}
+
 func TestSuspendedOnly_classifiesTheWholeErrorTree(t *testing.T) {
 	first := &workflow.Suspension{ID: "a", Value: "first"}
 	second := &workflow.Suspension{ID: "b", Value: "second"}
@@ -1257,6 +1278,22 @@ func TestValidationErrorsCannotBecomeSuspensions(t *testing.T) {
 		})
 	}
 
+	t.Run("wrapper identity", func(t *testing.T) {
+		calls := 0
+		_, err := workflow.Run(
+			t.Context(),
+			invalidValidatingStep{
+				err: markedSuspensionWrapper{
+					child: errors.New("ordinary child does not erase wrapper identity"),
+				},
+				calls: &calls,
+			},
+			workflow.NewStore(),
+			workflow.RunConfig{},
+		)
+		assertInvalid(t, err, calls)
+	})
+
 	t.Run("leaf binder", func(t *testing.T) {
 		calls := 0
 		step := workflow.Leaf(
@@ -1272,6 +1309,13 @@ func TestValidationErrorsCannotBecomeSuspensions(t *testing.T) {
 		)
 		_, err := step.Run(t.Context(), workflow.NewStore())
 		assertInvalid(t, err, calls)
+		var stepErr *workflow.StepError
+		if !errors.As(err, &stepErr) || stepErr.ID != "leaf" || stepErr.Op != workflow.OpValidate {
+			t.Fatalf("error = %v; want leaf validation StepError", err)
+		}
+		if count := strings.Count(err.Error(), "workflow:"); count != 1 {
+			t.Fatalf("error names workflow %d times: %v", count, err)
+		}
 	})
 
 	t.Run("registered resolver", func(t *testing.T) {
@@ -1305,6 +1349,33 @@ func TestValidationErrorsCannotBecomeSuspensions(t *testing.T) {
 			Inputs: workflow.OneInput(workflow.Output("seed")),
 		})
 		assertInvalid(t, err, calls)
+	})
+}
+
+// Definition errors come from application validators and therefore need not
+// obey workflow definition depth. Detecting a suspension in such an error tree
+// uses an iterative matcher with [errors.Is] semantics rather than its recursive
+// multi-error walk.
+func TestValidationClassifiesDeepBranchedSuspensionWithoutStackPerWrapper(t *testing.T) {
+	withBoundedStack(t, func() {
+		validationErr := workflow.Suspend("validation cannot wait")
+		for range 20_000 {
+			validationErr = errorChildren{validationErr}
+		}
+
+		calls := 0
+		_, err := workflow.Run(
+			context.Background(),
+			invalidValidatingStep{err: validationErr, calls: &calls},
+			workflow.NewStore(),
+			workflow.RunConfig{},
+		)
+		if !errors.Is(err, flow.ErrInvalidConfig) || errors.Is(err, workflow.ErrSuspended) {
+			t.Fatalf("Run error = %v; want non-suspending invalid config", err)
+		}
+		if calls != 0 {
+			t.Fatalf("invalid step ran %d times; want 0", calls)
+		}
 	})
 }
 
@@ -1394,7 +1465,7 @@ func TestSuspension_nilKey(t *testing.T) {
 
 func TestSuspend_eventsReportTheThirdOutcome(t *testing.T) {
 	pipeline := workflow.Sequence(
-		workflow.Leaf("a", workflow.From[int](workflow.Output("start")),
+		workflow.Leaf("a", workflow.Output("start").Bind[int](),
 			flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil })),
 		workflow.Await("gate", workflow.Output("approval")),
 	)
@@ -1452,13 +1523,13 @@ func TestInterrupt_eventsReportSuspensionThenReplay(t *testing.T) {
 		events[0].Err != nil || events[0].ID != "approval" {
 		t.Fatalf("resumed events = %+v; want one skipped event named approval", events)
 	}
-	if approved, err := workflow.Get[bool](out, workflow.Output("approval")); err != nil || !approved {
+	if approved, err := out.Get[bool](workflow.Output("approval")); err != nil || !approved {
 		t.Fatalf("approval = %v, %v; want true", approved, err)
 	}
 	// A replayed wait produces its recorded answer without running anything, so
 	// the event's Store is the only place an observer can see the value the
 	// resumed run continued with.
-	if replayed, err := workflow.Get[bool](events[0].Store, workflow.Output("approval")); err != nil || !replayed {
+	if replayed, err := events[0].Store.Get[bool](workflow.Output("approval")); err != nil || !replayed {
 		t.Fatalf("skipped event Store = %v, %v; want the replayed answer", replayed, err)
 	}
 }
@@ -1494,7 +1565,7 @@ func TestSuspend_branchDecisionIsJournaled(t *testing.T) {
 	if !errors.Is(runErr, workflow.ErrSuspended) {
 		t.Fatalf("first run err = %v; want ErrSuspended", runErr)
 	}
-	if got, err := workflow.Get[string](paused, workflow.Output("out")); err != nil || got != "first" {
+	if got, err := paused.Get[string](workflow.Output("out")); err != nil || got != "first" {
 		t.Fatalf("first run took %q, %v; want first", got, err)
 	}
 
@@ -1502,7 +1573,7 @@ func TestSuspend_branchDecisionIsJournaled(t *testing.T) {
 	if runErr != nil {
 		t.Fatalf("resumed run: %v", runErr)
 	}
-	if got, err := workflow.Get[string](final, workflow.Output("out")); err != nil || got != "first" {
+	if got, err := final.Get[string](workflow.Output("out")); err != nil || got != "first" {
 		t.Fatalf("resumed run took %q; want the journaled branch first", got)
 	}
 	// The resolver was not consulted again, which also saves the second call.
@@ -1515,7 +1586,7 @@ func TestSuspend_branchDecisionIsJournaled(t *testing.T) {
 func TestSuspend_loopDecisionIsJournaled(t *testing.T) {
 	var checks atomic.Int64
 	body := workflow.Leaf("tick", workflow.BinderFunc[int](func(s workflow.Store) (int, error) {
-		v, err := workflow.Get[int](s, workflow.Output("tick"))
+		v, err := s.Get[int](workflow.Output("tick"))
 		if err != nil {
 			return 0, nil
 		}

@@ -143,41 +143,98 @@ func (s suspensionTree) suspensions() (suspensionList, bool) {
 
 // collect walks both forms supported by the standard error tree:
 // Unwrap() error and Unwrap() []error. It returns copies so identifying a wait
-// at a workflow boundary never mutates an error owned by its caller.
+// at a workflow boundary never mutates an error owned by its caller. The
+// explicit worklist makes both linear wrapping and nested joins stack-safe;
+// application error trees do not cross a workflow nesting boundary first.
 func (s suspensionTree) collect() (suspensionList, bool) {
-	for s.err != nil {
-		err := s.err
+	collector := suspensionCollector{
+		pending:         []error{s.err},
+		onlySuspensions: true,
+	}
+	return collector.collect()
+}
+
+// suspensionCollector owns the mutable state of one iterative error-tree walk.
+// pending holds unexplored join branches; a linear wrapper chain never enters
+// it and is collapsed in place.
+type suspensionCollector struct {
+	pending         []error
+	suspensions     suspensionList
+	leaves          int
+	onlySuspensions bool
+}
+
+func (s *suspensionCollector) collect() (suspensionList, bool) {
+	for len(s.pending) > 0 {
+		last := len(s.pending) - 1
+		err := s.pending[last]
+		s.pending = s.pending[:last]
+		if err != nil {
+			s.collectChain(err)
+		}
+	}
+	return s.suspensions, s.leaves > 0 && s.onlySuspensions
+}
+
+func (s *suspensionCollector) collectChain(err error) {
+	for {
 		if wait, ok := waitAt(err); ok {
-			return wait, true
+			s.accept(wait, true)
+			return
 		}
 		if many, ok := err.(interface{ Unwrap() []error }); ok {
-			children := many.Unwrap()
-			if slices.ContainsFunc(children, func(err error) bool { return err != nil }) {
-				return collectBranches(children)
+			if s.push(many.Unwrap()) {
+				return
 			}
-			return s.collectIdentity()
+			s.acceptIdentity(err)
+			return
 		}
-		if one, ok := err.(interface{ Unwrap() error }); ok {
-			child := one.Unwrap()
-			if child == nil {
-				return s.collectIdentity()
-			}
-			// Exact identity distinguishes a wrapper directly around ErrSuspended
-			// from a wrapper whose deeper tree merely contains one.
-			//
-			//nolint:errorlint // [errors.Is] cannot tell those shapes apart.
-			if child == ErrSuspended {
-				return suspensionList{{Value: err.Error()}}, true
-			}
-			// Match the standard errors traversal: a linear chain is a loop, while
-			// recursion is reserved for the branches of Unwrap() []error. Besides
-			// using less stack, this keeps ordinary wrapping the simpler case.
-			s.err = child
+		one, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			s.acceptIdentity(err)
+			return
+		}
+		child := one.Unwrap()
+		if child == nil {
+			s.acceptIdentity(err)
+			return
+		}
+		// Exact identity distinguishes a wrapper directly around ErrSuspended
+		// from a wrapper whose deeper tree merely contains one.
+		//
+		//nolint:errorlint // [errors.Is] cannot tell those shapes apart.
+		if child == ErrSuspended {
+			s.accept(suspensionList{{Value: err.Error()}}, true)
+			return
+		}
+		err = child
+	}
+}
+
+// push schedules non-nil children in the order a depth-first walk will pop
+// them. It reports whether the multi-error had any child to traverse; a value
+// exposing only nil children is itself an error leaf.
+func (s *suspensionCollector) push(children []error) bool {
+	count := 0
+	for _, child := range slices.Backward(children) {
+		if child == nil {
 			continue
 		}
-		return s.collectIdentity()
+		s.pending = append(s.pending, child)
+		count++
 	}
-	return nil, false
+	return count > 0
+}
+
+func (s *suspensionCollector) acceptIdentity(err error) {
+	found, only := suspensionIdentity(err)
+	s.accept(found, only)
+}
+
+func (s *suspensionCollector) accept(found suspensionList, only bool) {
+	s.suspensions = append(s.suspensions, found...)
+	s.leaves++
+	s.onlySuspensions = s.onlySuspensions && only
 }
 
 // waitAt reports the wait one error node already is, before anything unwraps it.
@@ -205,35 +262,15 @@ func waitAt(err error) (suspensionList, bool) {
 	return nil, false
 }
 
-// collectIdentity handles a leaf that participates in [errors.Is] without being
-// a Suspension value. An error exposing only nil children is still a leaf:
-// [errors.Is] checks its Is method before consulting Unwrap, so classification
-// must preserve the same meaning.
-func (s suspensionTree) collectIdentity() (suspensionList, bool) {
-	if errors.Is(s.err, ErrSuspended) {
-		return suspensionList{{Value: s.err.Error()}}, true
+// suspensionIdentity handles a leaf that participates in [errors.Is] without
+// being a Suspension value. An error exposing only nil children is still a
+// leaf: [errors.Is] checks its Is method before consulting Unwrap, so
+// classification must preserve the same meaning.
+func suspensionIdentity(err error) (suspensionList, bool) {
+	if errors.Is(err, ErrSuspended) {
+		return suspensionList{{Value: err.Error()}}, true
 	}
 	return nil, false
-}
-
-// collectBranches classifies the branches of an Unwrap() []error. It is not a
-// method on [suspensionTree] because none of these errors is the tree it would be
-// given: each branch is a tree of its own, and the answer is whether every one of
-// them is a wait.
-func collectBranches(children []error) (suspensionList, bool) {
-	var suspensions suspensionList
-	onlySuspensions := true
-	childCount := 0
-	for _, child := range children {
-		if child == nil {
-			continue
-		}
-		childCount++
-		found, childOnly := (suspensionTree{err: child}).collect()
-		suspensions = append(suspensions, found...)
-		onlySuspensions = onlySuspensions && childOnly
-	}
-	return suspensions, childCount > 0 && onlySuspensions
 }
 
 type suspensionList []*Suspension

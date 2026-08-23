@@ -183,9 +183,12 @@ func (c compiledGate) selectOutlet(
 	if runFrom(ctx).wasBypassed(boundaryKey(ctx, c.NodeID)) {
 		return routingSelection{bypassed: true}, nil
 	}
-	selected, err := Get[string](store, Output(c.NodeID))
+	selected, err := store.Get[string](Output(c.NodeID))
 	if err != nil {
-		return routingSelection{}, fmt.Errorf("read routing node %q: %w", c.NodeID, err)
+		return routingSelection{}, &detailError{
+			detail: fmt.Sprintf("read routing node %q", c.NodeID),
+			err:    err,
+		}
 	}
 	// A gate is durable control flow, so compare the same JSON-domain string on
 	// a fresh run and after Journal replay. Get intentionally preserves an exact

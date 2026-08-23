@@ -167,7 +167,7 @@ func (l *loopExecution) stop(ctx context.Context, s Store) (bool, error) {
 	if err := l.run.claim(boundaryKey(ctx, l.loop.config.ID)); err != nil {
 		return false, newStepError(ctx, l.loop.config.ID, OpValidate, err)
 	}
-	recorded, replayed, err := replayDecision[bool](ctx, l.run, KindLoop, l.loop.config.ID)
+	recorded, replayed, err := l.run.replayDecision[bool](ctx, KindLoop, l.loop.config.ID)
 	if err != nil {
 		return false, err
 	}

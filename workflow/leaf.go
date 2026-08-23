@@ -55,18 +55,18 @@ func isNilBinder[I any](binder Binder[I]) bool {
 	return ok && function == nil
 }
 
-// From returns a Binder that reads a value of type I from ref. Leaf validates
-// ref before Journal replay, so a completed record cannot hide a malformed
-// built-in binding definition.
-func From[I any](ref Ref) Binder[I] {
-	return refBinder[I]{ref: ref}
+// Bind returns a Binder that reads r as an I from the Store supplied to the
+// enclosing Leaf. Leaf validates r before Journal replay, so a completed record
+// cannot hide a malformed built-in binding definition.
+func (r Ref) Bind[I any]() Binder[I] {
+	return refBinder[I]{ref: r}
 }
 
 type refBinder[I any] struct {
 	ref Ref
 }
 
-func (r refBinder[I]) Bind(store Store) (I, error) { return Get[I](store, r.ref) }
+func (r refBinder[I]) Bind(store Store) (I, error) { return store.Get[I](r.ref) }
 
 func (r refBinder[I]) Validate() error { return r.ref.Validate() }
 
@@ -89,7 +89,7 @@ type firstBinder[I any] struct {
 
 func (f firstBinder[I]) Bind(store Store) (I, error) {
 	for _, ref := range f.refs {
-		value, err := Get[I](store, ref)
+		value, err := store.Get[I](ref)
 		if err == nil {
 			return value, nil
 		}
@@ -121,7 +121,7 @@ func (f firstBinder[I]) Validate() error {
 //
 // This is the prep/exec/post split: bind reads the Store, node computes, and the
 // Step writes back. The node itself stays free of Store knowledge and remains
-// independently testable. Use [From] and [FirstOf] for bindings the workflow
+// independently testable. Use [Ref.Bind] and [FirstOf] for bindings the workflow
 // can validate before replay; adapt application-defined binding functions with
 // [BinderFunc]. id must be non-empty, valid UTF-8, and unique among steps
 // that can run in the same execution scope. A policy that may invoke work more
@@ -140,13 +140,14 @@ func Leaf[I, O any](id string, bind Binder[I], node flow.Node[I, O]) Step {
 }
 
 // LeafFunc lifts an ordinary function into a [Step] that reads its input from
-// ref. It is the concise form of combining [Leaf], [From], and [flow.NodeFunc].
+// ref. It is the concise form of combining [Leaf], [Ref.Bind], and
+// [flow.NodeFunc].
 func LeafFunc[I, O any](
 	id string,
 	ref Ref,
 	fn func(context.Context, I) (O, error),
 ) Step {
-	return Leaf(id, From[I](ref), flow.NodeFunc[I, O](fn))
+	return Leaf(id, ref.Bind[I](), flow.NodeFunc[I, O](fn))
 }
 
 // leafStep is the [Step] produced by [Leaf].
@@ -157,6 +158,7 @@ type leafStep[I, O any] struct {
 }
 
 func (l leafStep[I, O]) Run(ctx context.Context, store Store) (Store, error) {
+	ctx = ensureRun(ctx)
 	execution := leafExecution[I, O]{
 		leaf:  l,
 		store: store,
@@ -184,7 +186,7 @@ func (l leafStep[I, O]) validate() error {
 	if err := validateNode(l.node); err != nil {
 		return newValidationError(
 			l.id,
-			fmt.Errorf("node: %w", err))
+			&detailError{detail: "node", err: err})
 	}
 	return nil
 }

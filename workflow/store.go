@@ -26,9 +26,9 @@ import (
 // A Store can hold arbitrary Go values in memory, but only values with a
 // faithful JSON representation can be persisted and restored. A deserialized
 // Store holds JSON-domain values: [json.Number], string, bool, nil, []any, and
-// map[string]any. [Get] converts those values to the requested type, so a typed
-// step sees the same value before and after persistence when that type has a
-// faithful JSON round trip. A type with only a custom [json.Marshaler], for
+// map[string]any. [Store.Get] converts those values to the requested type, so a
+// typed step sees the same value before and after persistence when that type has
+// a faithful JSON round trip. A type with only a custom [json.Marshaler], for
 // example, must also define the corresponding decoding contract. [Store.Lookup]
 // does not convert: it returns whatever is stored, which after a round trip is
 // the JSON-domain value.
@@ -42,8 +42,6 @@ import (
 // Every method takes a value receiver so a Store cannot be mutated through a
 // copy. UnmarshalJSON is the one exception: [json.Unmarshaler] requires a pointer,
 // and replacing a Store wholesale is the only way to decode one.
-//
-//nolint:recvcheck // UnmarshalJSON must be a pointer method to satisfy [json.Unmarshaler].
 type Store struct {
 	snapshot *storeSnapshot
 	delta    *storeDelta
@@ -224,7 +222,7 @@ func (s Store) WithOutput(nodeID string, value any) Store {
 // bool reports whether the reference resolved. A whole-cell lookup returns the
 // stored Go value as-is; a nested lookup into a typed Go value returns the
 // corresponding JSON-domain value. If that conversion fails, Lookup reports an
-// unresolved reference; use [Get] when the error matters. Returned mutable
+// unresolved reference; use [Store.Get] when the error matters. Returned mutable
 // values are borrowed views and must not be mutated.
 func (s Store) Lookup(ref Ref) (any, bool) {
 	value, found, _ := s.resolve(ref)
@@ -257,14 +255,12 @@ func (s Store) resolve(ref Ref) (value any, found bool, err error) {
 }
 
 // Write records one Store write: the cell it landed in and the value it wrote.
+// Ref is the complete cell identity; Value is a borrowed view and must not be
+// mutated.
 type Write struct {
-	NodeID string
-	Key    string
-	Value  any
+	Ref   Ref
+	Value any
 }
-
-// Ref returns a reference to the written cell.
-func (w Write) Ref() Ref { return At(w.NodeID, w.Key) }
 
 // Changes returns the writes that distinguish s from base, oldest first, keeping
 // only the final write to each cell. It is the write set an audit log records;
@@ -278,7 +274,8 @@ func (w Write) Ref() Ref { return At(w.NodeID, w.Key) }
 // Change identity comes from Store lineage rather than value equality. If s is
 // unrelated to base — including a separately decoded snapshot — every cell in s
 // has a distinct write identity and is reported. Values are borrowed views and
-// must not be mutated.
+// must not be mutated; the returned slice and its Write values belong to the
+// caller.
 func (s Store) Changes(base Store) []Write {
 	changed := s.changesSince(base)
 	changes := make([]Write, 0, len(changed))
@@ -287,9 +284,8 @@ func (s Store) Changes(base Store) []Write {
 			continue
 		}
 		changes = append(changes, Write{
-			NodeID: change.key.nodeID,
-			Key:    change.key.key,
-			Value:  change.cell.value,
+			Ref:   At(change.key.nodeID, change.key.key),
+			Value: change.cell.value,
 		})
 	}
 	return changes
@@ -491,13 +487,19 @@ func (s storeKey) compare(other storeKey) int {
 }
 
 // applyOverlay replays the overlay in write order, so the newest write to a cell
-// lands last and wins. The chain runs newest first, so reaching the oldest write
-// means recursing before writing; [storeOverlayLimit] bounds the chain and the
-// recursion with it. A nil receiver is the empty overlay.
+// lands last and wins. The chain runs newest first, so the walk records it and
+// then iterates backward. A Store returned from this package has a bounded
+// overlay, but [Store.withChanges] may assemble an arbitrarily wide batch before
+// compacting it; spending one call frame per change there would turn Graph width
+// into recursion depth. The inline buffer keeps the ordinary bounded walk free
+// of heap allocation. A nil receiver is the empty overlay.
 func (d *storeDelta) applyOverlay(write func(storeKey, cell)) {
-	if d == nil {
-		return
+	var inline [storeOverlayLimit + 1]*storeDelta
+	overlay := inline[:0]
+	for ; d != nil; d = d.parent {
+		overlay = append(overlay, d)
 	}
-	d.parent.applyOverlay(write)
-	write(d.key, d.cell)
+	for _, delta := range slices.Backward(overlay) {
+		write(delta.key, delta.cell)
+	}
 }

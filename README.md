@@ -16,7 +16,7 @@ The library is in-process and explicit:
 
 ## Install
 
-`flow` requires Go 1.26 or newer.
+`flow` requires Go 1.27 or newer.
 
 ```sh
 go get github.com/Tangerg/flow
@@ -144,12 +144,12 @@ out, err := workflow.Sequence(clean, greet).Run(
 if err != nil {
 	return err
 }
-message, err := workflow.Get[string](out, workflow.Output("greet"))
+message, err := out.Get[string](workflow.Output("greet"))
 ```
 
 The lower-level `Leaf` keeps data preparation and computation separate:
 `Binder[I]` reads a typed input from the Store, and `flow.Node[I, O]` computes
-the output. `From` and `FirstOf` provide definition-aware binders; `BinderFunc`
+the output. `Ref.Bind` and `FirstOf` provide definition-aware binders; `BinderFunc`
 adapts an application function when binding is custom. A stateful custom Binder
 can join replay-safe definition checks with the same pure `Validate() error`
 method used by composite nodes; `Ref.Validate` supplies the canonical check for
@@ -161,7 +161,7 @@ can therefore be composed with `flow.Then` and passed unchanged to `Branch`,
 
 The Store is immutable and copy-on-write. Stored values are shared as-is, so
 treat maps, slices, pointers, and other mutable values as immutable after
-insertion. Prefer `workflow.Get[T]` for typed reads, including after a Store has
+insertion. Prefer `store.Get[T](ref)` for typed reads, including after a Store has
 been serialized and restored.
 
 Runtime definitions have two complementary forms:

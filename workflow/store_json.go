@@ -156,12 +156,12 @@ func (s storeJSONDocument) marshal() ([]byte, error) {
 //
 // Numbers decode as [json.Number] rather than float64, so a decoded Store loses
 // no precision and an int64 beyond float64's exact range survives the round
-// trip. Read decoded values with [Get], which converts them to the type a caller
+// trip. Read decoded values with [Store.Get], which converts them to the type a caller
 // asks for; a bare [Store.Lookup] returns the JSON-domain value. Decoded cells
 // receive fresh write identities, so [Store.Changes] against a Store from a
 // different lineage reports every decoded cell.
 func (s *Store) UnmarshalJSON(data []byte) error {
-	return decodeJSONInto(s, data, decodeStore, unmarshalError("store"))
+	return jsonDocument(data).decodeInto(s, decodeStore, unmarshalError("store"))
 }
 
 // decodeStore reads the strict document, each return naming only its own

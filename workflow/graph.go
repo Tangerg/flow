@@ -69,8 +69,6 @@ type GraphNode struct {
 // Treat Nodes and their maps, slices, and raw config as immutable while calling
 // Inputs, MissingInputs, Registry.ValidateGraph, or Registry.CompileGraph. A
 // compiled Step does not retain the Graph or any of those mutable values.
-//
-//nolint:recvcheck // UnmarshalJSON must be a pointer method to satisfy json.Unmarshaler.
 type Graph struct {
 	Nodes       []GraphNode `json:"nodes"`
 	Concurrency int         `json:"concurrency,omitempty"`
@@ -88,7 +86,7 @@ func (g Graph) MarshalJSON() ([]byte, error) {
 // the same JSON Schema, duplicate-member, Unicode, integer, unknown-field, and
 // nesting rules as [ValidateGraphJSON] and [Registry.CompileGraphJSON].
 func (g *Graph) UnmarshalJSON(data []byte) error {
-	return decodeJSONInto(g, data, decodeGraphDocument, graphJSONError)
+	return jsonDocument(data).decodeInto(g, decodeGraphDocument, graphJSONError)
 }
 
 // nodeIDs is the namespace the graph declares. A malformed graph still has one --
@@ -130,9 +128,10 @@ func (g Graph) Inputs() []Ref {
 }
 
 // MissingInputs returns the references from [Graph.Inputs] that [Store.Lookup]
-// does not resolve. The returned slice is a copy. An empty result means the Store satisfies every potential
-// external read. A non-empty result does not by itself prevent a run: a
-// conditional node that would read one of those references may be bypassed.
+// does not resolve. The returned slice is a fresh value the caller owns. An
+// empty result means the Store satisfies every potential external read. A
+// non-empty result does not by itself prevent a run: a conditional node that
+// would read one of those references may be bypassed.
 func (g Graph) MissingInputs(store Store) []Ref {
 	missing := make([]Ref, 0, len(g.Nodes))
 	for _, ref := range g.Inputs() {

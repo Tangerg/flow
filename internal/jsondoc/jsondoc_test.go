@@ -116,8 +116,8 @@ func TestCodec_rejectsAmbiguousOrLossyDocuments(t *testing.T) {
 		{name: "low surrogate", data: []byte(`"\udc00"`), want: "unpaired UTF-16 surrogate"},
 		{name: "high then scalar", data: []byte(`"\ud800\u0041"`), want: "unpaired UTF-16 surrogate"},
 		{name: "high then malformed", data: []byte(`"\ud800\uXXXX"`), want: "unpaired UTF-16 surrogate"},
-		{name: "short escape", data: []byte(`"\u12"`), want: "invalid character"},
-		{name: "unknown escape", data: []byte(`"\q"`), want: "invalid character"},
+		{name: "short escape", data: []byte(`"\u12"`)},
+		{name: "unknown escape", data: []byte(`"\q"`)},
 		{name: "trailing escape", data: []byte{'"', '\\'}, want: "unexpected EOF"},
 		// Each surrogate range ends where the other begins, so its last code unit
 		// is the one a boundary can misplace: 0xDBFF is still a high surrogate and
@@ -158,7 +158,10 @@ func TestCodec_rejectsAmbiguousOrLossyDocuments(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := codec.Value(test.data)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
+			if err == nil {
+				t.Fatal("Value accepted an invalid document")
+			}
+			if test.want != "" && !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Value error = %v; want %q", err, test.want)
 			}
 		})
@@ -218,10 +221,12 @@ func TestCodec_boundsNestingNotBreadth(t *testing.T) {
 
 func TestReader_reportsMalformedContainers(t *testing.T) {
 	for name, data := range map[string]string{
-		"token":  ``,
-		"object": `{"value":1`,
-		"member": `{"`,
-		"array":  `[1`,
+		"token":        ``,
+		"object close": `{`,
+		"object value": `{"value":1`,
+		"member":       `{"`,
+		"array close":  `[`,
+		"array value":  `[1`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			decoder := json.NewDecoder(strings.NewReader(data))

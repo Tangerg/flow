@@ -1,7 +1,6 @@
 package workflow
 
 import (
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -90,14 +89,16 @@ type definitionValidator struct {
 // composite's validation and turn a construction error into partial execution.
 func validateDefinition(step Step) error {
 	validator := definitionValidator{}
-	return normalizeDefinitionError("validation", validator.validate(step))
+	_, err := normalizeDefinitionError("validation", validator.validate(step))
+	return err
 }
 
 // validateNode is the only bridge from flow's generic validation convention to
 // workflow definition semantics. In particular, a workflow validator cannot
 // turn immutable definition inspection into a resumable run-time outcome.
 func validateNode[I, O any](node flow.Node[I, O]) error {
-	return normalizeDefinitionError("validation", flow.Validate(node))
+	_, err := normalizeDefinitionError("validation", flow.Validate(node))
+	return err
 }
 
 // validateBody checks what every named composite holding exactly one body
@@ -117,18 +118,32 @@ func validateBody(id string, body Step) error {
 // normalizeDefinitionError keeps every definition-construction extension point
 // on the same side of the execution boundary. Suspension is meaningful only
 // after a run has begun; a validator or factory returning one has produced an
-// invalid definition, not a resumable outcome. The original error is rendered
-// rather than wrapped so [errors.Is] cannot misclassify it as ErrSuspended.
-func normalizeDefinitionError(source string, err error) error {
-	if !errors.Is(err, ErrSuspended) {
-		return err
+// invalid definition, not a resumable outcome. The replacement does not wrap
+// the original, so error matching cannot misclassify it as ErrSuspended. A direct
+// StepError remains the location of the invalid definition; discarding it would
+// make a Binder validator the sole leaf validation path that loses ID and Op.
+func normalizeDefinitionError(source string, err error) (bool, error) {
+	if err == nil {
+		return false, nil
 	}
-	return fmt.Errorf(
-		"%w: %s returned a suspension: %s",
+	if !(errorTree{root: err}).matches(ErrSuspended) {
+		return false, err
+	}
+	invalid := fmt.Errorf(
+		"%w: %s returned a suspension",
 		flow.ErrInvalidConfig,
 		source,
-		err.Error(),
 	)
+	// Only a direct package-owned location can be preserved without changing an
+	// application-defined error tree merely because one of its causes suspends.
+	//
+	//nolint:errorlint // Exact wrapper identity is the ownership boundary.
+	if stepErr, ok := err.(*StepError); ok {
+		normalized := stepErr.clone()
+		normalized.Err = invalid
+		return true, normalized
+	}
+	return true, invalid
 }
 
 func (d *definitionValidator) validate(step Step) error {
@@ -306,8 +321,8 @@ func (o outputGuarantee) union(other outputGuarantee) outputGuarantee {
 	return outputGuarantee{nodes: nodes, known: true}
 }
 
-// intersection keeps outputs produced on either of two mutually exclusive
-// paths. Unknown is absorbing for the same reason as union.
+// intersection keeps only outputs produced on both mutually exclusive paths.
+// Unknown is absorbing for the same reason as union.
 func (o outputGuarantee) intersection(other outputGuarantee) outputGuarantee {
 	if !o.known || !other.known {
 		return outputGuarantee{}

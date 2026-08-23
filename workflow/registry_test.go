@@ -73,11 +73,11 @@ func TestCompileGraph_acceptsAFactoryThatReturnsAnIteration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got, err := workflow.Get[[]int](out, workflow.Output("each")); err != nil ||
+	if got, err := out.Get[[]int](workflow.Output("each")); err != nil ||
 		!slices.Equal(got, []int{2, 4, 6}) {
 		t.Fatalf("collected = %v, %v; want [2 4 6]", got, err)
 	}
-	if got, err := workflow.Get[int](out, workflow.Output("size")); err != nil || got != 3 {
+	if got, err := out.Get[int](workflow.Output("size")); err != nil || got != 3 {
 		t.Fatalf("size = %d, %v; want 3", got, err)
 	}
 }
@@ -96,7 +96,7 @@ func lateBoundNodeSpecFactory() workflow.NodeFactory {
 			if !ok {
 				return 0, fmt.Errorf("%w %q", workflow.ErrMissingPort, workflow.DefaultPort)
 			}
-			input, err := workflow.Get[int](store, ref)
+			input, err := store.Get[int](ref)
 			if err != nil {
 				return 0, err
 			}
@@ -145,7 +145,7 @@ func TestCompileSpec_ownsTheFactoryDefinitionSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if value, getErr := workflow.Get[int](out, workflow.Output("node")); getErr != nil || value != 11 {
+	if value, getErr := out.Get[int](workflow.Output("node")); getErr != nil || value != 11 {
 		t.Fatalf("node output = %d, %v; want 11, nil", value, getErr)
 	}
 	if _, ok := out.Lookup(workflow.Output("changed-node")); ok {
@@ -374,6 +374,91 @@ func TestRegistry_factorySuspensionIsAnInvalidDefinition(t *testing.T) {
 					t.Fatalf("CompileSpec error = %v; want non-suspending type error", err)
 				}
 			})
+		})
+	}
+}
+
+// A NodeFactory is application code, so its error tree has not crossed a
+// workflow depth boundary. Compilation must use the iterative definition-error
+// classifier rather than the recursive standard multi-error walk.
+func TestRegistry_factoryClassifiesDeepBranchedSuspensionWithoutStackPerWrapper(t *testing.T) {
+	withBoundedStack(t, func() {
+		factoryErr := workflow.Suspend("factory cannot wait")
+		for range 20_000 {
+			factoryErr = errorChildren{factoryErr}
+		}
+		registry := workflow.NewRegistry().MustRegisterNode(
+			"broken",
+			func(workflow.NodeSpec) (workflow.Step, error) { return nil, factoryErr },
+		)
+
+		_, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
+			ID: "node", Type: "broken",
+		}}})
+		var graphErr *workflow.GraphError
+		if !errors.Is(err, workflow.ErrInvalidGraph) ||
+			!errors.Is(err, flow.ErrInvalidConfig) ||
+			errors.Is(err, workflow.ErrSuspended) ||
+			!errors.As(err, &graphErr) || graphErr.Field != "type" {
+			t.Fatalf("CompileGraph error = %v; want non-suspending type error", err)
+		}
+	})
+}
+
+// Field attribution also inspects an arbitrary application error tree. A
+// factory category below deeply nested joins must retain its field without
+// making standard recursive matching part of compilation's stack usage.
+func TestRegistry_factoryClassifiesDeepBranchedCategoryWithoutStackPerWrapper(t *testing.T) {
+	withBoundedStack(t, func() {
+		factoryErr := flow.ErrNilFunc
+		for range 20_000 {
+			factoryErr = errorChildren{factoryErr}
+		}
+		registry := workflow.NewRegistry().MustRegisterNode(
+			"broken",
+			func(workflow.NodeSpec) (workflow.Step, error) { return nil, factoryErr },
+		)
+
+		_, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
+			ID: "node", Type: "broken",
+		}}})
+		var graphErr *workflow.GraphError
+		if !errors.As(err, &graphErr) || graphErr.Field != "type" {
+			t.Fatalf("CompileGraph error field = %q; want type", graphErr.Field)
+		}
+	})
+}
+
+func TestRegistry_factoryErrorFieldPriorityIsStableAcrossJoinedCauses(t *testing.T) {
+	tests := []struct {
+		name  string
+		err   error
+		field string
+	}{
+		{
+			name:  "input outranks nil construction",
+			err:   errors.Join(flow.ErrNilNode, workflow.ErrMissingPort),
+			field: "inputs",
+		},
+		{
+			name:  "registration outranks input",
+			err:   errors.Join(workflow.ErrMissingPort, workflow.ErrInvalidRegistration),
+			field: "type",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			registry := workflow.NewRegistry().MustRegisterNode(
+				"broken",
+				func(workflow.NodeSpec) (workflow.Step, error) { return nil, test.err },
+			)
+			_, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
+				ID: "node", Type: "broken",
+			}}})
+			var graphErr *workflow.GraphError
+			if !errors.As(err, &graphErr) || graphErr.Field != test.field {
+				t.Fatalf("CompileGraph error field = %q; want %q", graphErr.Field, test.field)
+			}
 		})
 	}
 }
@@ -1427,10 +1512,10 @@ func TestValidateSpec_iterationBodyIDsAreLocalToEachElement(t *testing.T) {
 	if compileErr != nil {
 		t.Fatalf("Run: %v", compileErr)
 	}
-	if got, err := workflow.Get[int](out, workflow.Output("value")); err != nil || got != 10 {
+	if got, err := out.Get[int](workflow.Output("value")); err != nil || got != 10 {
 		t.Fatalf("outer value = %v, %v; want 10", got, err)
 	}
-	items, compileErr := workflow.Get[[]int](out, workflow.Output("each"))
+	items, compileErr := out.Get[[]int](workflow.Output("each"))
 	if compileErr != nil || len(items) != 2 || items[0] != 2 || items[1] != 3 {
 		t.Fatalf("iteration output = %v, %v; want [2 3]", items, compileErr)
 	}
@@ -1522,7 +1607,7 @@ func TestRegistry_concurrentCompilationSharesOnlyImmutableRegistrations(t *testi
 				t.Errorf("Run: %v", err)
 				return
 			}
-			if value, err := workflow.Get[int](output, workflow.Output("add")); err != nil || value != 2 {
+			if value, err := output.Get[int](workflow.Output("add")); err != nil || value != 2 {
 				t.Errorf("output = %d, %v; want 2, nil", value, err)
 			}
 		})

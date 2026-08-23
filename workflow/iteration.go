@@ -41,7 +41,7 @@ type IterationConfig struct {
 
 // Iteration runs cfg.Body once per element of the array at cfg.Input,
 // concurrently, and collects each run's cfg.BodyOutput into a []any written at
-// Output(cfg.ID). Typed slices are accepted through [Get]'s JSON conversion.
+// Output(cfg.ID). Typed slices are accepted through [Store.Get]'s JSON conversion.
 //
 // For element i, Body inherits the outer Store and adds the element under
 // [Item](cfg.ID) and its index via [ItemIndex](cfg.ID). Scope isolates execution
@@ -104,7 +104,7 @@ func (i iterationStep) Run(ctx context.Context, s Store) (Store, error) {
 	if err := admitScopedStep(ctx, i.id, i.Validate()); err != nil {
 		return s, err
 	}
-	items, err := Get[[]any](s, i.input)
+	items, err := s.Get[[]any](i.input)
 	if contextErr := context.Cause(ctx); contextErr != nil {
 		return s, contextErr
 	}
@@ -191,7 +191,7 @@ func (i *iterationExecution) Run(ctx context.Context, index int) (elementOutcome
 		}
 		return elementOutcome{}, err
 	}
-	value, err := Get[any](result, i.iteration.bodyOutput)
+	value, err := result.Get[any](i.iteration.bodyOutput)
 	if err != nil {
 		return elementOutcome{}, bodyOutputError(i.iteration.bodyOutput, err)
 	}

@@ -1160,8 +1160,7 @@ func TestRegisterSchemaRejectsInvalidAndExternalConfigSchemas(t *testing.T) {
 			if !errors.Is(err, workflow.ErrInvalidRegistration) {
 				t.Fatalf("error = %v; want ErrInvalidRegistration", err)
 			}
-			var registrationErr *workflow.RegistrationError
-			if !errors.As(err, &registrationErr) {
+			if _, ok := errors.AsType[*workflow.RegistrationError](err); !ok {
 				t.Fatalf("error chain lacks RegistrationError: %v", err)
 			}
 		})

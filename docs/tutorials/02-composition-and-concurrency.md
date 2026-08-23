@@ -72,6 +72,10 @@ worker := flow.NodeFunc[Job, Result](
 The returned error carries the element index. Use `errors.As` with
 `*flow.IndexError`; do not parse an error string.
 
+`Switch` applies the same rule to invalid branches: use `errors.As` with
+`*flow.CaseError` to read the case key. If several cases are invalid, validation
+returns their errors joined in deterministic diagnostic order.
+
 Stopping promptly is not rollback. An external side effect that already
 happened is not undone by `Map`. Concurrent side-effecting nodes should be
 idempotent, or a later node should own the final commit.

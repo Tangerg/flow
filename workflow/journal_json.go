@@ -156,7 +156,7 @@ func (j journalDocument) encode() []byte {
 // rather than silently replaced.
 //
 // As in a [Store], numbers decode as [json.Number] so nothing is rounded, and a
-// skipped step's recorded value is read back through [Get], which converts it to
+// skipped step's recorded value is read back through [Store.Get], which converts it to
 // the type the reading step asks for when that type has a faithful JSON round
 // trip. Version and scope-index fields use mathematical JSON integer semantics:
 // equivalent decimal and exponent spellings are accepted, while an index must
@@ -164,7 +164,7 @@ func (j journalDocument) encode() []byte {
 // migrate or discard older checkpoints before decoding them. Call UnmarshalJSON
 // between runs, not while a Run is using the Journal.
 // A Journal is the one wire type here that cannot decode through
-// [decodeJSONInto]: replacing it wholesale would copy the mutex it owns, and it
+// [jsonDocument.decodeInto]: replacing it wholesale would copy the mutex it owns, and it
 // has state to keep rather than replace -- the revision every decoded record takes
 // continues the one this Journal was already at, so a run that snapshotted before
 // the decode does not suddenly find these records historical. It keeps the shared
@@ -284,7 +284,7 @@ func decodeScope(record jsonObject) ([]ScopeFrame, error) {
 		if !ok {
 			return nil, fmt.Errorf("scope frame %d: must be an object", index)
 		}
-		frame, err := (scopeFrameObject(raw)).decode()
+		frame, err := scopeFrameObject(raw).decode()
 		if err != nil {
 			return nil, fmt.Errorf("scope frame %d: %w", index, err)
 		}

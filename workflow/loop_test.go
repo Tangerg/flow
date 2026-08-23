@@ -43,7 +43,7 @@ func TestLoop_untilDone(t *testing.T) {
 // and the iteration index remains available from the indexed scope.
 func TestLoop_conditionComposesAsAnOrdinaryNode(t *testing.T) {
 	read := flow.NodeFunc[workflow.Store, int](func(_ context.Context, s workflow.Store) (int, error) {
-		return workflow.Get[int](s, workflow.Output("n"))
+		return s.Get[int](workflow.Output("n"))
 	})
 	reachedThree := flow.NodeFunc[int, bool](func(_ context.Context, n int) (bool, error) {
 		return n >= 3, nil
@@ -59,7 +59,7 @@ func TestLoop_conditionComposesAsAnOrdinaryNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got, err := workflow.Get[int](out, workflow.Output("n")); err != nil || got != 3 {
+	if got, err := out.Get[int](workflow.Output("n")); err != nil || got != 3 {
 		t.Fatalf("output = %d, %v; want 3, nil", got, err)
 	}
 }
@@ -90,7 +90,7 @@ func TestLoop_conditionReadsIterationIndexFromScope(t *testing.T) {
 
 func TestLoop_nilCondition(t *testing.T) {
 	body := workflow.Leaf("x",
-		workflow.From[int](workflow.Ref{NodeID: "start", Path: "/output"}),
+		workflow.Ref{NodeID: "start", Path: "/output"}.Bind[int](),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 
@@ -333,7 +333,7 @@ func TestLoop_suspensionPreservesCompletedIterationWrites(t *testing.T) {
 		if !workflow.SuspendedOnly(err) {
 			t.Fatalf("err = %v; want suspension", err)
 		}
-		if value, getErr := workflow.Get[int](output, workflow.Output("write")); getErr != nil ||
+		if value, getErr := output.Get[int](workflow.Output("write")); getErr != nil ||
 			value != 1 {
 			t.Fatalf("write = %d, %v; want 1, nil", value, getErr)
 		}
@@ -347,7 +347,7 @@ func TestLoop_suspensionPreservesCompletedIterationWrites(t *testing.T) {
 		if !workflow.SuspendedOnly(err) {
 			t.Fatalf("err = %v; want suspension", err)
 		}
-		if value, getErr := workflow.Get[int](output, workflow.Output("write")); getErr != nil ||
+		if value, getErr := output.Get[int](workflow.Output("write")); getErr != nil ||
 			value != 1 {
 			t.Fatalf("write = %d, %v; want 1, nil", value, getErr)
 		}
@@ -429,7 +429,7 @@ func TestLoop_siblingBodiesWithTheSameIDHaveDistinctJournalScopes(t *testing.T) 
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
-		if got, err := workflow.Get[string](output, workflow.Output("tick")); err != nil ||
+		if got, err := output.Get[string](workflow.Output("tick")); err != nil ||
 			got != "FROM_SECOND" {
 			t.Fatalf("tick = %q, %v; want FROM_SECOND", got, err)
 		}

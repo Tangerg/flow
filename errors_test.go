@@ -3,10 +3,19 @@ package flow_test
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"regexp"
+	"runtime/debug"
 	"strings"
 	"testing"
 
 	"github.com/Tangerg/flow"
+)
+
+const (
+	boundedIndexErrorStackChild    = "FLOW_BOUNDED_INDEX_ERROR_STACK_TEST"
+	boundedMixedLocationStackChild = "FLOW_BOUNDED_MIXED_LOCATION_STACK_TEST"
 )
 
 func TestIndexError(t *testing.T) {
@@ -17,10 +26,114 @@ func TestIndexError(t *testing.T) {
 	}
 }
 
+func TestNilIndexErrorFormatsAsNil(t *testing.T) {
+	var indexed *flow.IndexError
+	if got := indexed.Error(); got != "<nil>" {
+		t.Fatalf("Error() = %q; want <nil>", got)
+	}
+	outer := &flow.IndexError{Index: 2, Err: indexed}
+	if got := outer.Error(); got != "index 2: <nil>" {
+		t.Fatalf("nested Error() = %q", got)
+	}
+	if errors.Is(indexed, flow.ErrNilNode) {
+		t.Fatal("typed nil IndexError unexpectedly matched a cause")
+	}
+}
+
+func TestCaseError(t *testing.T) {
+	boom := errors.New("boom")
+	err := &flow.CaseError{Key: "large", Err: boom}
+	if !errors.Is(err, boom) || err.Error() != `switch case "large": boom` {
+		t.Fatalf("err = %v; want structured case and wrapped cause", err)
+	}
+
+	var nilCase *flow.CaseError
+	if got := nilCase.Error(); got != "<nil>" {
+		t.Fatalf("nil Error() = %q; want <nil>", got)
+	}
+	if errors.Is(nilCase, flow.ErrNilNode) {
+		t.Fatal("typed nil CaseError unexpectedly matched a cause")
+	}
+}
+
+// Map and Race are ordinary nodes, so callers can nest them without crossing a
+// definition-depth boundary. Rendering their locations must not spend one call
+// frame per composite.
+func TestIndexErrorFormatsDeepChainIteratively(t *testing.T) {
+	if os.Getenv(boundedIndexErrorStackChild) == t.Name() {
+		debug.SetMaxStack(256 << 10)
+		var err error
+		err = errors.New("boom")
+		for index := range 20_000 {
+			err = &flow.IndexError{Index: index, Err: err}
+		}
+		message := err.Error()
+		if !strings.HasPrefix(message, "index 19999: ") ||
+			!strings.HasSuffix(message, "index 0: boom") {
+			t.Fatal("Error() did not preserve the complete wrapper order")
+		}
+		return
+	}
+
+	//nolint:gosec // Re-executes this test binary with a quoted testing-owned name.
+	command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$")
+	command.Env = append(os.Environ(), boundedIndexErrorStackChild+"="+t.Name())
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("IndexError formatting exhausted a bounded stack: %v\n%s", err, output)
+	}
+}
+
+func TestLocationErrorsFormatDeepMixedChainIteratively(t *testing.T) {
+	if os.Getenv(boundedMixedLocationStackChild) == t.Name() {
+		debug.SetMaxStack(256 << 10)
+		var err error
+		err = errors.New("boom")
+		for index := range 20_000 {
+			if index%2 == 0 {
+				err = errors.Join(&flow.IndexError{Index: index, Err: err})
+			} else {
+				err = errors.Join(&flow.CaseError{Key: index, Err: err})
+			}
+		}
+		message := err.Error()
+		if !strings.HasPrefix(message, "switch case 19999: index 19998: ") ||
+			!strings.HasSuffix(message, "switch case 1: index 0: boom") {
+			t.Fatal("Error() did not preserve the complete mixed wrapper order")
+		}
+		return
+	}
+
+	//nolint:gosec // Re-executes this test binary with a quoted testing-owned name.
+	command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$")
+	command.Env = append(os.Environ(), boundedMixedLocationStackChild+"="+t.Name())
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mixed location formatting exhausted a bounded stack: %v\n%s", err, output)
+	}
+}
+
 type failingNode struct{ err error }
 
 func (f failingNode) Run(context.Context, int) (int, error) { return 0, f.err }
 func (f failingNode) Validate() error                       { return f.err }
+
+type callerMultiError []error
+
+func (callerMultiError) Error() string     { return "caller-owned tree" }
+func (c callerMultiError) Unwrap() []error { return c }
+
+func TestLocationFormattingLeavesCallerMultiErrorsOpaque(t *testing.T) {
+	err := &flow.IndexError{
+		Index: 3,
+		Err: callerMultiError{
+			&flow.CaseError{Key: "hidden", Err: flow.ErrNilNode},
+		},
+	}
+	if got, want := err.Error(), "index 3: caller-owned tree"; got != want {
+		t.Fatalf("Error() = %q; want %q", got, want)
+	}
+}
 
 // TestErrorsNameThePackageAtMostOnce pins how this package splits an error
 // between origin and location. Its sentinels carry the package name because

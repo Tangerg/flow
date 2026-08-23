@@ -13,7 +13,7 @@
 // A workflow node is a [Step] — a flow.Node[Store, Store] that reads its inputs
 // from the Store and returns a Store extended with its output. Typed business
 // logic is bridged in with [Leaf]: a [Binder] prepares its input and a
-// flow.Node computes its output. [From] and [FirstOf] retain reference
+// flow.Node computes its output. [Ref.Bind] and [FirstOf] retain reference
 // definitions for validation, while [BinderFunc] adapts custom binding code. A
 // custom Binder can expose immutable definition checks with the same optional
 // Validate() error convention used by composite Nodes. A
@@ -144,7 +144,8 @@
 // compiled workflow can be run many times, concurrently, and each call gets an
 // independent signal sequence, receivers, and Journal configuration. A Step
 // built by this package may be called directly when no configuration is needed;
-// use Run at a caller-defined composite's top-level boundary even with a zero
+// its child-execution boundary installs zero-config identity bookkeeping. Use
+// Run at a caller-defined composite's top-level boundary even with a zero
 // RunConfig, so every child invocation shares one identity scope.
 // A nested Run is independent and starts at a new root scope. A caller-defined
 // composite that wants a child to remain in the same execution must call the

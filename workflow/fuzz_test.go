@@ -148,7 +148,7 @@ func FuzzCompileSpecJSON(f *testing.F) {
 
 // FuzzStoreJSON checks that decoding arbitrary JSON never panics and that a
 // decoded Store round-trips: whatever it holds must marshal again and decode to
-// the same thing. Get must also return rather than panic for every target type.
+// the same thing. Store.Get must also return rather than panic for every target type.
 func FuzzStoreJSON(f *testing.F) {
 	f.Add([]byte(`{}`))
 	f.Add([]byte(`{"a":{"output":1}}`))
@@ -168,17 +168,17 @@ func FuzzStoreJSON(f *testing.F) {
 
 		// Every typed read must come back as a value or an error.
 		ref := workflow.Output("a")
-		_, _ = workflow.Get[int](store, ref)
-		_, _ = workflow.Get[int64](store, ref)
-		_, _ = workflow.Get[uint](store, ref)
-		_, _ = workflow.Get[float64](store, ref)
-		_, _ = workflow.Get[string](store, ref)
-		_, _ = workflow.Get[bool](store, ref)
-		_, _ = workflow.Get[[]any](store, ref)
-		_, _ = workflow.Get[[]int](store, ref)
-		_, _ = workflow.Get[map[string]any](store, ref)
-		_, _ = workflow.Get[struct{ N int }](store, ref)
-		_, _ = workflow.Get[any](store, ref)
+		_, _ = store.Get[int](ref)
+		_, _ = store.Get[int64](ref)
+		_, _ = store.Get[uint](ref)
+		_, _ = store.Get[float64](ref)
+		_, _ = store.Get[string](ref)
+		_, _ = store.Get[bool](ref)
+		_, _ = store.Get[[]any](ref)
+		_, _ = store.Get[[]int](ref)
+		_, _ = store.Get[map[string]any](ref)
+		_, _ = store.Get[struct{ N int }](ref)
+		_, _ = store.Get[any](ref)
 	})
 }
 

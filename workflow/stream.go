@@ -236,15 +236,12 @@ func (e *emissionSession) close() error {
 // mutex is the linearization point between admitting a yield and closing the
 // invocation; close then waits for every admitted call before Run returns.
 //
-// Only the admission is a window a test can enter on purpose, by returning from a
+// Admission is the window a test can enter on purpose, by returning from a
 // producer whose goroutines are still yielding —
 // TestStreamFunc_aYieldRacingTheCloseReportsWhatItDid does, and dropping that lock
-// races on every run of it. The other three sections need two leaked yields to
-// overlap, or one to overlap the close that already refused it, and close runs from
-// the same goroutine that ran the producer: which side of the write a straggler
-// lands on is the scheduler's choice rather than the test's, so dropping their
-// locks races only sometimes. They stay for the same reason
-// [emissionSession.close]'s does.
+// races on every run of it. Recording the first failed yield is the other shared
+// transition: overlapping producers may reach it together, so it uses the same
+// lock that closes admission.
 type emissionLease struct {
 	mu      sync.Mutex
 	active  sync.WaitGroup
@@ -292,8 +289,8 @@ func (e *emissionLease) close() error {
 	e.mu.Unlock()
 	e.active.Wait()
 
-	e.mu.Lock()
-	err := e.err
-	e.mu.Unlock()
-	return err
+	// Every admitted yield calls Done after its last possible err write, and no
+	// new one can pass closed. Wait therefore makes the final value visible and
+	// stable without a second critical section.
+	return e.err
 }

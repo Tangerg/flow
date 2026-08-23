@@ -29,7 +29,7 @@ func (j JournalKey) MarshalJSON() ([]byte, error) {
 // lower-case member names are accepted, so an alternate spelling cannot resume a
 // run under a different identity than the one persisted.
 func (j *JournalKey) UnmarshalJSON(data []byte) error {
-	return decodeJSONInto(j, data, decodeJournalKey, unmarshalError("journal key"))
+	return jsonDocument(data).decodeInto(j, decodeJournalKey, unmarshalError("journal key"))
 }
 
 // decodeJournalKey reads the strict canonical object, each return naming only its

@@ -560,16 +560,16 @@ func TestJournal_jsonRoundTrip(t *testing.T) {
 	if marshalErr != nil {
 		t.Fatalf("resumed run: %v", marshalErr)
 	}
-	if got, err := workflow.Get[int](out, workflow.Output("i")); err != nil || got != 42 {
+	if got, err := out.Get[int](workflow.Output("i")); err != nil || got != 42 {
 		t.Fatalf("int = %v, %v", got, err)
 	}
-	if got, err := workflow.Get[string](out, workflow.Output("s")); err != nil || got != "text" {
+	if got, err := out.Get[string](workflow.Output("s")); err != nil || got != "text" {
 		t.Fatalf("string = %v, %v", got, err)
 	}
-	if got, err := workflow.Get[bool](out, workflow.Output("b")); err != nil || !got {
+	if got, err := out.Get[bool](workflow.Output("b")); err != nil || !got {
 		t.Fatalf("bool = %v, %v", got, err)
 	}
-	if got, err := workflow.Get[payload](out, workflow.Output("struct")); err != nil || got.N != 7 {
+	if got, err := out.Get[payload](workflow.Output("struct")); err != nil || got.N != 7 {
 		t.Fatalf("struct = %+v, %v", got, err)
 	}
 }
@@ -978,7 +978,7 @@ func TestAwaitFactory(t *testing.T) {
 	if compileErr != nil {
 		t.Fatalf("run: %v", compileErr)
 	}
-	if got, err := workflow.Get[int](out, workflow.Output("act")); err != nil || got != 2 {
+	if got, err := out.Get[int](workflow.Output("act")); err != nil || got != 2 {
 		t.Fatalf("act = %v, %v; want 2", got, err)
 	}
 }
@@ -1047,9 +1047,9 @@ func TestInterruptFactory_roundTripsStructuredRequestAndResponse(t *testing.T) {
 	if compileErr != nil {
 		t.Fatalf("resume: %v", compileErr)
 	}
-	response, compileErr := workflow.Get[struct {
+	response, compileErr := out.Get[struct {
 		Approved bool `json:"approved"`
-	}](out, workflow.Output("approval"))
+	}](workflow.Output("approval"))
 	if compileErr != nil || !response.Approved {
 		t.Fatalf("response = %+v, %v; want approved", response, compileErr)
 	}

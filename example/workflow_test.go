@@ -35,7 +35,7 @@ func Example_workflow() {
 		fmt.Println("error:", err)
 		return
 	}
-	message, err := workflow.Get[string](out, workflow.Output("greet"))
+	message, err := out.Get[string](workflow.Output("greet"))
 	if err != nil {
 		fmt.Println("error:", err)
 		return

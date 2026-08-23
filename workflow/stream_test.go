@@ -27,7 +27,7 @@ func TestStreamFunc_emitsChunksAndPublishesFinalOutput(t *testing.T) {
 	)
 	step := workflow.Leaf(
 		"stream",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		node,
 	)
 
@@ -58,7 +58,7 @@ func TestStreamFunc_emitsChunksAndPublishesFinalOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got, err := workflow.Get[int](out, workflow.Output("stream")); err != nil || got != 30 {
+	if got, err := out.Get[int](workflow.Output("stream")); err != nil || got != 30 {
 		t.Fatalf("final output = %v, %v; want 30", got, err)
 	}
 
@@ -101,7 +101,7 @@ func TestStreamFunc_emitsChunksAndPublishesFinalOutput(t *testing.T) {
 func TestStreamFunc(t *testing.T) {
 	step := workflow.Leaf(
 		"stream",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		workflow.StreamFunc[int, int, string](
 			func(_ context.Context, input int, yield func(string) bool) (int, error) {
 				yield(fmt.Sprintf("value=%d", input))
@@ -127,7 +127,7 @@ func TestStreamFunc(t *testing.T) {
 	if len(chunks) != 1 || chunks[0].Value != "value=21" {
 		t.Fatalf("chunks = %+v; want value=21", chunks)
 	}
-	if got, err := workflow.Get[int](out, workflow.Output("stream")); err != nil || got != 42 {
+	if got, err := out.Get[int](workflow.Output("stream")); err != nil || got != 42 {
 		t.Fatalf("output = %d, %v; want 42, nil", got, err)
 	}
 }
@@ -151,7 +151,7 @@ func TestStreamFunc_composesAsAnOrdinaryNode(t *testing.T) {
 	)
 	step := workflow.Leaf(
 		"answer",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		node,
 	)
 
@@ -173,7 +173,7 @@ func TestStreamFunc_composesAsAnOrdinaryNode(t *testing.T) {
 	if len(chunks) != 1 || chunks[0].ID != "answer" || chunks[0].Value != 21 {
 		t.Fatalf("chunks = %+v; want one chunk owned by answer", chunks)
 	}
-	if got, err := workflow.Get[string](out, workflow.Output("answer")); err != nil ||
+	if got, err := out.Get[string](workflow.Output("answer")); err != nil ||
 		got != "parsed:42" {
 		t.Fatalf("output = %q, %v; want parsed:42, nil", got, err)
 	}
@@ -207,7 +207,7 @@ func TestStreamFunc_withoutLeafHasNoEmissionIdentity(t *testing.T) {
 	if emits != 0 {
 		t.Fatalf("Emitter calls = %d; a raw Node has no leaf identity", emits)
 	}
-	if got, err := workflow.Get[bool](out, workflow.Output("done")); err != nil || !got {
+	if got, err := out.Get[bool](workflow.Output("done")); err != nil || !got {
 		t.Fatalf("output = %t, %v; want true, nil", got, err)
 	}
 }
@@ -235,7 +235,7 @@ func TestStreamFunc_serializesConcurrentYieldCalls(t *testing.T) {
 	)
 	step := workflow.Leaf(
 		"stream",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		node,
 	)
 
@@ -298,7 +298,7 @@ func TestStreamFunc_mapSharesOneLeafStreamSafely(t *testing.T) {
 	)
 	step := workflow.Leaf(
 		"batch",
-		workflow.From[[]int](workflow.Output("start")),
+		workflow.Output("start").Bind[[]int](),
 		flow.Map(stream, flow.MapConfig{}),
 	)
 	input := make([]int, count)
@@ -344,7 +344,7 @@ func TestStreamFunc_mapSharesOneLeafStreamSafely(t *testing.T) {
 		}
 		wantIndex++
 	}
-	got, err := workflow.Get[[]int](run.store, workflow.Output("batch"))
+	got, err := run.store.Get[[]int](workflow.Output("batch"))
 	if err != nil {
 		t.Fatalf("Get output: %v", err)
 	}
@@ -382,7 +382,7 @@ func TestStreamFunc_waitsForAnInFlightYield(t *testing.T) {
 	)
 	step := workflow.Leaf(
 		"stream",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		flow.Then(stream, flow.NodeFunc[int, int](
 			func(_ context.Context, input int) (int, error) {
 				seenByNextNode.Store(delivered.Load())
@@ -447,7 +447,7 @@ func TestStreamFunc_rejectsYieldAfterItsInvocationReturns(t *testing.T) {
 	)
 	step := workflow.Leaf(
 		"answer",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		flow.Then(stream, parser),
 	)
 
@@ -484,7 +484,7 @@ func TestStreamFunc_rejectsYieldAfterItsInvocationReturns(t *testing.T) {
 	if len(chunks) != 0 {
 		t.Fatalf("late yield emitted chunks: %+v", chunks)
 	}
-	if got, err := workflow.Get[int](run.store, workflow.Output("answer")); err != nil || got != 42 {
+	if got, err := run.store.Get[int](workflow.Output("answer")); err != nil || got != 42 {
 		t.Fatalf("output = %d, %v; want 42, nil", got, err)
 	}
 }
@@ -516,7 +516,7 @@ func TestStreamFunc_rejectsYieldAfterItsInvocationPanics(t *testing.T) {
 func TestStreamFunc_nestedRunDoesNotInheritEmitter(t *testing.T) {
 	inner := workflow.Leaf(
 		"inner",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		workflow.StreamFunc[int, int, string](
 			func(_ context.Context, input int, yield func(string) bool) (int, error) {
 				if !yield("inner") {
@@ -547,7 +547,7 @@ func TestStreamFunc_nestedRunDoesNotInheritEmitter(t *testing.T) {
 	)
 	outer := workflow.Leaf(
 		"outer",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		flow.Then(runInner, outerStream),
 	)
 
@@ -591,7 +591,7 @@ func TestStreamFunc_cancelledRaceLoserDoesNotPoisonWinner(t *testing.T) {
 	)
 	step := workflow.Leaf(
 		"race",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		flow.Race[int, int](loser, winner),
 	)
 
@@ -613,7 +613,7 @@ func TestStreamFunc_cancelledRaceLoserDoesNotPoisonWinner(t *testing.T) {
 	if len(chunks) != 0 {
 		t.Fatalf("cancelled loser emitted chunks: %+v", chunks)
 	}
-	if got, err := workflow.Get[int](out, workflow.Output("race")); err != nil || got != 42 {
+	if got, err := out.Get[int](workflow.Output("race")); err != nil || got != 42 {
 		t.Fatalf("output = %d, %v; want 42, nil", got, err)
 	}
 }
@@ -634,7 +634,7 @@ func TestStreamFunc_emitterFailureStopsEveryProducerInTheLeaf(t *testing.T) {
 	)
 	step := workflow.Leaf(
 		"batch",
-		workflow.From[[]int](workflow.Output("start")),
+		workflow.Output("start").Bind[[]int](),
 		flow.Map(stream, flow.MapConfig{}),
 	)
 
@@ -693,7 +693,7 @@ func TestStreamFunc_cancellationStopsEveryProducerInTheLeaf(t *testing.T) {
 	)
 	step := workflow.Leaf(
 		"batch",
-		workflow.From[[]int](workflow.Output("start")),
+		workflow.Output("start").Bind[[]int](),
 		flow.Map(stream, flow.MapConfig{}),
 	)
 
@@ -750,7 +750,7 @@ func TestStreamFunc_leafRejectsEmissionFromLeakedNodeWork(t *testing.T) {
 	)
 	step := workflow.Leaf(
 		"leaky",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		leaky,
 	)
 
@@ -769,7 +769,7 @@ func TestStreamFunc_leafRejectsEmissionFromLeakedNodeWork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got, err := workflow.Get[int](out, workflow.Output("leaky")); err != nil || got != 1 {
+	if got, err := out.Get[int](workflow.Output("leaky")); err != nil || got != 1 {
 		t.Fatalf("output = %d, %v; want 1, nil", got, err)
 	}
 
@@ -787,7 +787,7 @@ func TestLeaf_panicCancelsEmissionContext(t *testing.T) {
 	var emissionDone <-chan struct{}
 	step := workflow.Leaf(
 		"panic",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		flow.NodeFunc[int, int](func(ctx context.Context, _ int) (int, error) {
 			emissionDone = ctx.Done()
 			panic(panicValue)
@@ -841,7 +841,7 @@ func TestStreamFunc_emitterErrorStopsAndFailsTheLeaf(t *testing.T) {
 	)
 	step := workflow.Leaf(
 		"stream",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		node,
 	)
 
@@ -895,7 +895,7 @@ func TestStreamFunc_emitterErrorPrecedesProducerError(t *testing.T) {
 	)
 	step := workflow.Leaf(
 		"stream",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		node,
 	)
 
@@ -934,7 +934,7 @@ func TestStreamFunc_emitterContextCannotReenterTheLeafEmissionSession(t *testing
 	)
 	step := workflow.Leaf(
 		"stream",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		outer,
 	)
 
@@ -1002,7 +1002,7 @@ func TestEmitterContextCannotJoinProducingRun(t *testing.T) {
 	)
 	outer := workflow.Leaf(
 		"outer",
-		workflow.From[int](workflow.Output("seed")),
+		workflow.Output("seed").Bind[int](),
 		stream,
 	)
 
@@ -1049,7 +1049,7 @@ func TestStreamFunc_emitterSuspensionRemainsAThirdOutcome(t *testing.T) {
 	)
 	step := workflow.Leaf(
 		"stream",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		node,
 	)
 	out, err := workflow.Run(
@@ -1087,7 +1087,7 @@ func TestStreamFunc_completedReplayDoesNotReemit(t *testing.T) {
 	)
 	step := workflow.Leaf(
 		"stream",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		node,
 	)
 	journal := workflow.NewJournal()
@@ -1128,7 +1128,7 @@ func TestStreamFunc_completedReplayDoesNotReemit(t *testing.T) {
 	if got := runs.Load(); got != 1 {
 		t.Fatalf("node runs = %d; want 1", got)
 	}
-	if got, err := workflow.Get[int](out, workflow.Output("stream")); err != nil || got != 12 {
+	if got, err := out.Get[int](workflow.Output("stream")); err != nil || got != 12 {
 		t.Fatalf("replayed output = %v, %v; want 12", got, err)
 	}
 }
@@ -1149,7 +1149,7 @@ func TestStreamFunc_incompleteReplayRepeatsTheAttemptPrefix(t *testing.T) {
 	)
 	step := workflow.Leaf(
 		"stream",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		node,
 	)
 	journal := workflow.NewJournal()
@@ -1195,7 +1195,7 @@ func TestStreamFunc_incompleteReplayRepeatsTheAttemptPrefix(t *testing.T) {
 		}
 		wantIndex++
 	}
-	if got, err := workflow.Get[int](out, workflow.Output("stream")); err != nil || got != 13 {
+	if got, err := out.Get[int](workflow.Output("stream")); err != nil || got != 13 {
 		t.Fatalf("final output = %v, %v; want 13", got, err)
 	}
 }
@@ -1203,7 +1203,7 @@ func TestStreamFunc_incompleteReplayRepeatsTheAttemptPrefix(t *testing.T) {
 func TestStreamFunc_iterationEmitsConcurrentScopedStreams(t *testing.T) {
 	body := workflow.Leaf(
 		"double",
-		workflow.From[int](workflow.Item("items")),
+		workflow.Item("items").Bind[int](),
 		workflow.StreamFunc[int, int, int](
 			func(_ context.Context, input int, yield func(int) bool) (int, error) {
 				yield(input)
@@ -1239,7 +1239,7 @@ func TestStreamFunc_iterationEmitsConcurrentScopedStreams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got, err := workflow.Get[[]int](out, workflow.Output("items")); err != nil ||
+	if got, err := out.Get[[]int](workflow.Output("items")); err != nil ||
 		!slices.Equal(got, []int{2, 4, 6, 8}) {
 		t.Fatalf("outputs = %v, %v; want [2 4 6 8]", got, err)
 	}
@@ -1275,7 +1275,7 @@ func TestStreamFunc_parallelStreamsShareRunSequence(t *testing.T) {
 	makeStep := func(id string) workflow.Step {
 		return workflow.Leaf(
 			id,
-			workflow.From[int](workflow.Output("start")),
+			workflow.Output("start").Bind[int](),
 			workflow.StreamFunc[int, int, int](
 				func(_ context.Context, input int, yield func(int) bool) (int, error) {
 					yield(input)
@@ -1327,7 +1327,7 @@ func TestStreamFunc_nilEmitterDiscardsWithoutChangingEventSequence(t *testing.T)
 	)
 	step := workflow.Leaf(
 		"stream",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		node,
 	)
 	var events []workflow.Event
@@ -1404,7 +1404,7 @@ func TestStreamFunc_cancellationCannotPublishAPartialFinalOutput(t *testing.T) {
 	)
 	step := workflow.Leaf(
 		"stream",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		node,
 	)
 	out, err := step.Run(ctx, workflow.NewStore().WithOutput("start", 1))
@@ -1435,7 +1435,7 @@ func TestStreamFunc_cancellationDuringEmissionStopsCompletion(t *testing.T) {
 	)
 	step := workflow.Leaf(
 		"stream",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		node,
 	)
 	emits := 0
@@ -1475,7 +1475,7 @@ func TestStreamFunc_validatesNode(t *testing.T) {
 	var nilNode flow.Node[int, int]
 	step := workflow.Leaf(
 		"stream",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		nilNode,
 	)
 	_, err := step.Run(t.Context(), in)
@@ -1501,7 +1501,7 @@ func TestStreamFunc_validatesNode(t *testing.T) {
 	}
 	step = workflow.Leaf(
 		"stream",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		nilFunc,
 	)
 	_, err = step.Run(t.Context(), in)
@@ -1646,7 +1646,7 @@ func (s *stragglerRace) run(t *testing.T, attempt int) {
 	t.Helper()
 	step := workflow.Leaf(
 		"stream",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		workflow.StreamFunc[int, int, int](
 			func(_ context.Context, input int, yield func(int) bool) (int, error) {
 				s.spawn(yield)
@@ -1699,7 +1699,7 @@ func (s *stragglerRace) check(t *testing.T, attempt int) {
 	if s.err != nil {
 		t.Fatalf("attempt %d: Run: %v", attempt, s.err)
 	}
-	got, err := workflow.Get[int](s.out, workflow.Output("stream"))
+	got, err := s.out.Get[int](workflow.Output("stream"))
 	if err != nil || got != attempt {
 		t.Fatalf("attempt %d: output = %d, %v; want %d, nil", attempt, got, err, attempt)
 	}

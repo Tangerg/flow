@@ -40,7 +40,7 @@ func (r Ref) MarshalJSON() ([]byte, error) {
 // rejected. The reference is not validated here: an unset Ref is meaningful in
 // several definition fields, and each owner reports its own field path.
 func (r *Ref) UnmarshalJSON(data []byte) error {
-	return decodeJSONInto(r, data, decodeRef, unmarshalError("ref"))
+	return jsonDocument(data).decodeInto(r, decodeRef, unmarshalError("ref"))
 }
 
 // decodeRef reads the strict canonical object. Each return names only its own

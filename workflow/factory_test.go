@@ -55,7 +55,7 @@ func TestFactory(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Run: %v", err)
 			}
-			got, err := workflow.Get[int](out, workflow.Output("add"))
+			got, err := out.Get[int](workflow.Output("add"))
 			if err != nil || got != tt.want {
 				t.Fatalf("Get = %d, %v; want %d, nil", got, err, tt.want)
 			}
@@ -185,11 +185,11 @@ func sumPorts() workflow.NodeFactory {
 				)
 			}
 			return workflow.BinderFunc[[2]int](func(s workflow.Store) ([2]int, error) {
-				av, err := workflow.Get[int](s, a)
+				av, err := s.Get[int](a)
 				if err != nil {
 					return [2]int{}, err
 				}
-				bv, err := workflow.Get[int](s, b)
+				bv, err := s.Get[int](b)
 				if err != nil {
 					return [2]int{}, err
 				}
@@ -229,7 +229,7 @@ func TestBindFactory_readsAConfigOfEveryLength(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Run with config %d: %v", want, err)
 		}
-		if got, err := workflow.Get[int](out, workflow.Output("n")); err != nil || got != want {
+		if got, err := out.Get[int](workflow.Output("n")); err != nil || got != want {
 			t.Fatalf("output = %d, %v; want %d", got, err, want)
 		}
 	}
@@ -249,7 +249,7 @@ func TestBindFactory_bindsNamedPorts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got, err := workflow.Get[int](out, workflow.Output("sum")); err != nil || got != 7 {
+	if got, err := out.Get[int](workflow.Output("sum")); err != nil || got != 7 {
 		t.Fatalf("sum = %d, %v; want 7, nil", got, err)
 	}
 }
@@ -274,7 +274,7 @@ func TestBindFactory_acceptsNilSafeFunctionBinder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if value, getErr := workflow.Get[int](output, workflow.Output("double")); getErr != nil || value != 42 {
+	if value, getErr := output.Get[int](workflow.Output("double")); getErr != nil || value != 42 {
 		t.Fatalf("output = %d, %v; want 42, nil", value, getErr)
 	}
 }

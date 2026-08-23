@@ -153,6 +153,10 @@ func TestSwitch_preservesEveryInvalidCaseCause(t *testing.T) {
 	if !errors.Is(err, first) || !errors.Is(err, second) {
 		t.Fatalf("Validate error = %v; want both indistinguishable case causes", err)
 	}
+	var located *flow.CaseError
+	if !errors.As(err, &located) || located.Key != "first" {
+		t.Fatalf("Validate error = %#v; want first sorted CaseError", err)
+	}
 }
 
 func TestSwitch_reportsNestedCaseValidationDeterministically(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 )
 
 func TestParallel_mergesBranches(t *testing.T) {
-	from := workflow.From[int](workflow.Ref{NodeID: "start", Path: "/output"})
+	from := workflow.Ref{NodeID: "start", Path: "/output"}.Bind[int]()
 	a := workflow.Leaf("a", from, flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil }))
 	b := workflow.Leaf("b", from, flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil }))
 
@@ -39,7 +39,7 @@ func TestParallel_ownsBranchSliceStructure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got, getErr := workflow.Get[int](out, workflow.Output("original")); getErr != nil || got != 1 {
+	if got, getErr := out.Get[int](workflow.Output("original")); getErr != nil || got != 1 {
 		t.Fatalf("original output = %d, %v; want 1, nil", got, getErr)
 	}
 	if _, ok := out.Lookup(workflow.Output("changed")); ok {
@@ -49,7 +49,7 @@ func TestParallel_ownsBranchSliceStructure(t *testing.T) {
 
 func TestParallel_failFast(t *testing.T) {
 	boom := errors.New("boom")
-	from := workflow.From[int](workflow.Ref{NodeID: "start", Path: "/output"})
+	from := workflow.Ref{NodeID: "start", Path: "/output"}.Bind[int]()
 	ok := workflow.Leaf("ok", from, flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
 	bad := workflow.Leaf("bad", from, flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom }))
 
@@ -89,7 +89,7 @@ func TestParallel_failureReturnsTheInputStore(t *testing.T) {
 	if _, present := output.Lookup(workflow.Output("finished")); present {
 		t.Fatal("ordinary failure returned a successful sibling's write")
 	}
-	if value, getErr := workflow.Get[int](output, workflow.Output("seed")); getErr != nil || value != 1 {
+	if value, getErr := output.Get[int](workflow.Output("seed")); getErr != nil || value != 1 {
 		t.Fatalf("seed = %d, %v; want 1, nil", value, getErr)
 	}
 }
@@ -132,7 +132,7 @@ func TestParallel_emptyPassesThrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got, err := workflow.Get[int](output, workflow.Output("start")); err != nil || got != 1 {
+	if got, err := output.Get[int](workflow.Output("start")); err != nil || got != 1 {
 		t.Fatalf("start = %v, %v; want 1", got, err)
 	}
 }
@@ -388,7 +388,7 @@ func TestParallel_graphOwnershipSurvivesPersistedSuspension(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resumed Run: %v", err)
 	}
-	if value, getErr := workflow.Get[string](resumed, workflow.Output("route")); getErr != nil || value != "bypassed" {
+	if value, getErr := resumed.Get[string](workflow.Output("route")); getErr != nil || value != "bypassed" {
 		t.Fatalf("route output = %q, %v; want bypassed, nil", value, getErr)
 	}
 	if value, present := resumed.Lookup(workflow.Output("target")); present {
@@ -482,10 +482,10 @@ func TestParallel_compactsDeepBranchInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got, err := workflow.Get[bool](output, workflow.Output("written")); err != nil || !got {
+	if got, err := output.Get[bool](workflow.Output("written")); err != nil || !got {
 		t.Fatalf("written = %v, %v; want true", got, err)
 	}
-	if got, err := workflow.Get[int](output, workflow.Output("base-0")); err != nil || got != 0 {
+	if got, err := output.Get[int](workflow.Output("base-0")); err != nil || got != 0 {
 		t.Fatalf("base-0 = %v, %v; want 0", got, err)
 	}
 }

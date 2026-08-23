@@ -199,7 +199,7 @@ func TestEveryUnmarshalJSONDecodesThroughOneBoundary(t *testing.T) {
 	for _, receiver := range slices.Sorted(maps.Keys(own)) {
 		if _, allowed := wireDecodeExceptions[receiver]; !allowed {
 			t.Errorf(
-				"%s: %s.UnmarshalJSON decodes on its own; route it through decodeJSONInto or say why it cannot",
+				"%s: %s.UnmarshalJSON decodes on its own; route it through jsonDocument.decodeInto or say why it cannot",
 				own[receiver],
 				receiver,
 			)
@@ -213,8 +213,8 @@ func TestEveryUnmarshalJSONDecodesThroughOneBoundary(t *testing.T) {
 }
 
 // decodesThroughSharedBoundary reports whether the body reaches the one decoder,
-// by either of its two spellings: workflow wraps it to add its own nil-receiver
-// prefix, and expr calls jsondoc directly.
+// by either of its two spellings: workflow calls it through a generic method on
+// its document, and expr calls jsondoc directly.
 func decodesThroughSharedBoundary(body *ast.BlockStmt) bool {
 	found := false
 	ast.Inspect(body, func(node ast.Node) bool {
@@ -222,12 +222,14 @@ func decodesThroughSharedBoundary(body *ast.BlockStmt) bool {
 		if !ok {
 			return true
 		}
-		switch target := call.Fun.(type) {
-		case *ast.Ident:
-			found = found || target.Name == "decodeJSONInto"
-		case *ast.SelectorExpr:
-			found = found || target.Sel.Name == "DecodeInto"
-		}
+		ast.Inspect(call.Fun, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			if ok {
+				found = found || selector.Sel.Name == "decodeInto" ||
+					selector.Sel.Name == "DecodeInto"
+			}
+			return !found
+		})
 		return !found
 	})
 	return found

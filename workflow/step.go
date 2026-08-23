@@ -134,7 +134,10 @@ func admitBoundary(ctx context.Context, id string, invalid error) (*runState, er
 // Subgraph both project one, and the condition reads the same from either even
 // though they report it at different boundaries.
 func bodyOutputError(output Ref, err error) error {
-	return fmt.Errorf("read body output %s: %w", output, err)
+	return &detailError{
+		detail: fmt.Sprintf("read body output %s", output),
+		err:    err,
+	}
 }
 
 // admitScopedStep is the admission a composite performs when it will push a new

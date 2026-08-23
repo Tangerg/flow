@@ -42,6 +42,9 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
 	if e.Pos > 0 {
 		return fmt.Sprintf("expr %q at %d: %v", e.Source, e.Pos, e.Err)
 	}
@@ -49,4 +52,9 @@ func (e *Error) Error() string {
 }
 
 // Unwrap returns the underlying cause.
-func (e *Error) Unwrap() error { return e.Err }
+func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}

@@ -26,7 +26,7 @@ func Factory[C, I, O any](build func(C) (flow.Node[I, O], error)) NodeFactory {
 		if err != nil {
 			return nil, err
 		}
-		return From[I](ref), nil
+		return ref.Bind[I](), nil
 	}, build)
 }
 
@@ -88,7 +88,7 @@ func BindFactory[C, I, O any](bind func(cfg C, inputs Inputs) (Binder[I], error)
 		}
 		node, err := build(cfg)
 		if err != nil {
-			return nil, fmt.Errorf("workflow: build node: %w", err)
+			return nil, &factoryBuildError{err: err}
 		}
 		if err := validateNode(node); err != nil {
 			return nil, err

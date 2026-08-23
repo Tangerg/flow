@@ -48,6 +48,37 @@ func TestCondition(t *testing.T) {
 	}
 }
 
+func TestExpressionAdaptersRejectUncompiledExpressions(t *testing.T) {
+	tests := map[string]*expr.Expr{
+		"zero": new(expr.Expr),
+		"nil":  nil,
+	}
+	for name, expression := range tests {
+		t.Run(name, func(t *testing.T) {
+			assertInvalid := func(operation string, err error) {
+				t.Helper()
+				var expressionErr *expr.Error
+				if !errors.As(err, &expressionErr) || !errors.Is(err, flow.ErrInvalidConfig) {
+					t.Fatalf("%s error = %v; want expr.Error wrapping ErrInvalidConfig", operation, err)
+				}
+			}
+
+			condition := expression.Condition()
+			assertInvalid("validate condition", flow.Validate(condition))
+			_, err := condition.Run(context.Background(), workflow.Store{})
+			assertInvalid("run condition", err)
+			registry := workflow.NewRegistry()
+			assertInvalid("register condition", registry.RegisterCondition("invalid", condition))
+
+			resolver := expression.Resolver()
+			assertInvalid("validate resolver", flow.Validate(resolver))
+			_, err = resolver.Run(context.Background(), workflow.Store{})
+			assertInvalid("run resolver", err)
+			assertInvalid("register resolver", registry.RegisterResolver("invalid", resolver))
+		})
+	}
+}
+
 func TestCondition_reportsEvaluationFailureRatherThanFalse(t *testing.T) {
 	// A condition that cannot be evaluated must not read as "keep looping".
 	condition, err := expr.Condition("missing.output >= 3")
@@ -682,17 +713,17 @@ func TestErrorsNameThePackageAtMostOnce(t *testing.T) {
 	store := workflow.NewStore().WithOutput("a", "text")
 
 	failures := map[string]func() error{
-		"Parse syntax":    func() error { _, err := expr.Parse("1 +"); return err },
-		"Parse construct": func() error { _, err := expr.Parse(badExpr); return err },
-		"Parse reference": func() error { _, err := expr.Parse("counter"); return err },
-		"Eval undefined":  func() error { _, err := expr.MustParse("missing.output").Eval(store); return err },
-		"Eval type":       func() error { _, err := expr.MustParse(`a.output + 1`).Eval(store); return err },
-		"Eval zero":       func() error { _, err := expr.MustParse("1 / 0").Eval(store); return err },
-		"Bool result":     func() error { _, err := expr.MustParse("a.output").Bool(store); return err },
-		"String result":   func() error { _, err := expr.MustParse("1").String(store); return err },
-		"Condition":       func() error { _, err := expr.Condition(badExpr); return err },
-		"Resolver":        func() error { _, err := expr.Resolver(badExpr); return err },
-		"Switch case":     func() error { _, err := expr.Switch(badSwitch); return err },
+		"Parse syntax":       func() error { _, err := expr.Parse("1 +"); return err },
+		"Parse construct":    func() error { _, err := expr.Parse(badExpr); return err },
+		"Parse reference":    func() error { _, err := expr.Parse("counter"); return err },
+		"Eval undefined":     func() error { _, err := expr.MustParse("missing.output").Eval[any](store); return err },
+		"Eval type":          func() error { _, err := expr.MustParse(`a.output + 1`).Eval[any](store); return err },
+		"Eval zero":          func() error { _, err := expr.MustParse("1 / 0").Eval[any](store); return err },
+		"Eval bool result":   func() error { _, err := expr.MustParse("a.output").Eval[bool](store); return err },
+		"Eval string result": func() error { _, err := expr.MustParse("1").Eval[string](store); return err },
+		"Condition":          func() error { _, err := expr.Condition(badExpr); return err },
+		"Resolver":           func() error { _, err := expr.Resolver(badExpr); return err },
+		"Switch case":        func() error { _, err := expr.Switch(badSwitch); return err },
 		"Switch text": func() error {
 			_, err := expr.Switch(expr.SwitchSpec{Cases: []expr.Case{{When: "true", Then: notUTF8}}})
 			return err

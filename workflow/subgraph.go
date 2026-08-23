@@ -97,7 +97,7 @@ func (s *subgraphExecution) execute(ctx context.Context) (Store, error) {
 }
 
 func (s *subgraphExecution) project(ctx context.Context, inner Store) (Store, error) {
-	output, err := Get[any](inner, s.subgraph.bodyOutput)
+	output, err := inner.Get[any](s.subgraph.bodyOutput)
 	if contextErr := context.Cause(ctx); contextErr != nil {
 		return s.outer, contextErr
 	}
@@ -137,12 +137,15 @@ func (s *subgraphExecution) bind(ctx context.Context) (Store, error) {
 		if err := context.Cause(ctx); err != nil {
 			return Store{}, err
 		}
-		value, err := Get[any](s.outer, ref)
+		value, err := s.outer.Get[any](ref)
 		if contextErr := context.Cause(ctx); contextErr != nil {
 			return Store{}, contextErr
 		}
 		if err != nil {
-			return Store{}, fmt.Errorf("input %q from %s: %w", seedID, ref, err)
+			return Store{}, &detailError{
+				detail: fmt.Sprintf("input %q from %s", seedID, ref),
+				err:    err,
+			}
 		}
 		inner = inner.WithOutput(seedID, value)
 	}
@@ -188,7 +191,7 @@ func SubgraphFactory(body Step, bodyOutput Ref) NodeFactory {
 		if err := step.Validate(); err != nil {
 			return nil, &RegistrationError{
 				Kind: registrationNode,
-				Err:  fmt.Errorf("subgraph factory definition: %w", err),
+				Err:  err,
 			}
 		}
 		return step, nil

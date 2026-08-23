@@ -20,7 +20,7 @@ import (
 //	var b expr.Bindings
 //	if err := json.Unmarshal(data, &b); err != nil { ... }
 //	if err := b.Register(reg); err != nil { ... }
-type Bindings struct { //nolint:recvcheck // UnmarshalJSON must use a pointer receiver.
+type Bindings struct {
 	// Conditions are loop stop conditions, each a boolean expression.
 	Conditions map[string]string `json:"conditions,omitempty"`
 	// Resolvers are branch resolvers, each a string-valued expression.
@@ -164,8 +164,8 @@ func (b *bindingRegistrar) compileSwitches() error {
 }
 
 // Refs returns every reference the bindings read, deduplicated and sorted. The
-// returned slice is a copy. An editor uses it to check that a rule set only
-// reads values the graph produces.
+// returned slice is a fresh value the caller owns. An editor uses it to check
+// that a rule set only reads values the graph produces.
 func (b Bindings) Refs() ([]workflow.Ref, error) {
 	var refs []workflow.Ref
 	for source := range b.sources() {

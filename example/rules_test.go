@@ -46,7 +46,7 @@ func Example_rules() {
 		fmt.Println("error:", err)
 		return
 	}
-	result, err := workflow.Get[string](out, workflow.Output("review"))
+	result, err := out.Get[string](workflow.Output("review"))
 	if err != nil {
 		fmt.Println("error:", err)
 		return

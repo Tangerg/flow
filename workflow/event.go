@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"slices"
 	"time"
 )
 
@@ -70,8 +71,23 @@ type Event struct {
 	Store Store
 
 	// Err is the failure on [EventFailed], or an error matching [ErrSuspended] on
-	// [EventSuspended]. Use [Suspensions] to read every wait. It is nil otherwise.
+	// [EventSuspended]. Use [Suspensions] to read every wait. The event owns the
+	// exact mutable flow and workflow location wrappers in its error chain,
+	// including across standard-library joined branches. An application-defined
+	// wrapper ends that snapshot boundary, and it and its causes remain borrowed
+	// under Go's immutable-error convention. Application values stored in a
+	// location remain borrowed too. Err is nil otherwise.
 	Err error
+}
+
+// owned returns the event value an Observer may retain or modify. Store is
+// already an immutable value, and scalar fields copy with the struct. Scope and
+// the exported fields on module-owned location errors need their own storage so
+// a callback cannot rewrite the outcome the running boundary returns afterward.
+func (e Event) owned() Event {
+	e.Scope = slices.Clone(e.Scope)
+	e.Err = (ownedError{root: e.Err}).clone()
+	return e
 }
 
 // Observer receives low-volume workflow-boundary events synchronously. Pass one

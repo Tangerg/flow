@@ -96,7 +96,8 @@ func (s *scopedSet) has(key JournalKey) bool {
 //	})
 //
 // A Step built by this package may be called directly when no run configuration
-// is needed; its composite establishes the zero-config bookkeeping it needs.
+// is needed; a boundary that invokes child work establishes the zero-config
+// bookkeeping it needs.
 // Use Run for a caller-defined top-level composite even with a zero RunConfig,
 // so every child invocation shares one identity boundary.
 func Run(ctx context.Context, step Step, in Store, cfg RunConfig) (Store, error) {
@@ -173,9 +174,6 @@ func (r *runState) observing() bool {
 
 // journal returns the run's Journal, or nil when resumption is disabled.
 func (r *runState) journal() *Journal {
-	if r == nil {
-		return nil
-	}
 	return r.config.Journal
 }
 
@@ -217,14 +215,13 @@ func (r *runState) replay(ctx context.Context, key JournalKey) (any, bool, error
 // an output, and the type each wants names itself here rather than in prose each
 // of them would spell separately -- see
 // TestAReplayedDecisionMustCarryTheTypeItsCompositeRecorded.
-func replayDecision[T any](
+func (r *runState) replayDecision[T any](
 	ctx context.Context,
-	run *runState,
 	kind Kind,
 	id string,
 ) (T, bool, error) {
 	var decision T
-	recorded, replayed, err := run.replay(ctx, boundaryKey(ctx, id))
+	recorded, replayed, err := r.replay(ctx, boundaryKey(ctx, id))
 	if err != nil || !replayed {
 		return decision, false, err
 	}
@@ -288,8 +285,11 @@ func (r *runState) emit(ctx context.Context, event Event) {
 		return
 	}
 	event.Seq = r.nextSeq()
-	event.Scope = Scope(ctx)
-	r.config.Observer.Observe(callbackContext(ctx), event)
+	// Borrow the context-owned slice only until owned makes the application
+	// snapshot below. Calling Scope here would copy the same slice twice and
+	// split one ownership decision across two helpers.
+	event.Scope = scope(ctx)
+	r.config.Observer.Observe(callbackContext(ctx), event.owned())
 }
 
 // emitAndCheck is the cancellation checkpoint used after a non-failure event.

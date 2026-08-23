@@ -6,10 +6,12 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
 )
 
@@ -71,48 +73,79 @@ func (e *Expr) Source() string { return e.source }
 
 // Refs returns the Store references the expression reads, deduplicated and
 // sorted. References inside has() are included, since the expression still
-// depends on them. The returned slice is a copy.
+// depends on them. The returned slice is a fresh value the caller owns.
 func (e *Expr) Refs() []workflow.Ref { return slices.Clone(e.refs) }
 
-// Eval evaluates the expression against s. A mutable result read directly from
-// the Store is borrowed and must not be modified; expression evaluation does
-// not turn Store values into owned copies.
-func (e *Expr) Eval(s workflow.Store) (any, error) {
-	v, err := e.eval(s)
-	if err != nil {
-		return nil, e.wrap(err)
-	}
-	return v, nil
-}
-
-// Bool evaluates the expression and requires a bool result. There is no implicit
-// truthiness: a non-bool result is an [ErrType] error rather than a silent
-// coercion.
-func (e *Expr) Bool(s workflow.Store) (bool, error) { return evalAs[bool](e, s) }
-
-// String evaluates the expression and requires a string result.
-func (e *Expr) String(s workflow.Store) (string, error) { return evalAs[string](e, s) }
-
-// evalAs is the one accessor behind the typed ones above: evaluate, then require
-// the result to already be a T. Naming T as the type argument states the wanted
-// type once, where a method would otherwise repeat it in its signature, its
-// assertion, and its message.
-func evalAs[T any](e *Expr, s workflow.Store) (T, error) {
+// Eval evaluates the expression against s and requires a T result. There is no
+// implicit truthiness or conversion: a result of another type is an [ErrType]
+// error. Use T = any when the expression's dynamic result is wanted. A mutable
+// result read directly from the Store is borrowed and must not be modified;
+// expression evaluation does not turn Store values into owned copies. The zero
+// Expr and a nil *Expr return an error wrapping [flow.ErrInvalidConfig].
+func (e *Expr) Eval[T any](s workflow.Store) (T, error) {
 	var zero T
-	value, err := e.Eval(s)
-	if err != nil {
+	if err := e.validate(); err != nil {
 		return zero, err
+	}
+	value, err := e.eval(s)
+	if err != nil {
+		return zero, e.wrap(err)
+	}
+	target := reflect.TypeFor[T]()
+	if value == nil && nilAssignable(target.Kind()) {
+		return zero, nil
 	}
 	typed, ok := value.(T)
 	if !ok {
 		return zero, e.wrap(fmt.Errorf(
-			"%w: want %T, got %s",
+			"%w: want %s, got %s",
 			ErrType,
-			zero,
+			target,
 			(operand{raw: value}).typeName(),
 		))
 	}
 	return typed, nil
+}
+
+// validate checks the one invariant Parse establishes: an Expr has compiled
+// evaluation code. The concrete type is exported, so its zero value and a nil
+// pointer remain constructible even though neither is a compiled expression;
+// returning a structured definition error keeps those states from turning an
+// Eval or a workflow registration into a delayed panic.
+func (e *Expr) validate() error {
+	if e != nil && e.eval != nil {
+		return nil
+	}
+	source := ""
+	if e != nil {
+		source = e.source
+	}
+	return &Error{
+		Source: source,
+		Err: fmt.Errorf(
+			"%w: expression is not compiled",
+			flow.ErrInvalidConfig,
+		),
+	}
+}
+
+// nilAssignable reports the Go kinds to which an untyped nil result can be
+// assigned. Eval owns this generic type boundary so a nil expression or Store
+// value is accepted for T = any and other nilable types without weakening exact
+// type checks for concrete values.
+func nilAssignable(kind reflect.Kind) bool {
+	switch kind {
+	case reflect.Chan,
+		reflect.Func,
+		reflect.Interface,
+		reflect.Map,
+		reflect.Pointer,
+		reflect.Slice,
+		reflect.UnsafePointer:
+		return true
+	default:
+		return false
+	}
 }
 
 // wrap attaches the expression source to an evaluation error, leaving an error
@@ -248,7 +281,7 @@ func (c *compiler) compileRef(node ast.Expr) (evalFunc, error) {
 // values become ErrUndefined; malformed JSON views and conversion failures
 // remain type errors, including when the caller is has().
 func resolveReference(store workflow.Store, ref workflow.Ref) (any, error) {
-	value, err := workflow.Get[any](store, ref)
+	value, err := store.Get[any](ref)
 	if errors.Is(err, workflow.ErrNotFound) {
 		return nil, fmt.Errorf("%w %s", ErrUndefined, ref)
 	}

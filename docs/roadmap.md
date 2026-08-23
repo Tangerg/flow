@@ -4,7 +4,7 @@ This roadmap records unresolved engine work and decisions. Current behavior
 belongs in package documentation and tutorials; released compatibility history
 belongs in the [changelog](../CHANGELOG.md).
 
-Last reviewed: 2026-08-11.
+Last reviewed: 2026-08-23.
 
 ## Direction
 
@@ -39,9 +39,6 @@ The remaining work is stabilization:
    between actual releases.
 4. Keep formatting, tests, race detection, vet, lint, fuzzing, and
    vulnerability checks green.
-5. Review generic methods only after the module adopts a Go version that ships
-   them. Keep package-level generic functions unless a method is clearly
-   simpler for callers.
 
 ## Evidence required
 

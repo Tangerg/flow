@@ -18,8 +18,9 @@ import (
 //
 // K may be any comparable type, not just string, so enums and typed keys work.
 // Parent cancellation takes precedence and prevents a selected case from
-// starting after the resolver returns. Invalid cases are identified by key;
-// when several are invalid, Validate returns all of them as a joined error.
+// starting after the resolver returns. Invalid cases are identified by a
+// [CaseError]; when several are invalid, Validate returns all of them as a
+// joined error.
 func Switch[K comparable, I, O any](resolve Node[I, K], cases map[K]Node[I, O]) Node[I, O] {
 	return switchNode[K, I, O]{resolve: resolve, cases: maps.Clone(cases)}
 }
@@ -55,11 +56,7 @@ func (s switchNode[K, I, O]) Validate() error {
 	caseErrors := make([]error, 0)
 	for key, node := range s.cases {
 		if err := Validate(node); err != nil {
-			caseErrors = append(caseErrors, fmt.Errorf(
-				"switch case %#v: %w",
-				key,
-				err,
-			))
+			caseErrors = append(caseErrors, &CaseError{Key: key, Err: err})
 		}
 	}
 	// K need only be comparable, so case keys have no universal order. Sort the

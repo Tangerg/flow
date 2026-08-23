@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -63,6 +64,99 @@ func TestStructuredErrorFormatting(t *testing.T) {
 	}
 }
 
+// RefError is exported structured data, so an application can assemble its
+// cause without crossing a workflow depth boundary. Formatting must classify a
+// deeply joined missing-value cause without recursive standard error matching.
+func TestRefErrorFormatsDeepJoinedCauseWithoutStackPerWrapper(t *testing.T) {
+	withBoundedStack(t, func() {
+		cause := workflow.ErrNotFound
+		for range 20_000 {
+			cause = errorChildren{cause}
+		}
+		message := (&workflow.RefError{
+			Ref:  workflow.Output("load"),
+			Want: "int",
+			Err:  cause,
+		}).Error()
+		if message != "workflow: ref load#/output: joined children" {
+			t.Fatalf("RefError = %q; reinterpreted a caller-owned multi-error", message)
+		}
+	})
+}
+
+// Workflow's location errors are exported structured data, so an application
+// can assemble a direct chain without crossing a definition-depth boundary.
+// Rendering one must consume bounded stack just as matching and cloning it do.
+func TestWorkflowErrorsFormatDeepOwnedChainIteratively(t *testing.T) {
+	withBoundedStack(t, func() {
+		var err error
+		err = errors.New("boom")
+		for index := range 20_000 {
+			switch index % 5 {
+			case 0:
+				err = &workflow.StepError{ID: fmt.Sprintf("step-%d", index), Op: workflow.OpRun, Err: err}
+			case 1:
+				err = &workflow.RefError{Ref: workflow.Output(fmt.Sprintf("node-%d", index)), Want: "int", Got: "string", Err: err}
+			case 2:
+				err = &workflow.RegistrationError{Kind: "node", Name: fmt.Sprintf("node-%d", index), Err: err}
+			case 3:
+				err = &workflow.GraphError{Path: fmt.Sprintf("/nodes/%d", index), NodeID: fmt.Sprintf("node-%d", index), Field: "type", Err: err}
+			case 4:
+				err = &workflow.SpecError{Path: fmt.Sprintf("/steps/%d", index), Kind: workflow.KindLeaf, ID: fmt.Sprintf("step-%d", index), Field: "type", Err: err}
+			}
+		}
+		message := err.Error()
+		if !strings.HasPrefix(message, `workflow: spec at "/steps/19999" leaf "step-19999" field type: `) ||
+			!strings.Contains(message, `step "step-0" run: boom: got string, want int`) ||
+			strings.Count(message, "workflow:") != 1 {
+			t.Fatalf("Error() did not preserve the complete wrapper order")
+		}
+	})
+}
+
+// Exported workflow errors are pointer-shaped structured data and can appear as
+// typed nil causes. Formatting must terminate at that boundary instead of
+// recursively asking fmt to invoke the same Error method again.
+func TestWorkflowErrorsFormatTypedNilAsNil(t *testing.T) {
+	var stepErr *workflow.StepError
+	var refErr *workflow.RefError
+	var registrationErr *workflow.RegistrationError
+	var graphErr *workflow.GraphError
+	var specErr *workflow.SpecError
+	var indexErr *flow.IndexError
+	var caseErr *flow.CaseError
+
+	for name, err := range map[string]error{
+		"step":          stepErr,
+		"reference":     refErr,
+		"registration":  registrationErr,
+		"graph":         graphErr,
+		"specification": specErr,
+		"index":         indexErr,
+		"case":          caseErr,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := err.Error(); got != "<nil>" {
+				t.Fatalf("Error() = %q; want <nil>", got)
+			}
+			outer := &workflow.StepError{ID: "outer", Op: workflow.OpRun, Err: err}
+			if got := outer.Error(); got != `workflow: step "outer" run: <nil>` {
+				t.Fatalf("outer Error() = %q", got)
+			}
+			for _, category := range []error{
+				workflow.ErrInvalidRegistration,
+				workflow.ErrInvalidGraph,
+				workflow.ErrInvalidSpec,
+				workflow.ErrNotFound,
+			} {
+				if errors.Is(err, category) {
+					t.Fatalf("typed nil error matched %v", category)
+				}
+			}
+		})
+	}
+}
+
 func TestRefError(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -75,7 +169,7 @@ func TestRefError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := workflow.Get[int](tt.store, workflow.Output("n"))
+			_, err := tt.store.Get[int](workflow.Output("n"))
 			var refErr *workflow.RefError
 			if !errors.Is(err, tt.want) || !errors.As(err, &refErr) || refErr.Ref != workflow.Output("n") {
 				t.Fatalf("err = %v; want RefError wrapping %v", err, tt.want)
@@ -188,15 +282,26 @@ func TestSurfacedErrorsNamePackageExactlyOnce(t *testing.T) {
 		{ID: "a", Type: "n", Inputs: workflow.OneInput(workflow.Output("b"))},
 		{ID: "b", Type: "n", Inputs: workflow.OneInput(workflow.Output("a"))},
 	}}
+	buildFailure := workflow.NewRegistry().MustRegisterNode("broken", workflow.Factory(
+		func(struct{}) (flow.Node[int, int], error) {
+			return nil, errors.New("builder failed")
+		},
+	))
+	_, directBuildFailure := workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
+		return nil, errors.New("builder failed")
+	})(workflow.NodeSpec{Inputs: workflow.OneInput(workflow.Output("seed"))})
+	invalidSubgraphFactory := workflow.SubgraphFactory(nil, workflow.Output("body"))
+	_, directSubgraphFailure := invalidSubgraphFactory(workflow.NodeSpec{ID: "subgraph"})
+	invalidSubgraph := workflow.NewRegistry().MustRegisterNode("subgraph", invalidSubgraphFactory)
 
 	errs := map[string]error{
 		"journal conflict": journal.Record(workflow.JournalKey{ID: "a"}, 1),
 		"missing value": func() error {
-			_, err := workflow.Get[int](workflow.NewStore(), workflow.Output("x"))
+			_, err := workflow.NewStore().Get[int](workflow.Output("x"))
 			return err
 		}(),
 		"type mismatch": func() error {
-			_, err := workflow.Get[int](workflow.NewStore().WithOutput("x", "s"), workflow.Output("x"))
+			_, err := workflow.NewStore().WithOutput("x", "s").Get[int](workflow.Output("x"))
 			return err
 		}(),
 		"duplicate registration": registry.RegisterNode("n", func(workflow.NodeSpec) (workflow.Step, error) {
@@ -212,13 +317,31 @@ func TestSurfacedErrorsNamePackageExactlyOnce(t *testing.T) {
 		"unknown spec node type": registry.ValidateSpec(workflow.Spec{
 			Kind: workflow.KindLeaf, ID: "x", Type: "?",
 		}),
-		"bad graph JSON":    workflow.ValidateGraphJSON([]byte(`{"nodes":[`)),
-		"bad journal wire":  json.Unmarshal([]byte(`{"version":1,"records":[]}`), workflow.NewJournal()),
-		"nil journal key":   (*workflow.JournalKey)(nil).UnmarshalJSON([]byte(`{"id":"a"}`)),
-		"nil scope frame":   (*workflow.ScopeFrame)(nil).UnmarshalJSON([]byte(`{"id":"a"}`)),
-		"nil step to Run":   runError(t, nil),
-		"nil loop body":     runError(t, workflow.Loop(workflow.LoopConfig{ID: "l", Body: nil})),
-		"duplicate step ID": runError(t, workflow.Sequence(passthrough("same"), passthrough("same"))),
+		"node build failure": compileGraphError(buildFailure, workflow.Graph{Nodes: []workflow.GraphNode{{
+			ID:     "broken",
+			Type:   "broken",
+			Inputs: workflow.OneInput(workflow.Output("seed")),
+		}}}),
+		"direct node build failure": directBuildFailure,
+		"subgraph factory definition": compileGraphError(invalidSubgraph, workflow.Graph{Nodes: []workflow.GraphNode{{
+			ID:   "subgraph",
+			Type: "subgraph",
+		}}}),
+		"direct subgraph factory definition": directSubgraphFailure,
+		"nested leaf validation":             nestedLeafValidationError(t),
+		"nested switched leaf validation":    nestedSwitchedLeafValidationError(t),
+		"nested mapped leaf failure":         nestedMappedLeafError(t),
+		"subgraph input binding":             subgraphInputError(t),
+		"subgraph body projection":           subgraphProjectionError(t),
+		"iteration body failure":             iterationBodyError(t),
+		"iteration body projection":          iterationProjectionError(t),
+		"bad graph JSON":                     workflow.ValidateGraphJSON([]byte(`{"nodes":[`)),
+		"bad journal wire":                   json.Unmarshal([]byte(`{"version":1,"records":[]}`), workflow.NewJournal()),
+		"nil journal key":                    (*workflow.JournalKey)(nil).UnmarshalJSON([]byte(`{"id":"a"}`)),
+		"nil scope frame":                    (*workflow.ScopeFrame)(nil).UnmarshalJSON([]byte(`{"id":"a"}`)),
+		"nil step to Run":                    runError(t, nil),
+		"nil loop body":                      runError(t, workflow.Loop(workflow.LoopConfig{ID: "l", Body: nil})),
+		"duplicate step ID":                  runError(t, workflow.Sequence(passthrough("same"), passthrough("same"))),
 		// The same conflict as "journal conflict", but reached during a run so a
 		// StepError supplies the prefix instead of Record. The two paths format
 		// separately, so both have to be checked.
@@ -236,6 +359,104 @@ func TestSurfacedErrorsNamePackageExactlyOnce(t *testing.T) {
 			}
 		})
 	}
+}
+
+func compileGraphError(registry *workflow.Registry, graph workflow.Graph) error {
+	_, err := registry.CompileGraph(graph)
+	return err
+}
+
+func nestedLeafValidationError(t *testing.T) error {
+	t.Helper()
+	bind := workflow.BinderFunc[workflow.Store](func(store workflow.Store) (workflow.Store, error) {
+		return store, nil
+	})
+	inner := workflow.Leaf("inner", bind, flow.NodeFunc[workflow.Store, workflow.Store](nil))
+	return runError(t, workflow.Leaf("outer", bind, inner))
+}
+
+func nestedSwitchedLeafValidationError(t *testing.T) error {
+	t.Helper()
+	bind := workflow.BinderFunc[workflow.Store](func(store workflow.Store) (workflow.Store, error) {
+		return store, nil
+	})
+	first := workflow.Leaf("first", bind, flow.NodeFunc[workflow.Store, workflow.Store](nil))
+	second := workflow.Leaf("second", bind, flow.NodeFunc[workflow.Store, workflow.Store](nil))
+	resolve := flow.NodeFunc[workflow.Store, string](
+		func(context.Context, workflow.Store) (string, error) { return "first", nil },
+	)
+	switched := flow.Switch(resolve, map[string]flow.Node[workflow.Store, workflow.Store]{
+		"first":  first,
+		"second": second,
+	})
+	return runError(t, workflow.Leaf("outer", bind, switched))
+}
+
+func nestedMappedLeafError(t *testing.T) error {
+	t.Helper()
+	inner := workflow.LeafFunc("inner", workflow.Output("missing"),
+		func(_ context.Context, value int) (int, error) { return value, nil })
+	mapped := flow.Map(inner, flow.MapConfig{})
+	bind := workflow.BinderFunc[[]workflow.Store](func(store workflow.Store) ([]workflow.Store, error) {
+		return []workflow.Store{store}, nil
+	})
+	return runError(t, workflow.Leaf("outer", bind, mapped))
+}
+
+func subgraphInputError(t *testing.T) error {
+	t.Helper()
+	body := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(_ context.Context, store workflow.Store) (workflow.Store, error) { return store, nil },
+	)
+	return runError(t, workflow.Subgraph(workflow.SubgraphConfig{
+		ID:         "subgraph",
+		Inputs:     workflow.Inputs{"seed": workflow.Output("missing")},
+		Body:       body,
+		BodyOutput: workflow.Output("seed"),
+	}))
+}
+
+func subgraphProjectionError(t *testing.T) error {
+	t.Helper()
+	body := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(_ context.Context, store workflow.Store) (workflow.Store, error) { return store, nil },
+	)
+	return runError(t, workflow.Subgraph(workflow.SubgraphConfig{
+		ID:         "subgraph",
+		Body:       body,
+		BodyOutput: workflow.Output("missing"),
+	}))
+}
+
+func iterationProjectionError(t *testing.T) error {
+	t.Helper()
+	body := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(_ context.Context, store workflow.Store) (workflow.Store, error) { return store, nil },
+	)
+	step := workflow.Iteration(workflow.IterationConfig{
+		ID:         "iteration",
+		Input:      workflow.Output("items"),
+		Body:       body,
+		BodyOutput: workflow.Output("missing"),
+	})
+	_, err := step.Run(t.Context(), workflow.NewStore().WithOutput("items", []int{1}))
+	return err
+}
+
+func iterationBodyError(t *testing.T) error {
+	t.Helper()
+	body := workflow.LeafFunc("inner", workflow.Item("iteration"),
+		func(_ context.Context, _ int) (int, error) {
+			return 0, errors.New("body failed")
+		})
+	step := workflow.Iteration(workflow.IterationConfig{
+		ID:         "iteration",
+		Input:      workflow.Output("items"),
+		Body:       body,
+		BodyOutput: workflow.Output("inner"),
+	})
+	_, err := step.Run(t.Context(), workflow.NewStore().WithOutput("items", []int{1}))
+	return err
 }
 
 func runError(t *testing.T, step workflow.Step) error {
@@ -336,7 +557,7 @@ func TestAStoredNilIsATypeErrorNotAnAbsence(t *testing.T) {
 		WithOutput("empty", nil).
 		WithOutput("later", 7)
 
-	_, err := workflow.Get[int](store, workflow.Output("empty"))
+	_, err := store.Get[int](workflow.Output("empty"))
 	if !errors.Is(err, workflow.ErrTypeMismatch) {
 		t.Fatalf("Get[int] of a nil cell = %v; want ErrTypeMismatch", err)
 	}

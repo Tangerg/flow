@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
 	"github.com/Tangerg/flow/workflow/expr"
 )
@@ -106,12 +107,28 @@ func TestEval(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Parse: %v", err)
 			}
-			got, err := e.Eval(s)
+			got, err := e.Eval[any](s)
 			if err != nil {
 				t.Fatalf("Eval: %v", err)
 			}
 			if got != want {
 				t.Fatalf("Eval = %#v (%T); want %#v (%T)", got, got, want, want)
+			}
+		})
+	}
+}
+
+func TestEvalRejectsUncompiledExpressions(t *testing.T) {
+	tests := map[string]*expr.Expr{
+		"zero": new(expr.Expr),
+		"nil":  nil,
+	}
+	for name, expression := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := expression.Eval[any](workflow.Store{})
+			var expressionErr *expr.Error
+			if !errors.As(err, &expressionErr) || !errors.Is(err, flow.ErrInvalidConfig) {
+				t.Fatalf("Eval error = %v; want expr.Error wrapping ErrInvalidConfig", err)
 			}
 		})
 	}
@@ -182,7 +199,7 @@ func TestEval_operatorMatrix(t *testing.T) {
 
 	for src, want := range tests {
 		t.Run(src, func(t *testing.T) {
-			got, err := expr.MustParse(src).Eval(s)
+			got, err := expr.MustParse(src).Eval[any](s)
 			if err != nil {
 				t.Fatalf("Eval: %v", err)
 			}
@@ -203,7 +220,7 @@ func TestEval_stringAndFloatRejectUnsupportedOperators(t *testing.T) {
 		"x.output % y.output",
 	} {
 		t.Run(src, func(t *testing.T) {
-			if _, err := expr.MustParse(src).Eval(s); !errors.Is(err, expr.ErrType) {
+			if _, err := expr.MustParse(src).Eval[any](s); !errors.Is(err, expr.ErrType) {
 				t.Fatalf("err = %v; want ErrType", err)
 			}
 		})
@@ -310,7 +327,7 @@ func TestParse_boundsNestingNotBreadth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse of a wide expression within the nesting limit: %v", err)
 	}
-	value, err := expression.Eval(workflow.NewStore())
+	value, err := expression.Eval[any](workflow.NewStore())
 	if err != nil {
 		t.Fatalf("Eval: %v", err)
 	}
@@ -337,7 +354,7 @@ func TestEval_reportsWhyAnOperandFailed(t *testing.T) {
 		`missing.output || false`,
 	} {
 		t.Run(src, func(t *testing.T) {
-			_, err := expr.MustParse(src).Eval(workflow.NewStore())
+			_, err := expr.MustParse(src).Eval[any](workflow.NewStore())
 			if !errors.Is(err, expr.ErrUndefined) {
 				t.Fatalf("error = %v; want ErrUndefined", err)
 			}
@@ -367,7 +384,7 @@ func TestParse_reportsWhyAnIndexedBaseIsNotAReference(t *testing.T) {
 
 func TestEval_preservesNestedStoreResolutionFailure(t *testing.T) {
 	s := workflow.NewStore().WithOutput("bad", ambiguousJSON{})
-	_, err := expr.MustParse(`bad.output.field`).Eval(s)
+	_, err := expr.MustParse(`bad.output.field`).Eval[any](s)
 	if !errors.Is(err, expr.ErrType) ||
 		!errors.Is(err, workflow.ErrTypeMismatch) ||
 		errors.Is(err, expr.ErrUndefined) ||
@@ -375,7 +392,7 @@ func TestEval_preservesNestedStoreResolutionFailure(t *testing.T) {
 		t.Fatalf("Eval error = %v; want expression and Store type errors", err)
 	}
 
-	_, err = expr.MustParse(`has(bad.output.field)`).Bool(s)
+	_, err = expr.MustParse(`has(bad.output.field)`).Eval[bool](s)
 	if !errors.Is(err, expr.ErrType) ||
 		!errors.Is(err, workflow.ErrTypeMismatch) ||
 		errors.Is(err, expr.ErrUndefined) ||
@@ -384,24 +401,24 @@ func TestEval_preservesNestedStoreResolutionFailure(t *testing.T) {
 	}
 }
 
-// A typed accessor requires its type rather than coercing towards it, and says
+// Eval requires its requested type rather than coercing towards it, and says
 // which type it wanted and which it got. Both halves are the reason a caller can
 // tell a wrong expression from a wrong Store value.
-func TestTypedAccessorsNameBothTypes(t *testing.T) {
+func TestEvalNamesBothTypes(t *testing.T) {
 	tests := map[string]struct {
 		eval func(workflow.Store) error
 		want string
 	}{
 		"bool wanted": {
 			eval: func(s workflow.Store) error {
-				_, err := expr.MustParse(`v.output`).Bool(s)
+				_, err := expr.MustParse(`v.output`).Eval[bool](s)
 				return err
 			},
 			want: "want bool, got string",
 		},
 		"string wanted": {
 			eval: func(s workflow.Store) error {
-				_, err := expr.MustParse(`v.output == v.output`).String(s)
+				_, err := expr.MustParse(`v.output == v.output`).Eval[string](s)
 				return err
 			},
 			want: "want string, got bool",
@@ -434,7 +451,7 @@ func TestParse_integerIndexesUseTheStorePathRepresentation(t *testing.T) {
 	} {
 		t.Run(src, func(t *testing.T) {
 			e := expr.MustParse(src)
-			got, err := e.String(s)
+			got, err := e.Eval[string](s)
 			if err != nil || got != want.value {
 				t.Fatalf("String = %q, %v; want %q", got, err, want.value)
 			}
@@ -459,7 +476,7 @@ func TestEval_stringIndexesAddressEveryJSONKey(t *testing.T) {
 		`a.output["x~y"]`: "tilde",
 	} {
 		t.Run(src, func(t *testing.T) {
-			got, err := expr.MustParse(src).String(s)
+			got, err := expr.MustParse(src).Eval[string](s)
 			if err != nil || got != want {
 				t.Fatalf("String = %q, %v; want %q", got, err, want)
 			}
@@ -479,10 +496,10 @@ func TestEval_normalizesAnApplicationsOwnScalarTypes(t *testing.T) {
 	type label string
 
 	s := store("flag.output", approved(true), "name.output", label("beta"))
-	if got, err := expr.MustParse("flag.output && name.output == \"beta\"").Bool(s); err != nil || !got {
+	if got, err := expr.MustParse("flag.output && name.output == \"beta\"").Eval[bool](s); err != nil || !got {
 		t.Fatalf("Bool = %v, %v; want true", got, err)
 	}
-	if got, err := expr.MustParse("name.output").String(s); err != nil || got != "beta" {
+	if got, err := expr.MustParse("name.output").Eval[string](s); err != nil || got != "beta" {
 		t.Fatalf("String = %q, %v; want %q", got, err, "beta")
 	}
 }
@@ -509,7 +526,7 @@ func TestEval_normalizesEveryNumericKind(t *testing.T) {
 	e := expr.MustParse("v.output == 5 && v.output == 5.0")
 	for name, value := range values {
 		t.Run(name, func(t *testing.T) {
-			got, err := e.Bool(store("v.output", value))
+			got, err := e.Eval[bool](store("v.output", value))
 			if err != nil || !got {
 				t.Fatalf("Bool = %v, %v; want true", got, err)
 			}
@@ -552,7 +569,7 @@ func TestEval_afterJSONRoundTrip(t *testing.T) {
 	for src, want := range tests {
 		t.Run(src, func(t *testing.T) {
 			for _, current := range []workflow.Store{original, restored} {
-				got, evalErr := expr.MustParse(src).Eval(current)
+				got, evalErr := expr.MustParse(src).Eval[any](current)
 				if evalErr != nil {
 					t.Fatalf("Eval: %v", evalErr)
 				}
@@ -576,7 +593,7 @@ func TestEval_mixedNumberComparisonIsExact(t *testing.T) {
 	}
 	for src, want := range tests {
 		t.Run(src, func(t *testing.T) {
-			got, err := expr.MustParse(src).Bool(s)
+			got, err := expr.MustParse(src).Eval[bool](s)
 			if err != nil || got != want {
 				t.Fatalf("Bool = %v, %v; want %v", got, err, want)
 			}
@@ -608,7 +625,7 @@ func TestEval_integralJSONNumbersRemainExact(t *testing.T) {
 	}
 	for src, want := range tests {
 		t.Run(src, func(t *testing.T) {
-			got, err := expr.MustParse(src).Eval(restored)
+			got, err := expr.MustParse(src).Eval[any](restored)
 			if err != nil || got != want {
 				t.Fatalf("Eval = %#v, %v; want %#v", got, err, want)
 			}
@@ -639,7 +656,7 @@ func TestEval_containerEqualityIsSymmetric(t *testing.T) {
 		"list.output != object.output":   "!= wants scalar operands, got []interface {} and map[string]interface {}",
 	} {
 		t.Run(src, func(t *testing.T) {
-			_, err := expr.MustParse(src).Eval(s)
+			_, err := expr.MustParse(src).Eval[any](s)
 			if !errors.Is(err, expr.ErrType) {
 				t.Fatalf("err = %v; want ErrType", err)
 			}
@@ -673,7 +690,7 @@ func TestEval_lenAcceptsConcreteContainersBeforeAndAfterJSON(t *testing.T) {
 			"len(array.output)":  int64(3),
 			"len(object.output)": int64(2),
 		} {
-			got, evalErr := expr.MustParse(src).Eval(s)
+			got, evalErr := expr.MustParse(src).Eval[any](s)
 			if evalErr != nil || got != want {
 				t.Fatalf("%s = %v, %v; want %d", src, got, evalErr, want)
 			}
@@ -686,7 +703,7 @@ func TestParse_quotedNodeID(t *testing.T) {
 	s := workflow.NewStore().
 		WithOutput("load-user", 7).
 		WithCell("space id", "result", true)
-	got, err := e.Bool(s)
+	got, err := e.Eval[bool](s)
 	if err != nil || !got {
 		t.Fatalf("Bool = %v, %v; want true", got, err)
 	}
@@ -741,17 +758,17 @@ func TestEval_hugeUnsignedStaysExactAcrossJSON(t *testing.T) {
 			"v.output < 18446744073709551616.0": true,
 			"v.output % 2":                      uint64(1),
 		} {
-			got, evalErr := expr.MustParse(src).Eval(s)
+			got, evalErr := expr.MustParse(src).Eval[any](s)
 			if evalErr != nil || got != want {
 				t.Fatalf("%s = %#v, %v; want %#v", src, got, evalErr, want)
 			}
 		}
 	}
 
-	if got, evalErr := expr.MustParse("-9223372036854775808").Eval(workflow.NewStore()); evalErr != nil || got != int64(math.MinInt64) {
+	if got, evalErr := expr.MustParse("-9223372036854775808").Eval[any](workflow.NewStore()); evalErr != nil || got != int64(math.MinInt64) {
 		t.Fatalf("minimum int64 literal = %#v, %v", got, evalErr)
 	}
-	if _, evalErr := expr.MustParse("-18446744073709551615").Eval(workflow.NewStore()); !errors.Is(evalErr, expr.ErrType) {
+	if _, evalErr := expr.MustParse("-18446744073709551615").Eval[any](workflow.NewStore()); !errors.Is(evalErr, expr.ErrType) {
 		t.Fatalf("negating MaxUint64 err = %v; want ErrType", evalErr)
 	}
 }
@@ -777,8 +794,8 @@ func TestEval_numericSemanticsSurviveStoreJSON(t *testing.T) {
 	} {
 		t.Run(src, func(t *testing.T) {
 			e := expr.MustParse(src)
-			before, beforeErr := e.Eval(original)
-			after, afterErr := e.Eval(restored)
+			before, beforeErr := e.Eval[any](original)
+			after, afterErr := e.Eval[any](restored)
 			if beforeErr != nil || afterErr != nil || before != want || after != want {
 				t.Fatalf("before = %#v, %v; after = %#v, %v; want %#v",
 					before, beforeErr, after, afterErr, want)
@@ -821,7 +838,7 @@ func TestEval_unsignedArithmeticAndSpecialFloats(t *testing.T) {
 	}
 	for src, want := range tests {
 		t.Run(src, func(t *testing.T) {
-			got, err := expr.MustParse(src).Eval(s)
+			got, err := expr.MustParse(src).Eval[any](s)
 			if err != nil || got != want {
 				t.Fatalf("Eval = %#v, %v; want %#v", got, err, want)
 			}
@@ -832,12 +849,12 @@ func TestEval_unsignedArithmeticAndSpecialFloats(t *testing.T) {
 		"u.output + negative.output",
 		"negative.output + u.output",
 	} {
-		if _, err := expr.MustParse(src).Eval(s); !errors.Is(err, expr.ErrType) {
+		if _, err := expr.MustParse(src).Eval[any](s); !errors.Is(err, expr.ErrType) {
 			t.Fatalf("%s err = %v; want ErrType", src, err)
 		}
 	}
 	for _, src := range []string{"u.output / zero.output", "u.output % zero.output"} {
-		if _, err := expr.MustParse(src).Eval(s); !errors.Is(err, expr.ErrDivideByZero) {
+		if _, err := expr.MustParse(src).Eval[any](s); !errors.Is(err, expr.ErrDivideByZero) {
 			t.Fatalf("%s err = %v; want ErrDivideByZero", src, err)
 		}
 	}
@@ -853,7 +870,7 @@ func TestEval_shortCircuits(t *testing.T) {
 	}
 	for src, want := range tests {
 		t.Run(src, func(t *testing.T) {
-			got, err := expr.MustParse(src).Bool(s)
+			got, err := expr.MustParse(src).Eval[bool](s)
 			if err != nil {
 				t.Fatalf("Bool: %v", err)
 			}
@@ -943,7 +960,7 @@ func TestEval_typeErrors(t *testing.T) {
 		`list.output == list.output`: "== wants scalar operands, got []interface {} and []interface {}",
 	} {
 		t.Run(src, func(t *testing.T) {
-			_, err := expr.MustParse(src).Eval(s.WithCell("f", "output", 1.5))
+			_, err := expr.MustParse(src).Eval[any](s.WithCell("f", "output", 1.5))
 			if !errors.Is(err, expr.ErrType) || !strings.Contains(err.Error(), want) {
 				t.Fatalf("Eval err = %v; want ErrType saying %q", err, want)
 			}
@@ -952,7 +969,7 @@ func TestEval_typeErrors(t *testing.T) {
 }
 
 func TestEval_undefinedReference(t *testing.T) {
-	_, err := expr.MustParse("missing.output > 1").Eval(workflow.NewStore())
+	_, err := expr.MustParse("missing.output > 1").Eval[any](workflow.NewStore())
 	if !errors.Is(err, expr.ErrUndefined) {
 		t.Fatalf("err = %v; want ErrUndefined", err)
 	}
@@ -965,25 +982,25 @@ func TestEval_divideByZero(t *testing.T) {
 	for _, src := range []string{"1 / 0", "1 % 0", "1.0 / 0.0", "1 / z.output"} {
 		t.Run(src, func(t *testing.T) {
 			s := store("z.output", 0)
-			if _, err := expr.MustParse(src).Eval(s); !errors.Is(err, expr.ErrDivideByZero) {
+			if _, err := expr.MustParse(src).Eval[any](s); !errors.Is(err, expr.ErrDivideByZero) {
 				t.Fatalf("err = %v; want ErrDivideByZero", err)
 			}
 		})
 	}
 }
 
-func TestBoolAndString_requireTheirType(t *testing.T) {
+func TestEval_requiresItsType(t *testing.T) {
 	s := store("n.output", 7, "s.output", "beta")
 
-	if _, err := expr.MustParse("n.output").Bool(s); !errors.Is(err, expr.ErrType) {
-		t.Fatalf("Bool of a number err = %v; want ErrType", err)
+	if _, err := expr.MustParse("n.output").Eval[bool](s); !errors.Is(err, expr.ErrType) {
+		t.Fatalf("Eval[bool] of a number err = %v; want ErrType", err)
 	}
-	if _, err := expr.MustParse("n.output").String(s); !errors.Is(err, expr.ErrType) {
-		t.Fatalf("String of a number err = %v; want ErrType", err)
+	if _, err := expr.MustParse("n.output").Eval[string](s); !errors.Is(err, expr.ErrType) {
+		t.Fatalf("Eval[string] of a number err = %v; want ErrType", err)
 	}
-	got, err := expr.MustParse("s.output").String(s)
+	got, err := expr.MustParse("s.output").Eval[string](s)
 	if err != nil || got != "beta" {
-		t.Fatalf("String = %q, %v; want beta", got, err)
+		t.Fatalf("Eval[string] = %q, %v; want beta", got, err)
 	}
 }
 
@@ -1009,6 +1026,16 @@ func TestSourceAndMustParsePanics(t *testing.T) {
 		}
 	}()
 	expr.MustParse("counter")
+}
+
+func TestNilErrorFormatsAsNil(t *testing.T) {
+	var exprErr *expr.Error
+	if got := exprErr.Error(); got != "<nil>" {
+		t.Fatalf("Error() = %q; want <nil>", got)
+	}
+	if errors.Is(exprErr, expr.ErrSyntax) {
+		t.Fatal("typed nil Error unexpectedly matched a cause")
+	}
 }
 
 // TestError_reportsAPositionOnlyWhenItHasOne pins both message forms Error
@@ -1039,7 +1066,7 @@ func TestError_reportsAPositionOnlyWhenItHasOne(t *testing.T) {
 		},
 		"evaluated value of the wrong type": {
 			fail: func() error {
-				_, err := expr.MustParse("v.output").Bool(store("v.output", "text"))
+				_, err := expr.MustParse("v.output").Eval[bool](store("v.output", "text"))
 				return err
 			},
 			wantText: "v.output",
@@ -1118,7 +1145,7 @@ func TestOrdering_comparesAcrossTheSignedUnsignedBoundary(t *testing.T) {
 	}
 	for source, want := range tests {
 		t.Run(source, func(t *testing.T) {
-			got, err := expr.MustParse(source).Bool(workflow.NewStore())
+			got, err := expr.MustParse(source).Eval[bool](workflow.NewStore())
 			if err != nil || got != want {
 				t.Fatalf("%s = %v, %v; want %v", source, got, err, want)
 			}

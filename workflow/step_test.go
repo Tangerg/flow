@@ -17,8 +17,8 @@ func TestSequence_threadsStore(t *testing.T) {
 	double := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil })
 	inc := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x + 1, nil })
 
-	step1 := workflow.Leaf("double", workflow.From[int](workflow.Ref{NodeID: "start", Path: "/output"}), double)
-	step2 := workflow.Leaf("inc", workflow.From[int](workflow.Output("double")), inc)
+	step1 := workflow.Leaf("double", workflow.Ref{NodeID: "start", Path: "/output"}.Bind[int](), double)
+	step2 := workflow.Leaf("inc", workflow.Output("double").Bind[int](), inc)
 
 	flow := workflow.Sequence(step1, step2)
 
@@ -61,7 +61,7 @@ func TestSequence_preservesAChildStoreOnErrorAcrossNesting(t *testing.T) {
 				t.Fatalf("Run error = %v; want step failure", err)
 			}
 			for _, id := range []string{"first", "failing"} {
-				value, getErr := workflow.Get[bool](output, workflow.Output(id))
+				value, getErr := output.Get[bool](workflow.Output(id))
 				if getErr != nil || !value {
 					t.Fatalf("output %q = %v, %v; want true, nil", id, value, getErr)
 				}
@@ -75,7 +75,7 @@ func TestSequence_preservesAChildStoreOnErrorAcrossNesting(t *testing.T) {
 
 func TestLeaf_missingInput(t *testing.T) {
 	leaf := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil })
-	step := workflow.Leaf("n", workflow.From[int](workflow.Ref{NodeID: "absent", Path: "/output"}), leaf)
+	step := workflow.Leaf("n", workflow.Ref{NodeID: "absent", Path: "/output"}.Bind[int](), leaf)
 
 	if _, err := step.Run(t.Context(), workflow.NewStore()); err == nil {
 		t.Fatal("expected error for missing input")
@@ -115,7 +115,7 @@ func TestLeafFunc_andFirstOf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got, err := workflow.Get[int](out, workflow.Output("double")); err != nil || got != 42 {
+	if got, err := out.Get[int](workflow.Output("double")); err != nil || got != 42 {
 		t.Fatalf("output = %d, %v; want 42, nil", got, err)
 	}
 }
@@ -137,7 +137,7 @@ func TestSequence_ownsStepSliceStructure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got, getErr := workflow.Get[int](out, workflow.Output("original")); getErr != nil || got != 2 {
+	if got, getErr := out.Get[int](workflow.Output("original")); getErr != nil || got != 2 {
 		t.Fatalf("original output = %d, %v; want 2, nil", got, getErr)
 	}
 	if _, ok := out.Lookup(workflow.Output("changed")); ok {
@@ -164,7 +164,7 @@ func TestFirstOf_reportsConversionAndMissingErrors(t *testing.T) {
 func TestLeaf_propagatesLeafError(t *testing.T) {
 	boom := errors.New("boom")
 	leaf := flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom })
-	step := workflow.Leaf("n", workflow.From[int](workflow.Ref{NodeID: "start", Path: "/output"}), leaf)
+	step := workflow.Leaf("n", workflow.Ref{NodeID: "start", Path: "/output"}.Bind[int](), leaf)
 
 	_, err := step.Run(t.Context(), workflow.NewStore().WithOutput("start", 1))
 	if !errors.Is(err, boom) {
@@ -263,10 +263,7 @@ func TestSequence_acceptsNilSafePointerStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if value, getErr := workflow.Get[bool](
-		output,
-		workflow.Output("nil-safe"),
-	); getErr != nil || !value {
+	if value, getErr := output.Get[bool](workflow.Output("nil-safe")); getErr != nil || !value {
 		t.Fatalf("nil-safe output = %v, %v; want true, nil", value, getErr)
 	}
 }
@@ -286,10 +283,7 @@ func TestSequence_acceptsNilSafeFunctionStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if value, getErr := workflow.Get[bool](
-		output,
-		workflow.Output("nil-safe-func"),
-	); getErr != nil || !value {
+	if value, getErr := output.Get[bool](workflow.Output("nil-safe-func")); getErr != nil || !value {
 		t.Fatalf("nil-safe function output = %v, %v; want true, nil", value, getErr)
 	}
 }
@@ -428,7 +422,7 @@ func TestNestedRun_rootSuspensionIdentitySurvivesOuterLeaf(t *testing.T) {
 			if err != nil {
 				return 0, err
 			}
-			return workflow.Get[int](result, workflow.Output("inner"))
+			return result.Get[int](workflow.Output("inner"))
 		}),
 	)
 	ctx := workflow.WithScope(t.Context(), "outer-scope")
@@ -446,7 +440,7 @@ func TestNestedRun_rootSuspensionIdentitySurvivesOuterLeaf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resumed Run: %v", err)
 	}
-	if value, getErr := workflow.Get[int](result, workflow.Output("outer")); getErr != nil || value != 42 {
+	if value, getErr := result.Get[int](workflow.Output("outer")); getErr != nil || value != 42 {
 		t.Fatalf("outer output = %d, %v; want 42, nil", value, getErr)
 	}
 }
@@ -478,10 +472,7 @@ func TestLeaf_acceptsNilSafePointerBinder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got, getErr := workflow.Get[int](
-		out,
-		workflow.Output("double"),
-	); getErr != nil || got != 42 {
+	if got, getErr := out.Get[int](workflow.Output("double")); getErr != nil || got != 42 {
 		t.Fatalf("output = %d, %v; want 42, nil", got, getErr)
 	}
 }
@@ -504,7 +495,7 @@ func TestLeaf_acceptsNilSafeFunctionBinder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if value, getErr := workflow.Get[int](output, workflow.Output("double")); getErr != nil || value != 42 {
+	if value, getErr := output.Get[int](workflow.Output("double")); getErr != nil || value != 42 {
 		t.Fatalf("output = %d, %v; want 42, nil", value, getErr)
 	}
 }
@@ -958,7 +949,7 @@ func TestLeaf_validatesBuiltinBinderBeforeJournalReplay(t *testing.T) {
 		name string
 		bind workflow.Binder[int]
 	}{
-		{name: "From", bind: workflow.From[int](workflow.Ref{})},
+		{name: "Ref.Bind", bind: workflow.Ref{}.Bind[int]()},
 		{name: "empty FirstOf", bind: workflow.FirstOf[int]()},
 		{
 			name: "FirstOf",
@@ -1010,7 +1001,7 @@ func TestLeaf_acceptsCustomBindFunc(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	got, err := workflow.Get[int](out, workflow.Output("double"))
+	got, err := out.Get[int](workflow.Output("double"))
 	if err != nil || got != 42 {
 		t.Fatalf("Get = %d, %v; want 42, nil", got, err)
 	}
@@ -1065,7 +1056,7 @@ func TestScopedComposite_admitsTheDeepestScopeItCanPush(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run at the deepest admissible scope: %v", err)
 	}
-	if got, err := workflow.Get[int](out, workflow.Output("body")); err != nil || got != 1 {
+	if got, err := out.Get[int](workflow.Output("body")); err != nil || got != 1 {
 		t.Fatalf("body output = %d, %v; want 1", got, err)
 	}
 }
@@ -1074,28 +1065,28 @@ func TestGet_nilValue(t *testing.T) {
 	store := workflow.NewStore().WithCell("n", "value", nil)
 	ref := workflow.At("n", "value")
 
-	if got, err := workflow.Get[any](store, ref); err != nil || got != nil {
+	if got, err := store.Get[any](ref); err != nil || got != nil {
 		t.Fatalf("Get[any](nil) = %v, %v", got, err)
 	}
-	if got, err := workflow.Get[*int](store, ref); err != nil || got != nil {
+	if got, err := store.Get[*int](ref); err != nil || got != nil {
 		t.Fatalf("Get[*int](nil) = %v, %v", got, err)
 	}
-	if got, err := workflow.Get[chan int](store, ref); err != nil || got != nil {
+	if got, err := store.Get[chan int](ref); err != nil || got != nil {
 		t.Fatalf("Get[chan int](nil) = %v, %v", got, err)
 	}
-	if got, err := workflow.Get[func()](store, ref); err != nil || got != nil {
+	if got, err := store.Get[func()](ref); err != nil || got != nil {
 		t.Fatalf("Get[func()](nil) returned non-nil function or error %v", err)
 	}
-	if got, err := workflow.Get[map[string]int](store, ref); err != nil || got != nil {
+	if got, err := store.Get[map[string]int](ref); err != nil || got != nil {
 		t.Fatalf("Get[map[string]int](nil) = %v, %v", got, err)
 	}
-	if got, err := workflow.Get[[]int](store, ref); err != nil || got != nil {
+	if got, err := store.Get[[]int](ref); err != nil || got != nil {
 		t.Fatalf("Get[[]int](nil) = %v, %v", got, err)
 	}
-	if got, err := workflow.Get[unsafe.Pointer](store, ref); err != nil || got != nil {
+	if got, err := store.Get[unsafe.Pointer](ref); err != nil || got != nil {
 		t.Fatalf("Get[unsafe.Pointer](nil) = %v, %v", got, err)
 	}
-	if _, err := workflow.Get[int](store, ref); err == nil {
+	if _, err := store.Get[int](ref); err == nil {
 		t.Fatal("Get[int](nil) unexpectedly succeeded")
 	}
 }
@@ -1160,6 +1151,30 @@ func TestEveryCompositeRunDirectlyStillFormsOneRun(t *testing.T) {
 				t.Fatalf("Run outside a run = %v; want ErrDuplicateStep", err)
 			}
 		})
+	}
+}
+
+// TestLeafRunDirectlyStillFormsOneRunForAComposedStep holds Leaf to the same
+// identity boundary as every workflow composite. A Step is also a
+// flow.Node[Store, Store], so it may be part of the typed Node a Leaf invokes;
+// calling the Leaf directly must not make that nested identity disappear merely
+// because package-level Run was omitted.
+func TestLeafRunDirectlyStillFormsOneRunForAComposedStep(t *testing.T) {
+	inner := passthrough("same")
+	outer := workflow.Leaf(
+		"same",
+		workflow.BinderFunc[workflow.Store](func(store workflow.Store) (workflow.Store, error) {
+			return store, nil
+		}),
+		inner,
+	)
+
+	_, err := outer.Run(
+		t.Context(),
+		workflow.NewStore().WithOutput("seed", 1),
+	)
+	if !errors.Is(err, workflow.ErrDuplicateStep) {
+		t.Fatalf("direct Leaf Run = %v; want ErrDuplicateStep", err)
 	}
 }
 

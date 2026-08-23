@@ -16,7 +16,7 @@ func TestRoute_publishesAndReplaysResolverDecision(t *testing.T) {
 		"route",
 		flow.NodeFunc[workflow.Store, string](func(_ context.Context, store workflow.Store) (string, error) {
 			calls.Add(1)
-			value, err := workflow.Get[int](store, workflow.Output("input"))
+			value, err := store.Get[int](workflow.Output("input"))
 			if err != nil {
 				return "", err
 			}
@@ -38,7 +38,7 @@ func TestRoute_publishesAndReplaysResolverDecision(t *testing.T) {
 	if runErr != nil {
 		t.Fatalf("first run: %v", runErr)
 	}
-	if got, err := workflow.Get[string](first, workflow.Output("route")); err != nil || got != "yes" {
+	if got, err := first.Get[string](workflow.Output("route")); err != nil || got != "yes" {
 		t.Fatalf("route output = %q, %v; want yes, nil", got, err)
 	}
 
@@ -51,7 +51,7 @@ func TestRoute_publishesAndReplaysResolverDecision(t *testing.T) {
 	if runErr != nil {
 		t.Fatalf("replay: %v", runErr)
 	}
-	if got, err := workflow.Get[string](replayed, workflow.Output("route")); err != nil || got != "yes" {
+	if got, err := replayed.Get[string](workflow.Output("route")); err != nil || got != "yes" {
 		t.Fatalf("replayed output = %q, %v; want yes, nil", got, err)
 	}
 	if calls.Load() != 1 {

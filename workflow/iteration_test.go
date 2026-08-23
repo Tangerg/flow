@@ -13,7 +13,7 @@ import (
 func TestIteration_mapsAndCollects(t *testing.T) {
 	// body doubles each element, read from the scoped (iter, item) slot.
 	body := workflow.Leaf("el",
-		workflow.From[int](workflow.Item("iter")),
+		workflow.Item("iter").Bind[int](),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil }),
 	)
 
@@ -50,7 +50,7 @@ func TestIteration_mapsAndCollects(t *testing.T) {
 func TestIteration_usesIndex(t *testing.T) {
 	// body returns the element's index, proving the scope carries it.
 	body := workflow.Leaf("el",
-		workflow.From[int](workflow.ItemIndex("iter")),
+		workflow.ItemIndex("iter").Bind[int](),
 		flow.NodeFunc[int, int](func(_ context.Context, i int) (int, error) { return i, nil }),
 	)
 
@@ -76,7 +76,7 @@ func TestIteration_usesIndex(t *testing.T) {
 
 func TestIteration_inputNotArray(t *testing.T) {
 	body := workflow.Leaf("el",
-		workflow.From[int](workflow.Item("iter")),
+		workflow.Item("iter").Bind[int](),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 	iter := workflow.Iteration(workflow.IterationConfig{ID: "iter", Input: workflow.Output("start"), Body: body, BodyOutput: workflow.Output("el")})
@@ -351,7 +351,7 @@ func TestIteration_failureReturnsTheInputStore(t *testing.T) {
 	boom := errors.New("boom")
 	body := flow.NodeFunc[workflow.Store, workflow.Store](
 		func(_ context.Context, store workflow.Store) (workflow.Store, error) {
-			index, err := workflow.Get[int](store, workflow.ItemIndex("items"))
+			index, err := store.Get[int](workflow.ItemIndex("items"))
 			if err != nil {
 				return store, err
 			}
@@ -375,7 +375,7 @@ func TestIteration_failureReturnsTheInputStore(t *testing.T) {
 	if _, present := output.Lookup(workflow.Output("items")); present {
 		t.Fatal("ordinary failure published a partial collection")
 	}
-	if values, getErr := workflow.Get[[]int](output, workflow.Output("source")); getErr != nil || !slices.Equal(values, []int{1, 2}) {
+	if values, getErr := output.Get[[]int](workflow.Output("source")); getErr != nil || !slices.Equal(values, []int{1, 2}) {
 		t.Fatalf("source = %v, %v; want [1 2], nil", values, getErr)
 	}
 }

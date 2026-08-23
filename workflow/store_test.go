@@ -186,7 +186,7 @@ func TestStore_LookupRejectsMalformedJSONPointers(t *testing.T) {
 	}
 }
 
-func TestGet_reportsNestedJSONResolutionErrors(t *testing.T) {
+func TestStoreGet_reportsNestedJSONResolutionErrors(t *testing.T) {
 	tests := []struct {
 		name    string
 		value   any
@@ -212,7 +212,7 @@ func TestGet_reportsNestedJSONResolutionErrors(t *testing.T) {
 			if value, ok := store.Lookup(ref); ok {
 				t.Fatalf("Lookup = %v, true; want unresolved", value)
 			}
-			_, err := workflow.Get[any](store, ref)
+			_, err := store.Get[any](ref)
 			var refErr *workflow.RefError
 			if !errors.As(err, &refErr) ||
 				!errors.Is(err, workflow.ErrTypeMismatch) ||
@@ -231,17 +231,17 @@ func TestGet_reportsNestedJSONResolutionErrors(t *testing.T) {
 
 func TestStore_Changes(t *testing.T) {
 	base := workflow.NewStore().WithOutput("a", 1)
-	next := base.WithOutput("b", 2).WithCell("c", "key", 3)
+	next := base.WithOutput("b", 2).WithCell("c", "a/b~c", 3)
 
 	changes := next.Changes(base)
 	if len(changes) != 2 {
 		t.Fatalf("Changes = %+v; want 2 writes", changes)
 	}
-	if changes[0].Ref() != workflow.Output("b") || changes[0].Value.(int) != 2 {
+	if changes[0].Ref != workflow.Output("b") || changes[0].Value.(int) != 2 {
 		t.Fatalf("changes[0] = %+v; want b.output = 2", changes[0])
 	}
-	if changes[1].Ref() != workflow.At("c", "key") || changes[1].Value.(int) != 3 {
-		t.Fatalf("changes[1] = %+v; want c.key = 3", changes[1])
+	if changes[1].Ref != workflow.At("c", "a/b~c") || changes[1].Value.(int) != 3 {
+		t.Fatalf("changes[1] = %+v; want escaped c cell = 3", changes[1])
 	}
 	if got := base.Changes(base); len(got) != 0 {
 		t.Fatalf("Changes against self = %+v; want none", got)
@@ -272,8 +272,8 @@ func TestStore_supersededWriteDoesNotHideWhatCameBeforeIt(t *testing.T) {
 
 	changes := next.Changes(base)
 	if len(changes) != 2 ||
-		changes[0].Ref() != workflow.Output("first") || changes[0].Value.(int) != 1 ||
-		changes[1].Ref() != workflow.Output("second") || changes[1].Value.(int) != 3 {
+		changes[0].Ref != workflow.Output("first") || changes[0].Value.(int) != 1 ||
+		changes[1].Ref != workflow.Output("second") || changes[1].Value.(int) != 3 {
 		t.Fatalf("Changes against the store it descends from = %+v; want first = 1 then the final second = 3", changes)
 	}
 
@@ -282,8 +282,8 @@ func TestStore_supersededWriteDoesNotHideWhatCameBeforeIt(t *testing.T) {
 	unrelated := workflow.NewStore().WithOutput("elsewhere", 0)
 	changes = next.Changes(unrelated)
 	if len(changes) != 2 ||
-		changes[0].Ref() != workflow.Output("first") || changes[0].Value.(int) != 1 ||
-		changes[1].Ref() != workflow.Output("second") || changes[1].Value.(int) != 3 {
+		changes[0].Ref != workflow.Output("first") || changes[0].Value.(int) != 1 ||
+		changes[1].Ref != workflow.Output("second") || changes[1].Value.(int) != 3 {
 		t.Fatalf("Changes against an unrelated store = %+v; want the same two cells", changes)
 	}
 }
@@ -303,7 +303,7 @@ func TestStore_ChangesAcrossCompaction(t *testing.T) {
 		t.Fatalf("Changes = %d writes; want %d", len(changes), writes)
 	}
 	for i, change := range changes {
-		if change.Ref() != workflow.Output("n"+strconv.Itoa(i)) || change.Value.(int) != i {
+		if change.Ref != workflow.Output("n"+strconv.Itoa(i)) || change.Value.(int) != i {
 			t.Fatalf("changes[%d] = %+v; want n%d = %d", i, change, i, i)
 		}
 	}
@@ -315,7 +315,7 @@ func TestStore_ChangesAgainstUnrelatedStore(t *testing.T) {
 	s := workflow.NewStore().WithOutput("y", 2)
 
 	changes := s.Changes(unrelated)
-	if len(changes) != 1 || changes[0].Ref() != workflow.Output("y") {
+	if len(changes) != 1 || changes[0].Ref != workflow.Output("y") {
 		t.Fatalf("Changes = %+v; want one write to y.output", changes)
 	}
 	// A Store has no delete, so a cell missing from s is not reported.
@@ -336,7 +336,7 @@ func TestStore_ChangesTreatsDecodedCellsAsFreshWrites(t *testing.T) {
 	}
 
 	changes := decoded.Changes(base)
-	if len(changes) != 1 || changes[0].Ref() != workflow.Output("x") {
+	if len(changes) != 1 || changes[0].Ref != workflow.Output("x") {
 		t.Fatalf("Changes = %+v; want decoded x output as a fresh write", changes)
 	}
 }
@@ -516,13 +516,13 @@ func TestStore_pathHasTheSameJSONSemanticsBeforeAndAfterSerialization(t *testing
 	}
 
 	for _, store := range []workflow.Store{original, restored} {
-		if got, err := workflow.Get[int](store, workflow.At("typed", "output", "count")); err != nil || got != 2 {
+		if got, err := store.Get[int](workflow.At("typed", "output", "count")); err != nil || got != 2 {
 			t.Fatalf("count = %v, %v; want 2", got, err)
 		}
-		if got, err := workflow.Get[string](store, workflow.At("typed", "output", "items", "1", "name")); err != nil || got != "second" {
+		if got, err := store.Get[string](workflow.At("typed", "output", "items", "1", "name")); err != nil || got != "second" {
 			t.Fatalf("item name = %q, %v; want second", got, err)
 		}
-		if got, err := workflow.Get[string](store, workflow.At("typed", "output", "labels", "kind")); err != nil || got != "example" {
+		if got, err := store.Get[string](workflow.At("typed", "output", "labels", "kind")); err != nil || got != "example" {
 			t.Fatalf("label = %q, %v; want example", got, err)
 		}
 		if _, ok := store.Lookup(workflow.At("typed", "output", "Hidden")); ok {
@@ -565,14 +565,14 @@ func TestStore_rejectsInvalidPointerAndUnrepresentableNestedValues(t *testing.T)
 	if _, ok := store.Lookup(workflow.Output("deep").Child("next")); ok {
 		t.Fatal("excessively nested value unexpectedly resolved")
 	}
-	if _, err := workflow.Get[map[string]any](store, workflow.Output("deep")); !errors.Is(err, workflow.ErrMaxDepth) {
+	if _, err := store.Get[map[string]any](workflow.Output("deep")); !errors.Is(err, workflow.ErrMaxDepth) {
 		t.Fatalf("deep conversion error = %v; want ErrMaxDepth", err)
 	}
 }
 
-func TestGet_reportsValuesThatCannotBeMarshaled(t *testing.T) {
+func TestStoreGet_reportsValuesThatCannotBeMarshaled(t *testing.T) {
 	store := workflow.NewStore().WithOutput("channel", make(chan int))
-	if _, err := workflow.Get[int](store, workflow.Output("channel")); !errors.Is(err, workflow.ErrTypeMismatch) {
+	if _, err := store.Get[int](workflow.Output("channel")); !errors.Is(err, workflow.ErrTypeMismatch) {
 		t.Fatalf("error = %v; want ErrTypeMismatch", err)
 	}
 }
@@ -599,7 +599,7 @@ func TestStore_JSONRoundTrip(t *testing.T) {
 		t.Fatalf("number = %T(%v), %v; want json.Number(42)", got, got, ok)
 	}
 	// Get hides the difference, which is what lets a typed step resume.
-	if got, err := workflow.Get[int](decoded, workflow.Output("b")); err != nil || got != 42 {
+	if got, err := decoded.Get[int](workflow.Output("b")); err != nil || got != 42 {
 		t.Fatalf("Get[int] = %v, %v; want 42", got, err)
 	}
 }
@@ -656,33 +656,33 @@ func TestStore_JSONRoundTripPreservesTypedReads(t *testing.T) {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 
-	if got, err := workflow.Get[int](decoded, workflow.Output("i")); err != nil || got != 42 {
+	if got, err := decoded.Get[int](workflow.Output("i")); err != nil || got != 42 {
 		t.Fatalf("int = %v, %v", got, err)
 	}
-	if got, err := workflow.Get[int64](decoded, workflow.Output("i64")); err != nil || got != math.MaxInt64 {
+	if got, err := decoded.Get[int64](workflow.Output("i64")); err != nil || got != math.MaxInt64 {
 		t.Fatalf("int64 = %v, %v; want %d — precision was lost", got, err, int64(math.MaxInt64))
 	}
-	if got, err := workflow.Get[uint32](decoded, workflow.Output("u")); err != nil || got != 7 {
+	if got, err := decoded.Get[uint32](workflow.Output("u")); err != nil || got != 7 {
 		t.Fatalf("uint32 = %v, %v", got, err)
 	}
-	if got, err := workflow.Get[float64](decoded, workflow.Output("f")); err != nil || got != 1.5 {
+	if got, err := decoded.Get[float64](workflow.Output("f")); err != nil || got != 1.5 {
 		t.Fatalf("float64 = %v, %v", got, err)
 	}
-	if got, err := workflow.Get[string](decoded, workflow.Output("s")); err != nil || got != "text" {
+	if got, err := decoded.Get[string](workflow.Output("s")); err != nil || got != "text" {
 		t.Fatalf("string = %v, %v", got, err)
 	}
-	if got, err := workflow.Get[bool](decoded, workflow.Output("b")); err != nil || !got {
+	if got, err := decoded.Get[bool](workflow.Output("b")); err != nil || !got {
 		t.Fatalf("bool = %v, %v", got, err)
 	}
-	if got, err := workflow.Get[[]int](decoded, workflow.Output("slice")); err != nil || !slices.Equal(got, []int{1, 2, 3}) {
+	if got, err := decoded.Get[[]int](workflow.Output("slice")); err != nil || !slices.Equal(got, []int{1, 2, 3}) {
 		t.Fatalf("[]int = %v, %v", got, err)
 	}
-	got, marshalErr := workflow.Get[payload](decoded, workflow.Output("struct"))
+	got, marshalErr := decoded.Get[payload](workflow.Output("struct"))
 	if marshalErr != nil || got.N != 1 || !slices.Equal(got.Items, []string{"a"}) || got.Meta["k"] != "v" {
 		t.Fatalf("struct = %+v, %v", got, marshalErr)
 	}
 	// Conversion applies at any path depth, not just to whole cells.
-	if n, err := workflow.Get[int](decoded, workflow.At("nested", "output", "deep", "0", "n")); err != nil || n != 9 {
+	if n, err := decoded.Get[int](workflow.At("nested", "output", "deep", "0", "n")); err != nil || n != 9 {
 		t.Fatalf("nested int = %v, %v", n, err)
 	}
 }
@@ -694,14 +694,14 @@ func TestGet_convertsWithoutReinterpreting(t *testing.T) {
 	}
 
 	// A number that is not an integer must not be truncated into one.
-	if _, err := workflow.Get[int](decoded, workflow.At("n", "frac")); !errors.Is(err, workflow.ErrTypeMismatch) {
+	if _, err := decoded.Get[int](workflow.At("n", "frac")); !errors.Is(err, workflow.ErrTypeMismatch) {
 		t.Fatalf("Get[int] of 42.5 err = %v; want ErrTypeMismatch", err)
 	}
 	// A number is not a string and a string is not a number.
-	if _, err := workflow.Get[string](decoded, workflow.At("n", "whole")); !errors.Is(err, workflow.ErrTypeMismatch) {
+	if _, err := decoded.Get[string](workflow.At("n", "whole")); !errors.Is(err, workflow.ErrTypeMismatch) {
 		t.Fatalf("Get[string] of a number err = %v; want ErrTypeMismatch", err)
 	}
-	if _, err := workflow.Get[int](decoded, workflow.At("n", "text")); !errors.Is(err, workflow.ErrTypeMismatch) {
+	if _, err := decoded.Get[int](workflow.At("n", "text")); !errors.Is(err, workflow.ErrTypeMismatch) {
 		t.Fatalf("Get[int] of a string err = %v; want ErrTypeMismatch", err)
 	}
 	// A value outside float64's range is preserved on the way in and reported on
@@ -709,7 +709,7 @@ func TestGet_convertsWithoutReinterpreting(t *testing.T) {
 	if _, ok := decoded.Lookup(workflow.At("n", "huge")); !ok {
 		t.Fatal("an unrepresentable number was dropped during decode")
 	}
-	if _, err := workflow.Get[float64](decoded, workflow.At("n", "huge")); !errors.Is(err, workflow.ErrTypeMismatch) {
+	if _, err := decoded.Get[float64](workflow.At("n", "huge")); !errors.Is(err, workflow.ErrTypeMismatch) {
 		t.Fatalf("Get[float64] of 1e10000 err = %v; want ErrTypeMismatch", err)
 	}
 }
@@ -723,7 +723,7 @@ func TestGet_rejectsUnknownStructMembers(t *testing.T) {
 		"extra": 2,
 	})
 
-	if _, err := workflow.Get[partial](store, workflow.Output("n")); !errors.Is(err, workflow.ErrTypeMismatch) {
+	if _, err := store.Get[partial](workflow.Output("n")); !errors.Is(err, workflow.ErrTypeMismatch) {
 		t.Fatalf("Get error = %v; want ErrTypeMismatch", err)
 	}
 }
@@ -808,7 +808,7 @@ func TestStore_UnmarshalGivesRestoredWritesDeterministicOrder(t *testing.T) {
 	changes := store.Changes(workflow.NewStore())
 	got := make([]workflow.Ref, len(changes))
 	for i, change := range changes {
-		got[i] = change.Ref()
+		got[i] = change.Ref
 	}
 	want := []workflow.Ref{
 		workflow.At("a", "a"),
@@ -925,13 +925,13 @@ func TestStore_asksEachValueForItsBytesOnce(t *testing.T) {
 	}
 }
 
-// TestGet_reportsWhatItAskedForAndWhatItFound pins the structured error Get
+// TestStoreGet_reportsWhatItAskedForAndWhatItFound pins the structured error Get
 // hands back rather than only the sentinel inside it. All four failures arrive as
 // a RefError, whose text is assembled from its fields, and a caller branching on
 // one reads those fields: which reference failed, the type it asked for, and the
 // type it found. Every assertion elsewhere stops at the sentinel, which each of
 // these shapes shares with another.
-func TestGet_reportsWhatItAskedForAndWhatItFound(t *testing.T) {
+func TestStoreGet_reportsWhatItAskedForAndWhatItFound(t *testing.T) {
 	store := workflow.NewStore().
 		WithOutput("text", "hello").
 		WithOutput("unencodable", func() {}).
@@ -965,7 +965,7 @@ func TestGet_reportsWhatItAskedForAndWhatItFound(t *testing.T) {
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, err := workflow.Get[int](store, test.ref)
+			_, err := store.Get[int](test.ref)
 			var refErr *workflow.RefError
 			if !errors.As(err, &refErr) || err.Error() != test.want {
 				t.Fatalf("Get error = %v; want %q", err, test.want)

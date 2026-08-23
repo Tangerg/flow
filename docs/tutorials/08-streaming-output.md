@@ -57,7 +57,7 @@ parsed := flow.Then(generate, parseAnswer)
 ```go
 step := workflow.Leaf(
 	"generate",
-	workflow.From[string](workflow.Output("prompt")),
+	workflow.Output("prompt").Bind[string](),
 	parsed,
 )
 ```

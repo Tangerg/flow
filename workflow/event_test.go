@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ func record(events *[]workflow.Event) workflow.ObserverFunc {
 
 func TestEvents_emittedForSequence(t *testing.T) {
 	from := func(id string) workflow.Binder[int] {
-		return workflow.From[int](workflow.Output(id))
+		return workflow.Output(id).Bind[int]()
 	}
 	a := workflow.Leaf("a", from("start"), flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
 	b := workflow.Leaf("b", from("a"), flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }))
@@ -52,7 +53,7 @@ func TestEvents_emittedForSequence(t *testing.T) {
 func TestEvents_failure(t *testing.T) {
 	boom := errors.New("boom")
 	bad := workflow.Leaf("bad",
-		workflow.From[int](workflow.Ref{NodeID: "start", Path: "/output"}),
+		workflow.Ref{NodeID: "start", Path: "/output"}.Bind[int](),
 		flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom }),
 	)
 
@@ -77,6 +78,497 @@ func TestEvents_failure(t *testing.T) {
 	}
 }
 
+func TestEvents_ownMutableWorkflowErrors(t *testing.T) {
+	boom := errors.New("boom")
+	failing := workflow.Leaf(
+		"failed",
+		workflow.Output("seed").Bind[int](),
+		flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+			return 0, boom
+		}),
+	)
+	failureCtx := workflow.WithScope(t.Context(), "outer")
+
+	_, failure := workflow.Run(
+		failureCtx,
+		failing,
+		workflow.NewStore().WithOutput("seed", 1),
+		workflow.RunConfig{Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
+			if event.Kind != workflow.EventFailed {
+				return
+			}
+			var stepErr *workflow.StepError
+			if !errors.As(event.Err, &stepErr) {
+				t.Fatalf("event error = %T; want *workflow.StepError", event.Err)
+			}
+			stepErr.ID = "observer-mutated"
+			stepErr.Scope = append(stepErr.Scope, workflow.ScopeFrame{ID: "observer-mutated"})
+			stepErr.Err = nil
+			if len(event.Scope) != 1 {
+				t.Fatalf("event Scope = %+v; want outer scope", event.Scope)
+			}
+			event.Scope[0].ID = "observer-mutated"
+		})},
+	)
+	var stepErr *workflow.StepError
+	if !errors.As(failure, &stepErr) ||
+		stepErr.ID != "failed" ||
+		!slices.Equal(stepErr.Scope, ordinaryScope("outer")) ||
+		!errors.Is(failure, boom) {
+		t.Fatalf("Run error = %#v; Observer mutation escaped its Event", failure)
+	}
+	if scope := workflow.Scope(failureCtx); !slices.Equal(scope, ordinaryScope("outer")) {
+		t.Fatalf("context Scope = %+v; Observer mutation escaped its Event", scope)
+	}
+
+	missing := workflow.Output("missing")
+	_, bindFailure := workflow.Run(
+		t.Context(),
+		workflow.Leaf(
+			"bind",
+			missing.Bind[int](),
+			flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+				return value, nil
+			}),
+		),
+		workflow.NewStore(),
+		workflow.RunConfig{Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
+			if event.Kind != workflow.EventFailed {
+				return
+			}
+			var refErr *workflow.RefError
+			if !errors.As(event.Err, &refErr) {
+				t.Fatalf("event error = %T; want a *workflow.RefError cause", event.Err)
+			}
+			refErr.Ref = workflow.Output("observer-mutated")
+			refErr.Err = nil
+		})},
+	)
+	var refErr *workflow.RefError
+	if !errors.As(bindFailure, &refErr) || refErr.Ref != missing || !errors.Is(bindFailure, workflow.ErrNotFound) {
+		t.Fatalf("Run bind error = %#v; nested Observer mutation escaped its Event", bindFailure)
+	}
+
+	waiting := workflow.Interrupt("approval", "approve?")
+	_, suspensionErr := workflow.Run(
+		t.Context(),
+		waiting,
+		workflow.NewStore(),
+		workflow.RunConfig{Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
+			if event.Kind != workflow.EventSuspended {
+				return
+			}
+			var wait *workflow.Suspension
+			if !errors.As(event.Err, &wait) {
+				t.Fatalf("event error = %T; want *workflow.Suspension", event.Err)
+			}
+			wait.ID = "observer-mutated"
+			wait.Scope = append(wait.Scope, workflow.ScopeFrame{ID: "observer-mutated"})
+			wait.Value = "observer-mutated"
+		})},
+	)
+	waits := workflow.Suspensions(suspensionErr)
+	if len(waits) != 1 || waits[0].ID != "approval" || waits[0].Value != "approve?" {
+		t.Fatalf("Run suspensions = %+v; Observer mutation escaped its Event", waits)
+	}
+}
+
+// TestEventsOwnMutableErrorsAcrossInternalLocations extends the Event ownership
+// boundary through the location wrappers introduced by built-in composition.
+// A detail or collection index is immutable presentation state, but it must not
+// hide a mutable workflow error beneath it from the snapshot walk.
+func TestEventsOwnMutableErrorsAcrossInternalLocations(t *testing.T) {
+	t.Run("detail", testEventOwnsDetailLocation)
+	t.Run("index", testEventOwnsIndexLocation)
+	t.Run("joined indexes", testEventOwnsJoinedLocations)
+	t.Run("joined cases", testEventOwnsCaseLocations)
+	t.Run("structured locations", testEventOwnsStructuredLocations)
+	t.Run("factory location", testEventOwnsFactoryLocation)
+}
+
+func testEventOwnsDetailLocation(t *testing.T) {
+	storeBinder := workflow.BinderFunc[workflow.Store](
+		func(store workflow.Store) (workflow.Store, error) { return store, nil },
+	)
+	missing := workflow.Output("missing")
+	body := flow.NodeFunc[workflow.Store, workflow.Store](
+		func(_ context.Context, store workflow.Store) (workflow.Store, error) { return store, nil },
+	)
+	step := workflow.Leaf(
+		"outer",
+		storeBinder,
+		workflow.Subgraph(workflow.SubgraphConfig{
+			ID:         "subgraph",
+			Body:       body,
+			BodyOutput: missing,
+		}),
+	)
+
+	_, failure := workflow.Run(t.Context(), step, workflow.NewStore(), workflow.RunConfig{
+		Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
+			if event.Kind != workflow.EventFailed || event.ID != "outer" {
+				return
+			}
+			var refErr *workflow.RefError
+			if !errors.As(event.Err, &refErr) {
+				t.Fatalf("event error = %T; want *workflow.RefError", event.Err)
+			}
+			refErr.Ref = workflow.Output("observer-mutated")
+			refErr.Err = nil
+		}),
+	})
+
+	var refErr *workflow.RefError
+	if !errors.As(failure, &refErr) || refErr.Ref != missing || !errors.Is(failure, workflow.ErrNotFound) {
+		t.Fatalf("Run error = %#v; Observer mutation crossed a detail location", failure)
+	}
+}
+
+func testEventOwnsIndexLocation(t *testing.T) {
+	inner := workflow.LeafFunc(
+		"inner",
+		workflow.Output("missing"),
+		func(_ context.Context, value int) (int, error) { return value, nil },
+	)
+	mapped := flow.Map(inner, flow.MapConfig{})
+	bind := workflow.BinderFunc[[]workflow.Store](
+		func(store workflow.Store) ([]workflow.Store, error) { return []workflow.Store{store}, nil },
+	)
+	step := workflow.Leaf("outer", bind, mapped)
+
+	_, failure := workflow.Run(t.Context(), step, workflow.NewStore(), workflow.RunConfig{
+		Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
+			if event.Kind != workflow.EventFailed || event.ID != "outer" {
+				return
+			}
+			var innerErr *workflow.StepError
+			if !errors.As(event.Err, &innerErr) || innerErr.ID != "outer" {
+				t.Fatalf("event error = %#v; want outer StepError", event.Err)
+			}
+			if !errors.As(innerErr.Err, &innerErr) || innerErr.ID != "inner" {
+				t.Fatalf("event nested error = %#v; want inner StepError", event.Err)
+			}
+			var indexErr *flow.IndexError
+			if !errors.As(event.Err, &indexErr) || indexErr.Index != 0 {
+				t.Fatalf("event error = %#v; want element index 0", event.Err)
+			}
+			indexErr.Index = 99
+			innerErr.ID = "observer-mutated"
+			innerErr.Err = nil
+		}),
+	})
+
+	var outerErr *workflow.StepError
+	if !errors.As(failure, &outerErr) {
+		t.Fatalf("Run error = %#v; want outer StepError", failure)
+	}
+	var innerErr *workflow.StepError
+	if !errors.As(outerErr.Err, &innerErr) || innerErr.ID != "inner" ||
+		!errors.Is(failure, workflow.ErrNotFound) {
+		t.Fatalf("Run error = %#v; Observer mutation crossed an index location", failure)
+	}
+	var indexErr *flow.IndexError
+	if !errors.As(failure, &indexErr) || indexErr.Index != 0 {
+		t.Fatalf("Run error = %#v; Observer rewrote its collection index", failure)
+	}
+}
+
+func testEventOwnsJoinedLocations(t *testing.T) {
+	storeBinder := workflow.BinderFunc[workflow.Store](
+		func(store workflow.Store) (workflow.Store, error) { return store, nil },
+	)
+	first := workflow.LeafFunc(
+		"first",
+		workflow.Output("missing-first"),
+		func(_ context.Context, value int) (int, error) { return value, nil },
+	)
+	second := workflow.LeafFunc(
+		"second",
+		workflow.Output("missing-second"),
+		func(_ context.Context, value int) (int, error) { return value, nil },
+	)
+	step := workflow.Leaf("outer", storeBinder, flow.Race(first, second))
+
+	_, failure := workflow.Run(t.Context(), step, workflow.NewStore(), workflow.RunConfig{
+		Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
+			if event.Kind != workflow.EventFailed || event.ID != "outer" {
+				return
+			}
+			var indexErr *flow.IndexError
+			var stepErr *workflow.StepError
+			if !errors.As(event.Err, &indexErr) || indexErr.Index != 0 ||
+				!errors.As(indexErr.Err, &stepErr) || stepErr.ID != "first" {
+				t.Fatalf("event error = %#v; want first joined branch", event.Err)
+			}
+			indexErr.Index = 99
+			stepErr.ID = "observer-mutated"
+			stepErr.Err = nil
+		}),
+	})
+
+	var indexErr *flow.IndexError
+	var stepErr *workflow.StepError
+	if !errors.As(failure, &indexErr) || indexErr.Index != 0 ||
+		!errors.As(indexErr.Err, &stepErr) || stepErr.ID != "first" ||
+		!errors.Is(failure, workflow.ErrNotFound) {
+		t.Fatalf("Run error = %#v; Observer mutation crossed a joined branch", failure)
+	}
+}
+
+func testEventOwnsCaseLocations(t *testing.T) {
+	storeBinder := workflow.BinderFunc[workflow.Store](
+		func(store workflow.Store) (workflow.Store, error) { return store, nil },
+	)
+	first := workflow.Leaf("first", storeBinder, flow.NodeFunc[workflow.Store, workflow.Store](nil))
+	second := workflow.Leaf("second", storeBinder, flow.NodeFunc[workflow.Store, workflow.Store](nil))
+	resolve := flow.NodeFunc[workflow.Store, string](
+		func(context.Context, workflow.Store) (string, error) { return "first", nil },
+	)
+	step := workflow.Leaf("outer", storeBinder, flow.Switch(resolve,
+		map[string]flow.Node[workflow.Store, workflow.Store]{
+			"first":  first,
+			"second": second,
+		},
+	))
+
+	_, failure := workflow.Run(t.Context(), step, workflow.NewStore(), workflow.RunConfig{
+		Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
+			if event.Kind != workflow.EventFailed || event.ID != "outer" {
+				return
+			}
+			var caseErr *flow.CaseError
+			var stepErr *workflow.StepError
+			if !errors.As(event.Err, &caseErr) || caseErr.Key != "first" ||
+				!errors.As(caseErr.Err, &stepErr) || stepErr.ID != "first" {
+				t.Fatalf("event error = %#v; want first joined case", event.Err)
+			}
+			caseErr.Key = "observer-mutated"
+			stepErr.ID = "observer-mutated"
+			stepErr.Err = nil
+		}),
+	})
+
+	var caseErr *flow.CaseError
+	var stepErr *workflow.StepError
+	if !errors.As(failure, &caseErr) || caseErr.Key != "first" ||
+		!errors.As(caseErr.Err, &stepErr) || stepErr.ID != "first" ||
+		!errors.Is(failure, flow.ErrNilNode) {
+		t.Fatalf("Run error = %#v; Observer mutation crossed a joined case", failure)
+	}
+}
+
+func testEventOwnsStructuredLocations(t *testing.T) {
+	missing := workflow.Output("missing")
+	cause := &workflow.GraphError{
+		Path: "/nodes/0",
+		Err: &workflow.SpecError{
+			Path: "/body",
+			Err: &workflow.RegistrationError{
+				Kind: "node",
+				Name: "broken",
+				Err: &workflow.RefError{
+					Ref:  missing,
+					Want: "int",
+					Err:  workflow.ErrNotFound,
+				},
+			},
+		},
+	}
+	step := workflow.Leaf(
+		"outer",
+		workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+		flow.NodeFunc[int, int](func(context.Context, int) (int, error) { return 0, cause }),
+	)
+
+	_, failure := workflow.Run(t.Context(), step, workflow.NewStore(), workflow.RunConfig{
+		Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
+			if event.Kind != workflow.EventFailed {
+				return
+			}
+			var graphErr *workflow.GraphError
+			var specErr *workflow.SpecError
+			var registrationErr *workflow.RegistrationError
+			var refErr *workflow.RefError
+			if !errors.As(event.Err, &graphErr) ||
+				!errors.As(event.Err, &specErr) ||
+				!errors.As(event.Err, &registrationErr) ||
+				!errors.As(event.Err, &refErr) {
+				t.Fatalf("event error = %#v; want every structured location", event.Err)
+			}
+			graphErr.Path = "/observer-mutated"
+			specErr.Path = "/observer-mutated"
+			registrationErr.Name = "observer-mutated"
+			refErr.Ref = workflow.Output("observer-mutated")
+		}),
+	})
+
+	var graphErr *workflow.GraphError
+	var specErr *workflow.SpecError
+	var registrationErr *workflow.RegistrationError
+	var refErr *workflow.RefError
+	if !errors.As(failure, &graphErr) || graphErr.Path != "/nodes/0" ||
+		!errors.As(failure, &specErr) || specErr.Path != "/body" ||
+		!errors.As(failure, &registrationErr) || registrationErr.Name != "broken" ||
+		!errors.As(failure, &refErr) || refErr.Ref != missing ||
+		!errors.Is(failure, workflow.ErrNotFound) {
+		t.Fatalf("Run error = %#v; Observer mutation crossed a structured location", failure)
+	}
+}
+
+func testEventOwnsFactoryLocation(t *testing.T) {
+	missing := workflow.Output("missing")
+	factory := workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
+		return nil, &workflow.RefError{
+			Ref:  missing,
+			Want: "int",
+			Err:  workflow.ErrNotFound,
+		}
+	})
+	_, cause := factory(workflow.NodeSpec{
+		ID:     "unused",
+		Inputs: workflow.OneInput(workflow.Output("seed")),
+	})
+	if cause == nil {
+		t.Fatal("Factory returned no error")
+	}
+	step := workflow.Leaf(
+		"outer",
+		workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+		flow.NodeFunc[int, int](func(context.Context, int) (int, error) { return 0, cause }),
+	)
+
+	_, failure := workflow.Run(t.Context(), step, workflow.NewStore(), workflow.RunConfig{
+		Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
+			if event.Kind != workflow.EventFailed {
+				return
+			}
+			var refErr *workflow.RefError
+			if !errors.As(event.Err, &refErr) {
+				t.Fatalf("event error = %#v; want factory RefError", event.Err)
+			}
+			refErr.Ref = workflow.Output("observer-mutated")
+		}),
+	})
+
+	var refErr *workflow.RefError
+	if !errors.As(failure, &refErr) || refErr.Ref != missing ||
+		!errors.Is(failure, workflow.ErrNotFound) {
+		t.Fatalf("Run error = %#v; Observer mutation crossed a factory location", failure)
+	}
+}
+
+// TestEventsAcceptTypedNilStructuredCauses keeps observation from turning a
+// malformed-but-valid error interface into a panic. Its typed nil remains the
+// terminal cause; it does not acquire the category of a non-nil wrapper.
+func TestEventsAcceptTypedNilStructuredCauses(t *testing.T) {
+	var stepErr *workflow.StepError
+	var refErr *workflow.RefError
+	var registrationErr *workflow.RegistrationError
+	var graphErr *workflow.GraphError
+	var specErr *workflow.SpecError
+	var indexErr *flow.IndexError
+	var caseErr *flow.CaseError
+
+	for name, cause := range map[string]error{
+		"step":          stepErr,
+		"reference":     refErr,
+		"registration":  registrationErr,
+		"graph":         graphErr,
+		"specification": specErr,
+		"index":         indexErr,
+		"case":          caseErr,
+	} {
+		t.Run(name, func(t *testing.T) {
+			step := workflow.Leaf(
+				"outer",
+				workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+				flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+					return 0, cause
+				}),
+			)
+
+			var observed error
+			_, failure := workflow.Run(t.Context(), step, workflow.NewStore(), workflow.RunConfig{
+				Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
+					if event.Kind == workflow.EventFailed {
+						observed = event.Err
+					}
+				}),
+			})
+			if observed == nil || failure == nil {
+				t.Fatalf("observed, Run error = %v, %v; want two non-nil error interfaces", observed, failure)
+			}
+			if got := failure.Error(); got != `workflow: step "outer" run: <nil>` {
+				t.Fatalf("Run error = %q; want typed nil as the terminal cause", got)
+			}
+		})
+	}
+}
+
+// Package-owned error wrappers have exported mutable location fields, so an
+// Observer receives a structural copy even when a caller assembled the tree.
+// That ownership walk must use heap for an arbitrary error chain rather than
+// consume one call frame per wrapper.
+func TestEventsCopyDeepOwnedErrorChainWithoutStackPerWrapper(t *testing.T) {
+	withBoundedStack(t, func() {
+		boom := errors.New("boom")
+		nodeErr := boom
+		for index := range 20_000 {
+			nodeErr = &workflow.StepError{
+				ID:    fmt.Sprintf("inner-%05d", index),
+				Scope: []workflow.ScopeFrame{{ID: "scope"}},
+				Op:    workflow.OpRun,
+				Err:   nodeErr,
+			}
+		}
+
+		step := workflow.Leaf(
+			"outer",
+			workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+			flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+				return 0, nodeErr
+			}),
+		)
+		_, err := workflow.Run(context.Background(), step, workflow.NewStore(), workflow.RunConfig{
+			Observer: workflow.ObserverFunc(func(context.Context, workflow.Event) {}),
+		})
+		if !errors.Is(err, boom) {
+			t.Fatalf("Run error = %v; want boom in the copied chain", err)
+		}
+	})
+}
+
+func TestEventsCopyDeepJoinedOwnedErrorTreeWithoutStackPerBranch(t *testing.T) {
+	withBoundedStack(t, func() {
+		var nodeErr error
+		nodeErr = errors.New("boom")
+		for index := range 20_000 {
+			nodeErr = errors.Join(&workflow.StepError{
+				ID:  fmt.Sprintf("inner-%05d", index),
+				Op:  workflow.OpRun,
+				Err: nodeErr,
+			})
+		}
+
+		step := workflow.Leaf(
+			"outer",
+			workflow.BinderFunc[int](func(workflow.Store) (int, error) { return 1, nil }),
+			flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+				return 0, nodeErr
+			}),
+		)
+		_, failure := workflow.Run(context.Background(), step, workflow.NewStore(), workflow.RunConfig{
+			Observer: workflow.ObserverFunc(func(context.Context, workflow.Event) {}),
+		})
+		message := failure.Error()
+		if strings.Count(message, "workflow:") != 1 ||
+			!strings.Contains(message, `step "inner-19999" run: step "inner-19998"`) ||
+			!strings.HasSuffix(message, `step "inner-00000" run: boom`) {
+			t.Fatal("joined error tree lost its owned locations")
+		}
+	})
+}
+
 func TestEvents_distinguishValidationReplayAndAdmission(t *testing.T) {
 	// A rejected definition is reported under the ID it declared. The two defects
 	// differ in whether there is an ID to report: an invalid one is the single
@@ -95,7 +587,7 @@ func TestEvents_distinguishValidationReplayAndAdmission(t *testing.T) {
 				t.Context(),
 				workflow.Leaf[int, int](
 					invalid.id,
-					workflow.From[int](workflow.Output("seed")),
+					workflow.Output("seed").Bind[int](),
 					flow.NodeFunc[int, int](nil),
 				),
 				workflow.NewStore(),
@@ -119,7 +611,7 @@ func TestEvents_distinguishValidationReplayAndAdmission(t *testing.T) {
 		var events []workflow.Event
 		step := workflow.Leaf(
 			"leaf",
-			workflow.From[int](workflow.Output("seed")),
+			workflow.Output("seed").Bind[int](),
 			flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
 				t.Fatal("replayed node ran")
 				return 0, nil
@@ -137,7 +629,7 @@ func TestEvents_distinguishValidationReplayAndAdmission(t *testing.T) {
 		// A skipped step produced its output by replay rather than by running, and
 		// the event carries that Store the same way a completed one does. It is the
 		// only report a tracker gets for a replayed boundary.
-		if value, getErr := workflow.Get[int](events[0].Store, workflow.Output("leaf")); getErr != nil || value != 7 {
+		if value, getErr := events[0].Store.Get[int](workflow.Output("leaf")); getErr != nil || value != 7 {
 			t.Fatalf("skipped Store leaf = %v, %v; want the replayed 7", value, getErr)
 		}
 	})
@@ -145,7 +637,7 @@ func TestEvents_distinguishValidationReplayAndAdmission(t *testing.T) {
 	t.Run("rejected admission reports a failure without a start", func(t *testing.T) {
 		leaf := workflow.Leaf(
 			"leaf",
-			workflow.From[int](workflow.Output("seed")),
+			workflow.Output("seed").Bind[int](),
 			flow.NodeFunc[int, int](func(_ context.Context, in int) (int, error) { return in, nil }),
 		)
 		// The definition is valid, so nothing before admission rejects it. Reaching
@@ -194,7 +686,7 @@ func TestEvents_distinguishValidationReplayAndAdmission(t *testing.T) {
 		var events []workflow.Event
 		step := workflow.Leaf(
 			"leaf",
-			workflow.From[int](workflow.Output("seed")),
+			workflow.Output("seed").Bind[int](),
 			flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
 				t.Fatal("cancelled node ran")
 				return 0, nil
@@ -214,7 +706,7 @@ func TestEvents_distinguishValidationReplayAndAdmission(t *testing.T) {
 
 func TestEvents_noObserverIsFine(t *testing.T) {
 	a := workflow.Leaf("a",
-		workflow.From[int](workflow.Ref{NodeID: "start", Path: "/output"}),
+		workflow.Ref{NodeID: "start", Path: "/output"}.Bind[int](),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 	// No observer in context: emit must be a no-op, not panic.
@@ -225,7 +717,7 @@ func TestEvents_noObserverIsFine(t *testing.T) {
 
 func TestEvents_carrySequenceElapsedAndStore(t *testing.T) {
 	a := workflow.Leaf("a",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * 2, nil }),
 	)
 
@@ -257,10 +749,10 @@ func TestEvents_carrySequenceElapsedAndStore(t *testing.T) {
 	}
 	// A completed event carries the Store the step produced, which is what an
 	// external tracker or persister records.
-	if v, err := workflow.Get[int](completed.Store, workflow.Output("a")); err != nil || v != 42 {
+	if v, err := completed.Store.Get[int](workflow.Output("a")); err != nil || v != 42 {
 		t.Fatalf("completed Store a = %v, %v; want 42", v, err)
 	}
-	if changes := completed.Store.Changes(in); len(changes) != 1 || changes[0].Ref() != workflow.Output("a") {
+	if changes := completed.Store.Changes(in); len(changes) != 1 || changes[0].Ref != workflow.Output("a") {
 		t.Fatalf("Changes = %+v; want one write to a.output", changes)
 	}
 }
@@ -268,7 +760,7 @@ func TestEvents_carrySequenceElapsedAndStore(t *testing.T) {
 func TestEvents_failedCarriesNoStore(t *testing.T) {
 	boom := errors.New("boom")
 	bad := workflow.Leaf("bad",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		flow.NodeFunc[int, int](func(_ context.Context, _ int) (int, error) { return 0, boom }),
 	)
 
@@ -290,7 +782,7 @@ func TestEvents_failedCarriesNoStore(t *testing.T) {
 
 func TestEvents_scopeDistinguishesIterationElements(t *testing.T) {
 	body := workflow.Leaf("el",
-		workflow.From[int](workflow.Item("iter")),
+		workflow.Item("iter").Bind[int](),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 	step := workflow.Iteration(workflow.IterationConfig{
@@ -387,7 +879,7 @@ func TestScope_returnsACopy(t *testing.T) {
 
 func TestWithObserver_nilObserverIsInert(t *testing.T) {
 	a := workflow.Leaf("a",
-		workflow.From[int](workflow.Output("start")),
+		workflow.Output("start").Bind[int](),
 		flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x, nil }),
 	)
 	if _, err := workflow.Run(t.Context(), a,
@@ -479,7 +971,7 @@ func TestRun_rejectsNilStep(t *testing.T) {
 	if !errors.Is(err, workflow.ErrNilStep) {
 		t.Fatalf("err = %v; want ErrNilStep", err)
 	}
-	if got, _ := workflow.Get[int](out, workflow.Output("start")); got != 1 {
+	if got, _ := out.Get[int](workflow.Output("start")); got != 1 {
 		t.Fatalf("Run changed its input Store: %d", got)
 	}
 
@@ -488,7 +980,7 @@ func TestRun_rejectsNilStep(t *testing.T) {
 	if !errors.Is(err, workflow.ErrNilStep) {
 		t.Fatalf("typed nil err = %v; want ErrNilStep", err)
 	}
-	if got, _ := workflow.Get[int](out, workflow.Output("start")); got != 1 {
+	if got, _ := out.Get[int](workflow.Output("start")); got != 1 {
 		t.Fatalf("typed nil Run changed its input Store: %d", got)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -193,7 +194,7 @@ func (c Codec) valueAt(data []byte, at []string) (any, error) {
 		decoder: decoder,
 		// Capping the capacity keeps the walk's appends from writing into the
 		// caller's array beyond the prefix it passed.
-		path:     at[:len(at):len(at)],
+		path:     slices.Clip(at),
 		maxDepth: c.MaxDepth,
 	}
 	value, err := reader.read()
@@ -368,10 +369,8 @@ func (r *reader) readObject() (map[string]any, error) {
 		}
 		object[name] = value
 	}
-	if _, err := r.decoder.Token(); err != nil { // }
-		return nil, err
-	}
-	return object, nil
+	_, err := r.decoder.Token() // }
+	return object, err
 }
 
 func (r *reader) readMemberName() (string, error) {
@@ -395,10 +394,8 @@ func (r *reader) readArray() ([]any, error) {
 		}
 		array = append(array, value)
 	}
-	if _, err := r.decoder.Token(); err != nil { // ]
-		return nil, err
-	}
-	return array, nil
+	_, err := r.decoder.Token() // ]
+	return array, err
 }
 
 func encodePointer(path []string) string {

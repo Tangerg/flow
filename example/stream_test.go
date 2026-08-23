@@ -14,7 +14,7 @@ import (
 func Example_streamingOutput() {
 	generate := workflow.Leaf(
 		"generate",
-		workflow.From[string](workflow.Output("name")),
+		workflow.Output("name").Bind[string](),
 		workflow.StreamFunc[string, string, string](
 			func(ctx context.Context, name string, yield func(string) bool) (string, error) {
 				tokens := []string{"hello", ", ", name}
@@ -47,7 +47,7 @@ func Example_streamingOutput() {
 		fmt.Println("error:", err)
 		return
 	}
-	answer, err := workflow.Get[string](out, workflow.Output("generate"))
+	answer, err := out.Get[string](workflow.Output("generate"))
 	if err != nil {
 		fmt.Println("error:", err)
 		return

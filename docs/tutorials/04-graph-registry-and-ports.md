@@ -78,11 +78,11 @@ sum := workflow.BindFactory(
 			)
 		}
 		return workflow.BinderFunc[pair](func(store workflow.Store) (pair, error) {
-			a, err := workflow.Get[int](store, left)
+			a, err := store.Get[int](left)
 			if err != nil {
 				return pair{}, err
 			}
-			b, err := workflow.Get[int](store, right)
+			b, err := store.Get[int](right)
 			return pair{Left: a, Right: b}, err
 		}), nil
 	},
@@ -132,7 +132,7 @@ registry.
 	})
 ```
 
-`NodeSchema` validates wiring and configuration. The factory and `Get[T]` remain
+`NodeSchema` validates wiring and configuration. The factory and `Store.Get[T]` remain
 responsible for the actual Go types at execution time. Keep the schema and the
 domain type aligned; they are two views of the same boundary.
 

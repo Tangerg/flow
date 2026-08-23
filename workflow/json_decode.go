@@ -117,15 +117,14 @@ func translateJSONError(err error) error {
 	return jsondoc.TranslateDepth(err, ErrMaxDepth)
 }
 
-// decodeJSONInto is [jsondoc.DecodeInto] with this package's nil-receiver
+// decodeInto is [jsondoc.DecodeInto] with this package's nil-receiver
 // reporting; see it for the boundary all of these methods share.
-func decodeJSONInto[T any](
+func (j jsonDocument) decodeInto[T any](
 	dst *T,
-	data []byte,
 	decode func([]byte) (T, error),
 	wrap func(error) error,
 ) error {
-	return jsondoc.DecodeInto(dst, data, decode, wrap)
+	return jsondoc.DecodeInto(dst, j, decode, wrap)
 }
 
 // unmarshalError names one decoding boundary that has no structured error.

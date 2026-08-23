@@ -72,7 +72,7 @@ type Journal struct {
 // JournalKey's standalone JSON representation is strict, lossless, and
 // failure-atomic so a persisted callback correlation key cannot be renamed by
 // Unicode replacement or ambiguous object members.
-type JournalKey struct { //nolint:recvcheck // UnmarshalJSON requires a pointer receiver.
+type JournalKey struct {
 	ID    string       `json:"id"`
 	Scope []ScopeFrame `json:"scope,omitempty"`
 }
@@ -227,8 +227,8 @@ func (j *Journal) Len() int {
 	return j.count
 }
 
-// Keys returns the identities of the recorded steps in scope and ID order. Every
-// Scope is a copy.
+// Keys returns the identities of the recorded steps in scope and ID order. The
+// returned slice and every Scope in it are copies the caller owns.
 func (j *Journal) Keys() []JournalKey {
 	if j == nil {
 		return nil

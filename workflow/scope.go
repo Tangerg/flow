@@ -21,8 +21,6 @@ import (
 // indexed frame, index; member presence preserves an indexed zero without a
 // redundant boolean. Scope, Event, Chunk, Suspension, and JournalKey expose
 // frames as immutable values.
-//
-//nolint:recvcheck // UnmarshalJSON requires a pointer receiver.
 type ScopeFrame struct {
 	ID      string
 	Indexed bool
@@ -171,7 +169,7 @@ func withScopeFrame(ctx context.Context, frame ScopeFrame) context.Context {
 }
 
 // Scope returns the scope of a step running under ctx, outermost first. The
-// returned slice is a copy.
+// returned slice is a fresh value the caller owns.
 func Scope(ctx context.Context) []ScopeFrame {
 	return slices.Clone(scope(ctx))
 }
