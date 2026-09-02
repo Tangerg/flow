@@ -51,21 +51,29 @@ func describe(step Step) Description {
 	return Description{Kind: KindOpaque}
 }
 
-func (d Description) clone() Description {
-	type childSlice struct {
-		first  *Description
-		length int
-	}
-	type cloneTask struct {
-		source   Description
-		target   *Description
-		children childSlice
-		leave    bool
-	}
+// descriptionChildren identifies one Children slice by where it starts and how
+// far it runs. A caller-defined Describer may hand back a tree whose nodes share
+// a slice, which is what a cycle looks like from here, so the walk below keys the
+// slices it is currently inside on that identity rather than on their contents.
+type descriptionChildren struct {
+	first  *Description
+	length int
+}
 
+// descriptionCloneTask is one step of the copy: a node to write into target, or
+// the marker that ends a children slice. The marker is how an iterative walk
+// learns it has left a slice, which a recursive one would know by returning.
+type descriptionCloneTask struct {
+	source   Description
+	target   *Description
+	children descriptionChildren
+	leave    bool
+}
+
+func (d Description) clone() Description {
 	var clone Description
-	pending := []cloneTask{{source: d, target: &clone}}
-	active := make(map[childSlice]struct{})
+	pending := []descriptionCloneTask{{source: d, target: &clone}}
+	active := make(map[descriptionChildren]struct{})
 	for len(pending) > 0 {
 		last := len(pending) - 1
 		task := pending[last]
@@ -83,7 +91,10 @@ func (d Description) clone() Description {
 		if len(task.source.Children) == 0 {
 			continue
 		}
-		key := childSlice{first: &task.source.Children[0], length: len(task.source.Children)}
+		key := descriptionChildren{
+			first:  &task.source.Children[0],
+			length: len(task.source.Children),
+		}
 		if _, cyclic := active[key]; cyclic {
 			// Description promises a tree and has no error return with which to
 			// reject a caller-defined cycle. Preserve the repeated node as a leaf;
@@ -93,9 +104,9 @@ func (d Description) clone() Description {
 		}
 		active[key] = struct{}{}
 		task.target.Children = make([]Description, len(task.source.Children))
-		pending = append(pending, cloneTask{children: key, leave: true})
+		pending = append(pending, descriptionCloneTask{children: key, leave: true})
 		for index := len(task.source.Children) - 1; index >= 0; index-- {
-			pending = append(pending, cloneTask{
+			pending = append(pending, descriptionCloneTask{
 				source: task.source.Children[index],
 				target: &task.target.Children[index],
 			})

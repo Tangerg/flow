@@ -520,11 +520,18 @@ go test ./example -run Example -v
   builtins, and `compileBinary` names its two closures — `shortCircuit` and
   `binaryOperator.eval` — which also retires a `//nolint:exhaustive` covering a
   switch with one case.
-  The eight left are each one subject: a scheduler loop, an error-tree walk, a
-  shadowing walk over two maps, an escape scanner, a number parser, a straight-line
-  factory pipeline, and two dispatches over the kind vocabulary — where
+  What the probe reports today is twelve, each one subject: a scheduler loop
+  (`graphExecution.run`), three walks over an error tree (`errorTree.matches`,
+  `locationFormatter.render`, `suspensionCollector.collectChain`), a shadowing walk
+  over two maps (`Store.cells`), an escape scanner, a number parser, a
+  straight-line factory pipeline (`BindFactory`), and four dispatch tables — two
+  over the wrapper types a clone owns, two over the kind vocabulary, where
   `Spec.requireKindFields` *is* the field matrix. Splitting those would hide the
-  thing they exist to show.
+  thing they exist to show. `Description.clone` left the list by moving its two
+  local type declarations to the package level, where every other small state type
+  in this module already lives and can carry a doc comment. Re-run the probe after
+  changing a shape here: this list is a measurement, and a stale one reads like a
+  decision.
 - Let a declared identity travel as one value until the layer that consumes its
   halves. Sweeping for parameter pairs that appear together in three or more
   signatures put `(scope []ScopeFrame, id string)` at the top with eleven, and that
