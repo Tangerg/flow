@@ -661,6 +661,21 @@ go test ./example -run Example -v
   keeping the context it derived, one of the two validators dropping a rule, a
   kind losing a matrix member, an inner message naming the package again, a doc
   link or a citation pointing at nothing.
+- Measure what a promise costs before deciding it is free. Every composite
+  validates its whole subtree when Run, because nothing may happen before the
+  definition is proven and a step cannot ask whether the parent that just proved
+  it could see it — an opaque caller-defined step in the middle is exactly why the
+  built-in steps below it claim their own identities. Width and iteration count
+  stay linear, and a loop iteration spends about a twentieth of its time
+  revalidating its body. Depth does not: `BenchmarkSequenceNestingScaling` shows
+  512 nested steps costing some seventy-five times the same 512 side by side, and
+  a single `flow.Validate` of that definition costing a hundredth of one run of
+  it. The fixes are worse than the cost — a validated-child invocation path is a
+  second execution protocol, a "parent already validated" marker is ambient state,
+  and memoizing at construction moves the same quadratic into `Sequence` while
+  making every composite carry its subtree's identity set. What the shape earns is
+  a benchmark, so a validation that gets slower cannot get quadratically slower
+  unnoticed.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

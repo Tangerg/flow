@@ -200,6 +200,38 @@ func BenchmarkSequenceRunScaling(b *testing.B) {
 	}
 }
 
+// BenchmarkSequenceNestingScaling is the depth counterpart of the width scaling
+// above, and it is the one shape where validating before invoking any child
+// costs more than the work it protects. Every composite validates its whole
+// subtree when Run, and a definition cannot ask whether the parent that just did
+// so could see it -- a caller-defined step in the middle is opaque, and the
+// built-in steps below it have to claim their own identities. So depth d pays
+// about d/2 subtree validations, which is quadratic: 512 nested steps cost some
+// seventy-five times the same 512 side by side, where a loop running one body
+// that many times stays linear because each iteration revalidates only the body.
+// Nothing here is worth a second execution path, but a change that makes one
+// validation slower is quadratic in this shape alone, which is why it is
+// measured rather than assumed.
+func BenchmarkSequenceNestingScaling(b *testing.B) {
+	ctx := b.Context()
+	for _, depth := range []int{1, 16, 128, 512} {
+		b.Run(strconv.Itoa(depth), func(b *testing.B) {
+			step := benchmarkIncrement("step-0", "seed")
+			for index := 1; index < depth; index++ {
+				id := "step-" + strconv.Itoa(index)
+				step = workflow.Sequence(step, benchmarkIncrement(id, "step-"+strconv.Itoa(index-1)))
+			}
+			store := workflow.NewStore().WithOutput("seed", 1)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				_, _ = step.Run(ctx, store)
+			}
+		})
+	}
+}
+
 func BenchmarkParallelMerge(b *testing.B) {
 	ctx := b.Context()
 	base := workflow.NewStore()
