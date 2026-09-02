@@ -748,8 +748,8 @@ func TestSchemaInfrastructure_reportsEveryFailureBoundary(t *testing.T) {
 	}
 
 	loadErr := errors.New("load schema")
-	load := schemaLoader(func() (*compiledSchema, error) {
-		return nil, loadErr
+	load := schemaLoader(func() (compiledSchema, error) {
+		return compiledSchema{}, loadErr
 	})
 	var decoded map[string]any
 	if err := load.decode(jsonDocument(`{}`), &decoded); !errors.Is(err, loadErr) {
@@ -760,7 +760,7 @@ func TestSchemaInfrastructure_reportsEveryFailureBoundary(t *testing.T) {
 	// must share no text with the boundary that reports it -- otherwise the
 	// boundary's own name would satisfy the check that the words survived.
 	validateErr := errors.New("refused by the backend")
-	schema := &compiledSchema{validator: schemaValidatorFunc(func(any) error {
+	schema := compiledSchema{validator: schemaValidatorFunc(func(any) error {
 		return validateErr
 	})}
 	if err := schema.validate(nil); errors.Is(err, validateErr) ||

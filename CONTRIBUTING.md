@@ -592,6 +592,26 @@ go test ./example -run Example -v
   The same blindness hid three of the ten typed nils the clone walk stops at, two
   of them private; `TestCloningAnOwnedErrorStopsAtEveryTypedNil` states that rule
   for all ten in one place, and each of the three panics without it.
+- Give a result with several answers one name and one algebra. Comparing two
+  expression operands answers three things — whether both were numbers, how they
+  order, and whether they order at all, which a NaN denies — and those three
+  travelled as `(int, bool, bool)` through six signatures. Four of them took the
+  pair apart and put it back together to widen it, and two negated the order by
+  hand to swap the operands. `numberComparison` is that result: `orderedNumbers`
+  and `unorderedNumbers` are the two answers two numbers can give, its zero value
+  is the pair that was never compared, and `reversed` turns the order around
+  without being able to touch the NaN. Every mutation of the new methods dies on
+  tests that existed before them, which is what says the type replaced a shape
+  rather than a behavior.
+- Let a zero value say "absent" instead of a nil pointer. A node type may declare
+  no config schema, and `compileOptional` reported that as `(nil, nil)` — a
+  `//nolint:nilnil`, a pointer every holder had to not dereference, and a method
+  that quietly accepted a nil receiver. `compiledSchema` is a value whose zero is
+  the absence, so the one place the distinction matters asks about it in the open,
+  and the order that makes it correct stays visible: an unchecked config is still
+  parsed as strict JSON before the schema is skipped —
+  `TestValidateGraph_rejectsMalformedConfigWithoutANodeSchema` fails when those
+  two swap.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

@@ -202,8 +202,8 @@ func (b binaryOperator) apply(left, right operand) (any, error) {
 		return result, err
 	}
 	if b.ordering() {
-		if order, unordered, ok := left.compareNumber(right); ok {
-			return b.applyOrder(order, unordered), nil
+		if comparison := left.compareNumber(right); comparison.bothNumbers {
+			return b.applyOrder(comparison), nil
 		}
 	}
 	return b.applyArithmetic(left, right)
@@ -260,8 +260,8 @@ func (b binaryOperator) equal(left, right operand) (bool, error) {
 		return false, fmt.Errorf("%w: %s wants scalar operands, got %s and %s",
 			ErrType, b.String(), left.typeName(), right.typeName())
 	}
-	if order, unordered, ok := left.compareNumber(right); ok {
-		return !unordered && order == 0, nil
+	if comparison := left.compareNumber(right); comparison.bothNumbers {
+		return comparison.equal(), nil
 	}
 	return left.raw == right.raw, nil
 }
@@ -284,26 +284,62 @@ func (b binaryOperator) ordering() bool {
 	}
 }
 
-func (b binaryOperator) applyOrder(order int, unordered bool) bool {
-	if unordered {
+func (b binaryOperator) applyOrder(comparison numberComparison) bool {
+	if comparison.unordered {
 		return false
 	}
 	switch b.Token {
 	case token.LSS:
-		return order < 0
+		return comparison.order < 0
 	case token.LEQ:
-		return order <= 0
+		return comparison.order <= 0
 	case token.GTR:
-		return order > 0
+		return comparison.order > 0
 	default: // token.GEQ; callers establish ordering before applying it.
-		return order >= 0
+		return comparison.order >= 0
 	}
 }
 
+// numberComparison is one comparison of two operands: whether both were numbers
+// at all, and if so how they order -- where two numbers can still fail to order,
+// which is what a NaN does. The three answers are one value because an order
+// read without them is an order that may never have been established, and
+// because reversing a comparison must reverse the order and nothing else.
+//
+// The zero value is what operands that are not both numbers report, so
+// bothNumbers has to be true before order or unordered mean anything.
+type numberComparison struct {
+	order       int
+	bothNumbers bool
+	unordered   bool
+}
+
+// orderedNumbers and unorderedNumbers are the two answers two numbers can give.
+func orderedNumbers(order int) numberComparison {
+	return numberComparison{order: order, bothNumbers: true}
+}
+
+func unorderedNumbers() numberComparison {
+	return numberComparison{bothNumbers: true, unordered: true}
+}
+
+// reversed states the same comparison with its operands swapped. A NaN is
+// unordered from either side, and a comparison that did not happen has no
+// direction, so only the order turns around.
+func (n numberComparison) reversed() numberComparison {
+	n.order = -n.order
+	return n
+}
+
+// equal reports two numbers being the same number, which an unordered pair
+// never is.
+func (n numberComparison) equal() bool {
+	return !n.unordered && n.order == 0
+}
+
 // compareNumber compares normalized numeric values without converting an
-// integer to float64. The second result reports an unordered NaN comparison;
-// the third reports whether both operands are numbers.
-func (o operand) compareNumber(other operand) (order int, unordered, ok bool) {
+// integer to float64.
+func (o operand) compareNumber(other operand) numberComparison {
 	switch left := o.raw.(type) {
 	case int64:
 		return signedNumber(left).compareOperand(other.raw)
@@ -312,52 +348,48 @@ func (o operand) compareNumber(other operand) (order int, unordered, ok bool) {
 	case float64:
 		return floatNumber(left).compareOperand(other.raw)
 	}
-	return 0, false, false
+	return numberComparison{}
 }
 
-func (s signedNumber) compareOperand(other any) (order int, unordered, ok bool) {
+func (s signedNumber) compareOperand(other any) numberComparison {
 	switch other := other.(type) {
 	case int64:
-		return cmp.Compare(int64(s), other), false, true
+		return orderedNumbers(cmp.Compare(int64(s), other))
 	case uint64:
-		return s.compareUnsigned(unsignedNumber(other)), false, true
+		return orderedNumbers(s.compareUnsigned(unsignedNumber(other)))
 	case float64:
-		order, unordered = s.compareFloat(floatNumber(other))
-		return order, unordered, true
+		return s.compareFloat(floatNumber(other))
 	default:
-		return 0, false, false
+		return numberComparison{}
 	}
 }
 
-func (u unsignedNumber) compareOperand(other any) (order int, unordered, ok bool) {
+func (u unsignedNumber) compareOperand(other any) numberComparison {
 	switch other := other.(type) {
 	case int64:
-		return -signedNumber(other).compareUnsigned(u), false, true
+		return orderedNumbers(signedNumber(other).compareUnsigned(u)).reversed()
 	case uint64:
-		return cmp.Compare(uint64(u), other), false, true
+		return orderedNumbers(cmp.Compare(uint64(u), other))
 	case float64:
-		order, unordered = u.compareFloat(floatNumber(other))
-		return order, unordered, true
+		return u.compareFloat(floatNumber(other))
 	default:
-		return 0, false, false
+		return numberComparison{}
 	}
 }
 
-func (f floatNumber) compareOperand(other any) (order int, unordered, ok bool) {
+func (f floatNumber) compareOperand(other any) numberComparison {
 	switch other := other.(type) {
 	case int64:
-		order, unordered = signedNumber(other).compareFloat(f)
-		return -order, unordered, true
+		return signedNumber(other).compareFloat(f).reversed()
 	case uint64:
-		order, unordered = unsignedNumber(other).compareFloat(f)
-		return -order, unordered, true
+		return unsignedNumber(other).compareFloat(f).reversed()
 	case float64:
 		if math.IsNaN(float64(f)) || math.IsNaN(other) {
-			return 0, true, true
+			return unorderedNumbers()
 		}
-		return cmp.Compare(float64(f), other), false, true
+		return orderedNumbers(cmp.Compare(float64(f), other))
 	default:
-		return 0, false, false
+		return numberComparison{}
 	}
 }
 
@@ -369,56 +401,56 @@ func (s signedNumber) compareUnsigned(other unsignedNumber) int {
 	return cmp.Compare(uint64(s), uint64(other))
 }
 
-func (s signedNumber) compareFloat(other floatNumber) (order int, unordered bool) {
+func (s signedNumber) compareFloat(other floatNumber) numberComparison {
 	floating := float64(other)
 	if math.IsNaN(floating) {
-		return 0, true
+		return unorderedNumbers()
 	}
 	// 2^63 is exactly representable as a float64. Keeping conversion inside this
 	// interval avoids implementation-dependent out-of-range float-to-int results.
 	if floating >= float64(math.MaxInt64) {
-		return -1, false
+		return orderedNumbers(-1)
 	}
 	if floating < float64(math.MinInt64) {
-		return 1, false
+		return orderedNumbers(1)
 	}
 
 	truncated := int64(floating)
 	if order := cmp.Compare(int64(s), truncated); order != 0 {
-		return order, false
+		return orderedNumbers(order)
 	}
 	switch converted := float64(truncated); {
 	case converted < floating:
-		return -1, false
+		return orderedNumbers(-1)
 	case converted > floating:
-		return 1, false
+		return orderedNumbers(1)
 	default:
-		return 0, false
+		return orderedNumbers(0)
 	}
 }
 
-func (u unsignedNumber) compareFloat(other floatNumber) (order int, unordered bool) {
+func (u unsignedNumber) compareFloat(other floatNumber) numberComparison {
 	floating := float64(other)
 	if math.IsNaN(floating) {
-		return 0, true
+		return unorderedNumbers()
 	}
 	if floating < 0 {
-		return 1, false
+		return orderedNumbers(1)
 	}
 	if floating >= float64(math.MaxUint64) {
-		return -1, false
+		return orderedNumbers(-1)
 	}
 
 	truncated := uint64(floating)
 	if order := cmp.Compare(uint64(u), truncated); order != 0 {
-		return order, false
+		return orderedNumbers(order)
 	}
 	// For a non-negative in-range float, truncation and conversion back to
 	// float64 can only preserve the value or move below it.
 	if float64(truncated) < floating {
-		return -1, false
+		return orderedNumbers(-1)
 	}
-	return 0, false
+	return orderedNumbers(0)
 }
 
 func (b binaryOperator) applyString(left, right string) (any, error) {

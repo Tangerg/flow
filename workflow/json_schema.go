@@ -30,10 +30,10 @@ var (
 	//go:embed jsonschema/graph.schema.json
 	graphSchemaJSON []byte
 
-	loadSpecSchema = sync.OnceValues(func() (*compiledSchema, error) {
+	loadSpecSchema = sync.OnceValues(func() (compiledSchema, error) {
 		return (schemaSource{url: specSchemaURL, document: specSchemaJSON}).compile()
 	})
-	loadGraphSchema = sync.OnceValues(func() (*compiledSchema, error) {
+	loadGraphSchema = sync.OnceValues(func() (compiledSchema, error) {
 		return (schemaSource{url: graphSchemaURL, document: graphSchemaJSON}).compile()
 	})
 )
@@ -43,6 +43,12 @@ type schemaSource struct {
 	document jsonDocument
 }
 
+// compiledSchema is one schema a document can be checked against. Its zero
+// value is the absence of a schema, which is a supported registration rather
+// than a failure: a node type may declare no config schema at all. Keeping that
+// state inside the value means no caller holds a pointer that may be nil, and
+// the one place the distinction matters -- [compiledSchema.validateConfig] --
+// asks about it in the open.
 type compiledSchema struct {
 	validator interface {
 		Validate(document any) error
@@ -89,13 +95,13 @@ func ValidateGraphJSON(data []byte) error {
 	return nil
 }
 
-func (s schemaSource) compile() (*compiledSchema, error) {
+func (s schemaSource) compile() (compiledSchema, error) {
 	doc, err := s.document.value()
 	if err != nil {
-		return nil, fmt.Errorf("decode JSON Schema: %w", err)
+		return compiledSchema{}, fmt.Errorf("decode JSON Schema: %w", err)
 	}
 	if dialectErr := new(schemaDialectValidator).validate(doc); dialectErr != nil {
-		return nil, fmt.Errorf("validate JSON Schema dialect: %w", dialectErr)
+		return compiledSchema{}, fmt.Errorf("validate JSON Schema dialect: %w", dialectErr)
 	}
 	compiler := jschema.NewCompiler()
 	compiler.DefaultDraft(jschema.Draft2020)
@@ -103,13 +109,19 @@ func (s schemaSource) compile() (*compiledSchema, error) {
 	// never perform network or filesystem I/O because of an external $ref.
 	compiler.UseLoader(jschema.SchemeURLLoader{})
 	if err = compiler.AddResource(s.url, doc); err != nil {
-		return nil, schemaBackendError{operation: "add JSON Schema resource", message: err.Error()}
+		return compiledSchema{}, schemaBackendError{
+			operation: "add JSON Schema resource",
+			message:   err.Error(),
+		}
 	}
 	schema, err := compiler.Compile(s.url)
 	if err != nil {
-		return nil, schemaBackendError{operation: "compile JSON Schema", message: err.Error()}
+		return compiledSchema{}, schemaBackendError{
+			operation: "compile JSON Schema",
+			message:   err.Error(),
+		}
 	}
-	return &compiledSchema{validator: schema}, nil
+	return compiledSchema{validator: schema}, nil
 }
 
 // schemaDialectValidator walks only positions that Draft 2020-12 defines as
@@ -257,19 +269,18 @@ func isDraft2020(dialect string) bool {
 		dialect == "http://json-schema.org/draft/2020-12/schema"
 }
 
-// compileOptional reports an absent schema as a nil validator rather than a
-// sentinel error, because "this node type declares no config schema" is a
-// supported registration and not a condition any caller recovers from.
-//
-//nolint:nilnil // A nil validator is the documented "no schema" result.
-func (s schemaSource) compileOptional() (*compiledSchema, error) {
+// compileOptional reports an absent document as the zero [compiledSchema]
+// rather than a sentinel error, because "this node type declares no config
+// schema" is a supported registration and not a condition any caller recovers
+// from.
+func (s schemaSource) compileOptional() (compiledSchema, error) {
 	if len(s.document) == 0 {
-		return nil, nil
+		return compiledSchema{}, nil
 	}
 	return s.compile()
 }
 
-type schemaLoader func() (*compiledSchema, error)
+type schemaLoader func() (compiledSchema, error)
 
 func (s schemaLoader) decode(document jsonDocument, dst any) error {
 	doc, err := document.value()
@@ -290,7 +301,7 @@ func (s schemaLoader) decode(document jsonDocument, dst any) error {
 // stands in as the empty object, so a schema with required members rejects it
 // rather than skipping the check. A node type that declares no schema still
 // requires a config that is a well-formed strict JSON document.
-func (c *compiledSchema) validateConfig(config json.RawMessage) error {
+func (c compiledSchema) validateConfig(config json.RawMessage) error {
 	data := config
 	if len(data) == 0 {
 		data = json.RawMessage(`{}`)
@@ -299,13 +310,13 @@ func (c *compiledSchema) validateConfig(config json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	if c == nil {
+	if c.validator == nil {
 		return nil
 	}
 	return c.validate(doc)
 }
 
-func (c *compiledSchema) validate(doc any) error {
+func (c compiledSchema) validate(doc any) error {
 	err := c.validator.Validate(doc)
 	if err == nil {
 		return nil

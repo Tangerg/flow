@@ -66,7 +66,7 @@ type NodeSchema struct {
 
 type registeredNodeSchema struct {
 	schema          NodeSchema
-	configValidator *compiledSchema
+	configValidator compiledSchema
 }
 
 // RegisterSchema associates a [NodeSchema] with a node type. It compiles

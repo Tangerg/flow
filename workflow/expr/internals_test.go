@@ -96,28 +96,36 @@ func TestNormalizationReadsTheDecimalItWrote(t *testing.T) {
 
 func TestExactNumericComparison_boundaries(t *testing.T) {
 	signedCases := []struct {
-		name      string
-		number    signedNumber
-		floating  floatNumber
-		order     int
-		unordered bool
+		name     string
+		number   signedNumber
+		floating floatNumber
+		want     numberComparison
 	}{
-		{name: "NaN", floating: floatNumber(math.NaN()), unordered: true},
-		{name: "above int64", floating: floatNumber(float64(1 << 63)), order: -1},
-		{name: "below int64", floating: -floatNumber(float64(1<<63)) * 2, order: 1},
+		{name: "NaN", floating: floatNumber(math.NaN()), want: unorderedNumbers()},
+		{name: "above int64", floating: floatNumber(float64(1 << 63)), want: orderedNumbers(-1)},
+		{name: "below int64", floating: -floatNumber(float64(1<<63)) * 2, want: orderedNumbers(1)},
 		// 2^63 and -2^63 are the interval ends the conversion guards name. Each is
 		// exactly a float64, so only an operand equal to the truncation it would
 		// produce can tell the guard from a comparison that ran past it.
-		{name: "at the int64 ceiling", number: math.MaxInt64, floating: floatNumber(float64(1 << 63)), order: -1},
-		{name: "at the int64 floor", number: math.MinInt64, floating: -floatNumber(float64(1 << 63))},
-		{name: "positive fraction", floating: 0.5, order: -1},
-		{name: "negative fraction", floating: -0.5, order: 1},
+		{
+			name:     "at the int64 ceiling",
+			number:   math.MaxInt64,
+			floating: floatNumber(float64(1 << 63)),
+			want:     orderedNumbers(-1),
+		},
+		{
+			name:     "at the int64 floor",
+			number:   math.MinInt64,
+			floating: -floatNumber(float64(1 << 63)),
+			want:     orderedNumbers(0),
+		},
+		{name: "positive fraction", floating: 0.5, want: orderedNumbers(-1)},
+		{name: "negative fraction", floating: -0.5, want: orderedNumbers(1)},
 	}
 	for _, test := range signedCases {
 		t.Run("signed "+test.name, func(t *testing.T) {
-			order, unordered := test.number.compareFloat(test.floating)
-			if order != test.order || unordered != test.unordered {
-				t.Fatalf("compareFloat = %d, %v; want %d, %v", order, unordered, test.order, test.unordered)
+			if got := test.number.compareFloat(test.floating); got != test.want {
+				t.Fatalf("compareFloat = %+v; want %+v", got, test.want)
 			}
 		})
 	}
@@ -126,25 +134,24 @@ func TestExactNumericComparison_boundaries(t *testing.T) {
 		name     string
 		number   unsignedNumber
 		floating floatNumber
-		order    int
+		want     numberComparison
 	}{
-		{name: "negative", number: 1, floating: -1, order: 1},
-		{name: "different integer", number: 2, floating: 1, order: 1},
-		{name: "fraction", number: 1, floating: 1.5, order: -1},
+		{name: "negative", number: 1, floating: -1, want: orderedNumbers(1)},
+		{name: "different integer", number: 2, floating: 1, want: orderedNumbers(1)},
+		{name: "fraction", number: 1, floating: 1.5, want: orderedNumbers(-1)},
 		// Zero is the end of the negative guard's interval. Normalization never
 		// hands comparison an unsigned operand this small, so the equality is the
 		// routine's own contract rather than a reachable expression.
-		{name: "zero", number: 0, floating: 0},
+		{name: "zero", number: 0, floating: 0, want: orderedNumbers(0)},
 		// A fraction between zero and one is on the other side of that same end: it
 		// is not negative, so it has to reach the truncation and the remainder that
 		// distinguishes it from the integer it truncates to.
-		{name: "fraction below one", number: 0, floating: 0.5, order: -1},
+		{name: "fraction below one", number: 0, floating: 0.5, want: orderedNumbers(-1)},
 	}
 	for _, test := range unsignedCases {
 		t.Run("unsigned "+test.name, func(t *testing.T) {
-			order, unordered := test.number.compareFloat(test.floating)
-			if order != test.order || unordered {
-				t.Fatalf("compareFloat = %d, %v; want %d, false", order, unordered, test.order)
+			if got := test.number.compareFloat(test.floating); got != test.want {
+				t.Fatalf("compareFloat = %+v; want %+v", got, test.want)
 			}
 		})
 	}
@@ -171,7 +178,7 @@ func TestExactNumericComparison_boundaries(t *testing.T) {
 		})
 	}
 
-	if _, _, ok := unsignedNumber(1).compareOperand(true); ok {
+	if unsignedNumber(1).compareOperand(true).bothNumbers {
 		t.Fatal("unsigned integer unexpectedly compared with bool")
 	}
 	if value, ok := (operand{raw: uint64(2)}).asFloat(); !ok || value != 2 {
@@ -238,10 +245,10 @@ func TestOrderingTokensAgreeAcrossNumbersAndStrings(t *testing.T) {
 				{order: 0, left: "a", right: "a", want: test.equal},
 				{order: 1, left: "b", right: "a", want: test.above},
 			} {
-				if got := operator.applyOrder(expected.order, false); got != expected.want {
+				if got := operator.applyOrder(orderedNumbers(expected.order)); got != expected.want {
 					t.Fatalf("applyOrder(%d) = %t; want %t", expected.order, got, expected.want)
 				}
-				if operator.applyOrder(expected.order, true) {
+				if operator.applyOrder(unorderedNumbers()) {
 					t.Fatalf("applyOrder(%d) on unordered operands = true; want false", expected.order)
 				}
 				got, err := operator.applyString(expected.left, expected.right)
@@ -270,9 +277,8 @@ func TestFloatComparisonIsUnorderedWhenEitherSideIsNaN(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			order, unordered, ok := test.left.compareOperand(test.right)
-			if !ok || !unordered || order != 0 {
-				t.Fatalf("compareOperand = %d, %t, %t; want 0, true, true", order, unordered, ok)
+			if got := test.left.compareOperand(test.right); got != unorderedNumbers() {
+				t.Fatalf("compareOperand = %+v; want %+v", got, unorderedNumbers())
 			}
 		})
 	}
