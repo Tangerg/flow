@@ -612,6 +612,28 @@ go test ./example -run Example -v
   parsed as strict JSON before the schema is skipped —
   `TestValidateGraph_rejectsMalformedConfigWithoutANodeSchema` fails when those
   two swap.
+- Keep a file about one machine. `workflow/errors.go` had grown to 908 lines
+  holding four: the declared error surface, the iterative `errors.Is` match, the
+  copy an `Observer` receives, and the rendering of one message. Its order showed
+  it — the whole clone machine sat between `StepError` and the constructor that
+  builds one. `error_tree.go`, `error_clone.go`, and `error_format.go` are those
+  machines, and `errors.go` is now the surface alone: sentinels, the shared limit,
+  the two vocabularies, the five exported locations with their constructors, and
+  the two private fragments. Splitting by operation is what the rest of this
+  package already does — `spec_validate.go` beside `spec_compile.go`,
+  `store_json.go` beside `store.go`.
+- Pin a vocabulary to the members it names, on both routes. A `field*` constant
+  is the word a diagnostic uses for a wire member, so the two spellings are one
+  contract stated twice. `specKindFields` carries the Spec half into
+  `TestSpecFieldMatricesAgreeWithTheSpecStruct`, but a Graph's members reach the
+  vocabulary only through the `fieldError` calls that locate them, which no test
+  saw. `TestGraphDiagnosticFieldsNameTheGraphsOwnMembers` is that half: it fails
+  when a tag is renamed, when a constant is, and when a new member arrives with no
+  name to be located by. The doc links need no such guard —
+  `TestGoDocLinksResolve` skips the standard library on purpose, and `go/doc`
+  resolves a link's package against the whole package's imports rather than one
+  file's, so moving a comment into a file that does not import `errors` does not
+  break `[errors.Join]`.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

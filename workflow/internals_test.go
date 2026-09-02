@@ -1525,6 +1525,47 @@ func TestSpecFieldMatricesAgreeWithTheSpecStruct(t *testing.T) {
 	})
 }
 
+// TestGraphDiagnosticFieldsNameTheGraphsOwnMembers is the Graph half of
+// TestSpecFieldMatricesAgreeWithTheSpecStruct. A Spec's members reach the
+// diagnostic vocabulary through specKindFields, which that test pins to the
+// struct. A Graph's reach it only through the fieldError calls that locate them,
+// so nothing keeps the two spellings the same word: a renamed tag leaves
+// GraphError.Field naming a member no reader can find in the document, and a new
+// member arrives with no name to be located by at all.
+func TestGraphDiagnosticFieldsNameTheGraphsOwnMembers(t *testing.T) {
+	located := []string{
+		fieldConcurrency,
+		fieldConfig,
+		fieldDependsOn,
+		fieldID,
+		fieldInputs,
+		fieldNodes,
+		fieldTrigger,
+		fieldType,
+		fieldWhen,
+	}
+	slices.Sort(located)
+
+	var members []string
+	for _, ownerType := range []reflect.Type{
+		reflect.TypeFor[Graph](),
+		reflect.TypeFor[GraphNode](),
+	} {
+		for field := range ownerType.Fields() {
+			name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+			if name == "" {
+				t.Fatalf("%s field %s has no JSON member name", ownerType.Name(), field.Name)
+			}
+			members = append(members, name)
+		}
+	}
+	slices.Sort(members)
+
+	if !slices.Equal(members, located) {
+		t.Fatalf("graph members %v; the vocabulary locates %v", members, located)
+	}
+}
+
 // specSchemaKindMembers reads the per-kind member sets out of the embedded Spec
 // JSON Schema. Each kind's definition is the object whose kind property is
 // pinned to a const, so the set is discovered rather than restated here.
