@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync/atomic"
 	"testing"
 
@@ -529,5 +530,93 @@ func TestBranch_reportsJournalDecisionConflict(t *testing.T) {
 	)
 	if !errors.Is(err, workflow.ErrJournalConflict) {
 		t.Fatalf("error = %v; want ErrJournalConflict", err)
+	}
+}
+
+// TestBranch_journalsOneDecisionPerScopedInvocation runs a Branch where every
+// repeated boundary puts one: inside a loop body. A branch adds no scope frame
+// of its own, so the only thing telling its second decision from its first is
+// the scope it inherited, and that scope is part of the key the decision is
+// claimed, recorded, and replayed under. Without it the second iteration
+// collides with the first instead of deciding again, and every test that runs a
+// branch at the top level passes either way.
+func TestBranch_journalsOneDecisionPerScopedInvocation(t *testing.T) {
+	var decided []uint64
+	resolver := flow.NodeFunc[workflow.Store, string](
+		func(ctx context.Context, _ workflow.Store) (string, error) {
+			scope := workflow.Scope(ctx)
+			index := scope[len(scope)-1].Index
+			decided = append(decided, index)
+			if index == 0 {
+				return "first", nil
+			}
+			return "later", nil
+		},
+	)
+	arm := func(id string) workflow.Step {
+		return workflow.LeafFunc(
+			id,
+			workflow.Output("seed"),
+			func(_ context.Context, value int) (int, error) { return value, nil },
+		)
+	}
+	iterations := 0
+	loop := workflow.Loop(workflow.LoopConfig{
+		ID: "loop",
+		Body: workflow.Branch(workflow.BranchConfig{
+			ID:       "pick",
+			Resolver: resolver,
+			Cases:    map[string]workflow.Step{"first": arm("first"), "later": arm("later")},
+		}),
+		Condition: flow.NodeFunc[workflow.Store, bool](
+			func(context.Context, workflow.Store) (bool, error) {
+				iterations++
+				return iterations >= 2, nil
+			},
+		),
+	})
+
+	journal := workflow.NewJournal()
+	store := workflow.NewStore().WithOutput("seed", 1)
+	if _, err := workflow.Run(
+		t.Context(),
+		loop,
+		store,
+		workflow.RunConfig{Journal: journal},
+	); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !slices.Equal(decided, []uint64{0, 1}) {
+		t.Fatalf("decisions = %v; want one per iteration index", decided)
+	}
+
+	var scopes []uint64
+	for _, key := range journal.Keys() {
+		if key.ID != "pick" {
+			continue
+		}
+		if len(key.Scope) != 1 || key.Scope[0].ID != "loop" || !key.Scope[0].Indexed {
+			t.Fatalf("decision key %+v; want one indexed loop frame", key)
+		}
+		scopes = append(scopes, key.Scope[0].Index)
+	}
+	if !slices.Equal(scopes, []uint64{0, 1}) {
+		t.Fatalf("journaled decisions at %v; want one per iteration", scopes)
+	}
+
+	// The recorded decisions are found again under the same scoped keys, so a
+	// resumed run follows them instead of asking the resolver a second time.
+	decided = nil
+	iterations = 0
+	if _, err := workflow.Run(
+		t.Context(),
+		loop,
+		store,
+		workflow.RunConfig{Journal: journal},
+	); err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+	if len(decided) != 0 {
+		t.Fatalf("resumed run decided %v; want the journaled decisions", decided)
 	}
 }

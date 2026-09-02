@@ -714,6 +714,18 @@ go test ./example -run Example -v
   documented at both ends, on `RunChild` and on `Step`.
   `Example_customRepeatedComposite` keeps writing the rule out, which is what a
   caller of that layer has to do.
+- An execution holds the identity it is known by, and the scope in it is not
+  decoration. `leafExecution` derived `boundaryKey(ctx, id)` four times and
+  `branchExecution` three, cloning the same scope to arrive at the same value,
+  while `gatedStep.Run` built it twice in one function. Each takes it once now,
+  at construction, where the boundary knows both halves — the loop cannot, and
+  should not, because every iteration is a different key. Removing the scope from
+  each key one at a time is what showed the tests were thinner than the code:
+  the leaf key died on eleven tests, and the branch key and the bypass mark died
+  on none, because nothing ran a branch or a gated graph inside a repeated
+  boundary. `TestBranch_journalsOneDecisionPerScopedInvocation` and
+  `TestCompiledGraph_bypassBelongsToOneScopedInvocation` are those compositions,
+  and each fails when its key loses the scope.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

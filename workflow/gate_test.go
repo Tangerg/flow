@@ -1027,3 +1027,106 @@ func eventFailure(events <-chan workflow.Event, id string) error {
 	}
 	return nil
 }
+
+// TestCompiledGraph_bypassBelongsToOneScopedInvocation puts a chain of gates
+// inside a loop body, which is where a bypass mark stops being a fact about a
+// node and becomes a fact about one invocation of it. A gate whose source was
+// bypassed is not satisfied, so the mark is read by the next node down; if it
+// were kept without the scope it was made in, the second iteration would read
+// the first one's mark and bypass a node whose gate is satisfied. Every gate
+// test that runs a graph at the top level passes either way, because there the
+// scope is empty.
+func TestCompiledGraph_bypassBelongsToOneScopedInvocation(t *testing.T) {
+	var branchCalls, targetCalls atomic.Int64
+	iterationOutlet := func(ctx context.Context) string {
+		scope := workflow.Scope(ctx)
+		if scope[len(scope)-1].Index == 0 {
+			return "no"
+		}
+		return "yes"
+	}
+	registry := workflow.NewRegistry().
+		MustRegisterNode("route", workflow.Factory(
+			func(struct{}) (flow.Node[int, string], error) {
+				return flow.NodeFunc[int, string](
+					func(ctx context.Context, _ int) (string, error) {
+						return iterationOutlet(ctx), nil
+					},
+				), nil
+			})).
+		MustRegisterSchema("route", routingSchema("yes", "no")).
+		MustRegisterNode("branch", workflow.Factory(
+			func(struct{}) (flow.Node[int, string], error) {
+				return flow.NodeFunc[int, string](
+					func(context.Context, int) (string, error) {
+						branchCalls.Add(1)
+						return "go", nil
+					},
+				), nil
+			})).
+		MustRegisterSchema("branch", routingSchema("go")).
+		MustRegisterNode("target", workflow.Factory(
+			func(struct{}) (flow.Node[int, int], error) {
+				return flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+					targetCalls.Add(1)
+					return value, nil
+				}), nil
+			}))
+
+	seed := workflow.Inputs{workflow.DefaultPort: workflow.Output("seed")}
+	body, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
+		{ID: "route", Type: "route", Inputs: seed},
+		{
+			ID: "branch", Type: "branch", Inputs: seed,
+			When: []workflow.Gate{workflow.When("route", "yes")},
+		},
+		{
+			ID: "target", Type: "target", Inputs: seed,
+			When: []workflow.Gate{workflow.When("branch", "go")},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+
+	iterations := 0
+	loop := workflow.Loop(workflow.LoopConfig{
+		ID:   "loop",
+		Body: body,
+		Condition: flow.NodeFunc[workflow.Store, bool](
+			func(context.Context, workflow.Store) (bool, error) {
+				iterations++
+				return iterations >= 2, nil
+			},
+		),
+	})
+
+	bypassed := make(map[string]int)
+	out, err := workflow.Run(
+		t.Context(),
+		loop,
+		workflow.NewStore().WithOutput("seed", 7),
+		workflow.RunConfig{Observer: workflow.ObserverFunc(
+			func(_ context.Context, event workflow.Event) {
+				if event.Kind == workflow.EventBypassed {
+					bypassed[event.ID]++
+				}
+			},
+		)},
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if branchCalls.Load() != 1 || targetCalls.Load() != 1 {
+		t.Fatalf(
+			"calls = branch:%d target:%d; want each to run in the iteration that selected it",
+			branchCalls.Load(), targetCalls.Load(),
+		)
+	}
+	if bypassed["branch"] != 1 || bypassed["target"] != 1 {
+		t.Fatalf("bypassed = %v; want branch and target bypassed once each", bypassed)
+	}
+	if got, readErr := out.Get[int](workflow.Output("target")); readErr != nil || got != 7 {
+		t.Fatalf("target output = %d, %v; want the value from the iteration that ran it", got, readErr)
+	}
+}

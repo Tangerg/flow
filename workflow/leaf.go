@@ -161,6 +161,7 @@ func (l leafStep[I, O]) Run(ctx context.Context, store Store) (Store, error) {
 	ctx = ensureRun(ctx)
 	execution := leafExecution[I, O]{
 		leaf:  l,
+		key:   boundaryKey(ctx, l.id),
 		store: store,
 		run:   runFrom(ctx),
 	}
@@ -202,9 +203,14 @@ func (l leafStep[I, O]) definition() stepDefinition {
 }
 
 // leafExecution owns everything that changes while one leaf runs, so the
-// leafStep it came from stays immutable and safe for concurrent use.
+// leafStep it came from stays immutable and safe for concurrent use. key is the
+// identity this invocation is known by -- to the Journal, to a suspension, and
+// to the chunks it emits -- and it is taken once because the scope it names
+// cannot change while the leaf runs. Deriving it per use would clone that scope
+// four times to arrive at the same value.
 type leafExecution[I, O any] struct {
 	leaf    leafStep[I, O]
+	key     JournalKey
 	store   Store
 	run     *runState
 	started time.Time
@@ -248,7 +254,7 @@ func (l *leafExecution[I, O]) runNode(ctx context.Context, input I) (O, error) {
 		return l.leaf.node.Run(ctx, input)
 	}
 
-	emissionCtx, emission := withEmission(ctx, l.run, boundaryKey(ctx, l.leaf.id), emitter)
+	emissionCtx, emission := withEmission(ctx, l.run, l.key, emitter)
 	defer emission.cancel(nil)
 	output, err := l.leaf.node.Run(emissionCtx, input)
 	if emissionErr := emission.close(); emissionErr != nil {
@@ -259,7 +265,7 @@ func (l *leafExecution[I, O]) runNode(ctx context.Context, input I) (O, error) {
 }
 
 func (l *leafExecution[I, O]) replay(ctx context.Context) (Store, bool, error) {
-	value, ok, err := l.run.replay(ctx, boundaryKey(ctx, l.leaf.id))
+	value, ok, err := l.run.replay(ctx, l.key)
 	if err != nil {
 		return Store{}, false, err
 	}
@@ -313,7 +319,7 @@ func (l *leafExecution[I, O]) suspend(
 	ctx context.Context,
 	suspensions suspensionList,
 ) (Store, error) {
-	err := suspensions.errAt(boundaryKey(ctx, l.leaf.id))
+	err := suspensions.errAt(l.key)
 	if l.run.observing() {
 		if contextErr := l.run.emitAndCheck(ctx, Event{
 			Kind:    EventSuspended,
@@ -329,7 +335,7 @@ func (l *leafExecution[I, O]) suspend(
 
 func (l *leafExecution[I, O]) complete(ctx context.Context, output O) (Store, error) {
 	next := l.store.WithOutput(l.leaf.id, output)
-	journalErr := l.run.journal().record(boundaryKey(ctx, l.leaf.id), output)
+	journalErr := l.run.journal().record(l.key, output)
 	if err := context.Cause(ctx); err != nil {
 		return l.store, err
 	}

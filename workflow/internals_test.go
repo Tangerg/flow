@@ -123,6 +123,7 @@ func TestReplayBoundaries_resampleCancellationAfterLookup(t *testing.T) {
 		ctx := withConfig(ctxtest.CancelAtCheck(t.Context(), 1, cause), RunConfig{})
 		execution := branchExecution{
 			branch: branchStep{id: "branch"},
+			key:    JournalKey{ID: "branch"},
 			input:  NewStore(),
 			run:    runFrom(ctx),
 		}
@@ -377,6 +378,7 @@ func TestLeaf_resamplesCancellationAfterJournalCommit(t *testing.T) {
 	})
 	execution := leafExecution[struct{}, int]{
 		leaf:  leafStep[struct{}, int]{id: "leaf"},
+		key:   JournalKey{ID: "leaf"},
 		store: NewStore(),
 		run:   runFrom(ctx),
 	}
@@ -406,6 +408,7 @@ func TestJournalCommitErrorsDoNotHideParentCancellation(t *testing.T) {
 		})
 		execution := leafExecution[struct{}, int]{
 			leaf:  leafStep[struct{}, int]{id: "leaf"},
+			key:   JournalKey{ID: "leaf"},
 			store: NewStore(),
 			run:   runFrom(ctx),
 		}

@@ -60,6 +60,7 @@ func (b branchStep) Run(ctx context.Context, s Store) (Store, error) {
 	ctx = ensureRun(ctx)
 	execution := branchExecution{
 		branch: b,
+		key:    boundaryKey(ctx, b.id),
 		input:  s,
 		run:    runFrom(ctx),
 	}
@@ -69,9 +70,12 @@ func (b branchStep) Run(ctx context.Context, s Store) (Store, error) {
 // branchExecution owns the selection and persistence boundary of one Branch
 // invocation. A case becomes admissible only after its name has been validated
 // against the definition and, for a fresh decision, committed to the configured
-// Journal when resumption is enabled.
+// Journal when resumption is enabled. key is the identity this invocation is
+// known by, taken once because a branch adds no scope of its own: claiming it,
+// recording the decision, and naming a wait are all the same boundary.
 type branchExecution struct {
 	branch branchStep
+	key    JournalKey
 	input  Store
 	run    *runState
 }
@@ -95,7 +99,7 @@ func (b *branchExecution) validate(ctx context.Context) error {
 	if err := b.branch.Validate(); err != nil {
 		return err
 	}
-	if err := b.run.claim(boundaryKey(ctx, b.branch.id)); err != nil {
+	if err := b.run.claim(b.key); err != nil {
 		return newStepError(ctx, b.branch.id, OpValidate, err)
 	}
 	return context.Cause(ctx)
@@ -123,7 +127,7 @@ func (b *branchExecution) selectCase(ctx context.Context) (Step, error) {
 	// unknown name would poison the Journal and make every later run fail before
 	// the resolver had a chance to recover.
 	if !replayed {
-		journalErr := b.run.journal().record(boundaryKey(ctx, b.branch.id), name)
+		journalErr := b.run.journal().record(b.key, name)
 		if contextErr := context.Cause(ctx); contextErr != nil {
 			return nil, contextErr
 		}
@@ -180,7 +184,7 @@ func (b *branchExecution) decide(ctx context.Context) (string, bool, error) {
 	name, err = b.branch.resolve.Run(ctx, b.input)
 	if err != nil {
 		if suspensions, only := (suspensionTree{err: err}).suspensions(); only {
-			return "", false, suspensions.errAt(boundaryKey(ctx, b.branch.id))
+			return "", false, suspensions.errAt(b.key)
 		}
 		return "", false, newStepError(ctx, b.branch.id, OpRun, err)
 	}

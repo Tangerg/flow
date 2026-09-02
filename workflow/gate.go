@@ -97,13 +97,14 @@ func (g gatedStep) Run(ctx context.Context, store Store) (Store, error) {
 	}
 	run := runFrom(ctx)
 	id := g.stepID()
-	if err := run.claim(boundaryKey(ctx, id)); err != nil {
+	key := boundaryKey(ctx, id)
+	if err := run.claim(key); err != nil {
 		return g.fail(ctx, store, OpValidate, err)
 	}
 	if err := context.Cause(ctx); err != nil {
 		return store, err
 	}
-	run.markBypassed(boundaryKey(ctx, id))
+	run.markBypassed(key)
 	if err := context.Cause(ctx); err != nil {
 		return store, err
 	}
