@@ -162,8 +162,8 @@ var wireDecodeExceptions = map[string]string{
 // that does not.
 //
 // It asks about the exported types, which are the ones a caller hands to
-// json.Unmarshal. An unexported adapter such as graphJSON is the inside of a decode
-// function, reached only from within the boundary this test is about.
+// json.Unmarshal. An unexported adapter such as graphJSONInput is the inside of a
+// decode function, reached only from within the boundary this test is about.
 //
 // What it asks is that the boundary call is the entire body. Asking only that the
 // body reaches it accepts a decoder that unmarshals into its receiver first and

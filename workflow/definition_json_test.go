@@ -13,7 +13,7 @@ func TestDefinitionJSONDecodesLimitsRecursivelyAndPreservesRawConfig(t *testing.
 		"nodes":[{"id":"node","type":"kind","config": { "n": 1.0, "text": "1e0" }}],
 		"concurrency":1e1
 	}`)
-	var graphDocument graphJSON
+	var graphDocument graphJSONInput
 	if err := json.Unmarshal(graphData, &graphDocument); err != nil {
 		t.Fatalf("Unmarshal Graph: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestDefinitionJSONDecodesLimitsRecursivelyAndPreservesRawConfig(t *testing.
 			"two":{"kind":"loop","id":"loop","condition":"done","maxIterations":2.0,"body":null}
 		}
 	}`)
-	var specDocument specJSON
+	var specDocument specJSONInput
 	if err := json.Unmarshal(specData, &specDocument); err != nil {
 		t.Fatalf("Unmarshal Spec: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestDefinitionJSONDecodesLimitsRecursivelyAndPreservesRawConfig(t *testing.
 }
 
 func TestDefinitionJSONRejectsInvalidEngineIntegersWithoutReplacingResult(t *testing.T) {
-	graphDocument := graphJSON{graph: Graph{Concurrency: 7}}
+	graphDocument := graphJSONInput{graph: Graph{Concurrency: 7}}
 	err := json.Unmarshal([]byte(`{"nodes":[],"concurrency":1.5}`), &graphDocument)
 	if err == nil || !strings.Contains(err.Error(), "concurrency") {
 		t.Fatalf("Unmarshal error = %v; want concurrency error", err)
@@ -64,7 +64,7 @@ func TestDefinitionJSONRejectsInvalidEngineIntegersWithoutReplacingResult(t *tes
 		"body":  `{"kind":"loop","body":{"kind":"parallel","concurrency":1.5}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			var document specJSON
+			var document specJSONInput
 			if err := json.Unmarshal([]byte(data), &document); err == nil {
 				t.Fatal("Unmarshal succeeded; want nested integer error")
 			}
@@ -95,11 +95,11 @@ func TestDefinitionJSONReportsInvalidCasesDeterministically(t *testing.T) {
 }
 
 func TestDefinitionJSONPreservesDecoderTypeErrors(t *testing.T) {
-	var graphDocument graphJSON
+	var graphDocument graphJSONInput
 	if err := json.Unmarshal([]byte(`[]`), &graphDocument); err == nil {
 		t.Fatal("Graph unmarshal succeeded; want type error")
 	}
-	var specDocument specJSON
+	var specDocument specJSONInput
 	if err := json.Unmarshal([]byte(`[]`), &specDocument); err == nil {
 		t.Fatal("Spec unmarshal succeeded; want type error")
 	}

@@ -13,20 +13,22 @@ import (
 	"github.com/Tangerg/flow/internal/jsonnum"
 )
 
-// graphJSON and specJSON are the strict DSL's typed decoding boundary. They
-// retain the exported definitions as plain Go data while reconciling one
-// representational difference: JSON Schema integers include spellings such as
-// 1.0 and 1e0, whereas encoding/json accepts only integer tokens for an int.
-type graphJSON struct {
+// graphJSONInput and specJSONInput are the strict DSL's typed decoding boundary,
+// named for the direction they carry: specJSONOutput is the same wire shape going
+// the other way. They retain the exported definitions as plain Go data while
+// reconciling one representational difference: JSON Schema integers include
+// spellings such as 1.0 and 1e0, whereas encoding/json accepts only integer
+// tokens for an int.
+type graphJSONInput struct {
 	graph Graph
 }
 
-type specJSON struct {
+type specJSONInput struct {
 	spec Spec
 }
 
 // specJSONDecoder owns the recursive raw members while one Spec is decoded.
-// Keeping child conversion on this receiver leaves specJSON as a small wire
+// Keeping child conversion on this receiver leaves specJSONInput as a small wire
 // adapter and keeps application Config bytes out of the normalization path.
 //
 // A child failure is located by wrapping on the way out — "steps[0]: case ..." —
@@ -76,7 +78,7 @@ type (
 )
 
 func decodeGraphDocument(data []byte) (Graph, error) {
-	var document graphJSON
+	var document graphJSONInput
 	if err := schemaLoader(loadGraphSchema).decode(jsonDocument(data), &document); err != nil {
 		return Graph{}, err
 	}
@@ -84,7 +86,7 @@ func decodeGraphDocument(data []byte) (Graph, error) {
 }
 
 func decodeSpecDocument(data []byte) (Spec, error) {
-	var document specJSON
+	var document specJSONInput
 	if err := schemaLoader(loadSpecSchema).decode(jsonDocument(data), &document); err != nil {
 		return Spec{}, err
 	}
@@ -291,7 +293,7 @@ func (s Spec) validateJSONText() (string, error) {
 	return "", nil
 }
 
-func (g *graphJSON) UnmarshalJSON(data []byte) error {
+func (g *graphJSONInput) UnmarshalJSON(data []byte) error {
 	var next graphJSONFields
 	document := struct {
 		*graphJSONFields
@@ -309,7 +311,7 @@ func (g *graphJSON) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (s *specJSON) UnmarshalJSON(data []byte) error {
+func (s *specJSONInput) UnmarshalJSON(data []byte) error {
 	var decoder specJSONDecoder
 	if err := decoder.decode(data); err != nil {
 		return err
@@ -396,7 +398,7 @@ func (s *specJSONDecoder) decodeBody() error {
 }
 
 func decodeSpecJSON(data []byte) (Spec, error) {
-	var document specJSON
+	var document specJSONInput
 	if err := json.Unmarshal(data, &document); err != nil {
 		return Spec{}, err
 	}
