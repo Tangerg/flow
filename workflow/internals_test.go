@@ -877,7 +877,7 @@ func TestSpecCompiler_defendsItsValidatedInputContract(t *testing.T) {
 		},
 		"missing loop body": {
 			spec: Spec{Kind: KindLoop, ID: "loop", Condition: "condition"},
-			want: `loop "loop" field body: loop body is required`,
+			want: `loop "loop" field body: required`,
 		},
 		"unknown condition": {
 			spec: Spec{
@@ -895,18 +895,18 @@ func TestSpecCompiler_defendsItsValidatedInputContract(t *testing.T) {
 		},
 		"missing iteration input": {
 			spec: Spec{Kind: KindIteration, ID: "each"},
-			want: `iteration "each" field input: iteration input is required`,
+			want: `iteration "each" field input: required`,
 		},
 		"missing iteration body": {
 			spec: Spec{Kind: KindIteration, ID: "each", Input: Output("items")},
-			want: `iteration "each" field body: iteration body is required`,
+			want: `iteration "each" field body: required`,
 		},
 		"missing iteration output": {
 			spec: Spec{
 				Kind: KindIteration, ID: "each", Input: Output("items"),
 				Body: &Spec{Kind: KindSequence},
 			},
-			want: `iteration "each" field bodyOutput: iteration body output is required`,
+			want: `iteration "each" field bodyOutput: required`,
 		},
 		"iteration body": {
 			spec: Spec{
@@ -917,14 +917,14 @@ func TestSpecCompiler_defendsItsValidatedInputContract(t *testing.T) {
 		},
 		"missing subgraph body": {
 			spec: Spec{Kind: KindSubgraph, ID: "sub", BodyOutput: Output("value")},
-			want: `subgraph "sub" field body: subgraph body is required`,
+			want: `subgraph "sub" field body: required`,
 		},
 		"missing subgraph output": {
 			spec: Spec{
 				Kind: KindSubgraph, ID: "sub",
 				Body: &Spec{Kind: KindSequence},
 			},
-			want: `subgraph "sub" field bodyOutput: subgraph body output is required`,
+			want: `subgraph "sub" field bodyOutput: required`,
 		},
 		"subgraph body": {
 			spec: Spec{

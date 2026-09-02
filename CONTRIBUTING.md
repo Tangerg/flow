@@ -634,6 +634,20 @@ go test ./example -run Example -v
   resolves a link's package against the whole package's imports rather than one
   file's, so moving a comment into a file that does not import `errors` does not
   break `[errors.Join]`.
+- Do not let the prose restate the location. Reading the definition diagnostics
+  as a user sees them found three families saying everything twice: `spec loop "x"
+  field body: loop body is required`, and `spec leaf "x" field concurrency: field
+  "concurrency" is not valid for a "leaf" spec`, where the kind and the field are
+  already in the prefix that `SpecError` builds. What is left to say is the
+  relationship — `field body: required`, `field concurrency: not valid for this
+  kind` — and `Spec.requireMember` says the first one once instead of six times.
+  `unknown kind %q` keeps its value on purpose: it belongs to the family of
+  `unknown node type %q`, `unknown resolver %q`, and `unknown graph node %q`,
+  which all name a category and the offending value, and consistency inside that
+  family is worth more than dropping one repetition. That is also why this rule
+  has no mechanical guard: a sentinel's category text legitimately contains the
+  word its field is named after, so any check would need an exception list longer
+  than the rule.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

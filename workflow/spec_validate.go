@@ -99,11 +99,9 @@ func (s *specValidator) validate(spec Spec) error {
 	}
 
 	if field := spec.unexpectedField(specKindFields[spec.Kind]); field != "" {
-		return spec.fieldError(field, fmt.Errorf(
-			"field %q is not valid for a %q spec",
-			field,
-			spec.Kind,
-		))
+		// The location names the field and the kind it is wrong for, so the prose
+		// adds only the relationship between them.
+		return spec.fieldError(field, errors.New("not valid for this kind"))
 	}
 	if err := spec.validateConstraints(); err != nil {
 		return err
@@ -131,33 +129,43 @@ func (s Spec) requireKindFields() error {
 	switch s.Kind {
 	case KindBranch:
 		if len(s.Cases) == 0 {
-			return s.fieldError(fieldCases, errors.New("at least one branch case is required"))
+			// A collection says the same thing absent and empty, so it asks for a
+			// member rather than for itself.
+			return s.fieldError(fieldCases, errors.New("at least one is required"))
 		}
 	case KindLoop:
 		if s.Body == nil {
-			return s.fieldError(fieldBody, errors.New("loop body is required"))
+			return s.requireMember(fieldBody)
 		}
 	case KindIteration:
 		switch {
 		case s.Input == (Ref{}):
-			return s.fieldError(fieldInput, errors.New("iteration input is required"))
+			return s.requireMember(fieldInput)
 		case s.Body == nil:
-			return s.fieldError(fieldBody, errors.New("iteration body is required"))
+			return s.requireMember(fieldBody)
 		case s.BodyOutput == (Ref{}):
-			return s.fieldError(fieldBodyOutput, errors.New("iteration body output is required"))
+			return s.requireMember(fieldBodyOutput)
 		}
 	case KindSubgraph:
 		switch {
 		case s.Body == nil:
-			return s.fieldError(fieldBody, errors.New("subgraph body is required"))
+			return s.requireMember(fieldBody)
 		case s.BodyOutput == (Ref{}):
-			return s.fieldError(fieldBodyOutput, errors.New("subgraph body output is required"))
+			return s.requireMember(fieldBodyOutput)
 		}
 	default:
 		// Leaf, sequence, and parallel need nothing beyond the fields their kind
 		// is allowed to carry at all.
 	}
 	return nil
+}
+
+// requireMember reports a member this kind must carry and does not have. The
+// location already names the kind and the field, so the prose is the one thing
+// left to say, and saying it once keeps six requirements from spelling their own
+// version of it.
+func (s Spec) requireMember(field string) error {
+	return s.fieldError(field, errors.New("required"))
 }
 
 // requireResolver and requireCondition resolve a registered name, reporting the
