@@ -174,35 +174,47 @@ func TestEveryExportedInterfaceIsImplementableByACaller(t *testing.T) {
 				continue
 			}
 			checked++
-			for _, member := range declared.Methods.List {
-				for _, method := range member.Names {
-					if !ast.IsExported(method.Name) {
-						t.Errorf(
-							"%s:%d: %s.%s is unexported, so only this module can implement %s",
-							name,
-							fileSet.Position(method.Pos()).Line,
-							spec.Name.Name,
-							method.Name,
-							spec.Name.Name,
-						)
-					}
-				}
-				if embedded, ok := member.Type.(*ast.Ident); ok && len(member.Names) == 0 &&
-					!ast.IsExported(embedded.Name) {
-					t.Errorf(
-						"%s:%d: %s embeds the unexported %s, so only this module can implement it",
-						name,
-						fileSet.Position(member.Pos()).Line,
-						spec.Name.Name,
-						embedded.Name,
-					)
-				}
+			for _, reason := range unimplementableMembers(fileSet, name, spec.Name.Name, declared) {
+				t.Error(reason)
 			}
 		}
 	})
 	if checked == 0 {
 		t.Fatal("no exported interface found; the walk stopped seeing the repository")
 	}
+}
+
+// unimplementableMembers reports the members of one exported interface that a
+// caller could not write: an unexported method, or an embedded unexported
+// interface that hides one. Each reason is phrased for the member it is about,
+// because which of the two it is decides what the fix looks like.
+func unimplementableMembers(
+	fileSet *token.FileSet,
+	file, name string,
+	declared *ast.InterfaceType,
+) []string {
+	var reasons []string
+	at := func(node ast.Node) string {
+		return fmt.Sprintf("%s:%d", file, fileSet.Position(node.Pos()).Line)
+	}
+	for _, member := range declared.Methods.List {
+		for _, method := range member.Names {
+			if !ast.IsExported(method.Name) {
+				reasons = append(reasons, fmt.Sprintf(
+					"%s: %s.%s is unexported, so only this module can implement %s",
+					at(method), name, method.Name, name,
+				))
+			}
+		}
+		embedded, embeds := member.Type.(*ast.Ident)
+		if embeds && len(member.Names) == 0 && !ast.IsExported(embedded.Name) {
+			reasons = append(reasons, fmt.Sprintf(
+				"%s: %s embeds the unexported %s, so only this module can implement it",
+				at(member), name, embedded.Name,
+			))
+		}
+	}
+	return reasons
 }
 
 // wireDecodeExceptions names the types whose UnmarshalJSON cannot route through
