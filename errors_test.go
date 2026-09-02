@@ -123,6 +123,29 @@ type callerMultiError []error
 func (callerMultiError) Error() string     { return "caller-owned tree" }
 func (c callerMultiError) Unwrap() []error { return c }
 
+// TestLocationErrorFormatsEveryJoinedBranch pins what a location does with a
+// join that has more than one branch: [errors.Join] separates branches with a
+// newline, and a location above one states where exactly once, before the first
+// branch, instead of once per line. Every other test here joins a single branch,
+// which is the degenerate arity: it cannot show the separator, the order, or
+// that the prefix is not repeated.
+func TestLocationErrorFormatsEveryJoinedBranch(t *testing.T) {
+	err := &flow.IndexError{
+		Index: 2,
+		Err: errors.Join(
+			&flow.CaseError{Key: "left", Err: flow.ErrNilNode},
+			errors.New("middle"),
+			&flow.IndexError{Index: 7, Err: flow.ErrNoCase},
+		),
+	}
+	want := "index 2: switch case \"left\": flow: nil node\n" +
+		"middle\n" +
+		"index 7: flow: no matching case"
+	if got := err.Error(); got != want {
+		t.Fatalf("Error() = %q; want %q", got, want)
+	}
+}
+
 func TestLocationFormattingLeavesCallerMultiErrorsOpaque(t *testing.T) {
 	err := &flow.IndexError{
 		Index: 3,

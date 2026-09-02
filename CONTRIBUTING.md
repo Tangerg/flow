@@ -556,6 +556,42 @@ go test ./example -run Example -v
   path, and a shared generic constructor would cost more machinery than the five
   lines it saves. `unparam`, `wastedassign`, and `prealloc` find nothing here;
   `gocritic`'s full tag set finds one type declared after its own methods.
+- Let the check that yields a value be the one that licenses it.
+  `standardJoinChildren` compared an error's type against a table built from
+  `errors.Join` and then force-asserted `Unwrap() []error`, so the table needed an
+  entry that could be nil in case a future standard library returned something
+  else — a branch nothing can reach. Asserting the capability first and comparing
+  the type afterwards refuses exactly the same values, needs no guard, and retires
+  a `//nolint:forcetypeassert` on both routes. A caller-defined multi-error stays
+  opaque either way; `TestLocationFormattingLeavesCallerMultiErrorsOpaque` and
+  `TestStoreGet_reportsWhatItAskedForAndWhatItFound` fail when the type comparison
+  goes.
+- State a fact once, where the data already carries it. Cloning an owned error
+  listed the same nine wrappers three times: once to copy each, once to decide
+  which field takes the rebuilt cause, and a `panic` for a tenth case that could
+  only exist if those lists disagreed. `errorCloneFrame` now carries the address of
+  the copy's own cause field, so the case that made the copy is the only place that
+  names it, `wrap` is two statements, and the impossible case has nowhere to be.
+  `suspensionCollector.accept` took a wait list beside a boolean saying whether
+  that leaf was a wait; a wait leaf always yields at least one wait, an anonymous
+  one where it has no identity, so the boolean could only ever repeat
+  `len(found) > 0` or contradict it. `waitAt` and `suspensionIdentity` answer with
+  the list alone, and `TestSuspend_joinedFailureIsNotClassifiedAsPureSuspension`
+  fails if the derived form is wrong. `copiedFrame` still empties the copy's cause
+  before handing out its address, and no test can tell — every frame this walk
+  records is attached exactly once. It keeps the property local instead of resting
+  on that proof.
+- Exercise the arity a rule is about. Both error formatters walk `errors.Join`
+  branches iteratively, and every test that reached them joined a single branch:
+  enough to pin the walk, blind to everything the branching is for. Rendering a
+  multi-branch join is where the separator, the branch order, and the fact that a
+  location states itself once instead of once per line live —
+  `TestLocationErrorFormatsEveryJoinedBranch` — and where a `RefError` decides that
+  its got/want detail describes the reference rather than a branch, so it appears
+  once after the last one — `TestRefErrorReportsItsMismatchOnceAcrossAJoinedCause`.
+  The same blindness hid three of the ten typed nils the clone walk stops at, two
+  of them private; `TestCloningAnOwnedErrorStopsAtEveryTypedNil` states that rule
+  for all ten in one place, and each of the three panics without it.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

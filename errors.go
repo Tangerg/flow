@@ -69,25 +69,32 @@ func (c *CaseError) Error() string {
 	return formatLocationError(c)
 }
 
+// standardJoinTypes is what [errors.Join] returns, at both arities it could
+// specialize. Deriving the types from the constructor avoids depending on an
+// unexported standard-library name.
 var standardJoinTypes = [...]reflect.Type{
-	standardJoinType(errors.Join(ErrInvalidConfig)),
-	standardJoinType(errors.Join(ErrInvalidConfig, ErrNilNode)),
+	reflect.TypeOf(errors.Join(ErrInvalidConfig)),
+	reflect.TypeOf(errors.Join(ErrInvalidConfig, ErrNilNode)),
 }
 
-func standardJoinType(err error) reflect.Type {
-	if _, ok := err.(interface{ Unwrap() []error }); !ok {
-		return nil
-	}
-	return reflect.TypeOf(err)
-}
-
+// standardJoinChildren recognizes only the concrete multi-error produced by
+// [errors.Join]. A caller-defined Unwrap() []error remains an opaque application
+// error: interpreting its branches could change presentation or ownership rules
+// chosen by that type.
+//
+// The capability comes before the identity because the assertion that yields the
+// children is also what proves they can be read. Asking the table first would
+// leave the assertion licensed by a type comparison, which is a promise about a
+// standard-library implementation rather than about this value.
 func standardJoinChildren(err error) ([]error, bool) {
-	typeOf := reflect.TypeOf(err)
-	if typeOf == nil || (typeOf != standardJoinTypes[0] && typeOf != standardJoinTypes[1]) {
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok {
 		return nil, false
 	}
-	// The type table contains only values that passed this exact assertion.
-	joined := err.(interface{ Unwrap() []error }) //nolint:forcetypeassert // Proven by the type table.
+	typeOf := reflect.TypeOf(err)
+	if typeOf != standardJoinTypes[0] && typeOf != standardJoinTypes[1] {
+		return nil, false
+	}
 	return joined.Unwrap(), true
 }
 

@@ -178,6 +178,39 @@ func TestRefError(t *testing.T) {
 	}
 }
 
+// TestRefErrorReportsItsMismatchOnceAcrossAJoinedCause pins where the got/want
+// detail goes when a reference's cause is a multi-branch [errors.Join]. The
+// mismatch describes the reference, not a branch, so it is stated once after the
+// last branch rather than repeated per line or dropped because the branches
+// interrupted the chain. A cause that reports absence still suppresses it: there
+// is no value whose type could disagree.
+func TestRefErrorReportsItsMismatchOnceAcrossAJoinedCause(t *testing.T) {
+	ref := workflow.Output("n")
+	mismatch := &workflow.RefError{
+		Ref:  ref,
+		Want: "int",
+		Got:  "string",
+		Err: errors.Join(
+			workflow.ErrTypeMismatch,
+			errors.New("convert: not a number"),
+		),
+	}
+	want := "workflow: ref " + ref.String() + ": value type mismatch\n" +
+		"convert: not a number: got string, want int"
+	if got := mismatch.Error(); got != want {
+		t.Fatalf("Error() = %q; want %q", got, want)
+	}
+
+	absent := &workflow.RefError{
+		Ref:  ref,
+		Want: "int",
+		Err:  errors.Join(workflow.ErrNotFound, errors.New("no such node")),
+	}
+	if got := absent.Error(); strings.Contains(got, "want int") {
+		t.Fatalf("Error() = %q; want no mismatch beside an absent value", got)
+	}
+}
+
 // TestRegistrationError covers the three ways a Registry refuses an entry --
 // an unusable name, a value that fails what its kind must prove, and a name
 // already taken -- because each builds its own error. All three have to name the

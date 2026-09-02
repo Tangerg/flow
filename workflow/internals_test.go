@@ -51,6 +51,45 @@ func TestErrorTreeMatchesNilByIdentity(t *testing.T) {
 	}
 }
 
+// TestCloningAnOwnedErrorStopsAtEveryTypedNil states the rule once for all ten
+// wrappers this package copies. Each is pointer-shaped structured data, so any
+// of them can appear as a typed nil cause, and copying one would dereference it.
+// A typed nil is therefore kept as it arrived -- it is still the error the caller
+// built -- while a wrapper above it is copied normally, because stopping the copy
+// of one node must not stop the walk. Two of these locations are private and one
+// is a Suspension the public routes classify before an Observer could ever see
+// it copied, so no external test reaches them.
+func TestCloningAnOwnedErrorStopsAtEveryTypedNil(t *testing.T) {
+	for name, typedNil := range map[string]error{
+		"step":          (*StepError)(nil),
+		"reference":     (*RefError)(nil),
+		"registration":  (*RegistrationError)(nil),
+		"graph":         (*GraphError)(nil),
+		"specification": (*SpecError)(nil),
+		"detail":        (*detailError)(nil),
+		"factory build": (*factoryBuildError)(nil),
+		"suspension":    (*Suspension)(nil),
+		"index":         (*flow.IndexError)(nil),
+		"case":          (*flow.CaseError)(nil),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if clone := (ownedError{root: typedNil}).clone(); clone != typedNil {
+				t.Fatalf("clone() = %#v; want the value it was given", clone)
+			}
+
+			outer := &StepError{ID: "outer", Op: OpRun, Err: typedNil}
+			clone := (ownedError{root: outer}).clone()
+			cloned, ok := clone.(*StepError)
+			switch {
+			case !ok || cloned == outer:
+				t.Fatalf("clone() = %#v; want an independent StepError", clone)
+			case cloned.Err != typedNil:
+				t.Fatalf("clone().Err = %#v; want the typed nil it wrapped", cloned.Err)
+			}
+		})
+	}
+}
+
 func TestReplayBoundaries_resampleCancellationAfterLookup(t *testing.T) {
 	cause := errors.New("cancel during replay lookup")
 

@@ -178,8 +178,8 @@ func (s *suspensionCollector) collect() (suspensionList, bool) {
 
 func (s *suspensionCollector) collectChain(err error) {
 	for {
-		if wait, ok := waitAt(err); ok {
-			s.accept(wait, true)
+		if wait := waitAt(err); wait != nil {
+			s.accept(wait)
 			return
 		}
 		if many, ok := err.(interface{ Unwrap() []error }); ok {
@@ -204,7 +204,7 @@ func (s *suspensionCollector) collectChain(err error) {
 		//
 		//nolint:errorlint // [errors.Is] cannot tell those shapes apart.
 		if child == ErrSuspended {
-			s.accept(suspensionList{{Value: err.Error()}}, true)
+			s.accept(suspensionList{{Value: err.Error()}})
 			return
 		}
 		err = child
@@ -227,50 +227,57 @@ func (s *suspensionCollector) push(children []error) bool {
 }
 
 func (s *suspensionCollector) acceptIdentity(err error) {
-	found, only := suspensionIdentity(err)
-	s.accept(found, only)
+	s.accept(suspensionIdentity(err))
 }
 
-func (s *suspensionCollector) accept(found suspensionList, only bool) {
+// accept records one error leaf together with the waits it turned out to be. A
+// leaf that is a wait always produces at least one, an anonymous one where it
+// carries no identity, so the waits themselves report whether every leaf so far
+// was a wait. A boolean beside them would be the same fact twice, and the two
+// could disagree.
+func (s *suspensionCollector) accept(found suspensionList) {
 	s.suspensions = append(s.suspensions, found...)
 	s.leaves++
-	s.onlySuspensions = s.onlySuspensions && only
+	s.onlySuspensions = s.onlySuspensions && len(found) > 0
 }
 
-// waitAt reports the wait one error node already is, before anything unwraps it.
-// It deliberately inspects that node rather than using [errors.As], which would
-// skip wrappers and could read a mixed joined tree as a pure tree of waits.
-// Separating it from the walk keeps [suspensionTree.collect] about the shape of
-// the tree and this about what a single node means.
-func waitAt(err error) (suspensionList, bool) {
+// waitAt reports the wait one error node already is, before anything unwraps it,
+// and nil for a node that is not one. It deliberately inspects that node rather
+// than using [errors.As], which would skip wrappers and could read a mixed
+// joined tree as a pure tree of waits. Separating it from the walk keeps
+// [suspensionTree.collect] about the shape of the tree and this about what a
+// single node means.
+func waitAt(err error) suspensionList {
 	//nolint:errorlint // Unwrapping here would defeat the per-node classification.
 	if suspension, ok := err.(*Suspension); ok {
 		if suspension == nil {
 			// A typed nil still satisfies error and matches ErrSuspended through
 			// Suspension.Unwrap. Preserve that meaning as an anonymous wait instead
 			// of normalizing it away into a nil error.
-			return suspensionList{{}}, true
+			return suspensionList{{}}
 		}
-		return suspensionList{suspension.clone()}, true
+		return suspensionList{suspension.clone()}
 	}
 	// Exact identity leaves a direct wrapper's message to the walk, which keeps it.
 	//
 	//nolint:errorlint // [errors.Is] would match wrappers this must not consume.
 	if err == ErrSuspended {
-		return suspensionList{{}}, true
+		return suspensionList{{}}
 	}
-	return nil, false
+	return nil
 }
 
 // suspensionIdentity handles a leaf that participates in [errors.Is] without
 // being a Suspension value. An error exposing only nil children is still a
 // leaf: [errors.Is] checks its Is method before consulting Unwrap, so
-// classification must preserve the same meaning.
-func suspensionIdentity(err error) (suspensionList, bool) {
+// classification must preserve the same meaning. Like [waitAt] it answers with
+// the waits a node is, so a caller cannot pair one node with another node's
+// verdict.
+func suspensionIdentity(err error) suspensionList {
 	if errors.Is(err, ErrSuspended) {
-		return suspensionList{{Value: err.Error()}}, true
+		return suspensionList{{Value: err.Error()}}
 	}
-	return nil, false
+	return nil
 }
 
 type suspensionList []*Suspension

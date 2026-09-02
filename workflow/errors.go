@@ -65,31 +65,32 @@ type errorTree struct {
 	root error
 }
 
+// standardJoinErrorTypes is what [errors.Join] returns, at both arities it could
+// specialize. Deriving the types from the constructor avoids depending on an
+// unexported standard-library name.
 var standardJoinErrorTypes = [...]reflect.Type{
-	standardJoinErrorType(errors.Join(ErrInvalidSpec)),
-	standardJoinErrorType(errors.Join(ErrInvalidSpec, ErrInvalidGraph)),
-}
-
-func standardJoinErrorType(err error) reflect.Type {
-	if _, ok := err.(interface{ Unwrap() []error }); !ok {
-		return nil
-	}
-	return reflect.TypeOf(err)
+	reflect.TypeOf(errors.Join(ErrInvalidSpec)),
+	reflect.TypeOf(errors.Join(ErrInvalidSpec, ErrInvalidGraph)),
 }
 
 // standardJoinChildren recognizes only the concrete multi-error produced by
 // [errors.Join]. A caller-defined Unwrap() []error remains an opaque application
 // error: interpreting its branches could change presentation or ownership rules
-// chosen by that type. Deriving the type from the constructor avoids depending
-// on an unexported standard-library name.
+// chosen by that type.
+//
+// The capability comes before the identity because the assertion that yields the
+// children is also what proves they can be read. Asking the table first would
+// leave the assertion licensed by a type comparison, which is a promise about a
+// standard-library implementation rather than about this value.
 func standardJoinChildren(err error) ([]error, bool) {
-	typeOf := reflect.TypeOf(err)
-	if typeOf == nil ||
-		(typeOf != standardJoinErrorTypes[0] && typeOf != standardJoinErrorTypes[1]) {
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok {
 		return nil, false
 	}
-	// The type table contains only values that passed this exact assertion.
-	joined := err.(interface{ Unwrap() []error }) //nolint:forcetypeassert // Proven by the type table.
+	typeOf := reflect.TypeOf(err)
+	if typeOf != standardJoinErrorTypes[0] && typeOf != standardJoinErrorTypes[1] {
+		return nil, false
+	}
 	return joined.Unwrap(), true
 }
 
@@ -272,8 +273,14 @@ type ownedError struct {
 	root error
 }
 
+// errorCloneFrame is one copied wrapper whose cause the walk has not rebuilt
+// yet. cause points into the copy, so the case that made the copy is the only
+// place that has to know which field carries a cause; reattaching later needs
+// no second identification of the wrapper, and a wrapper this walk learns to
+// copy cannot be one it has forgotten how to fill in.
 type errorCloneFrame struct {
 	wrapper error
+	cause   *error
 }
 
 type errorCloneFrames []errorCloneFrame
@@ -323,7 +330,7 @@ func (c *errorCloner) expandNext() bool {
 }
 
 func (c *errorCloner) expand(index int) {
-	frames, terminal := c.peel(c.nodes[index].result)
+	frames, terminal := peel(c.nodes[index].result)
 	c.nodes[index].frames = frames
 	children, joined := standardJoinChildren(terminal)
 	if !joined {
@@ -354,12 +361,12 @@ func (c *errorCloner) rebuild(index int) {
 // peel copies one exact linear chain and returns the first error outside it.
 // [errors.As] would cross an application wrapper and is therefore deliberately
 // not used here.
-func (c *errorCloner) peel(err error) (errorCloneFrames, error) {
+func peel(err error) (errorCloneFrames, error) {
 	var frames errorCloneFrames
 	for {
-		result := c.cloneWorkflowFrame(err)
+		result := cloneWorkflowFrame(err)
 		if !result.owned {
-			result = c.cloneCompositionFrame(err)
+			result = cloneCompositionFrame(err)
 		}
 		if !result.owned || result.terminal {
 			return frames, result.next
@@ -369,86 +376,96 @@ func (c *errorCloner) peel(err error) (errorCloneFrames, error) {
 	}
 }
 
+// copiedFrame records one copy of an owned wrapper. cause is the copy's own
+// cause field: emptying it here and handing the frame its address is what keeps
+// a copy from ever being reachable while it still borrows the original's cause.
+// next continues the walk at the original cause, which the copy no longer holds.
+func copiedFrame(wrapper error, cause *error, next error) errorCloneResult {
+	*cause = nil
+	return errorCloneResult{
+		frame: errorCloneFrame{wrapper: wrapper, cause: cause},
+		next:  next,
+		owned: true,
+	}
+}
+
+// ownedTerminal ends the walk at an owned value the copy cannot improve on: a
+// typed nil has no location to copy, and a Suspension copies itself.
+func ownedTerminal(next error) errorCloneResult {
+	return errorCloneResult{next: next, owned: true, terminal: true}
+}
+
 //nolint:errorlint // Exact wrapper identity determines ownership.
-func (*errorCloner) cloneWorkflowFrame(err error) errorCloneResult {
+func cloneWorkflowFrame(err error) errorCloneResult {
 	switch current := err.(type) {
 	case *StepError:
 		if current == nil {
-			return errorCloneResult{next: err, owned: true, terminal: true}
+			return ownedTerminal(err)
 		}
 		copied := *current
 		copied.Scope = slices.Clone(current.Scope)
-		copied.Err = nil
-		return errorCloneResult{frame: errorCloneFrame{wrapper: &copied}, next: current.Err, owned: true}
+		return copiedFrame(&copied, &copied.Err, current.Err)
 	case *RefError:
 		if current == nil {
-			return errorCloneResult{next: err, owned: true, terminal: true}
+			return ownedTerminal(err)
 		}
 		copied := *current
-		copied.Err = nil
-		return errorCloneResult{frame: errorCloneFrame{wrapper: &copied}, next: current.Err, owned: true}
+		return copiedFrame(&copied, &copied.Err, current.Err)
 	case *RegistrationError:
 		if current == nil {
-			return errorCloneResult{next: err, owned: true, terminal: true}
+			return ownedTerminal(err)
 		}
 		copied := *current
-		copied.Err = nil
-		return errorCloneResult{frame: errorCloneFrame{wrapper: &copied}, next: current.Err, owned: true}
+		return copiedFrame(&copied, &copied.Err, current.Err)
 	case *GraphError:
 		if current == nil {
-			return errorCloneResult{next: err, owned: true, terminal: true}
+			return ownedTerminal(err)
 		}
 		copied := *current
-		copied.Err = nil
-		return errorCloneResult{frame: errorCloneFrame{wrapper: &copied}, next: current.Err, owned: true}
+		return copiedFrame(&copied, &copied.Err, current.Err)
 	case *SpecError:
 		if current == nil {
-			return errorCloneResult{next: err, owned: true, terminal: true}
+			return ownedTerminal(err)
 		}
 		copied := *current
-		copied.Err = nil
-		return errorCloneResult{frame: errorCloneFrame{wrapper: &copied}, next: current.Err, owned: true}
+		return copiedFrame(&copied, &copied.Err, current.Err)
 	default:
 		return errorCloneResult{next: err}
 	}
 }
 
 //nolint:errorlint // Exact wrapper identity determines ownership.
-func (*errorCloner) cloneCompositionFrame(err error) errorCloneResult {
+func cloneCompositionFrame(err error) errorCloneResult {
 	switch current := err.(type) {
 	case *flow.IndexError:
 		if current == nil {
-			return errorCloneResult{next: err, owned: true, terminal: true}
+			return ownedTerminal(err)
 		}
 		copied := *current
-		copied.Err = nil
-		return errorCloneResult{frame: errorCloneFrame{wrapper: &copied}, next: current.Err, owned: true}
+		return copiedFrame(&copied, &copied.Err, current.Err)
 	case *flow.CaseError:
 		if current == nil {
-			return errorCloneResult{next: err, owned: true, terminal: true}
+			return ownedTerminal(err)
 		}
 		copied := *current
-		copied.Err = nil
-		return errorCloneResult{frame: errorCloneFrame{wrapper: &copied}, next: current.Err, owned: true}
+		return copiedFrame(&copied, &copied.Err, current.Err)
 	case *detailError:
 		if current == nil {
-			return errorCloneResult{next: err, owned: true, terminal: true}
+			return ownedTerminal(err)
 		}
 		copied := *current
-		copied.err = nil
-		return errorCloneResult{frame: errorCloneFrame{wrapper: &copied}, next: current.err, owned: true}
+		return copiedFrame(&copied, &copied.err, current.err)
 	case *factoryBuildError:
 		if current == nil {
-			return errorCloneResult{next: err, owned: true, terminal: true}
+			return ownedTerminal(err)
 		}
 		copied := *current
-		copied.err = nil
-		return errorCloneResult{frame: errorCloneFrame{wrapper: &copied}, next: current.err, owned: true}
+		return copiedFrame(&copied, &copied.err, current.err)
 	case *Suspension:
 		if current == nil {
-			return errorCloneResult{next: err, owned: true, terminal: true}
+			return ownedTerminal(err)
 		}
-		return errorCloneResult{next: current.clone(), owned: true, terminal: true}
+		return ownedTerminal(current.clone())
 	default:
 		return errorCloneResult{next: err}
 	}
@@ -462,29 +479,7 @@ func (f errorCloneFrames) attach(cause error) error {
 }
 
 func (f errorCloneFrame) wrap(cause error) error {
-	//nolint:errorlint // The exact clone determines which field carries the cause.
-	switch wrapper := f.wrapper.(type) {
-	case *StepError:
-		wrapper.Err = cause
-	case *RefError:
-		wrapper.Err = cause
-	case *RegistrationError:
-		wrapper.Err = cause
-	case *GraphError:
-		wrapper.Err = cause
-	case *SpecError:
-		wrapper.Err = cause
-	case *flow.IndexError:
-		wrapper.Err = cause
-	case *flow.CaseError:
-		wrapper.Err = cause
-	case *detailError:
-		wrapper.err = cause
-	case *factoryBuildError:
-		wrapper.err = cause
-	default:
-		panic("workflow: invalid owned error clone frame")
-	}
+	*f.cause = cause
 	return f.wrapper
 }
 
