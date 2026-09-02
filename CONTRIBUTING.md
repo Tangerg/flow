@@ -688,6 +688,32 @@ go test ./example -run Example -v
   is a different decision than returning a zero output;
   `TestRunChild_appliesTheContractACompositeOwesItsChildren` states the three
   decisions from where a caller stands, and each of them dies alone.
+- Say what a composite refuses, on every composite. `BranchConfig` says every
+  field is required, `LoopConfig` names its three, `ParallelConfig` gives its zero
+  Concurrency a meaning — and `IterationConfig` and `SubgraphConfig` said nothing
+  at all, with `Subgraph` the only built-in composite whose doc never mentioned a
+  refusal. Both say it now, in their siblings' words, and
+  `TestSubgraph_validatesBoundaryBeforeRunningBody` already pinned every clause,
+  which is why this was a documentation defect rather than a behavioral one. The
+  same sweep over exported constructors finds nothing else: `Route` and `LeafFunc`
+  point at `Leaf`, and the rest have nothing to refuse.
+- A citation guard has to know every name it is guarding. `testNamePattern`
+  required a capital after the prefix, which is what tells a citation from an
+  ordinary word like "testing" — and which silently excluded `Example_dag`, the
+  suffix form `go test` defines for a package example. Twelve of this module's
+  examples are named that way, and `example/README.md` and
+  `docs/tutorials/README.md` cite all twelve; renaming one was a rot nothing
+  reported. The pattern accepts
+  the underscore form now, and a citation of an example that does not exist fails
+  the way one of a test always did.
+- Two layers, two rollbacks, and both have to say so. `flow.RunChild` rolls a
+  cancelled child back to a zero output, which is right where the output carries
+  no state; a workflow composite keeps the Store it handed that child, because
+  that Store is what already completed. A Step is a `flow.Node[Store, Store]`, so
+  `RunChild` accepts one and would quietly return an empty Store — the trap is
+  documented at both ends, on `RunChild` and on `Step`.
+  `Example_customRepeatedComposite` keeps writing the rule out, which is what a
+  caller of that layer has to do.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

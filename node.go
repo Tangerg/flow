@@ -101,6 +101,11 @@ func Validate[I, O any](node Node[I, O]) error {
 // built-in sequential composites are written in terms of this function.
 // Concurrent composites apply the same rule from their schedulers, where
 // admission is also theirs to decide — see [Map] and [Race].
+//
+// The zero output is the right rollback when O carries no state of its own. A
+// composite over a value that accumulates state applies the same rule with a
+// different rollback: a workflow composite keeps the Store it handed the
+// cancelled child, because that Store is what already completed.
 func RunChild[I, O any](ctx context.Context, node Node[I, O], input I) (O, error) {
 	var zero O
 	if node == nil {

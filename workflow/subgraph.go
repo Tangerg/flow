@@ -8,7 +8,9 @@ import (
 	"github.com/Tangerg/flow"
 )
 
-// SubgraphConfig configures [Subgraph].
+// SubgraphConfig configures [Subgraph]. ID, Body, and BodyOutput are required;
+// empty Inputs seeds nothing, which is a body that reads only what it writes
+// itself.
 type SubgraphConfig struct {
 	// ID names the subgraph and its projected output.
 	ID string
@@ -35,6 +37,9 @@ type SubgraphConfig struct {
 // caller-defined Body retains responsibility for that contract at run time.
 // Ordinary body failures are wrapped in a StepError naming the sealed subgraph;
 // suspensions keep their inner step identity and scope.
+//
+// An empty or non-UTF-8 ID, a nil Body, an unusable seed name or seed reference,
+// and a BodyOutput that names no cell are rejected before the body runs.
 func Subgraph(cfg SubgraphConfig) Step {
 	return cfg.step()
 }

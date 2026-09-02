@@ -387,13 +387,15 @@ func receiverType(receiver *ast.FieldList) string {
 	return ""
 }
 
-// testNamePattern matches the prefixes go test recognizes followed by the capital
-// that makes a name rather than a word: "Testing" is prose, "TestStore" is a
-// citation. openingTestName is the same name where a doc comment claims to be
-// about it.
+// testNamePattern matches the prefixes go test recognizes followed by what makes
+// a name rather than a word: a capital, as in "TestStore" against the prose
+// "Testing", or the underscore of the suffix form go test defines for a package
+// example, as in "Example_dag". Twelve of this module's examples are named that
+// way, so requiring the capital alone left every citation of one unchecked.
+// openingTestName is the same name where a doc comment claims to be about it.
 var (
-	testNamePattern = regexp.MustCompile(`\b(?:Test|Benchmark|Example|Fuzz)[A-Z]\w*`)
-	openingTestName = regexp.MustCompile(`^(?:Test|Benchmark|Example|Fuzz)[A-Z]\w*`)
+	testNamePattern = regexp.MustCompile(`\b(?:Test|Benchmark|Example|Fuzz)(?:[A-Z]|_[a-z])\w*`)
+	openingTestName = regexp.MustCompile(`^(?:Test|Benchmark|Example|Fuzz)(?:[A-Z]|_[a-z])\w*`)
 	// qualifiedNamePattern matches this module's packages followed by an exported
 	// name, which is how documentation refers to the API.
 	qualifiedNamePattern = regexp.MustCompile(`\b(flow|flowx|workflow|expr|diagram)\.([A-Z]\w*)`)

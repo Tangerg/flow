@@ -21,6 +21,12 @@ import (
 // is stricter: when it is observed as a child returns, built-in composites give
 // it precedence and discard that child's unaccepted result.
 //
+// That makes a Step's rollback different from a plain Node's, which matters to a
+// caller-defined composite invoking children: [flow.RunChild] applies the same
+// cancellation rule but rolls back to a zero output, while a composite here keeps
+// the Store it handed the cancelled child, because that Store is what already
+// completed.
+//
 // Built-in composites validate their complete visible definition before work
 // begins and do not admit another child after observing parent cancellation.
 // They also participate in [flow.Validate], so the same checks remain visible

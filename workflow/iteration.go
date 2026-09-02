@@ -19,7 +19,9 @@ func Item(id string) Ref { return At(id, itemKey) }
 // item's zero-based index.
 func ItemIndex(id string) Ref { return At(id, indexKey) }
 
-// IterationConfig configures [Iteration].
+// IterationConfig configures [Iteration]. ID, Input, Body, and BodyOutput are
+// required; a zero Concurrency runs every element concurrently, matching
+// [flow.MapConfig].
 type IterationConfig struct {
 	// ID names the node; each element's result is collected under Output(ID).
 	ID string
