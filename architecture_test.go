@@ -164,6 +164,11 @@ var wireDecodeExceptions = map[string]string{
 // It asks about the exported types, which are the ones a caller hands to
 // json.Unmarshal. An unexported adapter such as graphJSON is the inside of a decode
 // function, reached only from within the boundary this test is about.
+//
+// What it asks is that the boundary call is the entire body. Asking only that the
+// body reaches it accepts a decoder that unmarshals into its receiver first and
+// then calls the boundary, which keeps none of the three promises while looking
+// like it keeps all of them.
 func TestEveryUnmarshalJSONDecodesThroughOneBoundary(t *testing.T) {
 	fileSet := token.NewFileSet()
 	shared := make(map[string]struct{})
@@ -212,12 +217,26 @@ func TestEveryUnmarshalJSONDecodesThroughOneBoundary(t *testing.T) {
 	}
 }
 
-// decodesThroughSharedBoundary reports whether the body reaches the one decoder,
-// by either of its two spellings: workflow calls it through a generic method on
-// its document, and expr calls jsondoc directly.
+// decodesThroughSharedBoundary reports whether the body is one statement that
+// returns the one decoder, by either of its two spellings: workflow calls it
+// through a generic method on its document, and expr calls jsondoc directly.
+//
+// Being the whole body is the question, not being somewhere in it. A decoder that
+// reaches the boundary after doing something else has already had the chance to
+// assign half a value, which is exactly the half no test can observe -- so
+// "reaches it" would pass a body that keeps none of the promise. Every exported
+// wire type here is one such statement, so nothing legitimate is refused by
+// asking.
 func decodesThroughSharedBoundary(body *ast.BlockStmt) bool {
+	if len(body.List) != 1 {
+		return false
+	}
+	returned, ok := body.List[0].(*ast.ReturnStmt)
+	if !ok || len(returned.Results) != 1 {
+		return false
+	}
 	found := false
-	ast.Inspect(body, func(node ast.Node) bool {
+	ast.Inspect(returned.Results[0], func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
 		if !ok {
 			return true

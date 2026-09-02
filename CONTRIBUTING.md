@@ -648,6 +648,19 @@ go test ./example -run Example -v
   has no mechanical guard: a sentinel's category text legitimately contains the
   word its field is named after, so any check would need an exception list longer
   than the rule.
+- A structural guard has to ask for the shape, not for the presence of a call.
+  Removing what each cited guard protects, one at a time, found eleven of them
+  load-bearing and one that was not:
+  `TestEveryUnmarshalJSONDecodesThroughOneBoundary` asked whether the body
+  *reaches* `decodeInto`, so a decoder that unmarshalled into its receiver first
+  and then called the boundary passed — keeping none of the three promises while
+  looking like it kept all of them. It now asks that the boundary call is the
+  whole body, which every exported wire type already is, and all three variants
+  of that mutation fail. The others each fail on the change they exist to catch:
+  `flow` importing a package here, a route renaming its own leaves, a boundary
+  keeping the context it derived, one of the two validators dropping a rule, a
+  kind losing a matrix member, an inner message naming the package again, a doc
+  link or a citation pointing at nothing.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out
