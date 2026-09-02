@@ -752,6 +752,16 @@ go test ./example -run Example -v
   `TestDerivedScopeLeavesNoRoomForASiblingToWriteInto` asks the derivation
   directly instead, and `Scope`'s copy for application code was already pinned by
   `TestScope_returnsACopy`.
+- Keep every exported interface implementable by a caller. "No framework base
+  types, privileged steps, or hooks that only the package itself may install" was
+  the one axiom here with no mechanical guard, and an exported interface with an
+  unexported method is precisely such a hook: a caller can hold the type and can
+  never satisfy it. No behavior reveals that — every test passes, and only
+  someone writing their own node, binder, or emitter finds out.
+  `TestEveryExportedInterfaceIsImplementableByACaller` refuses both forms, the
+  unexported method and an embedded unexported interface. `definedStep` is how a
+  built-in composite recognizes its own kinds and stays unexported for the same
+  reason: it is not a promise to anyone.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

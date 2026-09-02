@@ -141,6 +141,70 @@ func packageName(directory string) string {
 	return directory
 }
 
+// TestEveryExportedInterfaceIsImplementableByACaller is the structural half of
+// the axiom that this module has no framework base type and no hook only it may
+// install. An exported interface with an unexported method is exactly such a
+// hook: a caller can hold the type and can never satisfy it, so an
+// implementation has to come from inside. That is a decision no behavior reveals
+// — every test would pass, and only someone trying to write their own node,
+// binder, or emitter would find out.
+//
+// The interfaces this module exports each have one exported method, which is
+// what makes a caller's value a peer of a built-in one. The private
+// definedStep interface is how a built-in composite recognizes its own kinds,
+// and it stays unexported precisely so it is not a promise to anyone.
+func TestEveryExportedInterfaceIsImplementableByACaller(t *testing.T) {
+	fileSet := token.NewFileSet()
+	checked := 0
+	walkRepository(t, ".go", func(name string, data []byte) {
+		if strings.HasSuffix(name, "_test.go") {
+			return
+		}
+		file, err := parser.ParseFile(fileSet, name, data, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for declaration := range ast.Preorder(file) {
+			spec, ok := declaration.(*ast.TypeSpec)
+			if !ok || !ast.IsExported(spec.Name.Name) {
+				continue
+			}
+			declared, ok := spec.Type.(*ast.InterfaceType)
+			if !ok {
+				continue
+			}
+			checked++
+			for _, member := range declared.Methods.List {
+				for _, method := range member.Names {
+					if !ast.IsExported(method.Name) {
+						t.Errorf(
+							"%s:%d: %s.%s is unexported, so only this module can implement %s",
+							name,
+							fileSet.Position(method.Pos()).Line,
+							spec.Name.Name,
+							method.Name,
+							spec.Name.Name,
+						)
+					}
+				}
+				if embedded, ok := member.Type.(*ast.Ident); ok && len(member.Names) == 0 &&
+					!ast.IsExported(embedded.Name) {
+					t.Errorf(
+						"%s:%d: %s embeds the unexported %s, so only this module can implement it",
+						name,
+						fileSet.Position(member.Pos()).Line,
+						spec.Name.Name,
+						embedded.Name,
+					)
+				}
+			}
+		}
+	})
+	if checked == 0 {
+		t.Fatal("no exported interface found; the walk stopped seeing the repository")
+	}
+}
+
 // wireDecodeExceptions names the types whose UnmarshalJSON cannot route through
 // the shared boundary, with the reason it cannot. An exception has to be listed
 // here rather than merely written differently, because a hand-rolled decoder that
