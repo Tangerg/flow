@@ -227,6 +227,10 @@ func (n numberParser) integer() (Integer, error) {
 	)
 	switch {
 	case n.exponentNegative:
+		// Rejecting here bounds the sum below by len(digits). At the boundary
+		// itself, > and >= read the same: shifting the point past every digit
+		// leaves a fractional part that integralPrefix refuses, because a digit
+		// string with no nonzero digit returned above.
 		if n.exponent > len(digits)-fractionDigits {
 			return Integer{}, ErrFractional
 		}
@@ -251,6 +255,8 @@ func (n numberParser) integer() (Integer, error) {
 		len(integerDigits)+trailingZeros > maxUint64DecimalDigits {
 		return Integer{}, ErrRange
 	}
+	// Repeating zero zeros appends nothing, so this guard is for the reader and
+	// for the allocation, not for the result.
 	if trailingZeros > 0 {
 		integerDigits += strings.Repeat("0", trailingZeros)
 	}

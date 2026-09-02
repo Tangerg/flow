@@ -126,6 +126,8 @@ func (f fanOut) runConcurrent(parent context.Context) error {
 	// derived context before entering caller code; this closes the only window in
 	// which SetLimit can admit work after cancellation.
 	group, ctx := errgroup.WithContext(parent)
+	// A limit worth setting is at least two: zero means unbounded, and one took
+	// the sequential path above, which is why > and >= read the same here.
 	if f.limit > 1 && f.limit < f.count {
 		group.SetLimit(f.limit)
 	}

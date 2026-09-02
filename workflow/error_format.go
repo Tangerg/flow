@@ -79,6 +79,15 @@ func (f *errorFormatter) render(task errorFormatTask) {
 	}
 }
 
+// scheduleJoin queues the branches of a join, and the mismatch suffix that
+// belongs to the references collected on the way to it. The suffix goes on
+// first so it renders last, after every branch.
+//
+// Its guard is not observable: a suffix task with no references appends nothing,
+// so scheduling one unconditionally renders the same message. It stays because
+// that task is not free -- deciding whether to print a mismatch walks the cause's
+// error tree for [ErrNotFound] -- and because a suffix with nothing to say is a
+// thing this walk should not schedule.
 func (f *errorFormatter) scheduleJoin(children []error, references []*RefError, cause error) {
 	if len(references) > 0 {
 		f.tasks = append(f.tasks, errorFormatTask{

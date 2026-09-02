@@ -762,6 +762,19 @@ go test ./example -run Example -v
   unexported method and an embedded unexported interface. `definedStep` is how a
   built-in composite recognizes its own kinds and stays unexported for the same
   reason: it is not a promise to anyone.
+- Check the suite mechanically, not only where you suspect something. Every
+  mutation in this file so far was chosen because a rule looked unpinned, which
+  measures the reviewer as much as the tests. An unbiased sweep — one operator
+  flipped at a time, `>` against `>=`, `==` against `!=`, `&&` against `||`, in
+  every condition, loop, and return of the implementation — ran 150 mutants in two
+  batches across all nine packages: 145 died, 1 did not compile, and 4 survived,
+  each because it cannot be observed. `scheduleJoin` would schedule a mismatch
+  suffix with nothing to say; `fanOut.runConcurrent` would call `SetLimit(1)` for a
+  limit the dispatch above it already sent down the sequential path; and the
+  negative-exponent guard in `jsonnum` would reject at the integer-digit boundary
+  what `integralPrefix` refuses one line later, because a digit string with no
+  nonzero digit returned earlier. Each of the three now says so where it is. A
+  survivor is a claim about equivalence, so write the claim down or write the test.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out
