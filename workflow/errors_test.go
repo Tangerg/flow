@@ -211,6 +211,34 @@ func TestRefErrorReportsItsMismatchOnceAcrossAJoinedCause(t *testing.T) {
 	}
 }
 
+// TestCoreLocationsReadTheSameThroughEitherFormatter pins the two copies of one
+// rendering against each other. A collection or selection location belongs to
+// flow, which renders it when it is the outermost wrapper; this package renders
+// it again when a workflow location is above it, because one message may not
+// name two packages. Nothing but this holds those copies to the same words, and
+// the drift is silent: deleting the case-key line here left every test passing
+// while the same error read differently depending on whether a Step was in the
+// chain.
+//
+// The expectation is flow's own rendering rather than a spelling written out
+// again here, so a deliberate change to either copy fails until both agree.
+func TestCoreLocationsReadTheSameThroughEitherFormatter(t *testing.T) {
+	boom := errors.New("boom")
+	for name, located := range map[string]error{
+		"index":       &flow.IndexError{Index: 3, Err: boom},
+		"switch case": &flow.CaseError{Key: "retry", Err: boom},
+		"nested":      &flow.IndexError{Index: 0, Err: &flow.CaseError{Key: 7, Err: boom}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			step := &workflow.StepError{ID: "step", Op: workflow.OpRun, Err: located}
+			want := `workflow: step "step" run: ` + located.Error()
+			if got := step.Error(); got != want {
+				t.Fatalf("Error() = %q; want %q", got, want)
+			}
+		})
+	}
+}
+
 // TestRegistrationError covers the three ways a Registry refuses an entry --
 // an unusable name, a value that fails what its kind must prove, and a name
 // already taken -- because each builds its own error. All three have to name the

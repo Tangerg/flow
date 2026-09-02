@@ -775,6 +775,19 @@ go test ./example -run Example -v
   what `integralPrefix` refuses one line later, because a digit string with no
   nonzero digit returned earlier. Each of the three now says so where it is. A
   survivor is a claim about equivalence, so write the claim down or write the test.
+- Escalate the mutation operator until it finds something. Flipping operators
+  killed 145 of 150 and left four equivalences, which says that operator is too
+  weak for this code, not that the suite is complete. Deleting a statement instead
+  — a bare call with a side effect, or an assignment to a field — killed 66 of 80,
+  with 13 that no longer compiled and one survivor worth the sweep: removing the
+  case-key rendering from this package's error formatter changed the message and
+  every test still passed. A collection or selection location belongs to `flow`,
+  which renders it as the outermost wrapper, and this package renders it again
+  when a workflow location is above it, because one message may not name two
+  packages. Nothing held those two copies to the same words.
+  `TestCoreLocationsReadTheSameThroughEitherFormatter` expects flow's own
+  rendering rather than a third spelling of it, so deleting or rewording either
+  copy fails until both agree.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out
