@@ -310,13 +310,26 @@ func TestValidateFragmentReportsWholeDocumentDepthAndPath(t *testing.T) {
 	}
 
 	// The prefix is not written past its own length, so a caller may reuse it.
+	// The spare capacity is where that is decided: a variadic call passes the
+	// caller's slice itself, so a walk that appends its own segments onto it lands
+	// in the array beyond the prefix. Comparing the visible prefix cannot see
+	// that, which is why the spare region carries a value of its own here.
 	reusable := make([]string, 3, 8)
 	copy(reusable, at)
+	spare := reusable[len(reusable):cap(reusable)]
+	for index := range spare {
+		spare[index] = "untouched"
+	}
 	if err := codec.ValidateFragment(nested(3), reusable...); err != nil {
 		t.Fatalf("fragment with a spare-capacity prefix: %v", err)
 	}
 	if !slices.Equal(reusable, at) {
 		t.Fatalf("prefix was modified to %v; want %v", reusable, at)
+	}
+	for index, segment := range spare {
+		if segment != "untouched" {
+			t.Fatalf("the walk wrote %q past the prefix, at index %d", segment, index+len(at))
+		}
 	}
 
 	// An empty prefix is the whole-document case Value takes.

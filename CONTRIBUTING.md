@@ -415,6 +415,12 @@ go test ./example -run Example -v
   over its accumulator is the only reason nothing notices today.
   `TestOutputGuaranteeCombinatorsLeaveTheirOperandsAlone` says it instead of leaving
   it for a second caller to discover.
+  That sweep asked for clones, so it never saw the one ownership statement written
+  another way: `slices.Clip` keeps a fragment walk from appending its own path
+  segments into the caller's prefix array, which a variadic call passes by
+  reference. The test named for that guarantee compared the visible prefix, where
+  nothing lands, and passed with the clip removed. It writes a value into the spare
+  capacity now, which is the only place the guarantee can be observed.
 - An observation boundary owns the mutable workflow structure it hands to
   application code. `Event.Scope` and workflow runtime errors are snapshots;
   the immutable `Store` and Node-provided error causes remain borrowed by their
