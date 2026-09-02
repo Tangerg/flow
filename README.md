@@ -91,6 +91,7 @@ type Node[I, O any] interface {
 | --- | --- |
 | `NodeFunc` | Adapt a function to `Node` |
 | `Validate` | Check the complete visible definition without running it |
+| `RunChild` | Run one child under the cancellation contract composites owe |
 | `Then` | Pass one node's output to the next |
 | `Switch` | Select a node from the current input |
 | `Loop` | Repeat a node until a condition is met |
@@ -105,7 +106,10 @@ Composites from `flow`, `flowx`, and `workflow` expose recursive definition
 validation through `flow.Validate`. A caller-defined composite can participate
 with a pure, concurrency-safe `Validate() error` method; an ordinary node
 remains opaque. This distinction lets a replaying boundary reject an invalid
-visible definition without running application code.
+visible definition without running application code. `flow.RunChild` is the
+run-time half: it invokes one child under the same cancellation contract the
+built-in composites follow, so a composite of your own behaves like theirs
+instead of reimplementing the rule.
 
 `flowx` contains only derived composition shapes: `Chain`, `FanOut`, `Combine`,
 and `Fallback`. Retry, timeout, tracing, and circuit breaking are policies;

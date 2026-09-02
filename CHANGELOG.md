@@ -18,6 +18,11 @@ being presented as migrations from a version that was never published.
 - Derived composition in `flowx`: `Chain`, `FanOut`, `Combine`, and `Fallback`.
 - `flow`, `flowx`, and `workflow` composites participate in the same recursive,
   side-effect-free `flow.Validate` contract, including before Journal replay.
+- `flow.RunChild` invokes one child under the cancellation contract a composite
+  owes its children — no child started under a cancelled context, and a cause
+  observed while a child ran outranking what it returned — so a caller-defined
+  composite holds that rule instead of restating it. `flowx` uses it rather than
+  keeping its own copy.
 - Workflow loop and parallel configs delegate shared settings to the
   corresponding core configs; Graph, Spec, parallel, and iteration bounds share
   their validation and `flow.ErrInvalidConfig` category.

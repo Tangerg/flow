@@ -35,7 +35,7 @@ func (s switchNode[K, I, O]) Run(ctx context.Context, in I) (O, error) {
 	if err := s.Validate(); err != nil {
 		return zero, err
 	}
-	key, err := runNode(ctx, s.resolve, in)
+	key, err := RunChild(ctx, s.resolve, in)
 	if err != nil {
 		return zero, err
 	}
@@ -43,7 +43,7 @@ func (s switchNode[K, I, O]) Run(ctx context.Context, in I) (O, error) {
 	if !ok {
 		return zero, fmt.Errorf("%w: key %#v", ErrNoCase, key)
 	}
-	return runNode(ctx, node, in)
+	return RunChild(ctx, node, in)
 }
 
 func (s switchNode[K, I, O]) Validate() error {

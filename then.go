@@ -22,12 +22,12 @@ func (t thenNode[I, M, O]) Run(ctx context.Context, in I) (O, error) {
 		var zero O
 		return zero, err
 	}
-	mid, err := runNode(ctx, t.first, in)
+	mid, err := RunChild(ctx, t.first, in)
 	if err != nil {
 		var zero O
 		return zero, err
 	}
-	return runNode(ctx, t.second, mid)
+	return RunChild(ctx, t.second, mid)
 }
 
 func (t thenNode[I, M, O]) Validate() error {

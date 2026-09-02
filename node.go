@@ -88,10 +88,24 @@ func Validate[I, O any](node Node[I, O]) error {
 	return nil
 }
 
-// runNode applies the cancellation contract shared by sequential composites.
-// Concurrent primitives own the equivalent checks in their schedulers.
-func runNode[I, O any](ctx context.Context, node Node[I, O], input I) (O, error) {
+// RunChild runs node as one child of a composite, applying the cancellation
+// contract a composite owes its children: node does not start once ctx is
+// cancelled, and a cancellation observed while it ran takes precedence over
+// whatever it returned. Either way the output is the zero value, because a
+// cancelled composite has no result to commit. A nil node reports [ErrNilNode]
+// rather than panicking, which is the answer [Validate] gives for it.
+//
+// It is the run-time half of what Validate does at definition time, and it is
+// exported for the same reason: a caller-defined composite that wants to compose
+// like a built-in one needs the rule itself, not a description of it. The
+// built-in sequential composites are written in terms of this function.
+// Concurrent composites apply the same rule from their schedulers, where
+// admission is also theirs to decide — see [Map] and [Race].
+func RunChild[I, O any](ctx context.Context, node Node[I, O], input I) (O, error) {
 	var zero O
+	if node == nil {
+		return zero, ErrNilNode
+	}
 	if err := context.Cause(ctx); err != nil {
 		return zero, err
 	}

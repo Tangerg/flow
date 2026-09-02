@@ -86,6 +86,51 @@ func (nilSafeFuncNode) Run(_ context.Context, value int) (int, error) {
 	return value * 2, nil
 }
 
+// TestRunChild_appliesTheContractACompositeOwesItsChildren checks the rule from
+// where a caller-defined composite stands, which is the reason it is exported:
+// the alternative is every composite author reimplementing three decisions from
+// prose, and getting the third one wrong silently, because a child that returned
+// a good value under a cancelled context looks like a successful child.
+func TestRunChild_appliesTheContractACompositeOwesItsChildren(t *testing.T) {
+	started := 0
+	child := flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+		started++
+		return value * 2, nil
+	})
+
+	if output, err := flow.RunChild(t.Context(), child, 21); err != nil || output != 42 {
+		t.Fatalf("RunChild = %d, %v; want 42, nil", output, err)
+	}
+
+	if output, err := flow.RunChild[int, int](t.Context(), nil, 21); !errors.Is(err, flow.ErrNilNode) ||
+		output != 0 {
+		t.Fatalf("RunChild of a nil node = %d, %v; want 0, ErrNilNode", output, err)
+	}
+
+	cause := errors.New("caller stopped the composite")
+	cancelled, cancel := context.WithCancelCause(t.Context())
+	cancel(cause)
+	before := started
+	if output, err := flow.RunChild(cancelled, child, 21); !errors.Is(err, cause) || output != 0 {
+		t.Fatalf("RunChild under a cancelled context = %d, %v; want 0, %v", output, err, cause)
+	}
+	if started != before {
+		t.Fatal("RunChild started a child after the context was cancelled")
+	}
+
+	// A child that succeeds while the composite is being cancelled has produced a
+	// result nothing may commit. Returning it would let a cancelled operation
+	// report an output, which is the decision this rule exists to make.
+	racing, cancelRacing := context.WithCancelCause(t.Context())
+	late := flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+		cancelRacing(cause)
+		return value * 2, nil
+	})
+	if output, err := flow.RunChild(racing, late, 21); !errors.Is(err, cause) || output != 0 {
+		t.Fatalf("RunChild whose child raced cancellation = %d, %v; want 0, %v", output, err, cause)
+	}
+}
+
 func TestValidate_checksTheCompleteVisibleDefinition(t *testing.T) {
 	invalid := errors.New("invalid definition")
 	valid := flow.NodeFunc[int, int](func(context.Context, int) (int, error) {

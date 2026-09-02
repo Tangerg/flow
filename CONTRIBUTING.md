@@ -676,6 +676,18 @@ go test ./example -run Example -v
   making every composite carry its subtree's identity set. What the shape earns is
   a benchmark, so a validation that gets slower cannot get quadratically slower
   unnoticed.
+- Export the rule a higher layer would otherwise copy. `flowx` is the derived
+  layer, and `Fallback` was hand-writing `flow`'s child-invocation contract:
+  check the cause, run the child, check it again, discard the result if the second
+  check fires. That is `runNode`, which was unexported, so the only way to derive
+  a combinator was to restate a rule the axioms say a higher layer may never keep
+  a second copy of. It is `flow.RunChild` now — the run-time half of what
+  `Validate` is at definition time, and exported for the same reason: a composite
+  author needs the rule itself, not a description of it. `workflow`'s boundaries
+  keep their own version on purpose, because rolling back to the previous `Store`
+  is a different decision than returning a zero output;
+  `TestRunChild_appliesTheContractACompositeOwesItsChildren` states the three
+  decisions from where a caller stands, and each of them dies alone.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

@@ -63,7 +63,7 @@ func (r raceNode[I, O]) startNodes(ctx context.Context, input I) <-chan raceResu
 	results := make(chan raceResult[O], len(r.nodes))
 	for index, node := range r.nodes {
 		go func() {
-			value, err := runNode(ctx, node, input)
+			value, err := RunChild(ctx, node, input)
 			results <- raceResult[O]{index: index, value: value, err: err}
 		}()
 	}

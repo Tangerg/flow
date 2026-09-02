@@ -25,9 +25,10 @@
 // Cancellation outranks results. Every composite here checks the context before
 // invoking a child and again before committing what the child returned, so a
 // cause observed at either point is what Run reports — never a result produced
-// alongside it. Cancellation is otherwise cooperative: a Node that ignores its
-// context delays the composite that started it, and a composite that started
-// concurrent work does not return before that work does. Each operation
+// alongside it. [RunChild] is that rule, so a caller-defined composite can hold
+// it rather than restate it. Cancellation is otherwise cooperative: a Node that
+// ignores its context delays the composite that started it, and a composite that
+// started concurrent work does not return before that work does. Each operation
 // documents what it discards or rolls back when this applies.
 //
 // Errors preserve their causes. Collection and selection operations report

@@ -122,9 +122,9 @@ func (c *combineExecution[I, A, B, O]) Run(ctx context.Context, task combineTask
 	var err error
 	switch task {
 	case combineA:
-		c.result.a, err = c.combine.a.Run(ctx, c.input)
+		c.result.a, err = flow.RunChild(ctx, c.combine.a, c.input)
 	case combineB:
-		c.result.b, err = c.combine.b.Run(ctx, c.input)
+		c.result.b, err = flow.RunChild(ctx, c.combine.b, c.input)
 	}
 	return struct{}{}, err
 }
@@ -182,21 +182,14 @@ func (f fallbackNode[I, O]) Run(ctx context.Context, in I) (O, error) {
 	if err := f.Validate(); err != nil {
 		return zero, err
 	}
-	if err := context.Cause(ctx); err != nil {
-		return zero, err
-	}
-	out, err := f.primary.Run(ctx, in)
-	if ctxErr := context.Cause(ctx); ctxErr != nil {
-		return zero, ctxErr
-	}
+	out, err := flow.RunChild(ctx, f.primary, in)
 	if err == nil {
 		return out, nil
 	}
-	out, err = f.alternate.Run(ctx, in)
-	if ctxErr := context.Cause(ctx); ctxErr != nil {
-		return zero, ctxErr
-	}
-	return out, err
+	// RunChild refuses to start a child under a cancelled context, so the
+	// alternate is not reached when primary failed because the operation was
+	// cancelled: that cause is what the second call returns.
+	return flow.RunChild(ctx, f.alternate, in)
 }
 
 func (f fallbackNode[I, O]) Validate() error {
