@@ -67,7 +67,10 @@ func defaultPortRef(inputs Inputs) (Ref, error) {
 //		},
 //		func(struct{}) (flow.Node[[2]float64, float64], error) { ... },
 //	)
-func BindFactory[C, I, O any](bind func(cfg C, inputs Inputs) (Binder[I], error), build func(C) (flow.Node[I, O], error)) NodeFactory {
+func BindFactory[C, I, O any](
+	bind func(cfg C, inputs Inputs) (Binder[I], error),
+	build func(C) (flow.Node[I, O], error),
+) NodeFactory {
 	return func(spec NodeSpec) (Step, error) {
 		if bind == nil || build == nil {
 			return nil, flow.ErrNilFunc

@@ -48,7 +48,11 @@ func (f fanOutNode[I, O]) Validate() error {
 // either node runs. Parent cancellation observed after the nodes finish prevents
 // merge from starting; cancellation during merge takes precedence over its
 // result.
-func Combine[I, A, B, O any](a flow.Node[I, A], b flow.Node[I, B], merge func(ctx context.Context, a A, b B) (O, error)) flow.Node[I, O] {
+func Combine[I, A, B, O any](
+	a flow.Node[I, A],
+	b flow.Node[I, B],
+	merge func(ctx context.Context, a A, b B) (O, error),
+) flow.Node[I, O] {
 	return combineNode[I, A, B, O]{a: a, b: b, merge: merge}
 }
 
