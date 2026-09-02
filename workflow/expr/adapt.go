@@ -15,10 +15,11 @@ import (
 // expression itself produced. Every adapter in this file shares that rule, so
 // it is stated here rather than reassembled per adapter.
 //
-// It is the same precedence flow applies around a node it runs sequentially.
-// This package restates it because a compiled adapter is also a [workflow.Step]
-// a caller can run directly, and the helper that applies it in flow is that
-// package's own.
+// It is the same precedence [flow.RunChild] applies around a node a composite
+// runs. This package states it again because that helper wraps a node from the
+// outside, and this is the inside of one: an adapter is a [workflow.Step] a
+// caller may run directly, so the rule has to hold without a composite above it
+// to apply it.
 func (e *Expr) evaluate[T any](
 	ctx context.Context,
 	store workflow.Store,
