@@ -739,6 +739,19 @@ go test ./example -run Example -v
   boundary. `TestBranch_journalsOneDecisionPerScopedInvocation` and
   `TestCompiledGraph_bypassBelongsToOneScopedInvocation` are those compositions,
   and each fails when its key loses the scope.
+- A borrow needs the immutability it rests on pinned. `boundaryKey` hands out the
+  context's scope without copying it, and an execution now keeps that key for as
+  long as it runs, so what makes it sound is that a derived scope is never written
+  to again. `withScopeFrame` guarantees that by allocating exactly one more frame:
+  the result has no spare capacity, so nothing can append into it. Writing the
+  same derivation as `append` looks equivalent and is, until the growth doubles —
+  after which two boundaries derived from one parent share an array and the
+  second's frame overwrites the first's. Reaching that through behavior takes four
+  nested boundaries with siblings under the deepest, which no test has, and the
+  mutation passed the whole suite.
+  `TestDerivedScopeLeavesNoRoomForASiblingToWriteInto` asks the derivation
+  directly instead, and `Scope`'s copy for application code was already pinned by
+  `TestScope_returnsACopy`.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

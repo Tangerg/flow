@@ -90,6 +90,40 @@ func TestCloningAnOwnedErrorStopsAtEveryTypedNil(t *testing.T) {
 	}
 }
 
+// TestDerivedScopeLeavesNoRoomForASiblingToWriteInto pins the property that lets
+// every key, event, and chunk borrow the scope it was built under instead of
+// copying it: a derived scope is exactly as long as its capacity, so nothing can
+// append into it. Writing the derivation as append would look equivalent -- and
+// is, until the growth doubles, after which two boundaries derived from the same
+// parent share one array and the second one's frame overwrites the first's. That
+// needs four nested boundaries with siblings under the deepest to be observed
+// through behavior, which is why it is asked here directly.
+func TestDerivedScopeLeavesNoRoomForASiblingToWriteInto(t *testing.T) {
+	ctx := context.Background()
+	for depth := 1; depth <= 8; depth++ {
+		ctx = withScopeFrame(ctx, ScopeFrame{ID: "frame", Indexed: true, Index: uint64(depth)})
+		derived := scope(ctx)
+		if len(derived) != depth {
+			t.Fatalf("depth %d scope has %d frames", depth, len(derived))
+		}
+		if cap(derived) != len(derived) {
+			t.Fatalf(
+				"depth %d scope has capacity %d for %d frames; a sibling could append into it",
+				depth, cap(derived), len(derived),
+			)
+		}
+
+		left := scope(withScopeFrame(ctx, ScopeFrame{ID: "left"}))
+		right := scope(withScopeFrame(ctx, ScopeFrame{ID: "right"}))
+		if left[len(left)-1].ID != "left" || right[len(right)-1].ID != "right" {
+			t.Fatalf(
+				"siblings at depth %d read as %q and %q; they share one array",
+				depth+1, left[len(left)-1].ID, right[len(right)-1].ID,
+			)
+		}
+	}
+}
+
 func TestReplayBoundaries_resampleCancellationAfterLookup(t *testing.T) {
 	cause := errors.New("cancel during replay lookup")
 

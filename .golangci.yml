@@ -165,9 +165,11 @@ linters:
         linters:
           - errorlint
 
-    # One test builds MaxNestingDepth+1 nested scopes to prove the depth limit
-    # rejects them, so the nested context is the subject of the test.
-      - path: workflow/step_test\.go
+    # Two tests nest contexts deliberately, because the nesting is the subject:
+    # one builds MaxNestingDepth+1 scopes to prove the depth limit rejects them,
+    # the other derives eight to prove a derived scope leaves no spare capacity
+    # for a sibling to append into.
+      - path: workflow/(step|internals)_test\.go
         linters:
           - fatcontext
 

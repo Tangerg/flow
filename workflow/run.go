@@ -274,6 +274,13 @@ func (r *runState) wasBypassed(key JournalKey) bool {
 // boundaryKey names the boundary invocation running under ctx. A scope and a step
 // ID are one identity, so above the trie that stores them they travel as the one
 // type that already says so.
+//
+// The key borrows the context's scope instead of copying it, which is sound
+// because [withScopeFrame] only ever extends a scope into a new slice, so no
+// frame a key holds can change under it. An execution may therefore keep its key
+// for as long as it runs. What leaves the engine copies: [Scope] does for
+// application code, [suspensionList.errAt] does for a wait it names, and
+// [withEmission] does for the chunks a session will publish.
 func boundaryKey(ctx context.Context, id string) JournalKey {
 	return JournalKey{ID: id, Scope: scope(ctx)}
 }
