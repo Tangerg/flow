@@ -173,8 +173,12 @@ caller-defined child. The custom composite's own `Run` method should still call
 Call the child Step directly: a nested package-level `workflow.Run` starts an
 independent root scope. Check parent cancellation before admission and after the
 child returns; if it races with completion, preserve the Store from before that
-invocation. `WithScopeIndex` isolates Journal, event, chunk, and suspension
-identity; it does not isolate Store cells. Wrap the body in `Subgraph` when each
+invocation. `flow.RunChild` makes those two checks for a plain `Node` and is
+what a composite in `flow` or `flowx` uses, but it rolls a cancelled child back
+to a zero output — for a Step that is an empty Store, discarding what already
+completed — which is why the loop above is written out here. `WithScopeIndex`
+isolates Journal, event, chunk, and suspension identity; it does not isolate
+Store cells. Wrap the body in `Subgraph` when each
 invocation also needs a sealed Store.
 
 ## Common mistakes
