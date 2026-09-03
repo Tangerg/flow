@@ -50,6 +50,26 @@ func TestCancelAtCheck(t *testing.T) {
 	}
 }
 
+// TestCancelAtCheckIsShadowedByAParentCause pins the one limit of this value,
+// because a test that hit it would not fail — it would observe a cancellation at
+// the wrong moment with the wrong cause and still pass its assertion about
+// "cancelled". [context.Cause] consults a parent's cause before falling back to
+// Err, so the parent has to be live for the check count to decide anything.
+func TestCancelAtCheckIsShadowedByAParentCause(t *testing.T) {
+	parentCause := errors.New("parent cause")
+	parent, cancel := context.WithCancelCause(context.Background())
+	cancel(parentCause)
+
+	own := errors.New("own cause")
+	ctx := ctxtest.CancelAtCheck(parent, 1, own)
+	if err := ctx.Err(); !errors.Is(err, own) {
+		t.Fatalf("Err = %v; want this value's own cause", err)
+	}
+	if err := context.Cause(ctx); !errors.Is(err, parentCause) {
+		t.Fatalf("context.Cause = %v; want the parent's cause, which shadows this one", err)
+	}
+}
+
 func TestCancelAtCheckDelegatesToItsParent(t *testing.T) {
 	type key struct{}
 	parent := context.WithValue(context.Background(), key{}, "carried")

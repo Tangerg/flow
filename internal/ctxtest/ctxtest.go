@@ -13,6 +13,12 @@ import "context"
 // between finishing work and admitting its result — without sleeps or
 // assumptions about goroutine scheduling. Counting is not synchronized, so use
 // one of these values from a single goroutine's check sequence.
+//
+// The boundaries under test read [context.Cause] rather than Err, and the two
+// agree here only because Cause is documented to return c.Err() unless some
+// parent was cancelled with a cause of its own. Wrap a parent that has not been
+// cancelled: a parent carrying a cause shadows this one, and the boundary would
+// report a cancellation this value did not choose the moment for.
 func CancelAtCheck(parent context.Context, checks int, cause error) context.Context {
 	return &cancelAtCheck{Context: parent, done: make(chan struct{}), cause: cause, at: checks}
 }
