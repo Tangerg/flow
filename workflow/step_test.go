@@ -1309,6 +1309,11 @@ func TestEveryBuiltInStepReportsAnInvalidDefinitionThroughValidate(t *testing.T)
 // which cannot see an extra cell appearing beside it — an internal marker, a
 // body's private cell, or the item an Iteration writes for each element, whose
 // absence out here is the whole reason element stores are derived and dropped.
+//
+// Every way this package builds a Step is here. A caller-defined one is not, and
+// cannot be: it owns its own contract, which is why an opaque body is the case
+// that makes a Subgraph's projected output its own rule rather than a shape
+// check.
 func TestEveryCompositePublishesOnlyTheCellsItNames(t *testing.T) {
 	number := func(id string, ref workflow.Ref) workflow.Step {
 		return workflow.LeafFunc(id, ref,
@@ -1328,9 +1333,10 @@ func TestEveryCompositePublishesOnlyTheCellsItNames(t *testing.T) {
 	}
 
 	for name, testCase := range map[string]struct {
-		step  workflow.Step
-		input workflow.Store
-		want  []string
+		step    workflow.Step
+		input   workflow.Store
+		journal *workflow.Journal
+		want    []string
 	}{
 		"leaf": {
 			step: first, input: input,
@@ -1393,9 +1399,31 @@ func TestEveryCompositePublishesOnlyTheCellsItNames(t *testing.T) {
 			step: graph, input: input,
 			want: []string{"one#/output", "two#/output"},
 		},
+		// The two waits are the other shape a step can have: one publishes
+		// nothing of its own however many times it runs, and one publishes
+		// exactly its own answer once a response is recorded for it.
+		"await": {
+			step:  workflow.Await("gate", workflow.Output("approved")),
+			input: input.WithOutput("approved", true),
+			want:  nil,
+		},
+		"interrupt": {
+			step:    workflow.Interrupt("ask", "why"),
+			input:   input,
+			journal: answeredInterrupt(t, "ask", 42),
+			want:    []string{"ask#/output"},
+		},
+		"route": {
+			step: workflow.Route("pick", flow.NodeFunc[workflow.Store, string](
+				func(context.Context, workflow.Store) (string, error) { return "only", nil },
+			)),
+			input: input,
+			want:  []string{"pick#/output"},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			out, runErr := workflow.Run(t.Context(), testCase.step, testCase.input, workflow.RunConfig{})
+			out, runErr := workflow.Run(t.Context(), testCase.step, testCase.input,
+				workflow.RunConfig{Journal: testCase.journal})
 			if runErr != nil {
 				t.Fatalf("Run: %v", runErr)
 			}
@@ -1409,4 +1437,15 @@ func TestEveryCompositePublishesOnlyTheCellsItNames(t *testing.T) {
 			}
 		})
 	}
+}
+
+// answeredInterrupt returns a Journal holding the response an Interrupt needs to
+// publish instead of suspending, which is the only state in which it writes.
+func answeredInterrupt(t *testing.T, id string, response any) *workflow.Journal {
+	t.Helper()
+	journal := workflow.NewJournal()
+	if err := journal.Record(workflow.JournalKey{ID: id}, response); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	return journal
 }
