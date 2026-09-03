@@ -390,3 +390,26 @@ func TestChain_rejectsTypedNilFunctionBeforeRunning(t *testing.T) {
 		t.Fatal("a node ran before the typed nil function node was rejected")
 	}
 }
+
+// incrementNode is a comparable node, which a func-typed one is not: comparing
+// two interfaces holding funcs panics, so the identity below needs a node whose
+// dynamic type supports ==.
+type incrementNode struct{}
+
+func (incrementNode) Run(_ context.Context, in int) (int, error) { return in + 1, nil }
+
+// TestChain_singleNodeIsThatNode pins the documented identity rather than the
+// behavior TestChain_emptyAndSingle already covers: with one non-nil node Chain
+// returns that node, so wrapping costs nothing. A wrapper would behave the same
+// and would be observable anyway — a caller who type-asserts the result back to
+// their own node type would stop finding it there.
+func TestChain_singleNodeIsThatNode(t *testing.T) {
+	node := incrementNode{}
+	chained := flowx.Chain[int](node)
+	if chained != flow.Node[int, int](node) {
+		t.Fatalf("Chain(node) = %#v; want the node itself", chained)
+	}
+	if _, ok := chained.(incrementNode); !ok {
+		t.Fatalf("Chain(node) = %T; a caller can no longer assert their own type", chained)
+	}
+}
