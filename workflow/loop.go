@@ -48,7 +48,6 @@ func Loop(cfg LoopConfig) Step {
 	return loopStep{config: cfg}
 }
 
-// loopStep is the [Step] produced by [Loop].
 type loopStep struct {
 	config LoopConfig
 }
@@ -161,8 +160,6 @@ func (l *loopExecution) admit(ctx context.Context, next Store, err error) error 
 	return nil
 }
 
-// stop returns whether the loop ends after this iteration, reusing the recorded
-// decision when the run is resuming.
 func (l *loopExecution) stop(ctx context.Context, s Store) (bool, error) {
 	if err := l.run.claim(boundaryKey(ctx, l.loop.config.ID)); err != nil {
 		return false, newStepError(ctx, l.loop.config.ID, OpValidate, err)

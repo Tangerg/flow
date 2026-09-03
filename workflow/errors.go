@@ -162,7 +162,6 @@ func (s *StepError) appendErrorPrefix(message *strings.Builder) (bool, error) {
 	return true, s.Err
 }
 
-// Unwrap returns the underlying validation, bind, or run error.
 func (s *StepError) Unwrap() error {
 	if s == nil {
 		return nil
@@ -332,7 +331,6 @@ func (g *GraphError) Is(target error) bool {
 	return g != nil && target == ErrInvalidGraph
 }
 
-// Unwrap returns the underlying graph error.
 func (g *GraphError) Unwrap() error {
 	if g == nil {
 		return nil
@@ -389,7 +387,6 @@ func (s *SpecError) Is(target error) bool {
 	return s != nil && target == ErrInvalidSpec
 }
 
-// Unwrap returns the underlying specification error.
 func (s *SpecError) Unwrap() error {
 	if s == nil {
 		return nil

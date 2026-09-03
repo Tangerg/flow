@@ -196,7 +196,6 @@ func (o operand) length() (any, error) {
 	return nil, fmt.Errorf("%w: len wants string, array, or object, got %s", ErrType, o.typeName())
 }
 
-// apply evaluates a binary operator over two normalized values.
 func (b binaryOperator) apply(left, right operand) (any, error) {
 	if result, handled, err := b.applyEquality(left, right); handled {
 		return result, err
@@ -331,8 +330,6 @@ func (n numberComparison) reversed() numberComparison {
 	return n
 }
 
-// equal reports two numbers being the same number, which an unordered pair
-// never is.
 func (n numberComparison) equal() bool {
 	return !n.unordered && n.order == 0
 }

@@ -98,7 +98,6 @@ func suspensionReason(value any) string {
 	return reflected.String()
 }
 
-// Unwrap returns [ErrSuspended].
 func (s *Suspension) Unwrap() error { return ErrSuspended }
 
 // Suspend returns an error that stops the run at the calling step. Use it inside
@@ -303,9 +302,6 @@ func (s suspensionList) errAt(key JournalKey) error {
 	return s.err()
 }
 
-// err reports the suspensions of a fan-out as one error. Several branches may
-// be waiting at once, and a caller needs every reason to know what to supply
-// before resuming.
 func (s suspensionList) err() error {
 	s = s.normalized()
 	switch len(s) {
@@ -352,9 +348,6 @@ func (s *Suspension) compare(other *Suspension) int {
 	)
 }
 
-// clone copies a suspension and its scope so identifying a wait at a workflow
-// boundary never mutates an error owned by a caller. Callers filter nil entries
-// first, so the receiver is never nil.
 func (s *Suspension) clone() *Suspension {
 	clone := *s
 	clone.Scope = slices.Clone(s.Scope)

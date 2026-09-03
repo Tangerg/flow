@@ -92,7 +92,6 @@ type elementOutcome struct {
 	suspensions suspensionList
 }
 
-// iterationStep is the [Step] produced by [Iteration].
 type iterationStep struct {
 	id         string
 	input      Ref

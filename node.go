@@ -37,7 +37,6 @@ type Node[I, O any] interface {
 //	out, err := double.Run(ctx, 21) // 42, nil
 type NodeFunc[I, O any] func(ctx context.Context, in I) (O, error)
 
-// NodeFunc satisfies Node.
 var _ Node[any, any] = NodeFunc[any, any](nil)
 
 // Run calls f. A nil NodeFunc returns [ErrNilNode].

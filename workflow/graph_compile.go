@@ -86,10 +86,9 @@ func (graphStep) validate() error { return nil }
 
 func (g graphStep) Validate() error { return validateDefinition(g) }
 
-// compile turns the plan into the Step that runs it. Everything the step needs to
-// schedule -- who waits for whom, whose completion releases whom, and which node
-// namespace the graph owns -- is the plan's own knowledge, so the plan builds it
-// rather than handing its fields to a function that reads nothing else.
+// compile is the plan's own method because everything the step needs to schedule
+// -- who waits for whom, whose completion releases whom, and which node namespace
+// the graph owns -- is the plan's own knowledge.
 func (g graphPlan) compile(steps stepList, limit int) Step {
 	return graphStep{
 		steps:                 steps,

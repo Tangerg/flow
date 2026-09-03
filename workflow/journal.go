@@ -97,7 +97,7 @@ type journalValue struct {
 	revision uint64
 }
 
-// NewJournal returns an empty Journal.
+// NewJournal returns an empty Journal; the zero Journal is equally usable.
 func NewJournal() *Journal { return &Journal{} }
 
 // Record marks one step execution as completed with value as its result. It is
@@ -119,8 +119,6 @@ func (j *Journal) Record(key JournalKey, value any) error {
 	return nil
 }
 
-// record stores a step's output. A nil Journal discards it, so callers need not
-// check whether resumption is enabled.
 func (j *Journal) record(key JournalKey, value any) error {
 	if j == nil {
 		return nil
@@ -128,10 +126,9 @@ func (j *Journal) record(key JournalKey, value any) error {
 	return j.insert(key, value)
 }
 
-// insert is the write path both Record and record share. Its errors locate a
-// failure by scope alone, because the step ID and this package are context each
-// caller already supplies: Record from the key it was handed, an internal
-// caller from the [StepError] that wraps it.
+// insert locates a failure by scope alone, because the step ID and this package
+// are context each caller already supplies: Record from the key it was handed,
+// an internal caller from the [StepError] that wraps it.
 func (j *Journal) insert(key JournalKey, value any) error {
 	if err := key.validate(); err != nil {
 		return err
@@ -217,7 +214,7 @@ func (j *journalNode) lookup(scope []ScopeFrame, id string) (journalValue, bool)
 	return value, ok
 }
 
-// Len returns the number of recorded steps.
+// Len counts recorded steps, including ones a run has not replayed.
 func (j *Journal) Len() int {
 	if j == nil {
 		return 0
@@ -295,8 +292,6 @@ func (j *Journal) Forget(key JournalKey) error {
 	return nil
 }
 
-// forget reports whether it removed a record and prunes empty scope nodes on
-// the way back up.
 func (j *journalNode) forget(scope []ScopeFrame, id string) bool {
 	if len(scope) == 0 {
 		if _, ok := j.records[id]; !ok {

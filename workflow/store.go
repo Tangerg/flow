@@ -112,7 +112,7 @@ type storeChange struct {
 	cell cell
 }
 
-// NewStore returns an empty Store.
+// NewStore returns an empty Store; the zero Store is equally usable.
 func NewStore() Store {
 	return Store{}
 }

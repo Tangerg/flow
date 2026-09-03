@@ -49,7 +49,6 @@ func Branch(cfg BranchConfig) Step {
 	}
 }
 
-// branchStep is the [Step] produced by [Branch].
 type branchStep struct {
 	id      string
 	resolve Resolver
@@ -170,8 +169,8 @@ func (b branchStep) validate() error {
 
 func (b branchStep) Validate() error { return validateDefinition(b) }
 
-// decide returns the branch to take, reusing the recorded decision when the run
-// is resuming. Run records a fresh decision only after verifying the case.
+// decide reuses the recorded decision when the run is resuming, and records a
+// fresh one only after the case has been verified.
 func (b *branchExecution) decide(ctx context.Context) (string, bool, error) {
 	name, replayed, err := b.run.replayDecision[string](ctx, KindBranch, b.branch.id)
 	if err != nil {

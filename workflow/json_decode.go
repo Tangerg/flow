@@ -56,9 +56,8 @@ func (j jsonObject) require(kind string, required ...string) error {
 	return nil
 }
 
-// stringMember reads a member that must be a string. Presence is a separate
-// contract — require names an absent member — so this names one that is present
-// with the wrong type.
+// stringMember names a member that is present with the wrong type, because
+// presence is a separate contract that require already reports.
 func (j jsonObject) stringMember(name string) (string, error) {
 	value, ok := j[name].(string)
 	if !ok {
@@ -90,8 +89,6 @@ type strictObject struct {
 	optional []string
 }
 
-// check applies the contract to already-parsed members, which is how a member
-// nested inside a larger document arrives.
 func (s strictObject) check(object jsonObject) error {
 	allowed := slices.Concat(s.required, s.optional)
 	if err := object.allow(allowed...); err != nil {
@@ -100,7 +97,6 @@ func (s strictObject) check(object jsonObject) error {
 	return object.require(s.what, s.required...)
 }
 
-// parse applies the contract to a complete document and returns its members.
 func (s strictObject) parse(data []byte) (jsonObject, error) {
 	raw, err := jsonDocument(data).object()
 	if err != nil {
@@ -127,7 +123,6 @@ func (j jsonDocument) decodeInto[T any](
 	return jsondoc.DecodeInto(dst, j, decode, wrap)
 }
 
-// unmarshalError names one decoding boundary that has no structured error.
 func unmarshalError(what string) func(error) error {
 	return func(err error) error {
 		return fmt.Errorf("workflow: unmarshal %s: %w", what, err)

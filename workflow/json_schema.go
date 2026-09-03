@@ -182,10 +182,8 @@ func (s *schemaDialectValidator) validate(value any) error {
 	return nil
 }
 
-// checkDialect checks the one thing a schema object says about itself, leaving
-// [schemaDialectValidator.validate] to be about the positions it descends into.
-// An object that declares no dialect inherits the one this package compiles
-// under, which is why an absent $schema is not a failure.
+// checkDialect treats an absent $schema as inheriting the dialect this package
+// compiles under, which is why it is not a failure.
 func (s *schemaDialectValidator) checkDialect(object map[string]any) error {
 	dialect, declared := object["$schema"]
 	if !declared {

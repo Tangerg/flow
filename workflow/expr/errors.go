@@ -51,7 +51,6 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("expr %q: %v", e.Source, e.Err)
 }
 
-// Unwrap returns the underlying cause.
 func (e *Error) Unwrap() error {
 	if e == nil {
 		return nil

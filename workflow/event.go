@@ -42,9 +42,7 @@ const (
 type Event struct {
 	// Kind is the transition this event reports.
 	Kind EventKind
-
-	// ID is the step's ID.
-	ID string
+	ID   string
 
 	// Scope is the chain of enclosing execution scopes, outermost first. [Loop]
 	// and [Iteration] distinguish repeated invocations; [Subgraph] isolates an
@@ -109,7 +107,6 @@ type Observer interface {
 // ObserverFunc adapts a function into an [Observer].
 type ObserverFunc func(context.Context, Event)
 
-// ObserverFunc satisfies Observer.
 var _ Observer = ObserverFunc(nil)
 
 // Observe calls f. A nil ObserverFunc discards the event.

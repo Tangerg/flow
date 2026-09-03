@@ -87,12 +87,10 @@ type raceRun[O any] struct {
 	won     bool
 }
 
-// waitForAll takes one result per started node, which is what waiting for all of
-// them means: each sends exactly once. Parent cancellation takes no part in that
-// drain -- it already reaches the nodes through the context this race derived
-// from it -- and takes precedence here, where the outcome is chosen, rather than
-// also while collecting. Deciding it twice would state one rule in two places
-// that nothing outside can tell apart, because this one settles what Run returns.
+// waitForAll is where the outcome is chosen, which is why parent cancellation is
+// checked here and takes no part in the drain: it already reaches the nodes
+// through the context this race derived, and deciding it twice would state one
+// rule in two places that nothing outside can tell apart.
 func (r *raceRun[O]) waitForAll(parent context.Context) (O, error) {
 	for range len(r.errs) {
 		r.record(<-r.results)
@@ -108,8 +106,6 @@ func (r *raceRun[O]) waitForAll(parent context.Context) (O, error) {
 	return zero, errors.Join(r.errs...)
 }
 
-// record keeps the first success and stops the rest. Results after it are only
-// drained: which node won is already fixed.
 func (r *raceRun[O]) record(result raceResult[O]) {
 	if r.won {
 		return

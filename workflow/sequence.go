@@ -19,7 +19,6 @@ func Sequence(steps ...Step) Step {
 	return sequenceStep{steps: stepList(slices.Clone(steps))}
 }
 
-// sequenceStep is the [Step] produced by [Sequence].
 type sequenceStep struct {
 	steps stepList
 }

@@ -14,13 +14,11 @@ type MapConfig struct {
 	Concurrency int
 }
 
-// Validate reports whether c can configure [Map].
+// Validate rejects a negative Concurrency; zero means unbounded.
 func (c MapConfig) Validate() error {
 	return nonNegativeCount("concurrency", c.Concurrency)
 }
 
-// nonNegativeCount is the bound every count in a config shares. Stating it once
-// keeps two configs from disagreeing about how an impossible count reads.
 func nonNegativeCount(name string, value int) error {
 	if value < 0 {
 		return fmt.Errorf("%w: %s must be non-negative, got %d", ErrInvalidConfig, name, value)

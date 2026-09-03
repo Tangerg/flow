@@ -25,7 +25,6 @@ import (
 // a bind failure; waiting cannot turn malformed data into a usable value.
 func Await(id string, ref Ref) Step { return awaitStep{id: id, ref: ref} }
 
-// awaitStep is the [Step] produced by [Await].
 type awaitStep struct {
 	id  string
 	ref Ref

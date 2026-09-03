@@ -43,7 +43,6 @@ type StreamFunc[I, O, C any] func(
 	func(C) bool,
 ) (O, error)
 
-// StreamFunc satisfies flow.Node.
 var _ flow.Node[any, any] = StreamFunc[any, any, any](nil)
 
 // Validate rejects a nil StreamFunc before a composite performs work. The
@@ -115,7 +114,6 @@ type Emitter interface {
 // EmitterFunc adapts a function into an [Emitter].
 type EmitterFunc func(context.Context, Chunk) error
 
-// EmitterFunc satisfies Emitter.
 var _ Emitter = EmitterFunc(nil)
 
 // Emit calls f. A nil EmitterFunc discards the chunk.

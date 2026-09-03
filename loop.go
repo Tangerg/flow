@@ -16,7 +16,7 @@ type LoopConfig struct {
 	MaxIterations int
 }
 
-// Validate reports whether c can configure [Loop].
+// Validate rejects a negative MaxIterations; zero means [DefaultMaxIterations].
 func (c LoopConfig) Validate() error {
 	return nonNegativeCount("max iterations", c.MaxIterations)
 }

@@ -148,8 +148,6 @@ func nilAssignable(kind reflect.Kind) bool {
 	}
 }
 
-// wrap attaches the expression source to an evaluation error, leaving an error
-// that already carries it untouched.
 func (e *Expr) wrap(err error) error {
 	if _, wrapped := errors.AsType[*Error](err); wrapped {
 		return err
@@ -240,8 +238,6 @@ func (c *compiler) compileLiteral(lit *ast.BasicLit) (evalFunc, error) {
 	}
 }
 
-// compileIdent accepts only the predeclared constants. Every other bare
-// identifier is a reference missing its path, which is worth saying plainly.
 func (c *compiler) compileIdent(id *ast.Ident) (evalFunc, error) {
 	if value, predeclared := predeclaredIdent(id.Name); predeclared {
 		return c.constant(value), nil
@@ -291,8 +287,6 @@ func resolveReference(store workflow.Store, ref workflow.Ref) (any, error) {
 	return (operand{raw: value}).normalized(), nil
 }
 
-// reference flattens a selector and index chain into a [workflow.Ref] and
-// records it.
 func (c *compiler) reference(node ast.Expr) (workflow.Ref, error) {
 	root, segments, err := c.flatten(node)
 	if err != nil {
@@ -392,8 +386,8 @@ func (c *compiler) nodeID(index ast.Expr) (string, error) {
 	return id, nil
 }
 
-// indexSegment reads a constant index. A Store path is text, so an index must be
-// a literal rather than a computed value.
+// indexSegment requires a literal: a Store path is text, so an index cannot be
+// computed.
 func (c *compiler) indexSegment(index ast.Expr) (string, error) {
 	lit, ok := index.(*ast.BasicLit)
 	if !ok {
@@ -417,9 +411,6 @@ func (c *compiler) indexSegment(index ast.Expr) (string, error) {
 	}
 }
 
-// unusableIndex reports an index that is not a literal this package can read.
-// An expression and a literal of the wrong kind fail for the same reason, so
-// they say so in one sentence rather than two copies of it.
 func (c *compiler) unusableIndex(node ast.Node) error {
 	return c.unsupported(node, "index must be an integer or string literal")
 }
@@ -498,8 +489,8 @@ func shortCircuit(left, right evalFunc, op token.Token) evalFunc {
 	}
 }
 
-// eval applies the operator to both operands. It belongs to the operator because
-// nothing of the expression it came from survives compilation.
+// eval belongs to the operator because nothing of the expression it came from
+// survives compilation.
 func (b binaryOperator) eval(left, right evalFunc) evalFunc {
 	return func(s workflow.Store) (any, error) {
 		leftValue, err := left(s)
@@ -556,8 +547,6 @@ func (c *compiler) compileHas(n *ast.CallExpr) (evalFunc, error) {
 	}, nil
 }
 
-// compileLen compiles len(x) over an ordinary compiled argument, so its operand
-// may be any expression rather than only a reference.
 func (c *compiler) compileLen(n *ast.CallExpr, depth int) (evalFunc, error) {
 	if err := c.oneArgument(n, "len"); err != nil {
 		return nil, err

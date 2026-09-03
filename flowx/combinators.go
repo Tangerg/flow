@@ -120,8 +120,7 @@ func (c *combineExecution[I, A, B, O]) execute(ctx context.Context) (O, error) {
 	return output, err
 }
 
-// Run executes one of the two fixed input branches. The task value is private
-// input produced by execute, so no default case is part of the protocol.
+// Run has no default case because task is private input produced by execute.
 func (c *combineExecution[I, A, B, O]) Run(ctx context.Context, task combineTask) (struct{}, error) {
 	var err error
 	switch task {

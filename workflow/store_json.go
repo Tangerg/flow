@@ -123,7 +123,6 @@ func (s storeJSONDocument) encodeValues() error {
 	return nil
 }
 
-// locate names the cell a wire-format failure happened in.
 func (s storeKey) locate(err error) error {
 	return fmt.Errorf("node %q key %q: %w", s.nodeID, s.key, err)
 }

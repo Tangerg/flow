@@ -37,15 +37,13 @@ type IndexError struct {
 	Err   error
 }
 
-// Error states the position and defers to the cause. This package's sentinels
-// carry its name themselves, because most of them reach a caller with nothing
-// wrapping them; a location that repeated the name would say it twice, and
-// nested locations would say it once per level.
+// Error omits this package's name: its sentinels carry it themselves, and most
+// reach a caller with nothing wrapping them, so a location that repeated it would
+// say it twice -- once per nesting level.
 func (i *IndexError) Error() string {
 	return formatLocationError(i)
 }
 
-// Unwrap returns the underlying element error.
 func (i *IndexError) Unwrap() error {
 	if i == nil {
 		return nil
@@ -62,9 +60,8 @@ type CaseError struct {
 	Err error
 }
 
-// Error states the case key and defers to the cause. Like [IndexError], the
-// location does not repeat this package's name; root sentinels carry it and a
-// nested error retains the package name of its own boundary.
+// Error omits this package's name for the reason [IndexError.Error] does; a
+// nested error keeps the name of its own boundary.
 func (c *CaseError) Error() string {
 	return formatLocationError(c)
 }
@@ -164,7 +161,6 @@ func (f *locationFormatter) render(task locationFormatTask) {
 	}
 }
 
-// Unwrap returns the underlying case error.
 func (c *CaseError) Unwrap() error {
 	if c == nil {
 		return nil

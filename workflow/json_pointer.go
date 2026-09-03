@@ -21,8 +21,6 @@ type pointerEncoder struct {
 	strings.Builder
 }
 
-// write appends one escaped RFC 6901 segment.
-//
 //nolint:gosec // strings.Builder's writes are documented never to fail.
 func (p *pointerEncoder) write(segment string) {
 	p.WriteByte('/')

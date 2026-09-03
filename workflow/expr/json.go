@@ -43,7 +43,6 @@ func decodeBindings(data []byte) (Bindings, error) {
 	return Bindings(next), nil
 }
 
-// jsonError names one of this package's JSON boundaries.
 func jsonError(what string) func(error) error {
 	return func(err error) error {
 		return fmt.Errorf("expr: %s JSON: %w", what, err)

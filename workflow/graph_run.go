@@ -86,8 +86,6 @@ func (g *graphExecution) run(ctx context.Context) (Store, error) {
 	return g.result(ctx)
 }
 
-// accept records one finished node. It reports whether this outcome introduced
-// the first failure, which tells the scheduler to cancel the remaining calls.
 func (g *graphExecution) accept(outcome graphOutcome, parentCanceled bool) bool {
 	g.active--
 	if g.failure != nil || parentCanceled {
@@ -158,9 +156,8 @@ func (g *graphExecution) complete(outcome graphOutcome) {
 	}
 }
 
-// completedStore replays, in node order, the changes of every node that
-// finished successfully. A node that failed, suspended, was dropped by
-// cancellation, or never started recorded none.
+// completedStore replays changes in node order. A node that failed, suspended,
+// was dropped by cancellation, or never started recorded none.
 func (g *graphExecution) completedStore() Store {
 	var changes []storeChange
 	for _, nodeChanges := range g.changes {

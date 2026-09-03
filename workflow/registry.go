@@ -229,9 +229,6 @@ func (r *Registry) MustRegisterCondition(name string, condition Condition) *Regi
 	return r
 }
 
-// registerDecision registers one of the two decision shapes. [Resolver] and
-// [Condition] differ only in what they return, so what they must prove is the
-// same: the node's complete visible definition.
 func (r *Registry) registerDecision[O any](
 	table *registrationTable[flow.Node[Store, O]],
 	kind, name string,

@@ -45,8 +45,8 @@ type scopedStep struct {
 	frame ScopeFrame
 }
 
-// run invokes the child under its scope. Composites validate their body before
-// constructing a scopedStep, so step is never nil here.
+// run can assume a non-nil step: composites validate their body before
+// constructing a scopedStep.
 func (s scopedStep) run(ctx context.Context, store Store) (Store, error) {
 	return s.step.Run(s.childContext(ctx), store)
 }

@@ -265,8 +265,6 @@ func (s stepDefinition) iterationOutputCondition() error {
 	return iterationOutputError(s.bodyOutput)
 }
 
-// locate attaches this definition's execution identity to a condition, which is
-// how a code-built definition reports one.
 func (s stepDefinition) locate(condition error) error {
 	if condition == nil {
 		return nil
@@ -445,8 +443,7 @@ func (d *definitionValidator) claimedIDs() definitionIDs {
 	return d.ids
 }
 
-// claim records id as taken, reporting a conflict with one already claimed. The
-// caller has validated id, so it is never empty.
+// claim can assume a validated id, so an empty one is never a claim.
 func (d *definitionValidator) claim(id string) error {
 	switch {
 	case d.ids != nil:

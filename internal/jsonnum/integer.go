@@ -51,7 +51,6 @@ func (i Integer) Unsigned() (uint64, bool) {
 	return i.Magnitude, true
 }
 
-// String returns the decimal spelling of the value.
 func (i Integer) String() string {
 	decimal := strconv.FormatUint(i.Magnitude, 10)
 	if i.Negative {

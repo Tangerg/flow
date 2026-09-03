@@ -52,7 +52,6 @@ func Parallel(cfg ParallelConfig) Step {
 	}
 }
 
-// parallelStep is the [Step] produced by [Parallel].
 type parallelStep struct {
 	branches stepList
 	limit    int

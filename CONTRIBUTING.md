@@ -314,6 +314,19 @@ go test ./example -run Example -v
   decision instead of an output — `Branch` wants a case name, `Loop` wants whether
   it stopped, and neither spells that anywhere but the type it asks for.
   `TestAReplayedDecisionMustCarryTheTypeItsCompositeRecorded` holds both to it.
+- Comment a key data structure, an interface, an algorithm, or a trap — nothing
+  else. A comment earns its place by answering a *why* the code cannot: an
+  invariant a field carries, a contract an exported symbol promises, the strategy
+  a walk follows, or the reason an obvious-looking change is wrong. A sentence
+  that restates the signature is noise the next reader has to check against the
+  code anyway, so `NodeFunc satisfies Node`, `Unwrap returns the underlying
+  error`, and `xStep is the Step produced by X` are gone, along with the
+  narration on helpers whose rationale is recorded here instead. Two linters bound
+  this: `revive` requires a doc comment on an exported function or method — it
+  exempts `Error`, `Unwrap`, and `String` — so an exported symbol keeps one and
+  spends it on the contract rather than on the name. `godoclint` requires that
+  comment to open with the symbol name, so a why is phrased to start there:
+  "Error omits this package's name because…", not "This package's sentinels…".
 - Open a doc comment with the name it documents, unexported declarations
   included. `godoclint`'s `start-with-name` checks exported symbols by default,
   which is the half a reader is most likely to catch anyway; all three that had

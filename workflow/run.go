@@ -55,7 +55,6 @@ type scopedSet struct {
 	root journalNode
 }
 
-// add records one identity and reports whether it was new.
 func (s *scopedSet) add(key JournalKey) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -102,8 +101,6 @@ func (s *scopedSet) has(key JournalKey) bool {
 // so every child invocation shares one identity boundary.
 func Run(ctx context.Context, step Step, in Store, cfg RunConfig) (Store, error) {
 	if isNilNode(step) {
-		// The sentinel names only the condition, and there is no step identity
-		// to report here, so Run supplies the context itself.
 		return in, fmt.Errorf("workflow: run: %w", ErrNilStep)
 	}
 	if _, builtIn := step.(definedStep); !builtIn {
@@ -153,15 +150,11 @@ func runFrom(ctx context.Context) *runState {
 	return run
 }
 
-// observing reports whether anything is watching, so a step can skip work that
-// only an observer would use. The nil function adapter is disabled just like a
-// nil interface; otherwise it would consume sequence numbers without delivering
-// an event.
-//
-// Check it before building an event whose fields cost something — an elapsed
-// time reads the clock — and not otherwise: [runState.emit] checks it again, so
-// guarding an event that is free to build only adds a branch. That is why the
-// events carrying Elapsed are guarded and the others are not.
+// observing is worth checking only before building an event whose fields cost
+// something -- an elapsed time reads the clock -- because [runState.emit] checks
+// it again, so guarding a free event only adds a branch. A nil function adapter
+// counts as nothing watching; otherwise it would consume sequence numbers
+// without delivering an event.
 func (r *runState) observing() bool {
 	if r == nil || r.config.Observer == nil {
 		return false
@@ -172,12 +165,10 @@ func (r *runState) observing() bool {
 	return true
 }
 
-// journal returns the run's Journal, or nil when resumption is disabled.
 func (r *runState) journal() *Journal {
 	return r.config.Journal
 }
 
-// emitter returns the run's Emitter, or nil when streaming is disabled.
 func (r *runState) emitter() Emitter {
 	if r == nil || r.config.Emitter == nil {
 		return nil
@@ -188,9 +179,6 @@ func (r *runState) emitter() Emitter {
 	return r.config.Emitter
 }
 
-// nextSeq assigns every externally visible signal a total order within this
-// run. Delivery remains concurrent; consumers can sort events and chunks by the
-// assigned number when they need one timeline.
 func (r *runState) nextSeq() uint64 {
 	return r.seq.Add(1)
 }
@@ -261,8 +249,6 @@ func (r *runState) claim(key JournalKey) error {
 	return nil
 }
 
-// markBypassed records that a gate declined to run id, so a node downstream of
-// it can tell "did not run" from "has not run yet".
 func (r *runState) markBypassed(key JournalKey) {
 	r.bypassed.add(key)
 }
@@ -285,8 +271,6 @@ func boundaryKey(ctx context.Context, id string) JournalKey {
 	return JournalKey{ID: id, Scope: scope(ctx)}
 }
 
-// emit completes event with the run's sequence number and scope, then delivers
-// it synchronously. A nil receiver discards the event.
 func (r *runState) emit(ctx context.Context, event Event) {
 	if !r.observing() {
 		return

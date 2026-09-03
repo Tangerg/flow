@@ -33,7 +33,6 @@ type binderValidator interface {
 // BinderFunc adapts an ordinary function into a [Binder].
 type BinderFunc[I any] func(Store) (I, error)
 
-// BinderFunc satisfies Binder.
 var _ Binder[any] = BinderFunc[any](nil)
 
 // Bind calls f. A nil BinderFunc returns [flow.ErrNilFunc].
@@ -150,7 +149,6 @@ func LeafFunc[I, O any](
 	return Leaf(id, ref.Bind[I](), flow.NodeFunc[I, O](fn))
 }
 
-// leafStep is the [Step] produced by [Leaf].
 type leafStep[I, O any] struct {
 	id   string
 	bind Binder[I]
