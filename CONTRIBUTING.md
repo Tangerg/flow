@@ -877,6 +877,17 @@ go test ./example -run Example -v
   sentinel through `RunChild` — so only `Validate` can tell the positions apart.
   Only `gatedStep.satisfied`'s second cancellation check is an equivalence, and it
   says so where it sits.
+- A new composite kind is three tests, not one. Route agreement was pinned for a
+  sequence of leaves, and `TestSpecRoundTripsEveryKind` pinned every kind to
+  crossing the wire unchanged — and between those two a composite whose `Spec`
+  compiled into a differently configured Go value satisfied both, because the wire
+  test never runs what it decodes and the run test had no body in it.
+  `TestEveryCompositeKindRunsTheSameFromASpec` builds each nesting kind twice and
+  holds the pair to the same events, values, and journal. It pairs two routes
+  rather than three on purpose: a flat `Graph` cannot express a body. What it
+  catches is the mapping a field matrix cannot see — pointing the iteration
+  compiler's `Input` at the wrong field compiles cleanly and diverges only when
+  something runs.
 - Negate the condition, then stop escalating. Flipping comparison operators left
   four equivalences; deleting statements and error returns found real gaps. What
   no operator above reaches is boolean state — `if ok`, `if closed`,
