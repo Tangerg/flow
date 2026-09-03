@@ -249,8 +249,10 @@ func (j *journalDecoder) decodeRecord(value any) error {
 	if err != nil {
 		return err
 	}
-	key := JournalKey{ID: id, Scope: scope}
-	if err := key.validate(); err != nil {
+	// Only the ID is left to judge here: decodeScope already refused a scope that
+	// is too long, and every frame validated itself as it was decoded, which is
+	// what ScopeFrame's own JSON boundary promises.
+	if err := validateStepID(id); err != nil {
 		return err
 	}
 	if inserted := j.root.record(

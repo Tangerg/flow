@@ -21,6 +21,11 @@ type graphExecution struct {
 	suspensions suspensionList
 }
 
+// graphOutcome is what one scheduled node reports back. The two Stores are read
+// only for a node that completed, since that is the only case with changes to
+// merge — a refused or failed call still carries the Store it was given, which is
+// what a step returns when it does not commit, rather than a zero Store a later
+// reader could mistake for an empty one.
 type graphOutcome struct {
 	index int
 	input Store

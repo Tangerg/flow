@@ -770,8 +770,10 @@ func TestSchemaInfrastructure_reportsEveryFailureBoundary(t *testing.T) {
 	if _, err := (schemaSource{
 		url:      "%",
 		document: jsonDocument(`{}`),
-	}).compile(); err == nil || !strings.Contains(err.Error(), "add JSON Schema resource") {
-		t.Fatalf("invalid resource URL = %v; want the resource boundary", err)
+	}).compile(); err == nil ||
+		!strings.HasPrefix(err.Error(), "add JSON Schema resource: ") ||
+		!strings.Contains(err.Error(), "invalid URL escape") {
+		t.Fatalf("invalid resource URL = %v; want the resource boundary and what it said", err)
 	}
 	// A document that decodes and registers can still be no schema at all, which
 	// is the one boundary the backend rather than this package detects.
