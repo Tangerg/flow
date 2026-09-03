@@ -272,6 +272,9 @@ func (e *emissionLease) yield(ctx context.Context, value any) bool {
 	if e.err == nil {
 		e.err = err
 	}
+	// Closing admission is redundant for the answer a later yield gets: this err,
+	// or the context the session cancelled with it, refuses that yield anyway. It
+	// stops the yield from taking the session's lock to be told so.
 	e.closed = true
 	e.mu.Unlock()
 	return false

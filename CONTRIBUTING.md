@@ -839,6 +839,22 @@ go test ./example -run Example -v
   `TestCoreLocationsReadTheSameThroughEitherFormatter` expects flow's own
   rendering rather than a third spelling of it, so deleting or rewording either
   copy fails until both agree.
+  Finishing that sweep — the other 208 deletions — killed 157, left 40 that no
+  longer compiled, and produced 11 survivors, every one of them in `workflow`:
+  eight packages went in and returned nothing, which is the sweep's other result.
+  Six were real and are answered in their own bullets here or beside the code. The
+  remaining five are equivalences, and a survivor is a claim about equivalence, so
+  each says so where it sits: two capacity hints no behavior can see, a
+  `DefaultDraft` that names the draft the library already calls latest, and two
+  `closed` flags a later yield would be refused by anyway — one of which
+  `emissionSession.emit` had already predicted in a comment. Two of the six were
+  the same defect in two places: a location fragment's prose is user-visible text,
+  and `TestSurfacedErrorsNamePackageExactlyOnce` counts the package qualifier
+  without reading a word around it, so `detailError` and `factoryBuildError` could
+  lose their separator or their whole prose in silence.
+  `TestSurfacedMessagesRenderEveryPrivateLocation` reads all five boundaries that
+  build one, which took finding the reachable route to each: a `Journal` holding a
+  number for a routing node is how a gate's own read fails.
 - A panic reaches the caller only from the caller's own goroutine, and that is
   worth saying out loud. `Run` cancels its derived context while unwinding a
   panic, which reads as a promise that a panic unwinds — and it does, until a

@@ -101,12 +101,16 @@ func TestEvents_ownMutableWorkflowErrors(t *testing.T) {
 			if !errors.As(event.Err, &stepErr) {
 				t.Fatalf("event error = %T; want *workflow.StepError", event.Err)
 			}
+			if len(stepErr.Scope) != 1 || len(event.Scope) != 1 {
+				t.Fatalf("error Scope = %+v and event Scope = %+v; want the outer scope",
+					stepErr.Scope, event.Scope)
+			}
 			stepErr.ID = "observer-mutated"
+			// Writing into a frame is what a borrowed array reveals. The append
+			// beside it cannot: the run's own error keeps its length either way.
+			stepErr.Scope[0].ID = "observer-mutated"
 			stepErr.Scope = append(stepErr.Scope, workflow.ScopeFrame{ID: "observer-mutated"})
 			stepErr.Err = nil
-			if len(event.Scope) != 1 {
-				t.Fatalf("event Scope = %+v; want outer scope", event.Scope)
-			}
 			event.Scope[0].ID = "observer-mutated"
 		})},
 	)

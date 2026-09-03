@@ -104,6 +104,10 @@ func (s schemaSource) compile() (compiledSchema, error) {
 		return compiledSchema{}, fmt.Errorf("validate JSON Schema dialect: %w", dialectErr)
 	}
 	compiler := jschema.NewCompiler()
+	// A schema may omit $schema, and the compiler would then read it as whatever
+	// draft the library calls latest. Naming the draft is what keeps a library
+	// upgrade from reinterpreting a stored config schema; it matches the current
+	// latest, so nothing observes it today and no test can.
 	compiler.DefaultDraft(jschema.Draft2020)
 	// Schemas must be self-contained. In particular, registering a node must
 	// never perform network or filesystem I/O because of an external $ref.

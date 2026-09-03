@@ -634,3 +634,116 @@ func TestAStoredNilIsATypeErrorNotAnAbsence(t *testing.T) {
 		t.Fatalf("FirstOf past a nil cell = %d, %v; want 0, ErrTypeMismatch", value, err)
 	}
 }
+
+// TestSurfacedMessagesRenderEveryPrivateLocation pins the prose of the two
+// locations no exported type names: detailError, which four boundaries build,
+// and factoryBuildError. TestSurfacedErrorsNamePackageExactlyOnce counts the
+// qualifier, and it stays correct however these read, so a fragment could lose
+// its separator or its entire prose with nothing failing -- while this is the
+// text a caller reads to learn which field to repair. The gate case also states
+// where a routing read is located: at the node whose admission needed it, since
+// that is where the gate a caller would fix is declared.
+func TestSurfacedMessagesRenderEveryPrivateLocation(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		build func(*testing.T) error
+		want  string
+	}{
+		"leaf node": {
+			build: func(*testing.T) error {
+				var missing flow.Node[int, int]
+				return flow.Validate(
+					workflow.Leaf("leaf", workflow.Output("seed").Bind[int](), missing),
+				)
+			},
+			want: `workflow: step "leaf" validate: node: flow: nil node`,
+		},
+		"factory build": {
+			build: func(*testing.T) error {
+				_, err := workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
+					return nil, errors.New("boom")
+				})(workflow.NodeSpec{
+					ID:     "node",
+					Inputs: workflow.OneInput(workflow.Output("seed")),
+				})
+				return err
+			},
+			want: "workflow: build node: boom",
+		},
+		"body output": {
+			build: func(t *testing.T) error {
+				t.Helper()
+				_, err := workflow.Run(t.Context(), workflow.Subgraph(workflow.SubgraphConfig{
+					ID:         "sub",
+					Body:       &nilSafeStep{},
+					BodyOutput: workflow.Output("absent"),
+				}), workflow.NewStore(), workflow.RunConfig{})
+				return err
+			},
+			want: `workflow: step "sub" run: read body output absent#/output: ` +
+				"ref absent#/output: value not found",
+		},
+		"subgraph input": {
+			build: func(t *testing.T) error {
+				t.Helper()
+				_, err := workflow.Run(t.Context(), workflow.Subgraph(workflow.SubgraphConfig{
+					ID:         "sub",
+					Inputs:     workflow.Inputs{"seed": workflow.Output("absent")},
+					Body:       &nilSafeStep{},
+					BodyOutput: workflow.Output("nil-safe"),
+				}), workflow.NewStore(), workflow.RunConfig{})
+				return err
+			},
+			want: `workflow: step "sub" bind: input "seed" from absent#/output: ` +
+				"ref absent#/output: value not found",
+		},
+		"routing read": {
+			build: gatedRunWithAMisrecordedRouter,
+			want: `workflow: step "approve" run: read routing node "route": ` +
+				"ref route#/output: value type mismatch: " +
+				"json: cannot unmarshal number into Go value of type string: got int, want string",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := testCase.build(t)
+			if err == nil || err.Error() != testCase.want {
+				t.Fatalf("Error() = %v; want %q", err, testCase.want)
+			}
+		})
+	}
+}
+
+// gatedRunWithAMisrecordedRouter replays a routing node from a Journal that
+// holds a number for it, which is the reachable way to make a gate's own read
+// fail: the graph refuses to guess an outlet from a value it cannot compare.
+func gatedRunWithAMisrecordedRouter(t *testing.T) error {
+	t.Helper()
+	registry := workflow.NewRegistry().
+		MustRegisterNode("route", routingFactory(func(int) string { return "approve" })).
+		MustRegisterSchema("route", routingSchema("approve", "reject")).
+		MustRegisterNode("approve", addN())
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
+		{
+			ID: "route", Type: "route",
+			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
+		},
+		{
+			ID: "approve", Type: "approve",
+			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
+			When:   []workflow.Gate{workflow.When("route", "approve")},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+	journal := workflow.NewJournal()
+	if recordErr := journal.Record(workflow.JournalKey{ID: "route"}, 42); recordErr != nil {
+		t.Fatalf("Record: %v", recordErr)
+	}
+	_, runErr := workflow.Run(
+		t.Context(),
+		step,
+		workflow.NewStore().WithOutput("start", 1),
+		workflow.RunConfig{Journal: journal},
+	)
+	return runErr
+}
