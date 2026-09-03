@@ -413,12 +413,12 @@ func TestStreamFunc_waitsForAnInFlightYield(t *testing.T) {
 		finished <- err
 	}()
 
+	// Nothing peeks at finished here. "Run has not returned yet" is a negative
+	// claim, and reading a channel that may not have been written yet answers it
+	// by timing rather than by fact; seenByNextNode below carries the same claim
+	// as a fact, because a run that returned early would have run that node
+	// before delivery.
 	<-emitting
-	select {
-	case err := <-finished:
-		t.Fatalf("Run returned while a yield was still in flight: %v", err)
-	default:
-	}
 	close(release)
 
 	if err := <-finished; err != nil {

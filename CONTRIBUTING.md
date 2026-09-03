@@ -1159,6 +1159,41 @@ go test ./example -run Example -v
   quotation and the loss of the repair. `Trigger` is the only enumerated type
   here with an empty member that a diagnostic could reach; `ValueType`'s empty
   member is valid, so no message prints it.
+- A negative timing claim cannot be established by waiting, and three of this
+  module's four concurrency bounds were asserted by waiting. `Concurrency: 2`
+  means no third call runs, and every one of those tests waited for two calls to
+  report and then peeked to see whether a third had: `TestMap_boundsConcurrency`,
+  `TestFanOut_boundsConcurrency`, and
+  `TestCompileGraph_limitsConcurrencyAcrossTheWholeGraph`. A call that broke the
+  bound may not have reached its first statement when the peek runs, so the peek
+  answers on timing. Measured against a mutant that ignores the configured limit,
+  they killed it 7/8, 3/6, and 7/8 — FanOut's missed a dropped limit half the
+  time. Under [testing/synctest] the same question is a fact: at quiescence every
+  admitted call is durably parked on the release channel, so the count is the
+  whole of what was admitted, no peak needs tracking, and all three now kill both
+  the ignored limit and an off-by-one 8/8. The nodes park on a channel receive
+  because that is durable blocking; a mutex block is not. `flow.Map` owns this
+  bound and Iteration, Parallel, and `flowx.FanOut` forward to it, so what those
+  tests pin is the forwarding — the graph scheduler is the exception that counts
+  its own admitted work, which is why the rule is stated twice.
+- Delete the racy half of a claim that a fact already carries.
+  `TestStreamFunc_waitsForAnInFlightYield` peeked at its `finished` channel to
+  claim Run had not returned, then proved the same thing deterministically from
+  inside the pipeline: a node composed after the stream recorded whether delivery
+  had happened. The peek could only ever weaken the report, so it is gone and the
+  reason is written where it was. Removing it does not weaken the test — it still
+  kills a missing `active.Wait()` 6/6.
+- An arity is not a different abstraction, so ask every composite for its
+  degenerate form. An empty sequence, parallel, and graph pass the Store through
+  and publish nothing, and each was pinned. An empty iteration is the one that
+  publishes: the collected output is written once every element has produced one,
+  which zero elements satisfy immediately. Nothing asserted it — the file's five
+  empty-collection inputs all feed error cases — and the doc stated only the
+  mechanism, so a reader could conclude either way.
+  `TestIteration_emptyCollectionProducesAnEmptyResult` pins what a caller
+  actually reads: an empty collection that exists, distinguishable from the
+  absent one every incomplete outcome leaves, and encoded as `[]` rather than the
+  `null` a nil slice would write.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out
