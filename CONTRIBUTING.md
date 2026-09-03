@@ -877,6 +877,31 @@ go test ./example -run Example -v
   sentinel through `RunChild` — so only `Validate` can tell the positions apart.
   Only `gatedStep.satisfied`'s second cancellation check is an equivalence, and it
   says so where it sits.
+- Drop a field, not a statement. `Kind: task.source.Kind` inside a composite
+  literal is not a statement, so no sweep here had ever touched one — and a
+  config field that never reaches the step it configures is exactly the failure
+  the three-construction-routes axiom exists to prevent. All 703 keyed fields in
+  the module, dropped one at a time: 383 killed, 298 that no longer compiled, 22
+  survivors. The routes held — nothing in `spec_compile.go` or `graph_compile.go`
+  survived, so every serialized field that reaches a built step is observed by
+  something. What the survivors found instead was **fidelity**: a copy can own its
+  storage and still not carry it. `Describe`'s ownership copy could lose a
+  caller's `Label` or `Kind` at every level, because each assertion mutated and
+  re-read the one field it had chosen; and the same walk's slice identity could
+  lose its length, which is what keeps a descendant's shorter view of an
+  ancestor's array from reading as a cycle. Two more were diagnostics missing
+  their subject: an `Await` bind failure's event ID, which an Observer has no
+  other way to attribute, and the JSON Schema backend's own explanation.
+  A config schema's resource URL was the one with teeth — dropping it does not
+  leave the resource unnamed, it resolves against the working directory, so a
+  caller's registration error carries a `file:///` path from the machine that
+  compiled the schema.
+  Of the fifteen equivalences, three are enums whose first member is the zero
+  value on purpose, three are flags read only in pairs that share an exit, and the
+  rest are values a later boundary supplies anyway — including two defaults in the
+  error cloner that read alike while only the second one's is used, because `peel`
+  consults the composition cloner whenever the workflow cloner does not recognize
+  a wrapper.
 - Ask a boundary its own question, not the one a later boundary answers too.
   Sweeping all 662 of `workflow`'s error returns rather than the sampled quarter —
   339 killed, 312 that no longer compiled, 11 survivors — separated into three
