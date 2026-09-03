@@ -2611,3 +2611,88 @@ func TestValidatingOneBoundaryAllocatesNoIdentitySet(t *testing.T) {
 			allocs, oneBoundary)
 	}
 }
+
+// TestEveryFanOutSharesOneFlattenedBase pins the rule at the three sites that
+// apply it, not just in the helper that implements it. A composite handing one
+// Store to concurrent derivers flattens it first, so the fan-out pays one
+// snapshot copy instead of one per deriver;
+// TestStore_sharesOneBaseAcrossConcurrentDerivers proves sharedBase does that,
+// and the base-scaling benchmarks measure what it saves. Nothing checked that
+// the composites still call it: removing the call from Parallel, Iteration, or
+// the graph scheduler passed the whole suite.
+//
+// The observable form of the rule is the snapshot every deriver reads through.
+// A Store at the overlay limit carries no snapshot yet, so a child that received
+// one unflattened would either hold none or flatten its own.
+func TestEveryFanOutSharesOneFlattenedBase(t *testing.T) {
+	// Exactly at the limit: one more write would flatten it here instead, which
+	// would leave the check below proving nothing.
+	fill := func(store Store) Store {
+		for index := range storeOverlayLimit - store.depth {
+			store = store.WithCell("filler", fmt.Sprintf("key-%02d", index), index)
+		}
+		if store.depth != storeOverlayLimit || store.snapshot != nil {
+			t.Fatalf("input has depth %d and snapshot %v; want the limit and none",
+				store.depth, store.snapshot)
+		}
+		return store
+	}
+
+	const derivers = 2
+	captured := make(chan *storeSnapshot, derivers)
+	capture := BinderFunc[int](func(store Store) (int, error) {
+		captured <- store.snapshot
+		return 0, nil
+	})
+	capturingStep := Leaf(
+		"captured",
+		capture,
+		flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) { return value, nil }),
+	)
+
+	registry := NewRegistry()
+	registry.MustRegisterNode("capture", BindFactory(
+		func(struct{}, Inputs) (Binder[int], error) { return capture, nil },
+		func(struct{}) (flow.Node[int, int], error) {
+			return flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+				return value, nil
+			}), nil
+		},
+	))
+	graph, err := registry.CompileGraph(Graph{Nodes: []GraphNode{
+		{ID: "one", Type: "capture"},
+		{ID: "two", Type: "capture"},
+	}})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+
+	for name, step := range map[string]Step{
+		"parallel": Parallel(ParallelConfig{Steps: []Step{
+			capturingStep,
+			Leaf("other", capture,
+				flow.NodeFunc[int, int](func(_ context.Context, v int) (int, error) { return v, nil })),
+		}}),
+		"iteration": Iteration(IterationConfig{
+			ID:         "each",
+			Input:      At("seed", "items"),
+			Body:       capturingStep,
+			BodyOutput: Output("captured"),
+		}),
+		"graph": graph,
+	} {
+		t.Run(name, func(t *testing.T) {
+			input := fill(NewStore().WithCell("seed", "items", []any{1, 2}))
+			if _, err := Run(t.Context(), step, input, RunConfig{}); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			first, second := <-captured, <-captured
+			if first == nil {
+				t.Fatal("a deriver read through no snapshot; its input was never flattened")
+			}
+			if first != second {
+				t.Fatal("two derivers read through different snapshots; each flattened its own")
+			}
+		})
+	}
+}

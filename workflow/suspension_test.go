@@ -1379,6 +1379,51 @@ func TestValidationClassifiesDeepBranchedSuspensionWithoutStackPerWrapper(t *tes
 	})
 }
 
+// TestValidationKeepsAnApplicationLocationAndOwnsItsScope pins both halves of
+// what the definition boundary does with a suspension reported through this
+// package's own location type. The location survives, because discarding it
+// would lose the ID and Op a caller repairs the definition by. The result also
+// owns its Scope: the validator that reported it is application code that still
+// holds the slice it passed, and the tests above only ever reach this path with
+// an error the package built itself, whose Scope is empty.
+func TestValidationKeepsAnApplicationLocationAndOwnsItsScope(t *testing.T) {
+	retained := indexedScope("items", 1)
+	calls := 0
+	reported := &workflow.StepError{
+		ID:    "inner",
+		Scope: retained,
+		Op:    workflow.OpValidate,
+		Err:   fmt.Errorf("gate: %w", workflow.Suspend("cannot wait")),
+	}
+
+	_, err := workflow.Run(
+		t.Context(),
+		invalidValidatingStep{err: reported, calls: &calls},
+		workflow.NewStore(),
+		workflow.RunConfig{},
+	)
+	if !errors.Is(err, flow.ErrInvalidConfig) || errors.Is(err, workflow.ErrSuspended) {
+		t.Fatalf("err = %v; want ErrInvalidConfig only", err)
+	}
+	var stepErr *workflow.StepError
+	if !errors.As(err, &stepErr) || stepErr.ID != "inner" || stepErr.Op != workflow.OpValidate {
+		t.Fatalf("err = %v; want the location the validator reported", err)
+	}
+	if stepErr == reported {
+		t.Fatal("the returned error is the one the validator still holds")
+	}
+	if !slices.Equal(stepErr.Scope, retained) {
+		t.Fatalf("Scope = %+v; want %+v", stepErr.Scope, retained)
+	}
+	stepErr.Scope[0].ID = "rewritten"
+	if retained[0].ID == "rewritten" {
+		t.Fatal("the returned error shares the Scope its validator still holds")
+	}
+	if calls != 0 {
+		t.Fatalf("invalid step ran %d times; want 0", calls)
+	}
+}
+
 func TestJoinSuspensions_normalizesAndCopies(t *testing.T) {
 	scope := indexedScope("items", 1)
 	second := &workflow.Suspension{ID: "b", Scope: scope, Value: "second"}

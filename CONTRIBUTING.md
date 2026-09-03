@@ -113,6 +113,13 @@ go test ./example -run Example -v
   cost; `TestStore_sharesOneBaseAcrossConcurrentDerivers` measures correctness, and
   it is what a flattening that decided to remember its result would fail — the race
   detector reports it writing into the snapshot every deriver is reading.
+  Neither held the three composites to actually calling it: deleting the call from
+  `Parallel`, `Iteration`, or the graph scheduler passed the whole suite, because a
+  benchmark is only a guard for someone who runs it.
+  `TestEveryFanOutSharesOneFlattenedBase` asks the observable form instead — an
+  input exactly at the limit carries no snapshot, so a deriver that received one
+  unflattened would read through none, and two that each flattened their own would
+  read through different ones. All three deletions now fail it.
 - Measure nesting from something the walk already keeps, or pass it down. The
   `jsondoc` reader reads `len(path)`, because entering a container is what
   appends a segment; `specValidator` and the `Spec` encoder each descend into a
@@ -418,6 +425,21 @@ go test ./example -run Example -v
   goroutine that ran the producer, so dropping their locks races only sometimes —
   `emissionLease` records that beside them rather than leaving the next reader to
   hunt for the missing test.
+- A barrier stated at two layers needs the outer one held to it separately. The
+  lease waits for every admitted yield before `StreamFunc` returns; the enclosing
+  session then holds its own lock across delivery, and that second barrier is
+  documented as the backstop for a yield that leaked out of its invocation. So
+  deleting `emissionLease.close`'s wait broke nothing a whole-run test could see:
+  the leaf still could not finish, it merely waited in the session's lock instead,
+  and the promise that moved was the smaller one — a node composed after the
+  producer, inside the same leaf, now runs while a chunk is still inside the
+  `Emitter`. That is where
+  `TestStreamFunc_waitsForAYieldStillInsideTheEmitter` looks. Reaching for
+  `testing/synctest` rather than a timeout is what makes the answer a fact instead
+  of an estimate, and it comes with the pitfall the test states: a goroutine
+  blocked on a `sync.Mutex` is not durably blocked, so the broken lease has to be
+  caught before the leaf reaches the session's lock, or the bubble hangs instead of
+  reporting. Deleting the wait fails it in well under a second.
 - State a value type's algebra even where nothing observes it. Thirty-three
   defensive copies keep this module's constructors and accessors owning what they
   hand out, and twenty-seven fail a test the moment one goes — the
@@ -648,6 +670,22 @@ go test ./example -run Example -v
   the two private fragments. Splitting by operation is what the rest of this
   package already does — `spec_validate.go` beside `spec_compile.go`,
   `store_json.go` beside `store.go`.
+- Ask for the operation the one caller needs, not the general one. `StepError` had
+  a `clone` whose body copied the location and then walked the whole cause tree
+  through `ownedError.clone` — a second spelling of what `cloneWorkflowFrame`
+  already does for a `*StepError`, and its only caller overwrote `Err` on the very
+  next line. A full error-tree copy was therefore computed and discarded on every
+  suspension a definition validator reported, which is also why deleting that line
+  passed the suite: it was unobservable by construction, not merely untested.
+  `withCause` is that caller's operation, so the tree is never copied and the
+  duplicate rule is gone. The `Scope` copy stays and is now guarded: the doc for
+  the deleted `clone` claimed the cause was copied too, and the only path that
+  makes any of it matter comes from application code —
+  `TestValidationKeepsAnApplicationLocationAndOwnsItsScope` builds a `*StepError`
+  the way an application validator may, with a `Scope` slice the caller keeps, and
+  fails when the normalized copy shares it. Every path this repository takes there
+  carries an empty `Scope`, which is exactly the evidence `AGENTS.md` says not to
+  read as evidence.
 - Pin a vocabulary to the members it names, on both routes. A `field*` constant
   is the word a diagnostic uses for a wire member, so the two spellings are one
   contract stated twice. `specKindFields` carries the Spec half into

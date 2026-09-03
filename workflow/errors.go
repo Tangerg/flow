@@ -169,14 +169,16 @@ func (s *StepError) Unwrap() error {
 	return s.Err
 }
 
-// clone returns an independently mutable location wrapper. Callers have already
-// classified a concrete StepError, so the receiver is non-nil. A direct workflow
-// wrapper in the cause is cloned too; an application-defined cause remains
-// borrowed and follows Go's immutable-error convention.
-func (s *StepError) clone() *StepError {
+// withCause keeps this location and replaces what it wraps. Its caller has
+// classified a concrete StepError, so the receiver is non-nil, and it is
+// restating why a step failed rather than copying a tree: cloning the old cause
+// here would compute a copy the next statement discards, and [ownedError.clone]
+// already owns copying a StepError frame for the callers who do need it. Scope
+// is still copied, because the result escapes to a caller who may mutate it.
+func (s *StepError) withCause(err error) *StepError {
 	clone := *s
 	clone.Scope = slices.Clone(s.Scope)
-	clone.Err = (ownedError{root: s.Err}).clone()
+	clone.Err = err
 	return &clone
 }
 

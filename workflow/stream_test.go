@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Tangerg/flow"
@@ -1617,6 +1618,92 @@ func TestStreamFunc_aYieldRacingTheCloseReportsWhatItDid(t *testing.T) {
 		race.run(t, attempt)
 		race.check(t, attempt)
 	}
+}
+
+// TestStreamFunc_waitsForAYieldStillInsideTheEmitter pins the half of the
+// invocation contract no timing can show: StreamFunc does not return until every
+// in-flight yield returns. TestStreamFunc_aYieldRacingTheCloseReportsWhatItDid
+// opens the same window, but its stragglers are free to win the race, so it
+// passes equally well when nothing waits for them at all.
+//
+// The observer here is a downstream node in the same leaf, which is where the
+// promise is the lease's alone to keep: the enclosing session also holds its lock
+// across delivery, so the leaf could not finish early either way, but a node
+// composed after the producer runs the moment the producer's own invocation ends.
+// [testing/synctest] then settles what a timeout only estimates -- once the bubble
+// is quiescent, that node has either run or cannot until this test acts. It parks
+// on a channel for the same reason: the session's lock is not durable blocking, so
+// a lease that failed to wait must be caught before the leaf reaches it, or the
+// bubble hangs instead of reporting.
+func TestStreamFunc_waitsForAYieldStillInsideTheEmitter(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		inside := make(chan struct{})
+		release := make(chan struct{})
+		proceed := make(chan struct{})
+		letGo := sync.OnceFunc(func() { close(release) })
+		carryOn := sync.OnceFunc(func() { close(proceed) })
+		defer letGo()
+		defer carryOn()
+
+		var delivered, ranEarly atomic.Bool
+		producer := workflow.StreamFunc[int, int, int](
+			func(_ context.Context, input int, yield func(int) bool) (int, error) {
+				go func() { yield(1) }()
+				<-inside
+				return input, nil
+			},
+		)
+		downstream := flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+			ranEarly.Store(!delivered.Load())
+			<-proceed
+			return value, nil
+		})
+		step := workflow.Leaf(
+			"stream",
+			workflow.Output("start").Bind[int](),
+			flow.Then[int, int, int](producer, downstream),
+		)
+		emitter := workflow.EmitterFunc(func(context.Context, workflow.Chunk) error {
+			close(inside)
+			<-release
+			delivered.Store(true)
+			return nil
+		})
+
+		type completion struct {
+			out workflow.Store
+			err error
+		}
+		done := make(chan completion, 1)
+		go func() {
+			out, err := workflow.Run(
+				t.Context(),
+				step,
+				workflow.NewStore().WithOutput("start", 7),
+				workflow.RunConfig{Emitter: emitter},
+			)
+			done <- completion{out, err}
+		}()
+
+		<-inside
+		synctest.Wait()
+		if ranEarly.Load() {
+			t.Fatal("a node composed after the producer ran while a yield was inside the Emitter")
+		}
+		letGo()
+		carryOn()
+
+		got := <-done
+		if got.err != nil {
+			t.Fatalf("Run: %v", got.err)
+		}
+		if !delivered.Load() {
+			t.Fatal("Run returned before the in-flight chunk was delivered")
+		}
+		if value, err := got.out.Get[int](workflow.Output("stream")); err != nil || value != 7 {
+			t.Fatalf("output = %d, %v; want 7, nil", value, err)
+		}
+	})
 }
 
 // stragglerRace is one attempt at yielding across the close that ends an

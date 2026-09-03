@@ -139,9 +139,7 @@ func normalizeDefinitionError(source string, err error) (bool, error) {
 	//
 	//nolint:errorlint // Exact wrapper identity is the ownership boundary.
 	if stepErr, ok := err.(*StepError); ok {
-		normalized := stepErr.clone()
-		normalized.Err = invalid
-		return true, normalized
+		return true, stepErr.withCause(invalid)
 	}
 	return true, invalid
 }
