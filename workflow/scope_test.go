@@ -458,6 +458,49 @@ func TestWithScopeIndex_supportsCallerDefinedRepetition(t *testing.T) {
 	}
 }
 
+// TestACompositeRefusesTheScopeItWouldPushInto pins where an unusable scope is
+// refused: claiming an execution identity is what asks, so every boundary asks
+// once, and a composite adds only the capacity rule for the frame it is about to
+// push. Every other route to this ends at a leaf asking for itself, which is why
+// the composite's admission needed the one shape where no descendant follows: an
+// Iteration over an empty array runs no body at all, and would otherwise report
+// success under a scope no Journal could record.
+func TestACompositeRefusesTheScopeItWouldPushInto(t *testing.T) {
+	var calls atomic.Int64
+	body := workflow.Leaf(
+		"body",
+		workflow.Item("each").Bind[int](),
+		flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+			calls.Add(1)
+			return value, nil
+		}),
+	)
+	each := workflow.Iteration(workflow.IterationConfig{
+		ID:         "each",
+		Input:      workflow.Output("items"),
+		Body:       body,
+		BodyOutput: workflow.Output("body"),
+	})
+
+	out, err := each.Run(
+		workflow.WithScope(t.Context(), ""),
+		workflow.NewStore().WithOutput("items", []any{}),
+	)
+	var stepErr *workflow.StepError
+	if !errors.As(err, &stepErr) || stepErr.ID != "each" || stepErr.Op != workflow.OpValidate {
+		t.Fatalf("err = %v; want a validation StepError from the composite", err)
+	}
+	if !strings.Contains(err.Error(), "scope frame 0") {
+		t.Fatalf("err = %v; want the offending frame named", err)
+	}
+	if _, held := out.Lookup(workflow.Output("each")); held {
+		t.Fatal("the refused composite published a result")
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("body ran %d times under an unusable scope", calls.Load())
+	}
+}
+
 func scopeContext(ctx context.Context, depth int) context.Context {
 	if depth == 0 {
 		return ctx

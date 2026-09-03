@@ -113,16 +113,6 @@ func validateScopeDepth(depth int) error {
 	)
 }
 
-// validateChildScope checks a built-in composite's child namespace before it
-// reads inputs or enters the body. The composite has already validated the
-// frame it will add, so this only validates the inherited scope and capacity.
-func validateChildScope(scope []ScopeFrame) error {
-	if err := validateScopeDepth(len(scope) + 1); err != nil {
-		return err
-	}
-	return validateScope(scope)
-}
-
 type scopeKey struct{}
 
 // WithScope returns a context with an additional ordinary execution-scope

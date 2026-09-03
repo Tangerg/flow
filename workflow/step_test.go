@@ -1275,6 +1275,16 @@ func TestEveryBuiltInStepReportsAnInvalidDefinitionThroughValidate(t *testing.T)
 			}),
 			want: workflow.ErrInvalidStepID,
 		},
+		// A composite's own required field is the third shape, and it needs an
+		// opaque body: a visible one is held to producing what BodyOutput selects,
+		// which refuses an unusable reference for the wrong reason. Behind an
+		// opaque body only this field's own rule is left, and at run time the read
+		// fails anyway -- so only Validate separates a definition that cannot work
+		// from one that merely did not.
+		"subgraph body output": {
+			step: workflow.Subgraph(workflow.SubgraphConfig{ID: "sub", Body: &nilSafeStep{}}),
+			want: flow.ErrInvalidConfig,
+		},
 		"sequence": {
 			step: workflow.Sequence(nil),
 			want: workflow.ErrNilStep,

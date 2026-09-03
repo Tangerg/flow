@@ -878,25 +878,35 @@ go test ./example -run Example -v
   Only `gatedStep.satisfied`'s second cancellation check is an equivalence, and it
   says so where it sits.
 - Ask a boundary its own question, not the one a later boundary answers too.
-  Sweeping every error return in `workflow` exhaustively — the sampled half had
-  been enough to find the wrappers above — turned up one gap and one species. The
-  gap: `Await` and `Interrupt` could have returned `nil` from `Validate` and passed
+  Sweeping all 662 of `workflow`'s error returns rather than the sampled quarter —
+  339 killed, 312 that no longer compiled, 11 survivors — separated into three
+  answers. Three survivors were the same gap: `Await`, `Interrupt`, and
+  `Subgraph`'s body output could have returned `nil` from `Validate` and passed
   the entire suite, because every case in this repository reached a definition
   defect by running the step, and a run refuses an unusable ID again when it
-  claims an identity. `Validate` is what a caller checks a definition with before
-  anything runs, so
+  claims an identity, an unusable reference again when it reads.
   `TestEveryBuiltInStepReportsAnInvalidDefinitionThroughValidate` now asks all
-  nine kinds directly, in the two shapes a built-in step can be wrong: an ID it
-  cannot be identified by, and a child that is not there.
-  The species is the re-checked cancellation — `gatedStep.satisfied` twice,
-  `leafExecution.start` on its unobserved path, `runState.replay`. Each asks
-  `context.Cause` where nothing between it and the previous asker can have
-  changed the answer, so no test can distinguish them, and none of them is
-  removable for that reason: they are why cancellation does not depend on who was
-  watching or on which boundary a caller happened to enter through. Each says so
-  where it sits, and `gatedStep.validate` is the same shape one level up — a
-  delegation kept for interface transparency that the compiler already made
-  incapable of failing.
+  nine kinds directly, in the three shapes a built-in step can be wrong: an ID it
+  cannot be identified by, a child that is not there, and a required field that
+  cannot work — the last needing an opaque body, since a visible one is refused
+  first for a different reason.
+  One survivor was a duplicated rule: `admitScopedStep` validated the inherited
+  scope's frames and then claimed an identity, which validates them again two
+  lines later. Only the capacity of the frame about to be pushed is the
+  composite's own question, so that is all it asks now, and
+  `TestACompositeRefusesTheScopeItWouldPushInto` guards the remaining copy
+  through the one shape where no descendant asks for itself — an `Iteration` over
+  an empty array, which runs no body at all.
+  The rest are one species: the re-checked cancellation — `gatedStep.satisfied`
+  twice, `leafExecution.start` on its unobserved path, `runState.replay`,
+  `subgraphExecution.bind`. Each asks `context.Cause` where nothing between it and
+  the previous asker can have changed the answer, so no test can distinguish them,
+  and none is removable for that reason: they are why cancellation does not depend
+  on who was watching or on which boundary a caller entered through. Each says so
+  where it sits, as do the two delegations of the same shape —
+  `gatedStep.validate`, which the compiler already made incapable of failing, and
+  `emissionSession.close`'s failure report, which the lease returns first on every
+  path a test can reach.
 - A warning in the documentation is a claim about behavior, so it needs a guard
   like any other. `workflow/doc.go` tells callers that the generic combinators
   know nothing about a Store, so a first-success or error-recovery one may hide a

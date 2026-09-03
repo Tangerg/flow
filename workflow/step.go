@@ -161,7 +161,10 @@ func admitScopedStep(ctx context.Context, id string, invalid error) error {
 	if invalid != nil {
 		return invalid
 	}
-	if err := validateChildScope(scope(ctx)); err != nil {
+	// Capacity for the frame about to be pushed is this boundary's own rule:
+	// claiming the identity below validates the inherited scope, but only a
+	// composite knows its child will run one frame deeper.
+	if err := validateScopeDepth(len(scope(ctx)) + 1); err != nil {
 		return newStepError(ctx, id, OpValidate, err)
 	}
 	if err := runFrom(ctx).claim(boundaryKey(ctx, id)); err != nil {
