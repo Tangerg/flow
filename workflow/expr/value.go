@@ -175,7 +175,6 @@ func (o operand) negate() (any, error) {
 		if n == uint64(math.MaxInt64)+1 {
 			return int64(math.MinInt64), nil
 		}
-		// normalized converts smaller unsigned values to int64 before evaluation.
 		return nil, fmt.Errorf("%w: unary - overflows int64", ErrType)
 	case float64:
 		return -n, nil

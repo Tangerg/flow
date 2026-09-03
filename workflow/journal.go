@@ -154,11 +154,10 @@ func (j JournalKey) validate() error {
 	return validateScope(j.Scope)
 }
 
-// record inserts value and reports whether the identity was new. It takes the two
-// halves of a [JournalKey] rather than the key, because this is the layer where an
-// identity stops being one value: the scope is a path this trie descends and the ID
-// is a member it acts on, and forget consumes that path one frame at a time.
-// Everything above here passes the key whole.
+// record takes the two halves of a [JournalKey] rather than the key, because this
+// is the layer where an identity stops being one value: the scope is a path this
+// trie descends and the ID is a member it acts on, and forget consumes that path
+// one frame at a time. Everything above here passes the key whole.
 func (j *journalNode) record(scope []ScopeFrame, id string, value journalValue) bool {
 	for _, frame := range scope {
 		if j.children == nil {

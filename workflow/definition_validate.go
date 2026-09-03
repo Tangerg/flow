@@ -212,10 +212,6 @@ func (d *definitionValidator) validateShape(
 	}
 }
 
-// iterationOutputError and subgraphOutputError state each projection failure
-// once. Both the built-in definition and the Spec form of these composites can
-// reject it, and each locates it its own way — by step identity or by wire field
-// — but the condition itself must read identically from either.
 func iterationOutputError(output Ref) error {
 	return fmt.Errorf(
 		"%w: iteration body output %s is not produced by its visible body and is not a valid item or index value",
@@ -272,10 +268,6 @@ func (s stepDefinition) locate(condition error) error {
 	return newValidationError(s.id, condition)
 }
 
-// subgraphOutputGuaranteed and iterationOutputGuaranteed are the shared
-// projection rules for code-built definitions and serialized Specs. Keeping
-// the rules independent of either representation prevents validation and
-// compilation from accepting different data-flow contracts.
 func subgraphOutputGuaranteed(inputs Inputs, outputs outputGuarantee, ref Ref) bool {
 	_, seed := inputs[ref.NodeID]
 	produced := outputs.contains(ref.NodeID)
@@ -334,11 +326,6 @@ func (o outputGuarantee) intersection(other outputGuarantee) outputGuarantee {
 	return outputGuarantee{nodes: nodes, known: true}
 }
 
-// unionOutputs is what running every element guarantees, and intersectOutputs is
-// what running exactly one of them guarantees. The two rules belong to sequence
-// and branch respectively, and both the built-in definition tree and the Spec
-// document fold them over their own element type, so the rules live here once and
-// the callers supply only how an element is measured.
 func unionOutputs[T any](elements []T, outputsOf func(T) outputGuarantee) outputGuarantee {
 	outputs := knownOutputs()
 	for _, element := range elements {

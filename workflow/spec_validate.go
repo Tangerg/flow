@@ -194,8 +194,6 @@ func (r registrySnapshot) requireCondition(spec Spec) (Condition, error) {
 	return condition, nil
 }
 
-// unknownKindError is what both the validating and the compiling switch report
-// for a kind neither of them handles.
 func (s Spec) unknownKindError() error {
 	return s.fieldError(fieldKind, fmt.Errorf("unknown kind %q", s.Kind))
 }

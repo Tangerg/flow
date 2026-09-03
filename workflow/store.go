@@ -467,8 +467,6 @@ func (s Store) cells() iter.Seq2[storeKey, cell] {
 	}
 }
 
-// materialize returns a mutable copy of the Store's complete flat cell-record
-// map, including private removal markers needed by enclosing composites.
 func (s Store) materialize() storeCells {
 	data := make(storeCells, len(s.baseCells())+s.depth)
 	maps.Copy(data, s.baseCells())

@@ -111,9 +111,8 @@ func firstInvalidText(members []textMember) (string, error) {
 	return "", nil
 }
 
-// validateName checks the common contract of serialized names: they are
-// required and must cross UTF-8 boundaries unchanged. Concepts with a stronger
-// error category, such as step IDs, keep their dedicated validator.
+// validateName is for names with no error category of their own; a step ID has
+// one and keeps its own validator.
 func validateName(name, value string) error {
 	if value == "" {
 		return fmt.Errorf("%s is empty", name)
