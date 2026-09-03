@@ -36,7 +36,7 @@ func TestCitedTestsResolve(t *testing.T) {
 }
 
 // TestTestCommentsNameTheirOwnTest covers the other way a citation goes wrong:
-// the name still resolves, so [TestCitedTestsResolve] stays green, but it names a
+// the name still resolves, so TestCitedTestsResolve stays green, but it names a
 // different test than the one the comment is attached to. That happens by editing
 // — a new test inserted into an existing comment block inherits its first lines
 // and leaves the old test undocumented — and the result reads as documentation
@@ -135,8 +135,13 @@ func TestDocumentedAPINamesResolve(t *testing.T) {
 // unexported name, so the rule is: a qualified name whose package is this
 // module's, a name that starts with a capital, and a lowercase name below a
 // declared type. A single capital is a type parameter, which godoc does not link
-// either. Test files are excluded because godoc renders none of them, and a test
-// name inside one is already held by the two tests above.
+// either.
+//
+// Test files are read as well. godoc renders none of them, so a broken link
+// there costs a reader rather than a page — and a test comment cites API, not
+// only tests: godoclint requires a link for every standard-library name in any
+// comment, and the ones pointing into this module rot exactly like the rest. A
+// test name is cited bare, which is what the two tests above hold.
 func TestGoDocLinksResolve(t *testing.T) {
 	packages := make(map[string]packageNames, len(packageDirectories))
 	for _, directory := range packageDirectories {
@@ -145,9 +150,6 @@ func TestGoDocLinksResolve(t *testing.T) {
 	unresolved := make(map[string][]string)
 	checked := 0
 	walkRepository(t, ".go", func(name string, data []byte) {
-		if strings.HasSuffix(name, "_test.go") {
-			return
-		}
 		own := packages[path.Dir(name)]
 		for index, line := range strings.Split(string(data), "\n") {
 			if !strings.HasPrefix(strings.TrimSpace(line), "//") {
