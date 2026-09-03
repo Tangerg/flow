@@ -1218,6 +1218,10 @@ func TestSequence_rejectsADuplicateOfAnyStepID(t *testing.T) {
 // identity, a nil child again when the composite invokes it. So a Validate that
 // silently returned nil kept passing the whole suite while breaking the contract
 // callers validate against — three kinds were in exactly that state.
+//
+// A compiled Graph is the one built-in absent here, and by construction: the
+// compiler refuses a node whose step fails validation, so a compiled one cannot
+// hold an invalid definition to be asked about.
 func TestEveryBuiltInStepReportsAnInvalidDefinitionThroughValidate(t *testing.T) {
 	body := workflow.Leaf(
 		"body",
@@ -1310,9 +1314,12 @@ func TestEveryBuiltInStepReportsAnInvalidDefinitionThroughValidate(t *testing.T)
 // body's private cell, or the item an Iteration writes for each element, whose
 // absence out here is the whole reason element stores are derived and dropped.
 //
-// Every way this package builds a Step is here. A caller-defined one is not, and
-// cannot be: it owns its own contract, which is why an opaque body is the case
-// that makes a Subgraph's projected output its own rule rather than a shape
+// Every kind of Step this package builds is here. The convenience forms are not,
+// because they are not kinds: LeafFunc and Route both build a Leaf, so the leaf
+// case is the one that answers for them — and Route's own output already has
+// TestRoute_publishesAndReplaysResolverDecision. A caller-defined Step is absent
+// for the opposite reason: it owns its own contract, which is why an opaque body
+// is what makes a Subgraph's projected output its own rule rather than a shape
 // check.
 func TestEveryCompositePublishesOnlyTheCellsItNames(t *testing.T) {
 	number := func(id string, ref workflow.Ref) workflow.Step {
@@ -1412,13 +1419,6 @@ func TestEveryCompositePublishesOnlyTheCellsItNames(t *testing.T) {
 			input:   input,
 			journal: answeredInterrupt(t, "ask", 42),
 			want:    []string{"ask#/output"},
-		},
-		"route": {
-			step: workflow.Route("pick", flow.NodeFunc[workflow.Store, string](
-				func(context.Context, workflow.Store) (string, error) { return "only", nil },
-			)),
-			input: input,
-			want:  []string{"pick#/output"},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
