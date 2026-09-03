@@ -22,11 +22,15 @@ jobs:
           cache: true
       - run: test -z "$(gofmt -l .)"
       - run: go mod tidy -diff
-      - name: Test with race detection and minimum statement coverage
+      # The floor is the standard this repository actually holds: every package
+      # reports 100.0%, and an uncovered statement is treated as evidence that
+      # either the statement or a guard is missing. A floor below that passes on
+      # a coverage loss nobody chose.
+      - name: Test with race detection and complete statement coverage
         run: |
           go test -race -coverprofile=coverage.out ./...
           coverage="$(go tool cover -func=coverage.out | awk '/^total:/ { print $3 }')"
-          awk -v coverage="${coverage%\%}" 'BEGIN { exit coverage < 95.0 }'
+          awk -v coverage="${coverage%\%}" 'BEGIN { exit coverage < 100.0 }'
       - run: go vet ./...
 
   quality:
