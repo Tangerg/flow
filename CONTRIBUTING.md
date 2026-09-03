@@ -1193,6 +1193,15 @@ go test ./example -run Example -v
   it too, so the negative test passes for either reason. A negative test beside a
   missing positive one is a blind spot the suite cannot report,
   which `TestIteration_collectsEachElementIndex` now closes.
+  The same operator applied to keyed struct fields — swap the values of two
+  fields of one declared type — has nothing left to find: all 51 such sites, 42
+  killed, none uncompilable, and every one of the nine survivors is a swap of two
+  syntactically identical values, `owned: true` against `terminal: true` or
+  `base: s` against `result: s`. `ownedTerminal` already documents why its pair
+  reads that way, and the plan's two adjacency lists differ only after they are
+  filled. So the wiring of same-typed fields is observed wherever the values
+  differ, and it is the argument list, not the struct literal, that was worth
+  sweeping.
 - A rule with three legs needs three tests, and the one nothing states is the
   leg to look for. A bypass reaches a gated dependent as a bypass and a data edge
   as an error — both pinned, and the second is the documented "bypass is
