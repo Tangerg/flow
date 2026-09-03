@@ -456,3 +456,51 @@ func TestIteration_replaysByPositionNotByValue(t *testing.T) {
 		t.Fatalf("collected = %v; want the replayed 10 beside the fresh 80", collected)
 	}
 }
+
+// TestValidateSpec_defersAnUnknowableProjectionToCompilation pins where the
+// conservative boundary sits and that nothing falls through it. Validation knows
+// what a leaf produces only from its registered schema; without one, the set is
+// unknowable without running the factory, which validation must not do. So the
+// same document is refused before compiling when the schema is registered and
+// admitted when it is not — and then refused by compilation, which holds the
+// built step. What a caller relies on is the pair: validate now, compile later,
+// and no defect between them.
+//
+// TestGuaranteedOutputsAgreeAcrossRepresentations holds the two implementations of
+// the guarantee to each other, including on being unknown. This holds the
+// consequence.
+func TestValidateSpec_defersAnUnknowableProjectionToCompilation(t *testing.T) {
+	body := workflow.Spec{Kind: workflow.KindLeaf, ID: "body", Type: "wait"}
+	spec := workflow.Spec{
+		Kind: workflow.KindIteration, ID: "each",
+		Input: workflow.Output("items"), Body: &body,
+		BodyOutput: workflow.Output("nobody-produces-this"),
+	}
+	registered := workflow.NewRegistry().
+		MustRegisterNode("wait", workflow.InterruptFactory()).
+		MustRegisterSchema("wait", workflow.NodeSchema{Output: workflow.TypeAny})
+	unregistered := workflow.NewRegistry().MustRegisterNode("wait", workflow.InterruptFactory())
+
+	err := registered.ValidateSpec(spec)
+	if !errors.Is(err, flow.ErrInvalidConfig) {
+		t.Fatalf("ValidateSpec with a schema = %v; want ErrInvalidConfig", err)
+	}
+	var specErr *workflow.SpecError
+	if !errors.As(err, &specErr) || specErr.Field != "bodyOutput" {
+		t.Fatalf("ValidateSpec error = %+v; want it to name bodyOutput", specErr)
+	}
+
+	if err := unregistered.ValidateSpec(spec); err != nil {
+		t.Fatalf("ValidateSpec without a schema = %v; want the projection deferred", err)
+	}
+	_, compileErr := unregistered.CompileSpec(spec)
+	if !errors.Is(compileErr, flow.ErrInvalidConfig) {
+		t.Fatalf("CompileSpec = %v; want the deferred projection refused", compileErr)
+	}
+	// Compiling the whole definition would refuse it in any case, by validating
+	// the step it just built. What the compiler's own check adds is the wire
+	// field, so a caller reads the same location either route reported it.
+	if !errors.As(compileErr, &specErr) || specErr.Field != "bodyOutput" {
+		t.Fatalf("CompileSpec error = %+v; want it to name bodyOutput too", specErr)
+	}
+}
