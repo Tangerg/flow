@@ -44,7 +44,8 @@
 - The same capability at the same layer has exactly one canonical API. A composite that names itself
   takes exactly one `Config` struct that owns every field; a step with no children takes positional
   parameters; `Sequence` stays variadic because it has no settings. No functional options, no second
-  configuration form, no alias.
+  configuration form, no alias. A second form runs perfectly, so the pairing of a `Config` with the
+  one constructor named after it is checked directly — `TestEveryConfigStructHasOneConstructor`.
 - The three construction routes agree. Built in Go, compiled from a `Spec`, or compiled from a flat
   `Graph`, the same workflow must produce the same run: a serialized form is a second spelling,
   never a second execution protocol — `TestEveryConstructionFormRunsTheSameWorkflow`.

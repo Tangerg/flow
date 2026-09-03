@@ -388,3 +388,101 @@ func TestEveryContextDerivationNamesItsGuard(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryConfigStructHasOneConstructor holds the axiom that no behavior can
+// reveal: the same capability at the same layer has exactly one canonical API.
+// A second construction form works perfectly at run time. `Iteration` plus an
+// `IterationWithConcurrency` taking the same Config, an alias kept for a caller
+// who used the old name, or a `Config` no constructor names any more all pass
+// every other test in this repository while making the sparse API a claim rather
+// than a fact.
+//
+// What is checked is the agreement between the two halves of a construction
+// route. A `Config` declared in a package is taken by exactly one exported
+// function of that package, and that function is the one the type is named
+// after, so the settings a caller can write and the entry point that reads them
+// cannot drift apart. Positional children beside the Config are not the second
+// form the axiom is about — `flow.Map` takes the node it maps and `flowx.FanOut`
+// reuses `flow.MapConfig` rather than declaring a copy of it, which is the
+// layering rule working, not a competing API.
+//
+// The second half is what functional options would look like here: an exported
+// function taking a variadic function parameter. That is the shape a settings
+// struct exists to refuse, and it reads as an ordinary Go idiom in review.
+func TestEveryConfigStructHasOneConstructor(t *testing.T) {
+	checked := 0
+	for _, dir := range slices.Sorted(maps.Keys(moduleImports)) {
+		declared := make(map[string]struct{})
+		constructors := make(map[string][]string)
+		parsePackage(t, dir, func(file *ast.File) {
+			for _, declaration := range file.Decls {
+				collectConfigDeclarations(t, dir, declaration, declared, constructors)
+			}
+		})
+		for _, config := range slices.Sorted(maps.Keys(declared)) {
+			checked++
+			want := strings.TrimSuffix(config, "Config")
+			if got := constructors[config]; !slices.Equal(got, []string{want}) {
+				t.Errorf(
+					"%s: %s is taken by %v; want exactly one constructor named %s",
+					dir, config, got, want,
+				)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no Config struct found; the walk stopped seeing the module")
+	}
+}
+
+// collectConfigDeclarations records the Config structs a package declares and,
+// for each, the exported functions of that package that take one. It reports a
+// variadic function parameter where it finds it, since that is the option shape
+// the same axiom refuses and every exported signature is already in hand here.
+func collectConfigDeclarations(
+	t *testing.T,
+	dir string,
+	declaration ast.Decl,
+	declared map[string]struct{},
+	constructors map[string][]string,
+) {
+	t.Helper()
+	switch node := declaration.(type) {
+	case *ast.GenDecl:
+		for _, spec := range node.Specs {
+			typed, ok := spec.(*ast.TypeSpec)
+			if !ok || !strings.HasSuffix(typed.Name.Name, "Config") {
+				continue
+			}
+			if _, isStruct := typed.Type.(*ast.StructType); isStruct {
+				declared[typed.Name.Name] = struct{}{}
+			}
+		}
+	case *ast.FuncDecl:
+		if node.Recv != nil || !node.Name.IsExported() {
+			return
+		}
+		for _, parameter := range node.Type.Params.List {
+			if _, isVariadic := parameter.Type.(*ast.Ellipsis); isVariadic {
+				if _, isFunc := unwrapEllipsis(parameter.Type).(*ast.FuncType); isFunc {
+					t.Errorf(
+						"%s: %s takes variadic function options; settings belong in one Config struct",
+						dir, node.Name.Name,
+					)
+				}
+			}
+			name, ok := parameter.Type.(*ast.Ident)
+			if !ok || !strings.HasSuffix(name.Name, "Config") {
+				continue
+			}
+			constructors[name.Name] = append(constructors[name.Name], node.Name.Name)
+		}
+	}
+}
+
+func unwrapEllipsis(expression ast.Expr) ast.Expr {
+	if variadic, ok := expression.(*ast.Ellipsis); ok {
+		return variadic.Elt
+	}
+	return expression
+}

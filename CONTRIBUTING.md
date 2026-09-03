@@ -1176,6 +1176,21 @@ go test ./example -run Example -v
   bound and Iteration, Parallel, and `flowx.FanOut` forward to it, so what those
   tests pin is the forwarding — the graph scheduler is the exception that counts
   its own admitted work, which is why the rule is stated twice.
+- Check an axiom structurally when no behavior can reveal it. Two axioms here are
+  pure structure: the import graph, and "the same capability at the same layer has
+  exactly one canonical API". A second construction form runs perfectly — an
+  `IterationWithConcurrency` beside `Iteration`, an alias kept for an old name, a
+  `Config` no constructor names any more — and passes every behavioral test while
+  making the sparse API a claim rather than a fact.
+  `TestEveryConfigStructHasOneConstructor` pins the agreement between the two
+  halves of a construction route: a `Config` declared in a package is taken by
+  exactly one exported function of that package, and it is the one the type is
+  named after. It also refuses the option shape, a variadic function parameter on
+  an exported function, which reads as ordinary Go in review. Positional children
+  beside a Config are not the second form the axiom is about: `flow.Map` takes
+  the node it maps, and `flowx.FanOut` reuses `flow.MapConfig` instead of
+  declaring a copy, which is the layering rule working. All four drift directions
+  were verified to fail.
 - Delete the racy half of a claim that a fact already carries.
   `TestStreamFunc_waitsForAnInFlightYield` peeked at its `finished` channel to
   claim Run had not returned, then proved the same thing deterministically from
