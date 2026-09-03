@@ -1292,3 +1292,47 @@ func assertBothGraphChecksAgree(
 		)
 	}
 }
+
+// TestValidateGraph_cycleNamesTheNodesThatCannotBeOrdered pins the one graph
+// diagnostic that carried no location and no names: every other defect names a
+// field a caller can repair, and a cycle said only "graph cycle", leaving a
+// fifty-node document to be searched by hand.
+//
+// The set it names is what Kahn's algorithm could not reach, which is the cycle
+// plus whatever waits behind it — so the message says those nodes cannot be
+// ordered rather than that they form the cycle. The trailing node below is in
+// the list for that reason, and the independent one is not.
+func TestValidateGraph_cycleNamesTheNodesThatCannotBeOrdered(t *testing.T) {
+	registry := workflow.NewRegistry().MustRegisterNode("t", workflow.InterruptFactory())
+	from := func(id, source string) workflow.GraphNode {
+		return workflow.GraphNode{
+			ID: id, Type: "t",
+			Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output(source)},
+		}
+	}
+	err := registry.ValidateGraph(workflow.Graph{Nodes: []workflow.GraphNode{
+		from("free", "seed"),
+		from("a", "b"),
+		from("b", "a"),
+		from("after", "a"),
+	}})
+	if !errors.Is(err, workflow.ErrCycle) {
+		t.Fatalf("ValidateGraph error = %v; want ErrCycle", err)
+	}
+	message := err.Error()
+	for _, name := range []string{`"a"`, `"b"`, `"after"`} {
+		if !strings.Contains(message, name) {
+			t.Fatalf("error = %v; want it to name %s", err, name)
+		}
+	}
+	if strings.Contains(message, `"free"`) {
+		t.Fatalf("error = %v; names a node that could be ordered", err)
+	}
+	// A cycle spans the definition, so it keeps the whole-graph location every
+	// other GraphError spends on a node and a field.
+	var graphErr *workflow.GraphError
+	if !errors.As(err, &graphErr) ||
+		graphErr.Path != "" || graphErr.NodeID != "" || graphErr.Field != "" {
+		t.Fatalf("GraphError = %+v; want the whole-graph location", graphErr)
+	}
+}

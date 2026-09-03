@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/Tangerg/flow"
 )
@@ -351,7 +352,27 @@ func (g *graphPlanner) validateAcyclic() error {
 		}
 	}
 	if processed != len(g.graph.Nodes) {
-		return &GraphError{Err: ErrCycle}
+		return &GraphError{Err: fmt.Errorf(
+			"%w: %s cannot be ordered",
+			ErrCycle,
+			g.unorderedNodes(dependencyCounts),
+		)}
 	}
 	return nil
+}
+
+// unorderedNodes names every node Kahn's algorithm could not reach, in document
+// order. That set is the cycle plus whatever waits behind it, which is why the
+// diagnostic says a node cannot be ordered rather than that it is in the cycle:
+// naming a node that merely waits for one as a member would be wrong, and a
+// caller has to inspect all of them anyway. The location stays empty because a
+// cycle spans the definition rather than sitting at one node.
+func (g *graphPlanner) unorderedNodes(dependencyCounts []int) string {
+	names := make([]string, 0, len(dependencyCounts))
+	for nodeIndex, count := range dependencyCounts {
+		if count != 0 {
+			names = append(names, strconv.Quote(g.graph.Nodes[nodeIndex].ID))
+		}
+	}
+	return strings.Join(names, ", ")
 }
