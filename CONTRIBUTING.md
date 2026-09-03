@@ -877,6 +877,29 @@ go test ./example -run Example -v
   sentinel through `RunChild` — so only `Validate` can tell the positions apart.
   Only `gatedStep.satisfied`'s second cancellation check is an equivalence, and it
   says so where it sits.
+- Negate the condition, then stop escalating. Flipping comparison operators left
+  four equivalences; deleting statements and error returns found real gaps. What
+  no operator above reaches is boolean state — `if ok`, `if closed`,
+  `if errors.Is(...)`, and their compositions — so every one of the module's 309
+  non-comparison `if` and `for` conditions was negated: 198 killed, 111 that no
+  longer compiled, and **nothing survived**. That is the first sweep here to find
+  nothing at all, and it says where this suite stands: the state machines — the
+  emission lease, the store's overlay bookkeeping, the scheduler's readiness, the
+  parsers' escape and sign handling — are each observed by something. Escalating
+  the operator further is not where the next finding is.
+- Some promises no mutation operator can reach, and they are the ones to look for
+  now. Abandoning a child changes no returned value: every sweep above leaves
+  "waits for what it started" intact, and nothing in this module checked
+  goroutine lifetime at all. `flow` held both halves of Race's statement, but
+  Map's had only a flag its siblings set before returning — which proves they
+  observed the cancellation and cannot distinguish a wait from a flag read too
+  early — and this layer had nothing for a `Parallel`, an `Iteration`, or a
+  compiled `Graph`. Counting live calls and reading the count at the moment of
+  return, never after a settling wait, is exact in both directions:
+  `TestMap_waitsForEveryElementToReturn` and
+  `TestConcurrentCompositesLeaveNoBranchRunning` are caught by a Race that stops
+  draining once it has a winner and by a scheduler that breaks out of its loop on
+  failure.
 - Drop a field, not a statement. `Kind: task.source.Kind` inside a composite
   literal is not a statement, so no sweep here had ever touched one — and a
   config field that never reaches the step it configures is exactly the failure
