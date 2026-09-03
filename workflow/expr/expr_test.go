@@ -1152,3 +1152,26 @@ func TestOrdering_comparesAcrossTheSignedUnsignedBoundary(t *testing.T) {
 		})
 	}
 }
+
+// TestUncompiledExprAccessorsAnswerLikeTheZeroValue holds the two accessors to
+// what the type says about its two uncompiled states: neither is a compiled
+// expression, so both read as one that was never parsed. Eval and the adapters
+// already report a structured error for either -- see
+// TestExpressionAdaptersRejectUncompiledExpressions -- while Source and Refs
+// dereferenced the pointer, so a caller who skipped Parse's error crashed on the
+// two calls most likely to follow it.
+func TestUncompiledExprAccessorsAnswerLikeTheZeroValue(t *testing.T) {
+	for name, expression := range map[string]*expr.Expr{
+		"zero": new(expr.Expr),
+		"nil":  nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if source := expression.Source(); source != "" {
+				t.Fatalf("Source() = %q; want empty for an expression that was never parsed", source)
+			}
+			if refs := expression.Refs(); len(refs) != 0 {
+				t.Fatalf("Refs() = %v; want none for an expression that was never parsed", refs)
+			}
+		})
+	}
+}

@@ -139,6 +139,10 @@ being presented as migrations from a version that was never published.
 
 ### Fixed
 
+- `Expr.Source` and `Expr.Refs` no longer dereference a nil `*Expr`. Both
+  uncompiled states the type documents — the zero value and a nil pointer — now
+  read as an expression that was never parsed, which is what `Eval` and the
+  condition and resolver adapters already reported.
 - Structured flow and workflow location errors now render exact caller-built
   chains and standard joined branches iteratively, without repeating the
   workflow package qualifier or exhausting the goroutine stack. Typed-nil

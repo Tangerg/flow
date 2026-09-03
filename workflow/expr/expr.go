@@ -68,13 +68,28 @@ func MustParse(src string) *Expr {
 	return e
 }
 
-// Source returns the expression text the Expr was parsed from.
-func (e *Expr) Source() string { return e.source }
+// Source returns the expression text the Expr was parsed from, and empty text
+// for the two values that were never parsed: the zero Expr and a nil *Expr. The
+// type is exported, so a caller who skipped [Parse]'s error holds one of them,
+// and reading what it was parsed from is how they would find that out.
+func (e *Expr) Source() string {
+	if e == nil {
+		return ""
+	}
+	return e.source
+}
 
 // Refs returns the Store references the expression reads, deduplicated and
 // sorted. References inside has() are included, since the expression still
-// depends on them. The returned slice is a fresh value the caller owns.
-func (e *Expr) Refs() []workflow.Ref { return slices.Clone(e.refs) }
+// depends on them. The returned slice is a fresh value the caller owns. An
+// expression that was never compiled reads nothing, which is what the zero Expr
+// and a nil *Expr report.
+func (e *Expr) Refs() []workflow.Ref {
+	if e == nil {
+		return nil
+	}
+	return slices.Clone(e.refs)
+}
 
 // Eval evaluates the expression against s and requires a T result. There is no
 // implicit truthiness or conversion: a result of another type is an [ErrType]
