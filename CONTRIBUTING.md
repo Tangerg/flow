@@ -877,6 +877,25 @@ go test ./example -run Example -v
   sentinel through `RunChild` — so only `Validate` can tell the positions apart.
   Only `gatedStep.satisfied`'s second cancellation check is an equivalence, and it
   says so where it sits.
+- One lock may span application code, and no path may hold two. That is the whole
+  deadlock argument for this module, and it was spread across three comments that
+  each stated their own half: `Registry.snapshot` takes one immutable view rather
+  than holding its lock across a factory, `emissionSession` holds its lock across
+  the `Emitter` deliberately so delivery stays serialized, and `emissionLease`
+  releases before it waits. Five locks in all —
+  `Journal`, `scopedSet`, `Registry`, the emission session, the emission lease —
+  and the property they add up to is that a callback can reach back into the
+  object that invoked it. `TestApplicationCodeMayReenterTheBoundaryThatCalledIt`
+  performs exactly the reentry each comment names as its risk: a factory
+  registering into the Registry compiling it, an Emitter recording into the run's
+  Journal, an Observer reading the Journal at the completion it is observing.
+  A broken discipline deadlocks rather than misbehaving, so those subtests fail by
+  timeout — holding `Registry.mu` across `CompileSpec` deadlocks the first one at
+  once. There is no way to observe the absence of a cycle other than closing it.
+  The Observer subtest also pins an ordering a host depends on and nothing had
+  stated: a completion is emitted after its checkpoint is recorded, so persisting
+  the Store and the Journal together at that event cannot store a Journal missing
+  the step that just completed.
 - A new composite kind is three tests, not one. Route agreement was pinned for a
   sequence of leaves, and `TestSpecRoundTripsEveryKind` pinned every kind to
   crossing the wire unchanged — and between those two a composite whose `Spec`

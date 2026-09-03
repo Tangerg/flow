@@ -39,6 +39,10 @@ const (
 // same step, and Store is serializable. Resumption also requires the run's
 // Journal, persisted at an application-chosen boundary. Keeping those concerns
 // out of the package is deliberate — see the package documentation.
+//
+// [EventCompleted] and [EventSkipped] arrive after that boundary's checkpoint is
+// recorded, so an Observer persisting the pair sees a Journal that already holds
+// the step it is observing. A failure or suspension records nothing.
 type Event struct {
 	// Kind is the transition this event reports.
 	Kind EventKind
