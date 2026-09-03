@@ -1197,3 +1197,98 @@ func TestValidateGraph_distinguishesRedundantDependsOnEntries(t *testing.T) {
 		})
 	}
 }
+
+// TestTheTwoGraphChecksRefuseTheSameDefects is the Graph counterpart of
+// TestTheTwoValidatorsRefuseTheSameDefects, against the other pair of copies.
+// A Graph's constraints are stated in the embedded JSON Schema — minimum
+// lengths, the pointer pattern, unique dependencies and gates, a trigger that
+// requires gates — and again in the Go validator, and nothing held the two to
+// one verdict. Whichever way they drift, a caller who serializes a working Graph
+// cannot load it back, or a document the schema accepted fails only later.
+//
+// Each defect is written once, as the Graph value, and asked of both routes.
+// Accepting the baseline first is what keeps a refusal from being about
+// something else.
+func TestTheTwoGraphChecksRefuseTheSameDefects(t *testing.T) {
+	// The first node routes and declares the outlet the gate cases name, so a
+	// repeated or malformed gate is the only thing wrong with them: a gate
+	// against a source with no declared outlets is refused for that instead, and
+	// would leave the Go half of every gate case untested.
+	registry := workflow.NewRegistry().
+		MustRegisterNode("t", addN()).
+		MustRegisterNode("route", routingFactory(func(int) string { return "x" })).
+		MustRegisterSchema("route", routingSchema("x", "y"))
+	wired := workflow.Inputs{workflow.DefaultPort: workflow.Output("seed")}
+	source := workflow.GraphNode{ID: "a", Type: "route", Inputs: wired}
+	node := func(id string) workflow.GraphNode {
+		return workflow.GraphNode{ID: id, Type: "t", Inputs: wired}
+	}
+	// Every defect below is the second node of an otherwise valid pair, so the
+	// baseline is what the corpus differs from by exactly one member.
+	with := func(mutate func(*workflow.GraphNode)) workflow.Graph {
+		target := node("b")
+		mutate(&target)
+		return workflow.Graph{Nodes: []workflow.GraphNode{source, target}}
+	}
+	baseline := workflow.Graph{Nodes: []workflow.GraphNode{source, node("b")}}
+	assertBothGraphChecksAgree(t, registry, baseline, true)
+
+	for name, graph := range map[string]workflow.Graph{
+		"empty node ID":   with(func(n *workflow.GraphNode) { n.ID = "" }),
+		"empty node type": with(func(n *workflow.GraphNode) { n.Type = "" }),
+		"empty port name": with(func(n *workflow.GraphNode) {
+			n.Inputs = workflow.Inputs{"": workflow.Output("seed")}
+		}),
+		"empty reference node": with(func(n *workflow.GraphNode) {
+			n.Inputs = workflow.Inputs{workflow.DefaultPort: {Path: "/output"}}
+		}),
+		"unrooted reference path": with(func(n *workflow.GraphNode) {
+			n.Inputs = workflow.Inputs{workflow.DefaultPort: {NodeID: "seed", Path: "output"}}
+		}),
+		"empty dependency": with(func(n *workflow.GraphNode) { n.DependsOn = []string{""} }),
+		"repeated dependency": with(func(n *workflow.GraphNode) {
+			n.DependsOn = []string{"a", "a"}
+		}),
+		"empty gate outlet": with(func(n *workflow.GraphNode) {
+			n.When = []workflow.Gate{{NodeID: "a", Outlet: ""}}
+		}),
+		"empty gate node": with(func(n *workflow.GraphNode) {
+			n.When = []workflow.Gate{{NodeID: "", Outlet: "x"}}
+		}),
+		"repeated gate": with(func(n *workflow.GraphNode) {
+			n.When = []workflow.Gate{workflow.When("a", "x"), workflow.When("a", "x")}
+		}),
+		"trigger without gates": with(func(n *workflow.GraphNode) {
+			n.Trigger = workflow.TriggerAny
+		}),
+		"unknown trigger": with(func(n *workflow.GraphNode) {
+			n.Trigger = workflow.Trigger("some")
+			n.When = []workflow.Gate{workflow.When("a", "x")}
+		}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			assertBothGraphChecksAgree(t, registry, graph, false)
+		})
+	}
+}
+
+func assertBothGraphChecksAgree(
+	t *testing.T,
+	registry *workflow.Registry,
+	graph workflow.Graph,
+	valid bool,
+) {
+	t.Helper()
+	data, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	goErr := registry.ValidateGraph(graph)
+	schemaErr := workflow.ValidateGraphJSON(data)
+	if (goErr == nil) != valid || (schemaErr == nil) != valid {
+		t.Fatalf(
+			"the two checks disagree on %s (want valid=%t):\n  ValidateGraph:     %v\n  ValidateGraphJSON: %v",
+			data, valid, goErr, schemaErr,
+		)
+	}
+}
