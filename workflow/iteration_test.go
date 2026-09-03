@@ -2,8 +2,10 @@ package workflow_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Tangerg/flow"
@@ -502,5 +504,60 @@ func TestValidateSpec_defersAnUnknowableProjectionToCompilation(t *testing.T) {
 	// field, so a caller reads the same location either route reported it.
 	if !errors.As(compileErr, &specErr) || specErr.Field != "bodyOutput" {
 		t.Fatalf("CompileSpec error = %+v; want it to name bodyOutput too", specErr)
+	}
+}
+
+// TestIteration_emptyCollectionProducesAnEmptyResult pins the degenerate arity,
+// which this package treats as the same abstraction rather than a second path.
+// Nothing here had asserted it: every other empty-collection input in this file
+// feeds an error case.
+//
+// What a caller reads is the difference between a cell holding an empty
+// collection — the iteration ran and had nothing to do — and no cell at all,
+// which is what every incomplete outcome leaves. That difference has to survive
+// the wire too, so the encoded form is asserted: a nil slice would write null and
+// read back as a missing collection.
+func TestIteration_emptyCollectionProducesAnEmptyResult(t *testing.T) {
+	var bodyRuns int
+	step := workflow.Iteration(workflow.IterationConfig{
+		ID:    "each",
+		Input: workflow.Output("items"),
+		Body: workflow.LeafFunc("body", workflow.Item("each"),
+			func(_ context.Context, value int) (int, error) {
+				bodyRuns++
+				return value, nil
+			}),
+		BodyOutput: workflow.Output("body"),
+	})
+
+	journal := workflow.NewJournal()
+	out, err := workflow.Run(
+		t.Context(),
+		step,
+		workflow.NewStore().WithOutput("items", []any{}),
+		workflow.RunConfig{Journal: journal},
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if bodyRuns != 0 {
+		t.Fatalf("body ran %d times over no elements", bodyRuns)
+	}
+	if journal.Len() != 0 {
+		t.Fatalf("journal holds %d records; no boundary ran", journal.Len())
+	}
+	collected, getErr := out.Get[[]any](workflow.Output("each"))
+	if getErr != nil {
+		t.Fatalf("collected output: %v", getErr)
+	}
+	if collected == nil || len(collected) != 0 {
+		t.Fatalf("collected = %#v; want an empty collection that exists", collected)
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"each":{"output":[]}`) {
+		t.Fatalf("encoded %s; want the empty collection to survive as []", encoded)
 	}
 }

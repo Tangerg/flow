@@ -71,13 +71,15 @@ type IterationConfig struct {
 // together. The collected output is written only once every element has
 // produced one, since a slice with holes would read as a finished result. Every
 // incomplete outcome — suspension, ordinary failure, or parent cancellation —
-// returns the input Store without a collected output. Completed journaled
-// boundaries inside elements replay on the next run; an opaque Body that owns
-// no Journal boundary runs again. Iteration validates its ID, references, and
-// body before reading the input, so an empty collection cannot hide an invalid
-// definition. Input failures are reported at OpBind; element execution and
-// collection failures are reported at OpRun, while their [flow.IndexError]
-// still identifies the element.
+// returns the input Store without a collected output. A collection with no
+// elements meets that condition immediately and publishes an empty one, which
+// is how a caller tells an iteration that had nothing to do from one that did
+// not finish. Completed journaled boundaries inside elements replay on the
+// next run; an opaque Body that owns no Journal boundary runs again. Iteration
+// validates its ID, references, and body before reading the input, so an empty
+// collection cannot hide an invalid definition. Input failures are reported at
+// OpBind; element execution and collection failures are reported at OpRun,
+// while their [flow.IndexError] still identifies the element.
 func Iteration(cfg IterationConfig) Step {
 	return cfg.step()
 }
