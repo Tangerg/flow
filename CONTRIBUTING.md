@@ -1176,6 +1176,17 @@ go test ./example -run Example -v
   bound and Iteration, Parallel, and `flowx.FanOut` forward to it, so what those
   tests pin is the forwarding — the graph scheduler is the exception that counts
   its own admitted work, which is why the rule is stated twice.
+- A rule with three legs needs three tests, and the one nothing states is the
+  leg to look for. A bypass reaches a gated dependent as a bypass and a data edge
+  as an error — both pinned, and the second is the documented "bypass is
+  explicit" rule. The third leg is `DependsOn`, which names no value, so a
+  bypassed source satisfies it and the dependent runs. Nothing said so and
+  nothing ran a pure control edge out of a bypassed node, yet that is the leg a
+  caller is most likely to get wrong: a `DependsOn` written to make a node wait
+  for a conditional region produces a node that runs whether or not the region
+  did, with no error to say so. `TestCompileGraph_bypassSatisfiesAPureControlEdge`
+  pins it and the package doc now states the asymmetry with the repair — the
+  dependent carries its own gate.
 - Check an axiom structurally when no behavior can reveal it. Two axioms here are
   pure structure: the import graph, and "the same capability at the same layer has
   exactly one canonical API". A second construction form runs perfectly — an

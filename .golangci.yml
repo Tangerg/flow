@@ -7,6 +7,14 @@ version: "2"
 # than re-established by hand: a finding is either fixed, or suppressed at the
 # exact line with a comment saying why. No linter that found real code is
 # disabled wholesale.
+#
+# Evaluated and left off, so the work is not repeated: gochecknoinits, godox,
+# interfacebloat, grouper, and importas each find nothing here. gochecknoglobals
+# reports 20 package-level values, and every one is deliberate — interface
+# satisfaction assertions, error sentinels, immutable tables, the memoized
+# embedded JSON Schemas, and the Store revision allocator — so enabling it would
+# buy 20 line suppressions and no finding. nonamedreturns reports six signatures
+# whose names are what makes a multiple result readable.
 
 run:
   # Tests are most of this module and carry its executable documentation, so
