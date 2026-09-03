@@ -855,6 +855,17 @@ go test ./example -run Example -v
   `TestSurfacedMessagesRenderEveryPrivateLocation` reads all five boundaries that
   build one, which took finding the reachable route to each: a `Journal` holding a
   number for a routing node is how a gate's own read fails.
+- A warning in the documentation is a claim about behavior, so it needs a guard
+  like any other. `workflow/doc.go` tells callers that the generic combinators
+  know nothing about a Store, so a first-success or error-recovery one may hide a
+  suspension — and nothing held that sentence to the code. It can drift both ways:
+  a combinator taught to recognize the third outcome leaves the doc warning about
+  a trap that no longer exists, and the reverse loses an approval nobody is left
+  waiting for. `TestAFirstSuccessCombinatorHidesTheSuspensionItBeat` pins the half
+  this layering permits — `workflow` may not import `flowx`, so `Fallback`'s half
+  stays with `flowx`'s own error semantics — and it pins the boundary either way:
+  a beaten wait commits no cell, while a race nothing wins joins the wait with the
+  failure instead of hiding it.
 - A panic reaches the caller only from the caller's own goroutine, and that is
   worth saying out loud. `Run` cancels its derived context while unwinding a
   panic, which reads as a promise that a panic unwinds — and it does, until a

@@ -1721,3 +1721,65 @@ func TestSuspend_anonymousWaitTakesTheScopeItWasRaisedIn(t *testing.T) {
 		t.Fatalf("suspensions = %+v; want ask waiting in iter[0]", suspensions)
 	}
 }
+
+// TestAFirstSuccessCombinatorHidesTheSuspensionItBeat pins the warning this
+// package's documentation gives about composing Steps with generic combinators:
+// they know nothing about a Store, so a first-success combinator may hide a
+// suspension. Nothing held that sentence to the behavior, and it is the kind of
+// claim that goes stale silently -- a combinator taught to recognize the third
+// outcome would leave the doc telling callers to avoid a trap that no longer
+// exists, and the reverse drift loses an approval nobody is waiting for.
+//
+// The contrast is the other half, and TestSuspend_parallelLetsSiblingsFinish
+// already owns it: [workflow.Parallel] is this package's peer combinator, and
+// the same wait survives there with its sibling's output committed. What both
+// agree on is that a suspension itself commits nothing.
+func TestAFirstSuccessCombinatorHidesTheSuspensionItBeat(t *testing.T) {
+	waiting := workflow.Await("approval", workflow.Output("approved"))
+	winner := workflow.Leaf(
+		"fast",
+		workflow.Output("seed").Bind[int](),
+		flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+			return value * 2, nil
+		}),
+	)
+	seed := workflow.NewStore().WithOutput("seed", 21)
+
+	t.Run("race", func(t *testing.T) {
+		out, err := workflow.Run(
+			t.Context(),
+			flow.Race[workflow.Store, workflow.Store](waiting, winner),
+			seed,
+			workflow.RunConfig{},
+		)
+		if err != nil {
+			t.Fatalf("Run: %v; want the winner's success", err)
+		}
+		if got, getErr := out.Get[int](workflow.Output("fast")); getErr != nil || got != 42 {
+			t.Fatalf("winner output = %d, %v; want 42, nil", got, getErr)
+		}
+		if _, held := out.Lookup(workflow.Output("approval")); held {
+			t.Fatal("the beaten wait committed a cell")
+		}
+	})
+
+	t.Run("race joins them when none wins", func(t *testing.T) {
+		failing := workflow.Leaf(
+			"slow",
+			workflow.Output("seed").Bind[int](),
+			flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+				return 0, errors.New("boom")
+			}),
+		)
+		_, err := workflow.Run(
+			t.Context(),
+			flow.Race[workflow.Store, workflow.Store](waiting, failing),
+			seed,
+			workflow.RunConfig{},
+		)
+		waits := workflow.Suspensions(err)
+		if len(waits) != 1 || waits[0].ID != "approval" || workflow.SuspendedOnly(err) {
+			t.Fatalf("Run error = %v; want the wait joined with the failure", err)
+		}
+	})
+}
