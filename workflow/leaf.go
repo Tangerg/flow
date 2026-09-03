@@ -283,6 +283,10 @@ func (l *leafExecution[I, O]) replay(ctx context.Context) (Store, bool, error) {
 
 func (l *leafExecution[I, O]) start(ctx context.Context) error {
 	if !l.run.observing() {
+		// The observed path answers this through emitAndCheck, after handing the
+		// event to an Observer that may cancel. Nothing can cancel here, so no test
+		// tells the two apart -- but a start that skipped the question would make
+		// admission mean something different depending on who was watching.
 		return context.Cause(ctx)
 	}
 	l.started = time.Now()

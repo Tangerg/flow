@@ -1210,3 +1210,84 @@ func TestSequence_rejectsADuplicateOfAnyStepID(t *testing.T) {
 		t.Fatalf("%d steps ran; want the definition rejected before any of them", ran)
 	}
 }
+
+// TestEveryBuiltInStepReportsAnInvalidDefinitionThroughValidate asks each kind
+// the question only Validate can answer. Every case in this repository reached a
+// definition defect by running the step, and a run reports the same sentinel from
+// a second boundary: an unusable ID is refused again when the run claims an
+// identity, a nil child again when the composite invokes it. So a Validate that
+// silently returned nil kept passing the whole suite while breaking the contract
+// callers validate against — three kinds were in exactly that state.
+func TestEveryBuiltInStepReportsAnInvalidDefinitionThroughValidate(t *testing.T) {
+	body := workflow.Leaf(
+		"body",
+		workflow.Output("seed").Bind[int](),
+		flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+			return value, nil
+		}),
+	)
+	resolver := flow.NodeFunc[workflow.Store, string](
+		func(context.Context, workflow.Store) (string, error) { return "only", nil },
+	)
+	stop := flow.NodeFunc[workflow.Store, bool](
+		func(context.Context, workflow.Store) (bool, error) { return true, nil },
+	)
+	for name, testCase := range map[string]struct {
+		step workflow.Step
+		want error
+	}{
+		"leaf": {
+			step: workflow.Leaf("", workflow.Output("seed").Bind[int](),
+				flow.NodeFunc[int, int](func(_ context.Context, v int) (int, error) { return v, nil })),
+			want: workflow.ErrInvalidStepID,
+		},
+		"await": {
+			step: workflow.Await("", workflow.Output("approved")),
+			want: workflow.ErrInvalidStepID,
+		},
+		"interrupt": {
+			step: workflow.Interrupt("", "value"),
+			want: workflow.ErrInvalidStepID,
+		},
+		"branch": {
+			step: workflow.Branch(workflow.BranchConfig{
+				Resolver: resolver,
+				Cases:    map[string]workflow.Step{"only": body},
+			}),
+			want: workflow.ErrInvalidStepID,
+		},
+		"loop": {
+			step: workflow.Loop(workflow.LoopConfig{Condition: stop, Body: body}),
+			want: workflow.ErrInvalidStepID,
+		},
+		"iteration": {
+			step: workflow.Iteration(workflow.IterationConfig{
+				Input:      workflow.Output("items"),
+				Body:       body,
+				BodyOutput: workflow.Output("body"),
+			}),
+			want: workflow.ErrInvalidStepID,
+		},
+		"subgraph": {
+			step: workflow.Subgraph(workflow.SubgraphConfig{
+				Body:       body,
+				BodyOutput: workflow.Output("body"),
+			}),
+			want: workflow.ErrInvalidStepID,
+		},
+		"sequence": {
+			step: workflow.Sequence(nil),
+			want: workflow.ErrNilStep,
+		},
+		"parallel": {
+			step: workflow.Parallel(workflow.ParallelConfig{Steps: []workflow.Step{nil}}),
+			want: workflow.ErrNilStep,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := flow.Validate(testCase.step); !errors.Is(err, testCase.want) {
+				t.Fatalf("Validate = %v; want %v", err, testCase.want)
+			}
+		})
+	}
+}

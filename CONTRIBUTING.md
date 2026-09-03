@@ -877,6 +877,26 @@ go test ./example -run Example -v
   sentinel through `RunChild` — so only `Validate` can tell the positions apart.
   Only `gatedStep.satisfied`'s second cancellation check is an equivalence, and it
   says so where it sits.
+- Ask a boundary its own question, not the one a later boundary answers too.
+  Sweeping every error return in `workflow` exhaustively — the sampled half had
+  been enough to find the wrappers above — turned up one gap and one species. The
+  gap: `Await` and `Interrupt` could have returned `nil` from `Validate` and passed
+  the entire suite, because every case in this repository reached a definition
+  defect by running the step, and a run refuses an unusable ID again when it
+  claims an identity. `Validate` is what a caller checks a definition with before
+  anything runs, so
+  `TestEveryBuiltInStepReportsAnInvalidDefinitionThroughValidate` now asks all
+  nine kinds directly, in the two shapes a built-in step can be wrong: an ID it
+  cannot be identified by, and a child that is not there.
+  The species is the re-checked cancellation — `gatedStep.satisfied` twice,
+  `leafExecution.start` on its unobserved path, `runState.replay`. Each asks
+  `context.Cause` where nothing between it and the previous asker can have
+  changed the answer, so no test can distinguish them, and none of them is
+  removable for that reason: they are why cancellation does not depend on who was
+  watching or on which boundary a caller happened to enter through. Each says so
+  where it sits, and `gatedStep.validate` is the same shape one level up — a
+  delegation kept for interface transparency that the compiler already made
+  incapable of failing.
 - A warning in the documentation is a claim about behavior, so it needs a guard
   like any other. `workflow/doc.go` tells callers that the generic combinators
   know nothing about a Store, so a first-success or error-recovery one may hide a

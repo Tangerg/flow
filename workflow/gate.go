@@ -75,6 +75,10 @@ func gated(gates []compiledGate, trigger Trigger, step definedStep) definedStep 
 	}
 }
 
+// validate delegates for interface transparency rather than to catch anything:
+// a definition walk reaches every gated node through here, but the compiler
+// refused any node whose step fails validation before it was ever wrapped, and
+// validation is pure, so the delegated call cannot start failing later.
 func (g gatedStep) validate() error { return g.step.validate() }
 
 func (g gatedStep) Describe() Description { return g.step.Describe() }
@@ -139,17 +143,18 @@ func (g gatedStep) satisfied(ctx context.Context, store Store) (bool, error) {
 		selections: make(map[string]routingSelection, len(g.gates)),
 	}
 	matched := 0
+	// Both checks below are here because cancellation outranks a gate's answer:
+	// "not satisfied" is not a neutral result, it publishes a bypass that this
+	// node's descendants inherit. Neither is observable, and not for the usual
+	// reason -- the scheduler already refuses to start a node under a cancelled
+	// context, and matching a gate is a Store read, so no cancellation can arrive
+	// between these statements. What they buy is that this answer cannot become
+	// the exception if a future caller reaches a gate any other way.
 	for _, gate := range g.gates {
 		if err := context.Cause(ctx); err != nil {
 			return false, err
 		}
 		match, err := evaluation.match(ctx, store, gate)
-		// Cancellation outranks a gate's answer, because "not satisfied" is not a
-		// neutral result here: it publishes a bypass its descendants inherit. No
-		// test can show it -- matching a gate is a Store read with nothing to
-		// schedule against, so a cancellation lands either before this loop, where
-		// the check above catches it, or after the last gate, where the step's own
-		// boundary refuses to start.
 		if contextErr := context.Cause(ctx); contextErr != nil {
 			return false, contextErr
 		}
