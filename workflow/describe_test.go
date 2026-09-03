@@ -317,6 +317,13 @@ func TestDescribe_everyCompositeReportsItsID(t *testing.T) {
 			ID: "iteration", Input: workflow.Output("in"),
 			Body: leafStep("body"), BodyOutput: workflow.Output("body"),
 		}),
+		// A subgraph belongs with the named kinds for the same reason as the
+		// others: its ID names the scope its body runs in and the cell its output
+		// is projected to. The structural kinds are checked below, and a compiled
+		// Graph is one of them: it names its nodes rather than itself.
+		workflow.KindSubgraph: workflow.Subgraph(workflow.SubgraphConfig{
+			ID: "subgraph", Body: leafStep("body"), BodyOutput: workflow.Output("body"),
+		}),
 	}
 	for kind, step := range steps {
 		t.Run(string(kind), func(t *testing.T) {
@@ -332,12 +339,20 @@ func TestDescribe_everyCompositeReportsItsID(t *testing.T) {
 		})
 	}
 
-	// Sequence and parallel are structural and carry no ID.
+	// Sequence, parallel, and a compiled graph are structural and carry no ID.
+	registry := workflow.NewRegistry().MustRegisterNode("node", addN())
+	graph, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{{
+		ID: "a", Type: "node", Inputs: workflow.OneInput(workflow.Output("seed")),
+	}}})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
 	for kind, step := range map[workflow.Kind]workflow.Step{
 		workflow.KindSequence: workflow.Sequence(leafStep("a")),
 		workflow.KindParallel: workflow.Parallel(workflow.ParallelConfig{
 			Steps: []workflow.Step{leafStep("a")},
 		}),
+		workflow.KindGraph: graph,
 	} {
 		t.Run(string(kind), func(t *testing.T) {
 			if d := workflow.Describe(step); d.Kind != kind || d.ID != "" {
