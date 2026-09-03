@@ -42,6 +42,14 @@ import (
 // Every method takes a value receiver so a Store cannot be mutated through a
 // copy. UnmarshalJSON is the one exception: [json.Unmarshaler] requires a pointer,
 // and replacing a Store wholesale is the only way to decode one.
+//
+// A Store compares with == because its fields do, and that comparison answers
+// about lineage rather than content: two Stores that compare equal hold the same
+// cells, while two assembled separately from the same values do not. So it
+// recognizes one Store, such as the zero one, and does not ask whether two hold
+// the same thing. Neither does [Store.Changes], which reports by write identity
+// and therefore reports every cell of an unrelated Store. What two Stores hold is
+// compared through their encoded form, which is canonical.
 type Store struct {
 	snapshot *storeSnapshot
 	delta    *storeDelta

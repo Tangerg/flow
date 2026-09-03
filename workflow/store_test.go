@@ -1,6 +1,7 @@
 package workflow_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"math"
@@ -1019,5 +1020,52 @@ func TestStoreGet_bytesAndTextShareOneJSONKind(t *testing.T) {
 				t.Fatalf("bytes as string = %q, %v; want the base64 spelling", spelling, err)
 			}
 		})
+	}
+}
+
+// TestStoreComparesByLineageNotContent pins the reading of == that a caller can
+// get wrong in the quiet direction. It compiles on a Store and looks like value
+// equality, so it needs to be true that equal implies the same cells — it is,
+// because a shared snapshot and overlay head cannot disagree — and clear that
+// the converse fails: two Stores holding the same values, assembled apart, are
+// not equal. Store.Changes is the content question.
+func TestStoreComparesByLineageNotContent(t *testing.T) {
+	original := workflow.NewStore().WithOutput("a", 1)
+	copied := original
+	if copied != original {
+		t.Fatal("a copied Store differs from the Store it was copied from")
+	}
+	if changes := copied.Changes(original); len(changes) != 0 {
+		t.Fatalf("copied Changes = %+v; want none", changes)
+	}
+
+	same := workflow.NewStore().WithOutput("a", 1)
+	if same == original {
+		t.Fatal("two separately assembled Stores compared equal; == is not content equality")
+	}
+	// Changes is not the content question either: it reports by write identity,
+	// so an unrelated Store reports every cell it holds.
+	if changes := same.Changes(original); len(changes) != 1 {
+		t.Fatalf("Changes across lineages = %+v; want every cell reported", changes)
+	}
+	// The encoded form is, because it is canonical.
+	left, err := json.Marshal(same)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	right, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !bytes.Equal(left, right) {
+		t.Fatalf("encoded %s and %s; want one canonical form for the same cells", left, right)
+	}
+
+	var zero workflow.Store
+	if zero != (workflow.Store{}) {
+		t.Fatal("the zero Store is not recognizable by comparison")
+	}
+	if (workflow.Store{}) == workflow.NewStore().WithOutput("a", 1) {
+		t.Fatal("the zero Store compared equal to a Store with a cell")
 	}
 }

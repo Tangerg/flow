@@ -23,6 +23,11 @@ var (
 // including replacement of invalid UTF-8 in ordinary Go strings. Node IDs and
 // cell keys must be valid UTF-8 so their identities survive the JSON boundary
 // unchanged.
+//
+// The encoding is canonical: nodes and their keys are ordered by name, so two
+// Stores holding the same cells encode identically however they were assembled.
+// That is what makes the encoded form the comparison for content, which neither
+// == nor [Store.Changes] answers.
 func (s Store) MarshalJSON() ([]byte, error) {
 	encoded, err := s.jsonDocument().encode()
 	if err != nil {
