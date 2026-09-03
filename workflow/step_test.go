@@ -1301,3 +1301,112 @@ func TestEveryBuiltInStepReportsAnInvalidDefinitionThroughValidate(t *testing.T)
 		})
 	}
 }
+
+// TestEveryCompositePublishesOnlyTheCellsItNames pins the axiom that a cell
+// belongs to the node that produced it, from the outside: what a composite adds
+// to the Store it was given is exactly what its own definition names. Each
+// composite's own tests ask for its output and spot-check a neighbour or two,
+// which cannot see an extra cell appearing beside it — an internal marker, a
+// body's private cell, or the item an Iteration writes for each element, whose
+// absence out here is the whole reason element stores are derived and dropped.
+func TestEveryCompositePublishesOnlyTheCellsItNames(t *testing.T) {
+	number := func(id string, ref workflow.Ref) workflow.Step {
+		return workflow.LeafFunc(id, ref,
+			func(_ context.Context, value int) (int, error) { return value + 1, nil })
+	}
+	seed := workflow.Output("seed")
+	first, second := number("a", seed), number("b", seed)
+	input := workflow.NewStore().WithOutput("seed", 1)
+
+	registry := workflow.NewRegistry().MustRegisterNode("add", addN())
+	graph, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
+		{ID: "one", Type: "add", Inputs: workflow.Inputs{workflow.DefaultPort: seed}},
+		{ID: "two", Type: "add", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("one")}},
+	}})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+
+	for name, testCase := range map[string]struct {
+		step  workflow.Step
+		input workflow.Store
+		want  []string
+	}{
+		"leaf": {
+			step: first, input: input,
+			want: []string{"a#/output"},
+		},
+		"sequence": {
+			step: workflow.Sequence(first, second), input: input,
+			want: []string{"a#/output", "b#/output"},
+		},
+		"parallel": {
+			step: workflow.Parallel(workflow.ParallelConfig{
+				Steps: []workflow.Step{first, second},
+			}),
+			input: input,
+			want:  []string{"a#/output", "b#/output"},
+		},
+		"branch": {
+			step: workflow.Branch(workflow.BranchConfig{
+				ID: "pick",
+				Resolver: flow.NodeFunc[workflow.Store, string](
+					func(context.Context, workflow.Store) (string, error) { return "left", nil },
+				),
+				Cases: map[string]workflow.Step{"left": first, "right": second},
+			}),
+			input: input,
+			want:  []string{"a#/output"},
+		},
+		"loop": {
+			step: workflow.Loop(workflow.LoopConfig{
+				ID:   "loop",
+				Body: first,
+				Condition: flow.NodeFunc[workflow.Store, bool](
+					func(context.Context, workflow.Store) (bool, error) { return true, nil },
+				),
+			}),
+			input: input,
+			want:  []string{"a#/output"},
+		},
+		"iteration": {
+			step: workflow.Iteration(workflow.IterationConfig{
+				ID:         "each",
+				Input:      workflow.Output("items"),
+				Body:       number("body", workflow.Item("each")),
+				BodyOutput: workflow.Output("body"),
+			}),
+			input: workflow.NewStore().WithOutput("items", []any{1, 2}),
+			want:  []string{"each#/output"},
+		},
+		"subgraph": {
+			step: workflow.Subgraph(workflow.SubgraphConfig{
+				ID:         "sub",
+				Inputs:     workflow.Inputs{"inner-seed": seed},
+				Body:       number("inner", workflow.Output("inner-seed")),
+				BodyOutput: workflow.Output("inner"),
+			}),
+			input: input,
+			want:  []string{"sub#/output"},
+		},
+		"graph": {
+			step: graph, input: input,
+			want: []string{"one#/output", "two#/output"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, runErr := workflow.Run(t.Context(), testCase.step, testCase.input, workflow.RunConfig{})
+			if runErr != nil {
+				t.Fatalf("Run: %v", runErr)
+			}
+			published := make([]string, 0, 4)
+			for _, change := range out.Changes(testCase.input) {
+				published = append(published, change.Ref.String())
+			}
+			slices.Sort(published)
+			if !slices.Equal(published, testCase.want) {
+				t.Fatalf("published %v; want exactly %v", published, testCase.want)
+			}
+		})
+	}
+}
