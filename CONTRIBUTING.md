@@ -1202,6 +1202,20 @@ go test ./example -run Example -v
   filled. So the wiring of same-typed fields is observed wherever the values
   differ, and it is the argument list, not the struct literal, that was worth
   sweeping.
+- Flip a boolean return, which statement deletion cannot reach: deleting
+  `return true` from a function that must return a value does not compile, so
+  every earlier sweep spent those sites on the type checker. All 52 bare
+  `return true` and `return false` statements in the module, flipped one at a
+  time: 51 killed, one survivor, and it was a documented promise nothing tested.
+  `nilAssignable` decides which Go kinds an untyped nil result may be assigned
+  to, and its comment says Eval accepts nil for `any` and other nilable types
+  "without weakening exact type checks for concrete values". Nothing read a nil
+  into a concrete T, so answering true for every kind turned a stored JSON null
+  into a silent `0` or `""` — the guess this module refuses everywhere else — and
+  passed the suite. `TestEval_untypedNilIsAssignableOnlyToANilableTarget` states
+  both halves as the set they are: every kind the boundary names, unsafe.Pointer
+  included, and the concrete kinds a caller plausibly asks for. Dropping an
+  accepted kind and accepting a concrete one each fail it.
 - A rule with three legs needs three tests, and the one nothing states is the
   leg to look for. A bypass reaches a gated dependent as a bypass and a data edge
   as an error — both pinned, and the second is the documented "bypass is

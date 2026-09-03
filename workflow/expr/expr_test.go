@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/workflow"
@@ -1284,4 +1285,64 @@ func TestEval_lenMeasuresTheStoredKind(t *testing.T) {
 	if err != nil || after != 8 {
 		t.Fatalf("len after = %d, %v; want the encoded string length 8", after, err)
 	}
+}
+
+// TestEval_untypedNilIsAssignableOnlyToANilableTarget pins the boundary Eval's
+// own comment claims: a nil expression or Store value is accepted for T = any
+// and other nilable types "without weakening exact type checks for concrete
+// values". The second half was the unpinned one. Nothing here read a nil into a
+// concrete T, so a boundary that accepted every kind would have turned a stored
+// JSON null into a silent 0 or "" — the guess this module refuses everywhere
+// else — and passed the suite. A boolean-return sweep found it: flipping the
+// default answer to true broke nothing.
+//
+// Both halves are listed because the accepted set is a claim about
+// [reflect.Kind], not about the two types a test would otherwise reach for. Every
+// kind the boundary names is here, [unsafe.Pointer] included, and the refused
+// cases are the kinds a caller most plausibly asks for.
+func TestEval_untypedNilIsAssignableOnlyToANilableTarget(t *testing.T) {
+	store := workflow.NewStore().WithOutput("a", nil)
+	expression := expr.MustParse("a.output")
+
+	assertNilAccepted := func(name string, err error) {
+		t.Helper()
+		if err != nil {
+			t.Errorf("Eval[%s] on a nil value = %v; want the zero value of a nilable type", name, err)
+		}
+	}
+	assertNilRefused := func(name string, err error) {
+		t.Helper()
+		if !errors.Is(err, expr.ErrType) {
+			t.Errorf("Eval[%s] on a nil value = %v; want ErrType rather than a zero value", name, err)
+		}
+	}
+
+	_, err := expression.Eval[any](store)
+	assertNilAccepted("any", err)
+	_, err = expression.Eval[map[string]any](store)
+	assertNilAccepted("map", err)
+	_, err = expression.Eval[[]any](store)
+	assertNilAccepted("slice", err)
+	_, err = expression.Eval[*int](store)
+	assertNilAccepted("pointer", err)
+	_, err = expression.Eval[func()](store)
+	assertNilAccepted("func", err)
+	_, err = expression.Eval[chan int](store)
+	assertNilAccepted("chan", err)
+	_, err = expression.Eval[unsafe.Pointer](store)
+	assertNilAccepted("unsafe.Pointer", err)
+
+	value, err := expression.Eval[int](store)
+	assertNilRefused("int", err)
+	if value != 0 {
+		t.Errorf("Eval[int] returned %d beside its error; want the zero value", value)
+	}
+	_, err = expression.Eval[string](store)
+	assertNilRefused("string", err)
+	_, err = expression.Eval[bool](store)
+	assertNilRefused("bool", err)
+	_, err = expression.Eval[struct{}](store)
+	assertNilRefused("struct", err)
+	_, err = expression.Eval[[1]int](store)
+	assertNilRefused("array", err)
 }
