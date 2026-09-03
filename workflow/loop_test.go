@@ -663,3 +663,69 @@ func TestBodyMayReuseItsCompositeIDOnlyWhereNothingDecidesInThatScope(t *testing
 		})
 	}
 }
+
+// TestLoop_iterationCapIsAPerRunBudget pins two halves of the cap that the
+// documentation now states and nothing checked. Reaching it is not a rolled-back
+// failure: every iteration completed, so the Store that comes back holds their
+// work. And because an iteration's identity is its index, a run that resumes
+// with the same Journal replays what was recorded and continues — so raising the
+// cap carries the loop forward instead of starting it over, which is what lets a
+// host bound the work one attempt may do.
+func TestLoop_iterationCapIsAPerRunBudget(t *testing.T) {
+	var bodyRuns int
+	loopWithCap := func(iterations int) workflow.Step {
+		return workflow.Loop(workflow.LoopConfig{
+			ID: "loop",
+			Body: workflow.Leaf(
+				"body",
+				workflow.FirstOf[int](workflow.Output("body"), workflow.Output("seed")),
+				flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+					bodyRuns++
+					return value + 1, nil
+				}),
+			),
+			Condition: flow.NodeFunc[workflow.Store, bool](
+				func(_ context.Context, store workflow.Store) (bool, error) {
+					value, err := store.Get[int](workflow.Output("body"))
+					return value >= 15, err
+				},
+			),
+			MaxIterations: iterations,
+		})
+	}
+
+	journal := workflow.NewJournal()
+	paused, err := workflow.Run(
+		t.Context(),
+		loopWithCap(3),
+		workflow.NewStore().WithOutput("seed", 10),
+		workflow.RunConfig{Journal: journal},
+	)
+	if !errors.Is(err, flow.ErrMaxIterations) {
+		t.Fatalf("first run error = %v; want ErrMaxIterations", err)
+	}
+	if bodyRuns != 3 {
+		t.Fatalf("body ran %d times; want the cap's three", bodyRuns)
+	}
+	// Three completed iterations from 10, and the Store shows all of them.
+	if value, getErr := paused.Get[int](workflow.Output("body")); getErr != nil || value != 13 {
+		t.Fatalf("capped Store = %d, %v; want the last completed iteration's 13", value, getErr)
+	}
+
+	bodyRuns = 0
+	out, err := workflow.Run(
+		t.Context(),
+		loopWithCap(10),
+		paused,
+		workflow.RunConfig{Journal: journal},
+	)
+	if err != nil {
+		t.Fatalf("resumed run: %v", err)
+	}
+	if bodyRuns != 2 {
+		t.Fatalf("body ran %d times on resume; want only the two unrecorded iterations", bodyRuns)
+	}
+	if value, getErr := out.Get[int](workflow.Output("body")); getErr != nil || value != 15 {
+		t.Fatalf("resumed Store = %d, %v; want the condition's 15", value, getErr)
+	}
+}

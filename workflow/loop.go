@@ -39,8 +39,15 @@ type LoopConfig struct {
 // If the body or stop condition suspends, Loop returns the Store produced so far
 // by that iteration. An ordinary failure retains the Store from before the
 // failing iteration, matching [flow.Loop]. Parent cancellation also takes
-// precedence before an iteration commits and retains that prior Store. Reaching
-// the iteration cap returns a [StepError] wrapping [flow.ErrMaxIterations].
+// precedence before an iteration commits and retains that prior Store.
+//
+// Reaching the iteration cap returns a [StepError] wrapping
+// [flow.ErrMaxIterations] together with the Store the last completed iteration
+// produced: no iteration failed, so none is rolled back. The cap is therefore a
+// per-run budget rather than a broken definition. A run that resumes with the
+// same Journal replays the iterations it recorded and continues from there, so
+// raising the cap carries the loop forward instead of starting it over — which
+// is how a host bounds the work one attempt may do.
 //
 // An empty or non-UTF-8 ID, nil Body, nil Condition, or negative MaxIterations
 // is rejected before the body runs.
