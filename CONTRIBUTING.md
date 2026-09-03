@@ -885,6 +885,24 @@ go test ./example -run Example -v
   sentinel through `RunChild` — so only `Validate` can tell the positions apart.
   Only `gatedStep.satisfied`'s second cancellation check is an equivalence, and it
   says so where it sits.
+- A guard that looks for something must fail when it finds nothing. Two shapes
+  here can pass without examining anything, and both did. Twelve tests prove an
+  operation walks iteratively by re-running themselves in a subprocess with a
+  256 KiB stack — and `go test -run` exits 0 when its pattern selects nothing, so
+  renaming any of them would have left a subprocess that proves the operation
+  never ran. The child now prints after the body returns and the parent requires
+  it. The other shape is a walk that only reports what is wrong:
+  `TestDocumentedAPINamesResolve` collected unresolved names and said nothing
+  about how many resolved, so a walk that stopped seeing Markdown, or a pattern
+  that stopped matching, read as documentation with nothing wrong in it. Every
+  walking guard now counts what it examined — `edges`, `checked`, `documented`,
+  `resolved`, `len(cited)`, `len(shared)` — and the two that cannot be empty by
+  construction are the ones driven by a table.
+  The same question applies to an instrument's limits: `ctxtest.CancelAtCheck`
+  decides the moment a boundary sees cancellation, and [context.Cause] returns a
+  parent's cause ahead of its own, so a test wrapping an already-cancelled parent
+  would observe the wrong moment and still pass its assertion about being
+  cancelled. That limit is now stated on the helper and pinned by a test.
 - One lock may span application code, and no path may hold two. That is the whole
   deadlock argument for this module, and it was spread across three comments that
   each stated their own half: `Registry.snapshot` takes one immutable view rather

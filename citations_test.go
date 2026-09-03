@@ -97,10 +97,15 @@ func TestDocumentedAPINamesResolve(t *testing.T) {
 		"diagram":  exportedNames(t, "workflow/diagram"),
 	}
 	unresolved := make(map[string][]string)
+	// Counted because the reporting below is silent when nothing was examined:
+	// a walk that stopped seeing Markdown, or a pattern that stopped matching a
+	// qualified name, reads exactly like documentation with nothing wrong in it.
+	resolved := 0
 	walkRepository(t, ".md", func(name string, data []byte) {
 		for index, line := range strings.Split(string(data), "\n") {
 			for _, match := range qualifiedNamePattern.FindAllStringSubmatch(line, -1) {
 				if _, ok := exported[match[1]][match[2]]; ok {
+					resolved++
 					continue
 				}
 				qualified := match[1] + "." + match[2]
@@ -111,8 +116,8 @@ func TestDocumentedAPINamesResolve(t *testing.T) {
 			}
 		}
 	})
-	if len(unresolved) == 0 {
-		return
+	if resolved == 0 {
+		t.Fatal("no documented API name resolved; the walk stopped seeing the repository")
 	}
 	for _, qualified := range slices.Sorted(maps.Keys(unresolved)) {
 		t.Errorf("%s: %s names nothing this module exports", strings.Join(unresolved[qualified], ", "), qualified)
