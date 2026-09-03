@@ -16,6 +16,10 @@ import (
 // observed before result commit takes precedence over a winner or child errors;
 // Race still waits for every admitted node before returning the parent cause.
 //
+// A panic in a node is not recovered: Race runs every node on a goroutine of its
+// own, so the process ends with that node's stack rather than unwinding to the
+// caller. [Map] says why that is the choice.
+//
 // Race is the disjunction concurrency primitive — the "first success wins" twin
 // of [Map]'s "wait for all". It cannot be expressed by a wait-for-all map, so it
 // is a primitive rather than a derived helper.

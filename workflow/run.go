@@ -85,6 +85,9 @@ func (s *scopedSet) has(key JournalKey) bool {
 // failure event. Run cancels the execution context supplied to step before returning,
 // and also while unwinding a panic, so correctly context-aware background work
 // cannot outlive the run-scoped identity, observers, or Journal configuration.
+// Only a panic on this goroutine unwinds here: one raised inside a child that
+// [Parallel], [Iteration], or a compiled [Graph] scheduled concurrently ends the
+// process instead, for the reason [flow.Map] gives.
 // A Step remains responsible for joining work whose result belongs to its Run
 // call. A nil step returns [ErrNilStep].
 //

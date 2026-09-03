@@ -37,6 +37,13 @@ func nonNegativeCount(name string, value int) error {
 // call happened to return successfully. A nil node is rejected even when the
 // input is empty.
 //
+// A panic in node is not recovered. Where Map runs node on a goroutine of its
+// own, the process ends with that node's stack, which is what errgroup chose
+// deliberately: propagating a panic delays it, reduces its stack to a value, and
+// can hide it entirely if the panic leaves the join unreachable. A single
+// element runs on the calling goroutine and therefore unwinds to the caller
+// instead, which is the one difference between the two paths.
+//
 // Map is the concurrency primitive — fan-out, collecting a result per item, and
 // heterogeneous fan-in are derivable from it and live in higher-level packages
 // rather than in flow.
@@ -94,7 +101,9 @@ func (f fanOut) run(parent context.Context) error {
 	}
 	// A single call is scheduled by the same rules as a sequential run; it takes
 	// that path to skip an errgroup it would never use, not because one element
-	// is admitted or cancelled differently.
+	// is admitted or cancelled differently. It does panic differently, because it
+	// never leaves the caller's goroutine -- see
+	// TestPanicReachesTheCallerOnlyFromItsOwnGoroutine.
 	switch {
 	case f.count == 1 || f.limit == 1:
 		return f.runSequential(parent)

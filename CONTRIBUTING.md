@@ -801,6 +801,20 @@ go test ./example -run Example -v
   `TestCoreLocationsReadTheSameThroughEitherFormatter` expects flow's own
   rendering rather than a third spelling of it, so deleting or rewording either
   copy fails until both agree.
+- A panic reaches the caller only from the caller's own goroutine, and that is
+  worth saying out loud. `Run` cancels its derived context while unwinding a
+  panic, which reads as a promise that a panic unwinds — and it does, until a
+  composite schedules the child elsewhere. `errgroup` refuses to propagate a
+  panic on purpose: doing so delays it, reduces its stack to a value, and can
+  hide it entirely if the panic leaves the join unreachable. `Race` starts its own
+  goroutines and inherits the same answer. Adding a recover would be arguing with
+  that reasoning, so the behavior stays and the documents stop implying otherwise.
+  The sharp edge is arity: `fanOut` runs a single element on the calling
+  goroutine, so a one-element fan-out unwinds and a two-element one ends the
+  process. A caller who tests recovery against the first and ships the second gets
+  a crash, which is why
+  `TestPanicReachesTheCallerOnlyFromItsOwnGoroutine` pins both halves — the
+  in-process recover, and a subprocess that must die with the node's own stack.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

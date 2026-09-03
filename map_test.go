@@ -3,6 +3,10 @@ package flow_test
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"regexp"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -355,5 +359,57 @@ func TestMap_boundedFailureStopsScheduling(t *testing.T) {
 	}
 	if got := started.Load(); got != 2 {
 		t.Fatalf("started %d nodes after failure; want exactly initial 2", got)
+	}
+}
+
+// TestPanicReachesTheCallerOnlyFromItsOwnGoroutine pins the one difference a
+// caller can observe between the two paths fanOut dispatches to, and it is not
+// the one the fast path exists for. A single element runs on the calling
+// goroutine, so a panic in it unwinds through Run and a caller's recover sees
+// it; two elements run under an errgroup, which deliberately does not propagate
+// a panic -- doing so would delay it, reduce its stack to a value, and risk
+// hiding it in a deadlock -- so the process ends with the node's own stack.
+//
+// A caller who tests recovery against a one-element fan-out and ships a
+// two-element one gets a crash, which is why this is written down rather than
+// left to the shape of the input.
+func TestPanicReachesTheCallerOnlyFromItsOwnGoroutine(t *testing.T) {
+	const panicValue = "node panic"
+	panicking := flow.NodeFunc[int, int](func(context.Context, int) (int, error) {
+		panic(panicValue)
+	})
+
+	if os.Getenv(concurrentPanicChild) == t.Name() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				// Reaching the caller is what this child exists to disprove.
+				panic("a concurrent child's panic was propagated: " + recovered.(string))
+			}
+		}()
+		_, _ = flow.Map(panicking, flow.MapConfig{}).Run(context.Background(), []int{1, 2})
+		return
+	}
+
+	recovered := func() (value any) {
+		defer func() { value = recover() }()
+		_, _ = flow.Map(panicking, flow.MapConfig{}).Run(t.Context(), []int{1})
+		return nil
+	}()
+	if recovered != panicValue {
+		t.Fatalf("one element: recovered = %v; want %q", recovered, panicValue)
+	}
+
+	//nolint:gosec // Re-executes this test binary with a quoted testing-owned name.
+	command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$")
+	command.Env = append(os.Environ(), concurrentPanicChild+"="+t.Name())
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("two elements: the child exited cleanly; want the panic to end it\n%s", output)
+	}
+	if !strings.Contains(string(output), panicValue) {
+		t.Fatalf("two elements: the panic did not reach the crash output\n%s", output)
+	}
+	if strings.Contains(string(output), "was propagated") {
+		t.Fatalf("two elements: the panic reached the caller's recover\n%s", output)
 	}
 }

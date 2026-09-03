@@ -16,6 +16,7 @@ import (
 const (
 	boundedIndexErrorStackChild    = "FLOW_BOUNDED_INDEX_ERROR_STACK_TEST"
 	boundedMixedLocationStackChild = "FLOW_BOUNDED_MIXED_LOCATION_STACK_TEST"
+	concurrentPanicChild           = "FLOW_CONCURRENT_PANIC_TEST"
 )
 
 func TestIndexError(t *testing.T) {
