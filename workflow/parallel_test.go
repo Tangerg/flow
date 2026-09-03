@@ -510,3 +510,50 @@ func TestParallel_compactsLargeMergedResult(t *testing.T) {
 		}
 	}
 }
+
+// gatedWriter is a caller-defined branch that writes a shared cell and can be
+// held until another branch has finished, which is how a test chooses the
+// completion order instead of observing whichever one the scheduler produced.
+type gatedWriter struct {
+	value  string
+	wait   <-chan struct{}
+	signal chan<- struct{}
+}
+
+func (g gatedWriter) Run(_ context.Context, store workflow.Store) (workflow.Store, error) {
+	if g.wait != nil {
+		<-g.wait
+	}
+	next := store.WithOutput("shared", g.value)
+	if g.signal != nil {
+		close(g.signal)
+	}
+	return next, nil
+}
+
+// TestParallel_mergesInDeclarationOrderNotCompletionOrder pins which order the
+// conflict rule means, and therefore whether a Parallel is reproducible.
+// TestParallel_laterBranchWinsCellConflict shows that a later branch wins, but
+// its branches both finish at once, so a merge that followed completion order
+// would pass it whenever the scheduler happened to finish them in declaration
+// order. Here the first branch is held until the second has finished, which is
+// the only arrangement that tells the two rules apart — and if the rule were
+// temporal, one definition and one input would merge differently from run to
+// run. Only a caller-defined branch can write another's cell, so that is what
+// both tests use.
+func TestParallel_mergesInDeclarationOrderNotCompletionOrder(t *testing.T) {
+	secondDone := make(chan struct{})
+	step := workflow.Parallel(workflow.ParallelConfig{Steps: []workflow.Step{
+		gatedWriter{value: "first", wait: secondDone},
+		gatedWriter{value: "second", signal: secondDone},
+	}})
+
+	out, err := workflow.Run(t.Context(), step, workflow.NewStore(), workflow.RunConfig{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got, getErr := out.Get[string](workflow.Output("shared"))
+	if getErr != nil || got != "second" {
+		t.Fatalf("shared = %q, %v; want the later-declared branch's value", got, getErr)
+	}
+}

@@ -29,6 +29,12 @@ import (
 // [Interrupt] result, [Journal.Reset] starts a run over, and [Journal.Forget]
 // removes one exact checkpoint.
 //
+// A record is keyed by identity, not by the input that produced it. Replay
+// restores what a step returned last time even when the values it read have
+// changed since, so resume from the Store the records were made with — see
+// [Iteration], where positional element identity makes this visible — and start
+// a new logical run with a fresh Journal when inputs are read again.
+//
 // A Journal is safe for concurrent use within one logical workflow execution;
 // concurrent branches record into the same one. It does not serialize separate
 // [Run] calls. The host must admit at most one Run for a logical execution at a

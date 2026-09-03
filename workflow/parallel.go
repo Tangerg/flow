@@ -40,8 +40,10 @@ type ParallelConfig struct {
 // work, and a merge cannot resurrect a stale cell that a Graph removed. A
 // caller-defined branch that returns an unrelated or separately decoded Store
 // intentionally presents all of its cells as new writes; cells absent from that
-// unrelated Store do not delete the input. On a same-cell conflict a later
-// branch's change wins. A zero [ParallelConfig] runs every branch concurrently.
+// unrelated Store do not delete the input. On a same-cell conflict the branch
+// declared later wins, whichever one finished first, so one definition and one
+// input merge the same way however the branches were scheduled.
+// A zero [ParallelConfig] runs every branch concurrently.
 // Before running, it rejects nil branches and duplicate IDs in steps built by
 // this package. Built-in steps hidden inside caller-defined steps validate and
 // claim their identities when invoked.
