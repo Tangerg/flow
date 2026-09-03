@@ -210,6 +210,40 @@ func TestIteration_rejectsImpossibleOutputFromVisibleBody(t *testing.T) {
 	}
 }
 
+// TestIteration_collectsEachElementIndex pins the projection IterationConfig
+// offers in prose -- BodyOutput may select [ItemIndex] itself -- and that
+// nothing here ran. The negative half below is why it went unnoticed: a
+// validator that stopped recognizing ItemIndex as a projection at all refuses a
+// child path below it too, so that test passes either way. An argument swap
+// making the check ask for a node named "index" with a cell named after the
+// iteration survived the whole suite.
+func TestIteration_collectsEachElementIndex(t *testing.T) {
+	step := workflow.Iteration(workflow.IterationConfig{
+		ID:    "each",
+		Input: workflow.Output("items"),
+		Body: workflow.LeafFunc("body", workflow.Item("each"),
+			func(_ context.Context, value string) (string, error) { return value, nil }),
+		BodyOutput: workflow.ItemIndex("each"),
+	})
+
+	out, err := workflow.Run(
+		t.Context(),
+		step,
+		workflow.NewStore().WithOutput("items", []any{"a", "b", "c"}),
+		workflow.RunConfig{},
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	collected, err := out.Get[[]any](workflow.Output("each"))
+	if err != nil {
+		t.Fatalf("collected output: %v", err)
+	}
+	if !slices.Equal(collected, []any{0, 1, 2}) {
+		t.Fatalf("collected = %#v; want each element's index in order", collected)
+	}
+}
+
 func TestIteration_rejectsChildPathBelowItemIndex(t *testing.T) {
 	step := workflow.Iteration(workflow.IterationConfig{
 		ID:         "each",

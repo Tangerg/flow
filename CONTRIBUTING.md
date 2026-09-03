@@ -1176,6 +1176,23 @@ go test ./example -run Example -v
   bound and Iteration, Parallel, and `flowx.FanOut` forward to it, so what those
   tests pin is the forwarding — the graph scheduler is the exception that counts
   its own admitted work, which is why the rule is stated twice.
+- Swap two arguments the compiler cannot tell apart. Every earlier operator here
+  traded compile failures for findings — the keyed-field sweep lost 298 of 703
+  sites to the type checker — so the operator that wastes nothing is one whose
+  every mutant compiles by construction: take a function with two adjacent
+  parameters of the same type and swap those two arguments at a call site. All 65
+  such sites in the module, one at a time: 64 killed, **nothing failed to
+  compile**, and one survivor.
+  It found a projection the documentation offers and no test ran.
+  `IterationConfig.BodyOutput` may select [ItemIndex] itself, which collects each
+  element's index, and swapping the iteration's ID with the index cell name made
+  the validator ask for a node named "index" owning a cell named after the
+  iteration — refusing the documented form, passing every test. The neighbour is
+  why: `TestIteration_rejectsChildPathBelowItemIndex` pins the negative, and a
+  validator that stopped recognizing ItemIndex at all refuses a child path below
+  it too, so the negative test passes for either reason. A negative test beside a
+  missing positive one is a blind spot the suite cannot report,
+  which `TestIteration_collectsEachElementIndex` now closes.
 - A rule with three legs needs three tests, and the one nothing states is the
   leg to look for. A bypass reaches a gated dependent as a bypass and a data edge
   as an error — both pinned, and the second is the documented "bypass is
