@@ -815,6 +815,17 @@ go test ./example -run Example -v
   a crash, which is why
   `TestPanicReachesTheCallerOnlyFromItsOwnGoroutine` pins both halves — the
   in-process recover, and a subprocess that must die with the node's own stack.
+- Name the conversion a typed read cannot refuse. `Store.Get` promises it never
+  coerces between JSON kinds, and every cross-type read tried against it holds to
+  that — a float read as an int, a negative read as an unsigned, a string read as
+  a struct all report a mismatch. Bytes are the exception, because `encoding/json`
+  spells a `[]byte` as a base64 string: a stored string read as `[]byte` returns
+  what that text decodes to, and a stored `[]byte` read as a string returns its
+  base64 spelling, both without an error. Neither is detectable once a Store has
+  crossed JSON, and refusing either would cost a `[]byte` the round trip `Get`
+  exists to provide, so the behavior stays and the documentation names it.
+  `TestStoreGet_bytesAndTextShareOneJSONKind` pins what actually has to hold:
+  live and restored answer alike.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out

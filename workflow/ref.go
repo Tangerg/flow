@@ -126,6 +126,15 @@ func (r Ref) Child(segments ...string) Ref {
 // string. Conversion into an ordinary struct rejects unknown JSON members
 // instead of silently discarding data; a type implementing [json.Unmarshaler]
 // defines its own decoding contract.
+//
+// Bytes are the one Go distinction JSON does not keep: encoding/json writes a
+// []byte as a base64 string, so a stored string read as a []byte returns
+// whatever that text decodes to, and a stored []byte read as a string returns
+// its base64 spelling. Neither is a mismatch this can detect -- once a Store has
+// crossed JSON both are the same string -- and refusing either would cost a
+// []byte the round trip promised above, so the two behave alike before and after
+// persistence. Store text as a string and bytes as a []byte, and read each back
+// as what it is.
 func (s Store) Get[T any](ref Ref) (T, error) {
 	var zero T
 	target := reflect.TypeFor[T]()

@@ -978,3 +978,46 @@ func TestStoreGet_reportsWhatItAskedForAndWhatItFound(t *testing.T) {
 		})
 	}
 }
+
+// TestStoreGet_bytesAndTextShareOneJSONKind pins the one pair of Go types a
+// typed read cannot tell apart, and pins that it cannot tell them apart the same
+// way before and after persistence. encoding/json spells a []byte as a base64
+// string, so a stored string read as []byte decodes that text, and a stored
+// []byte read as a string returns its base64 spelling -- neither reports a
+// mismatch, because after a Store crosses JSON there is no difference left to
+// report. Refusing either direction would cost a []byte the round trip Get
+// promises, so what has to hold is that live and restored agree.
+func TestStoreGet_bytesAndTextShareOneJSONKind(t *testing.T) {
+	live := workflow.NewStore().
+		WithOutput("text", "abcd").
+		WithOutput("bytes", []byte("abcd"))
+	encoded, err := json.Marshal(live)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var restored workflow.Store
+	if err := json.Unmarshal(encoded, &restored); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	for name, store := range map[string]workflow.Store{"live": live, "restored": restored} {
+		t.Run(name, func(t *testing.T) {
+			decoded, err := store.Get[[]byte](workflow.Output("text"))
+			if err != nil || string(decoded) == "abcd" {
+				t.Fatalf("text as []byte = %q, %v; want the base64 decoding of the text", decoded, err)
+			}
+			text, err := store.Get[string](workflow.Output("text"))
+			if err != nil || text != "abcd" {
+				t.Fatalf("text as string = %q, %v; want the text", text, err)
+			}
+			bytes, err := store.Get[[]byte](workflow.Output("bytes"))
+			if err != nil || string(bytes) != "abcd" {
+				t.Fatalf("bytes as []byte = %q, %v; want the bytes back", bytes, err)
+			}
+			spelling, err := store.Get[string](workflow.Output("bytes"))
+			if err != nil || spelling != "YWJjZA==" {
+				t.Fatalf("bytes as string = %q, %v; want the base64 spelling", spelling, err)
+			}
+		})
+	}
+}
