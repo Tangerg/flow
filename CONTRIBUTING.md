@@ -885,6 +885,24 @@ go test ./example -run Example -v
   sentinel through `RunChild` — so only `Validate` can tell the positions apart.
   Only `gatedStep.satisfied`'s second cancellation check is an equivalence, and it
   says so where it sits.
+- A field matrix pins which members a kind may carry; which it must carry is a
+  second axis, and it was stated twice with nothing holding the copies together.
+  `TestSpecFieldMatricesAgreeWithTheSpecStruct` compares the schema's `properties`
+  with `specKindFields` and the `Spec` struct — the *allowed* axis. The *required*
+  axis lives in the schema's `required` lists and in the Go checks, and drift in
+  one direction is quiet and wrong: a member the schema demands and the Go path
+  does not makes the same definition valid in Go and invalid from JSON, which is
+  exactly what the three routes exist to prevent.
+  `TestEveryRequiredSpecMemberIsRequiredByBothRoutes` removes each required member
+  from a spec both routes accept and requires both to refuse what is left.
+  Asserting the complete spec first is what keeps a refusal from being about
+  something else — and it is what catches the opposite drift, a schema that grew a
+  requirement the Go path has never heard of.
+  The expectation is written out rather than read from the schema. A test that
+  derives its cases from one of the copies cannot see that copy shrink: reading
+  the required list from the schema meant deleting `condition` from the loop's
+  list merely stopped generating the case that would have caught it, which is how
+  the first version of this test passed that mutation.
 - A guard that looks for something must fail when it finds nothing. Two shapes
   here can pass without examining anything, and both did. Twelve tests prove an
   operation walks iteratively by re-running themselves in a subprocess with a

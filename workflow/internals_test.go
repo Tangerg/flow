@@ -2698,3 +2698,189 @@ func TestEveryFanOutSharesOneFlattenedBase(t *testing.T) {
 		})
 	}
 }
+
+// TestEveryRequiredSpecMemberIsRequiredByBothRoutes pins the axis
+// TestSpecFieldMatricesAgreeWithTheSpecStruct leaves open. That test holds the
+// schema and specKindFields to the same set of members a kind may carry; which
+// of them a kind must carry is stated twice as well — once as a schema
+// "required" list, once by the Go checks — and nothing held those two together.
+//
+// Drift in one direction is quiet and wrong: a member the schema demands and the
+// Go path does not makes the same definition valid in Go and invalid from JSON,
+// which is the disagreement the three construction routes exist to prevent.
+//
+// The expectation below is written out rather than read from the schema, because
+// a test that derives its cases from one of the copies cannot see that copy
+// shrink: dropping "condition" from the loop's required list would simply stop
+// generating the case that would have caught it.
+var wantSpecRequired = map[Kind][]string{
+	KindLeaf:      {fieldID, fieldType},
+	KindSequence:  nil,
+	KindParallel:  nil,
+	KindBranch:    {fieldID, fieldResolver, fieldCases},
+	KindLoop:      {fieldID, fieldBody, fieldCondition},
+	KindIteration: {fieldID, fieldInput, fieldBody, fieldBodyOutput},
+	KindSubgraph:  {fieldID, fieldBody, fieldBodyOutput},
+}
+
+func TestEveryRequiredSpecMemberIsRequiredByBothRoutes(t *testing.T) {
+	assertSchemaRequiresWhatIsExpected(t)
+
+	registry := NewRegistry().
+		MustRegisterNode("leaf", InterruptFactory()).
+		MustRegisterResolver("pick", flow.NodeFunc[Store, string](
+			func(context.Context, Store) (string, error) { return "only", nil },
+		)).
+		MustRegisterCondition("again", flow.NodeFunc[Store, bool](
+			func(context.Context, Store) (bool, error) { return true, nil },
+		))
+
+	for kind, required := range wantSpecRequired {
+		for _, member := range required {
+			t.Run(string(kind)+"/"+member, func(t *testing.T) {
+				assertMemberRequiredByBothRoutes(t, registry, kind, member)
+			})
+		}
+	}
+}
+
+func assertSchemaRequiresWhatIsExpected(t *testing.T) {
+	t.Helper()
+	schemaRequired := specSchemaKindRequired(t)
+	if len(schemaRequired) != len(wantSpecRequired) {
+		t.Fatalf("schema states requirements for %d kinds; this test expects %d",
+			len(schemaRequired), len(wantSpecRequired))
+	}
+	for kind, want := range wantSpecRequired {
+		got := slices.Sorted(slices.Values(schemaRequired[kind]))
+		if !slices.Equal(got, slices.Sorted(slices.Values(want))) {
+			t.Errorf("schema requires %v for kind %q; want %v", got, kind, want)
+		}
+	}
+}
+
+// assertMemberRequiredByBothRoutes removes one member from a spec both routes
+// accept, and requires both to refuse what is left. Asserting the complete spec
+// first is what keeps a refusal from being about something else.
+func assertMemberRequiredByBothRoutes(
+	t *testing.T,
+	registry *Registry,
+	kind Kind,
+	member string,
+) {
+	t.Helper()
+	complete := completeSpec(t, kind)
+	if err := registry.ValidateSpec(complete); err != nil {
+		t.Fatalf("the complete %s spec is invalid: %v", kind, err)
+	}
+	completeData, err := json.Marshal(complete)
+	if err != nil {
+		t.Fatalf("Marshal complete %s spec: %v", kind, err)
+	}
+	if schemaErr := ValidateSpecJSON(completeData); schemaErr != nil {
+		t.Fatalf("the schema refused the complete %s spec %s: %v", kind, completeData, schemaErr)
+	}
+
+	incomplete := zeroSpecMember(t, complete, member)
+	incompleteData, err := json.Marshal(incomplete)
+	if err != nil {
+		t.Fatalf("Marshal %s spec without %s: %v", kind, member, err)
+	}
+	if schemaErr := ValidateSpecJSON(incompleteData); schemaErr == nil {
+		t.Fatalf("the schema accepted %s without its required %s", incompleteData, member)
+	}
+	if specErr := registry.ValidateSpec(incomplete); specErr == nil {
+		t.Fatalf("ValidateSpec accepted a %s without %s, which the schema requires", kind, member)
+	}
+}
+
+// specSchemaKindRequired reads each kind's required members from the embedded
+// schema. "kind" itself is omitted: it names the branch rather than being a
+// member that branch demands.
+func specSchemaKindRequired(t *testing.T) map[Kind][]string {
+	t.Helper()
+	var document struct {
+		Defs map[string]struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+			Required   []string                   `json:"required"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(specSchemaJSON, &document); err != nil {
+		t.Fatalf("decode embedded spec schema: %v", err)
+	}
+
+	byKind := make(map[Kind][]string, len(specKindFields))
+	for _, definition := range document.Defs {
+		raw, ok := definition.Properties[fieldKind]
+		if !ok {
+			continue
+		}
+		var pinned struct {
+			Const string `json:"const"`
+		}
+		if err := json.Unmarshal(raw, &pinned); err != nil || pinned.Const == "" {
+			continue
+		}
+		members := make([]string, 0, len(definition.Required))
+		for _, member := range definition.Required {
+			if member != fieldKind {
+				members = append(members, member)
+			}
+		}
+		byKind[Kind(pinned.Const)] = members
+	}
+	if len(byKind) != len(specKindFields) {
+		t.Fatalf("schema defines %d kinds; specKindFields has %d", len(byKind), len(specKindFields))
+	}
+	return byKind
+}
+
+// completeSpec returns the smallest spec of a kind that both routes accept, so
+// removing one required member is the only defect under test.
+func completeSpec(t *testing.T, kind Kind) Spec {
+	t.Helper()
+	leaf := Spec{Kind: KindLeaf, ID: "body", Type: "leaf"}
+	switch kind {
+	case KindLeaf:
+		return Spec{Kind: KindLeaf, ID: "step", Type: "leaf"}
+	case KindSequence, KindParallel:
+		return Spec{Kind: kind, Steps: []Spec{leaf}}
+	case KindBranch:
+		return Spec{
+			Kind: KindBranch, ID: "pick", Resolver: "pick",
+			Cases: map[string]Spec{"only": leaf},
+		}
+	case KindLoop:
+		return Spec{Kind: KindLoop, ID: "loop", Body: &leaf, Condition: "again"}
+	case KindIteration:
+		return Spec{
+			Kind: KindIteration, ID: "each", Input: Output("items"),
+			Body: &leaf, BodyOutput: Output("body"),
+		}
+	case KindSubgraph:
+		return Spec{
+			Kind: KindSubgraph, ID: "sub",
+			Body: &leaf, BodyOutput: Output("body"),
+		}
+	default:
+		t.Fatalf("no complete spec for kind %q", kind)
+		return Spec{}
+	}
+}
+
+// zeroSpecMember returns spec with the field carrying the named wire member set
+// to its zero value, which is how a member goes missing from the encoded form.
+func zeroSpecMember(t *testing.T, spec Spec, member string) Spec {
+	t.Helper()
+	value := reflect.ValueOf(&spec).Elem()
+	for field := range reflect.TypeFor[Spec]().Fields() {
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if name != member {
+			continue
+		}
+		value.FieldByIndex(field.Index).SetZero()
+		return spec
+	}
+	t.Fatalf("no Spec field carries the wire member %q", member)
+	return spec
+}
