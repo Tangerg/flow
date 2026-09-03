@@ -6,7 +6,9 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Tangerg/flow"
@@ -79,64 +81,76 @@ func TestCompileGraph_portsInferDependencies(t *testing.T) {
 	}
 }
 
+// TestCompileGraph_limitsConcurrencyAcrossTheWholeGraph pins the bound the graph
+// scheduler keeps itself. Iteration and Parallel forward their limit to
+// [flow.Map], whose bound TestMap_boundsConcurrency already covers, but this
+// engine counts its own admitted work, so the rule is its own here.
+//
+// The assertion that carries the contract is a negative one -- the third node has
+// not started -- and a waiting test cannot make it: a node that started may
+// simply not have reached its first statement yet, so the check reports whichever
+// it observes. [testing/synctest] settles it instead. Once the bubble is
+// quiescent, every goroutine the scheduler admitted is durably blocked, so a node
+// that is not counted is one the scheduler never admitted. The nodes park on a
+// channel receive for that reason, which is durable blocking, unlike a mutex.
 func TestCompileGraph_limitsConcurrencyAcrossTheWholeGraph(t *testing.T) {
-	started := make(chan struct{}, 3)
-	release := make(chan struct{})
-	registry := workflow.NewRegistry().MustRegisterNode(
-		"blocking",
-		workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
-			return flow.NodeFunc[int, int](
-				func(ctx context.Context, input int) (int, error) {
-					started <- struct{}{}
-					select {
-					case <-release:
-						return input, nil
-					case <-ctx.Done():
-						return 0, ctx.Err()
-					}
-				},
-			), nil
-		}),
-	)
-	graph := workflow.Graph{
-		Concurrency: 2,
-		Nodes: []workflow.GraphNode{
-			{ID: "a", Type: "blocking", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
-			{ID: "b", Type: "blocking", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
-			{ID: "c", Type: "blocking", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
-		},
-	}
-	step, err := registry.CompileGraph(graph)
-	if err != nil {
-		t.Fatalf("CompileGraph: %v", err)
-	}
-
-	done := make(chan error, 1)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go func() {
-		_, err := step.Run(
-			ctx,
-			workflow.NewStore().WithOutput("start", 1),
+	synctest.Test(t, func(t *testing.T) {
+		var started atomic.Int32
+		release := make(chan struct{})
+		registry := workflow.NewRegistry().MustRegisterNode(
+			"blocking",
+			workflow.Factory(func(struct{}) (flow.Node[int, int], error) {
+				return flow.NodeFunc[int, int](
+					func(ctx context.Context, input int) (int, error) {
+						started.Add(1)
+						select {
+						case <-release:
+							return input, nil
+						case <-ctx.Done():
+							return 0, ctx.Err()
+						}
+					},
+				), nil
+			}),
 		)
-		done <- err
-	}()
-	for range 2 {
-		select {
-		case <-started:
-		case <-time.After(time.Second):
-			t.Fatal("two nodes did not fill the available concurrency slots")
+		graph := workflow.Graph{
+			Concurrency: 2,
+			Nodes: []workflow.GraphNode{
+				{ID: "a", Type: "blocking", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
+				{ID: "b", Type: "blocking", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
+				{ID: "c", Type: "blocking", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
+			},
 		}
-	}
-	select {
-	case <-started:
-		t.Fatal("third node started before a concurrency slot was released")
-	default:
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatalf("Run: %v", err)
-	}
+		step, err := registry.CompileGraph(graph)
+		if err != nil {
+			t.Fatalf("CompileGraph: %v", err)
+		}
+
+		done := make(chan error, 1)
+		go func() {
+			_, err := step.Run(
+				t.Context(),
+				workflow.NewStore().WithOutput("start", 1),
+			)
+			done <- err
+		}()
+
+		// Nothing can advance until this test releases the parked nodes, so the
+		// count now is the whole of what the scheduler admitted.
+		synctest.Wait()
+		if got := started.Load(); got != 2 {
+			t.Fatalf("%d nodes ran concurrently; want the declared limit of 2", got)
+		}
+
+		// One released slot admits exactly the one node that was waiting.
+		close(release)
+		if err := <-done; err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if got := started.Load(); got != 3 {
+			t.Fatalf("%d nodes ran in total; want all 3", got)
+		}
+	})
 }
 
 func TestCompileGraph_rejectsNegativeConcurrency(t *testing.T) {

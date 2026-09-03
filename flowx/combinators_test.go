@@ -3,7 +3,9 @@ package flowx_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 
 	"github.com/Tangerg/flow"
 	"github.com/Tangerg/flow/flowx"
@@ -28,35 +30,51 @@ func TestFanOut(t *testing.T) {
 	}
 }
 
+// TestFanOut_boundsConcurrency pins the forwarding, which is this layer's share
+// of the contract: the bound itself belongs to [flow.Map] and
+// TestMap_boundsConcurrency covers it, so what can break here is FanOut passing
+// on a config it was handed.
+//
+// "No third node started" is a negative claim, and waiting cannot establish one --
+// a node that started may not have reached its first statement yet, so a test
+// that peeks reports whichever it happens to see. [testing/synctest] makes the
+// claim decidable: once the bubble is quiescent, every started node is durably
+// parked on the release channel and counted.
 func TestFanOut_boundsConcurrency(t *testing.T) {
-	started := make(chan struct{}, 4)
-	release := make(chan struct{})
-	node := flow.NodeFunc[int, int](func(ctx context.Context, in int) (int, error) {
-		started <- struct{}{}
-		select {
-		case <-release:
-			return in, nil
-		case <-ctx.Done():
-			return 0, ctx.Err()
+	synctest.Test(t, func(t *testing.T) {
+		var started atomic.Int32
+		release := make(chan struct{})
+		node := flow.NodeFunc[int, int](func(ctx context.Context, in int) (int, error) {
+			started.Add(1)
+			select {
+			case <-release:
+				return in, nil
+			case <-ctx.Done():
+				return 0, ctx.Err()
+			}
+		})
+		done := make(chan error, 1)
+		go func() {
+			_, err := flowx.FanOut(
+				[]flow.Node[int, int]{node, node, node, node},
+				flow.MapConfig{Concurrency: 2},
+			).Run(t.Context(), 1)
+			done <- err
+		}()
+
+		synctest.Wait()
+		if got := started.Load(); got != 2 {
+			t.Fatalf("%d nodes started; want the configured limit of 2", got)
+		}
+
+		close(release)
+		if err := <-done; err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if got := started.Load(); got != 4 {
+			t.Fatalf("%d nodes ran in total; want all 4", got)
 		}
 	})
-	done := make(chan error, 1)
-	go func() {
-		_, err := flowx.FanOut([]flow.Node[int, int]{node, node, node, node}, flow.MapConfig{Concurrency: 2}).Run(t.Context(), 1)
-		done <- err
-	}()
-
-	<-started
-	<-started
-	select {
-	case <-started:
-		t.Fatal("more than two nodes started before a slot was released")
-	default:
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatalf("run: %v", err)
-	}
 }
 
 func TestFanOut_failFast(t *testing.T) {

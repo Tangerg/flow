@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Tangerg/flow"
@@ -95,55 +96,56 @@ func TestMap_failFastCancelsSiblings(t *testing.T) {
 	}
 }
 
+// TestMap_boundsConcurrency pins the bound every composite in this module
+// forwards to: Iteration, Parallel, and flowx.FanOut each hand their limit here
+// rather than counting their own admitted work, so this is the one place the rule
+// lives. The graph scheduler is the exception and keeps its own count.
+//
+// The contract is a negative claim -- no more than the limit runs at once -- and
+// a waiting test cannot establish one. Waiting for `limit` calls to report proves
+// only that they started; the call that broke the bound may not have reached its
+// first statement yet, so the check passes or fails on timing. Under
+// [testing/synctest] the question is decidable: at quiescence every admitted call
+// is durably parked on the release channel, so the count is the whole of what was
+// admitted, and no peak needs tracking.
 func TestMap_boundsConcurrency(t *testing.T) {
-	const limit = 3
-	var (
-		current atomic.Int32
-		peak    atomic.Int32
-	)
-	started := make(chan struct{}, 30)
-	release := make(chan struct{})
-
-	node := flow.NodeFunc[int, int](func(ctx context.Context, x int) (int, error) {
-		c := current.Add(1)
-		for {
-			old := peak.Load()
-			if c <= old || peak.CompareAndSwap(old, c) {
-				break
+	synctest.Test(t, func(t *testing.T) {
+		const (
+			limit    = 3
+			elements = 30
+		)
+		var started atomic.Int32
+		release := make(chan struct{})
+		node := flow.NodeFunc[int, int](func(ctx context.Context, value int) (int, error) {
+			started.Add(1)
+			select {
+			case <-release:
+				return value, nil
+			case <-ctx.Done():
+				return 0, ctx.Err()
 			}
+		})
+
+		finished := make(chan error, 1)
+		go func() {
+			_, err := flow.Map(node, flow.MapConfig{Concurrency: limit}).
+				Run(t.Context(), make([]int, elements))
+			finished <- err
+		}()
+
+		synctest.Wait()
+		if got := started.Load(); got != limit {
+			t.Fatalf("%d concurrent calls; want the configured limit of %d", got, limit)
 		}
-		started <- struct{}{}
-		select {
-		case <-release:
-			current.Add(-1)
-			return x, nil
-		case <-ctx.Done():
-			current.Add(-1)
-			return 0, ctx.Err()
+
+		close(release)
+		if err := <-finished; err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := started.Load(); got != elements {
+			t.Fatalf("%d calls ran in total; want all %d", got, elements)
 		}
 	})
-
-	in := make([]int, 30)
-	finished := make(chan error, 1)
-	go func() {
-		_, err := flow.Map(node, flow.MapConfig{Concurrency: limit}).Run(t.Context(), in)
-		finished <- err
-	}()
-	for range limit {
-		<-started
-	}
-	gotBeforeRelease := peak.Load()
-	close(release)
-	if gotBeforeRelease != limit {
-		t.Fatalf("observed %d concurrent calls before release; want %d", gotBeforeRelease, limit)
-	}
-	err := <-finished
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got := peak.Load(); got > limit {
-		t.Fatalf("observed %d concurrent, want <= %d", got, limit)
-	}
 }
 
 // A limit of one means each call runs after the last one returned, which no
