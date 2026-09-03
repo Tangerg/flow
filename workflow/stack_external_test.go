@@ -23,6 +23,12 @@ const boundedStackRan = "bounded stack body completed"
 // turns an accidental per-item recursive walk into a deterministic failure.
 // The production contract is stack growth independent of an application tree's
 // size; the limit is only the test instrument that proves it.
+//
+// The root package keeps its own copy of this helper. They cannot be one:
+// a test file is not importable, and moving it to a package like internal/ctxtest
+// would put the child branch -- which runs only inside the subprocess, whose
+// coverage counters are discarded -- into a measured package, where the gate
+// requires every statement to be executed.
 func withBoundedStack(t *testing.T, test func()) {
 	t.Helper()
 	if os.Getenv(boundedStackChild) == t.Name() {
