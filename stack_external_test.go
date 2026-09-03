@@ -1,4 +1,4 @@
-package workflow_test
+package flow_test
 
 import (
 	"bytes"
@@ -20,9 +20,9 @@ const boundedStackChild = "FLOW_BOUNDED_STACK_TEST"
 const boundedStackRan = "bounded stack body completed"
 
 // withBoundedStack runs test in a subprocess whose deliberately small stack
-// turns an accidental per-item recursive walk into a deterministic failure.
-// The production contract is stack growth independent of an application tree's
-// size; the limit is only the test instrument that proves it.
+// turns an accidental per-wrapper recursive walk into a deterministic failure.
+// The contract is stack growth independent of how deep a caller's error tree
+// runs; the limit is only the instrument that proves it.
 func withBoundedStack(t *testing.T, test func()) {
 	t.Helper()
 	if os.Getenv(boundedStackChild) == t.Name() {
@@ -37,7 +37,7 @@ func withBoundedStack(t *testing.T, test func()) {
 	command.Env = append(os.Environ(), boundedStackChild+"="+t.Name())
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("operation exhausted a bounded stack: %v\n%s", err, output)
+		t.Fatalf("formatting exhausted a bounded stack: %v\n%s", err, output)
 	}
 	if !bytes.Contains(output, []byte(boundedStackRan)) {
 		t.Fatalf("the subprocess ran no bounded-stack body:\n%s", output)

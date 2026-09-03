@@ -3,20 +3,10 @@ package flow_test
 import (
 	"context"
 	"errors"
-	"os"
-	"os/exec"
-	"regexp"
-	"runtime/debug"
 	"strings"
 	"testing"
 
 	"github.com/Tangerg/flow"
-)
-
-const (
-	boundedIndexErrorStackChild    = "FLOW_BOUNDED_INDEX_ERROR_STACK_TEST"
-	boundedMixedLocationStackChild = "FLOW_BOUNDED_MIXED_LOCATION_STACK_TEST"
-	concurrentPanicChild           = "FLOW_CONCURRENT_PANIC_TEST"
 )
 
 func TestIndexError(t *testing.T) {
@@ -61,8 +51,8 @@ func TestCaseError(t *testing.T) {
 // definition-depth boundary. Rendering their locations must not spend one call
 // frame per composite.
 func TestIndexErrorFormatsDeepChainIteratively(t *testing.T) {
-	if os.Getenv(boundedIndexErrorStackChild) == t.Name() {
-		debug.SetMaxStack(256 << 10)
+	withBoundedStack(t, func() {
+		// Declared as the interface because the loop assigns wrappers to it.
 		var err error
 		err = errors.New("boom")
 		for index := range 20_000 {
@@ -73,21 +63,12 @@ func TestIndexErrorFormatsDeepChainIteratively(t *testing.T) {
 			!strings.HasSuffix(message, "index 0: boom") {
 			t.Fatal("Error() did not preserve the complete wrapper order")
 		}
-		return
-	}
-
-	//nolint:gosec // Re-executes this test binary with a quoted testing-owned name.
-	command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$")
-	command.Env = append(os.Environ(), boundedIndexErrorStackChild+"="+t.Name())
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("IndexError formatting exhausted a bounded stack: %v\n%s", err, output)
-	}
+	})
 }
 
 func TestLocationErrorsFormatDeepMixedChainIteratively(t *testing.T) {
-	if os.Getenv(boundedMixedLocationStackChild) == t.Name() {
-		debug.SetMaxStack(256 << 10)
+	withBoundedStack(t, func() {
+		// Declared as the interface because the loop assigns wrappers to it.
 		var err error
 		err = errors.New("boom")
 		for index := range 20_000 {
@@ -102,16 +83,7 @@ func TestLocationErrorsFormatDeepMixedChainIteratively(t *testing.T) {
 			!strings.HasSuffix(message, "switch case 1: index 0: boom") {
 			t.Fatal("Error() did not preserve the complete mixed wrapper order")
 		}
-		return
-	}
-
-	//nolint:gosec // Re-executes this test binary with a quoted testing-owned name.
-	command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$")
-	command.Env = append(os.Environ(), boundedMixedLocationStackChild+"="+t.Name())
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("mixed location formatting exhausted a bounded stack: %v\n%s", err, output)
-	}
+	})
 }
 
 type failingNode struct{ err error }

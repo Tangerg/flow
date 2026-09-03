@@ -14,6 +14,11 @@ import (
 	"github.com/Tangerg/flow"
 )
 
+// concurrentPanicChild marks the subprocess that must die of its own panic,
+// which is why it does not use withBoundedStack: that helper asserts the child
+// succeeded, and this one asserts the opposite.
+const concurrentPanicChild = "FLOW_CONCURRENT_PANIC_TEST"
+
 func TestMap(t *testing.T) {
 	square := flow.NodeFunc[int, int](func(_ context.Context, x int) (int, error) { return x * x, nil })
 
