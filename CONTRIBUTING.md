@@ -885,6 +885,20 @@ go test ./example -run Example -v
   sentinel through `RunChild` — so only `Validate` can tell the positions apart.
   Only `gatedStep.satisfied`'s second cancellation check is an equivalence, and it
   says so where it sits.
+- The same question the Spec's copies raise, a Graph's raise too, and the answer
+  is a corpus rather than a matrix. A Graph's constraints — minimum lengths, the
+  JSON Pointer pattern, unique dependencies and gates, a trigger that requires
+  gates — are stated in the embedded schema and again in the Go validator, and
+  nothing held them to one verdict. `TestTheTwoGraphChecksRefuseTheSameDefects`
+  writes each defect once, as the Graph value, and asks both routes; the baseline
+  is accepted first, so a refusal cannot be about something else. Dropping
+  `uniqueItems` from the schema fails it.
+  Two things that corpus taught. A defect has to be the *only* thing wrong with
+  its case: the gate cases first used a source with no declared outlets, which is
+  refused for that instead and left the Go half of every gate case untested. And
+  a corpus compares verdicts, not reasons — deleting the Go duplicate-gate rule
+  still fails, because the impossible-gate-set rule refuses the same document, so
+  attribution stays with the dedicated tests where it belongs.
 - A field matrix pins which members a kind may carry; which it must carry is a
   second axis, and it was stated twice with nothing holding the copies together.
   `TestSpecFieldMatricesAgreeWithTheSpecStruct` compares the schema's `properties`
