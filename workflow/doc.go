@@ -68,7 +68,9 @@
 // considered. The zero [Trigger] then requires every gate; [TriggerAny]
 // requires at least one. An unsatisfied target does not run, writes no output,
 // and emits [EventBypassed]. Bypass is explicit: a missing value on an ungated
-// node remains an error.
+// node remains an error. A [GraphNode.DependsOn] entry names no value, so a
+// bypassed source satisfies it and the dependent runs; a node that must not run
+// when a conditional region did not carries its own gate.
 //
 // [Resolver] is an alias for flow.Node[Store, string], so branch decisions use
 // the same typed execution protocol as every other computation. [Route] gives

@@ -531,6 +531,63 @@ func TestCompileGraph_doesNotInferBypassFromMissingInput(t *testing.T) {
 	}
 }
 
+// TestCompileGraph_bypassSatisfiesAPureControlEdge is the third leg of one rule,
+// and the only one nothing stated. A bypass reaches a gated dependent as a
+// bypass, TestCompileGraph_propagatesBypassThroughConditionalRegions; it reaches
+// a data edge as an error, TestCompileGraph_doesNotInferBypassFromMissingInput,
+// because bypass is explicit and a missing value on an ungated node is not it.
+// A DependsOn entry is neither: it names no value, so a bypassed source
+// satisfies it and the dependent runs.
+//
+// The asymmetry is the point. A caller who writes DependsOn to make a node wait
+// for a conditional region gets a node that runs whether or not the region did,
+// and no error says so — the dependent has to carry its own gate. Nothing else
+// in the suite runs a pure control edge out of a node that was bypassed.
+func TestCompileGraph_bypassSatisfiesAPureControlEdge(t *testing.T) {
+	registry := workflow.NewRegistry().
+		MustRegisterNode("route", routingFactory(func(int) string { return "no" })).
+		MustRegisterSchema("route", routingSchema("yes", "no")).
+		MustRegisterNode("copy", addN())
+	step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
+		{ID: "route", Type: "route", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")}},
+		{
+			ID: "gated", Type: "copy", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
+			When: []workflow.Gate{workflow.When("route", "yes")},
+		},
+		{
+			ID: "after", Type: "copy", Inputs: workflow.Inputs{workflow.DefaultPort: workflow.Output("start")},
+			DependsOn: []string{"gated"},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("CompileGraph: %v", err)
+	}
+
+	var bypassed []string
+	out, err := workflow.Run(
+		t.Context(),
+		step,
+		workflow.NewStore().WithOutput("start", 1),
+		workflow.RunConfig{Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
+			if event.Kind == workflow.EventBypassed {
+				bypassed = append(bypassed, event.ID)
+			}
+		})},
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !slices.Equal(bypassed, []string{"gated"}) {
+		t.Fatalf("bypassed = %v; want only the gated node", bypassed)
+	}
+	if _, present := out.Lookup(workflow.Output("gated")); present {
+		t.Fatal("the bypassed node published an output")
+	}
+	if value, err := out.Get[int](workflow.Output("after")); err != nil || value != 1 {
+		t.Fatalf("after = %v, %v; want 1 from a control edge a bypass satisfied", value, err)
+	}
+}
+
 func TestCompileGraph_propagatesBypassThroughConditionalRegions(t *testing.T) {
 	registry := workflow.NewRegistry().
 		MustRegisterNode("route", routingFactory(func(int) string { return "no" })).
