@@ -82,6 +82,9 @@ func equivalentForms(t *testing.T, wait bool) map[string]workflow.Step {
 	}
 }
 
+// seedStore is the input every leaf-form comparison starts from.
+func seedStore() workflow.Store { return workflow.NewStore().WithOutput("seed", 5) }
+
 // observed is what a caller can see of one run.
 type observed struct {
 	events []string
@@ -90,9 +93,15 @@ type observed struct {
 	wire   string
 }
 
-func observe(t *testing.T, step workflow.Step, journal *workflow.Journal, ids []string) observed {
+func observe(
+	t *testing.T,
+	step workflow.Step,
+	journal *workflow.Journal,
+	input workflow.Store,
+	ids []string,
+) observed {
 	t.Helper()
-	result, _ := observeRun(t, step, journal, ids)
+	result, _ := observeRun(t, step, journal, input, ids)
 	return result
 }
 
@@ -102,6 +111,7 @@ func observeRun(
 	t *testing.T,
 	step workflow.Step,
 	journal *workflow.Journal,
+	input workflow.Store,
 	ids []string,
 ) (observed, error) {
 	t.Helper()
@@ -109,7 +119,7 @@ func observeRun(
 	out, err := workflow.Run(
 		t.Context(),
 		step,
-		workflow.NewStore().WithOutput("seed", 5),
+		input,
 		workflow.RunConfig{
 			Journal: journal,
 			Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
@@ -138,12 +148,12 @@ func observeRun(
 func TestEveryConstructionFormRunsTheSameWorkflow(t *testing.T) {
 	forms := equivalentForms(t, false)
 	ids := []string{"a", "z"}
-	want := observe(t, forms["code"], workflow.NewJournal(), ids)
+	want := observe(t, forms["code"], workflow.NewJournal(), seedStore(), ids)
 	if want.err != "" || !slices.Equal(want.values, []int{10, 20}) {
 		t.Fatalf("code form = %+v; want a clean run producing 10 and 20", want)
 	}
 	for _, name := range []string{"spec", "graph"} {
-		got := observe(t, forms[name], workflow.NewJournal(), ids)
+		got := observe(t, forms[name], workflow.NewJournal(), seedStore(), ids)
 		if got.err != want.err || !slices.Equal(got.values, want.values) ||
 			!slices.Equal(got.events, want.events) || got.wire != want.wire {
 			t.Fatalf("%s form = %+v; want the code form's %+v", name, got, want)
@@ -157,7 +167,7 @@ func TestEveryConstructionFormSuspendsAndResumesAlike(t *testing.T) {
 
 	resume := func(name string) (observed, observed) {
 		journal := workflow.NewJournal()
-		first, err := observeRun(t, forms[name], journal, ids)
+		first, err := observeRun(t, forms[name], journal, seedStore(), ids)
 		waits := workflow.Suspensions(err)
 		if len(waits) != 1 {
 			t.Fatalf("%s: got %d waits; want exactly one", name, len(waits))
@@ -165,7 +175,7 @@ func TestEveryConstructionFormSuspendsAndResumesAlike(t *testing.T) {
 		if recordErr := journal.Record(waits[0].Key(), 7); recordErr != nil {
 			t.Fatalf("%s: Record the response: %v", name, recordErr)
 		}
-		second, _ := observeRun(t, forms[name], journal, ids)
+		second, _ := observeRun(t, forms[name], journal, seedStore(), ids)
 		return first, second
 	}
 
@@ -544,50 +554,12 @@ func TestEveryCompositeKindRunsTheSameFromASpec(t *testing.T) {
 			if (input == workflow.Store{}) {
 				input = workflow.NewStore().WithOutput("seed", 5)
 			}
-			want := observeInput(t, testCase.code, input, testCase.ids)
-			got := observeInput(t, compiled, input, testCase.ids)
+			want := observe(t, testCase.code, workflow.NewJournal(), input, testCase.ids)
+			got := observe(t, compiled, workflow.NewJournal(), input, testCase.ids)
 			if got.err != want.err || !slices.Equal(got.values, want.values) ||
 				!slices.Equal(got.events, want.events) || got.wire != want.wire {
 				t.Fatalf("spec form = %+v; want the code form's %+v", got, want)
 			}
 		})
 	}
-}
-
-// observeInput is observeRun over a caller-supplied input, which the composite
-// kinds need: an iteration reads a collection the leaf forms never had.
-func observeInput(
-	t *testing.T,
-	step workflow.Step,
-	input workflow.Store,
-	ids []string,
-) observed {
-	t.Helper()
-	journal := workflow.NewJournal()
-	result := observed{}
-	out, err := workflow.Run(
-		t.Context(),
-		step,
-		input,
-		workflow.RunConfig{
-			Journal: journal,
-			Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
-				result.events = append(result.events, string(event.Kind)+"/"+event.ID)
-			}),
-		},
-	)
-	if err != nil {
-		result.err = err.Error()
-	}
-	for _, id := range ids {
-		value, _ := out.Get[int](workflow.Output(id))
-		result.values = append(result.values, value)
-	}
-	slices.Sort(result.events)
-	encoded, marshalErr := json.Marshal(journal)
-	if marshalErr != nil {
-		t.Fatalf("Marshal journal: %v", marshalErr)
-	}
-	result.wire = string(encoded)
-	return result
 }
