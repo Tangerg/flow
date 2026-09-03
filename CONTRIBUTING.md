@@ -885,6 +885,37 @@ go test ./example -run Example -v
   sentinel through `RunChild` — so only `Validate` can tell the positions apart.
   Only `gatedStep.satisfied`'s second cancellation check is an equivalence, and it
   says so where it sits.
+- A test named for a set is a claim about that set, so check the set. Auditing
+  every "Every…" test here against the thing it says it covers found five gaps
+  and four clean bills, which is a good enough ratio to keep doing it.
+  The gaps: the context-ownership family had a guard per boundary and none over
+  the set, and `Map`'s derived context — obtained through errgroup — had no test
+  at all while `Race`'s identical case did. The description family left out
+  `Subgraph`, whose ID names both the scope its body runs in and the cell its
+  output is projected to, and a compiled `Graph` in the structural group beside
+  it. The qualifier corpus was missing the JSON Schema backend, the dialect check,
+  and a document refused for depth. The cell-ownership family had only the
+  composites, not the three steps that are not composites. And the wire's
+  identity guard — "a type whose text is identity must refuse to encode rather
+  than quietly encode something else" — checked six texts and missed eight: a
+  port name, a node type, a dependency, a gate's source and outlet, a resolver
+  name, and a branch case name. Dropping the gate-outlet check encodes
+  `"outlet":"�"`, which re-routes a persisted graph without changing anything
+  a reader would notice.
+  The clean bills are worth as much: `TestGuaranteedOutputsModelsEveryBuiltInShape`
+  covers every definition kind, `TestWireTypesRoundTripEveryPopulatedField` states
+  its own criterion — types whose member set is stated twice — and says where Spec
+  is checked instead, `TestCompileSpecJSONAcceptsEveryKind` covers every kind a
+  Spec can be, and `TestDescribe_reportsTheBodyOfEveryCompositeThatHasOne` covers
+  exactly the three composites with a body.
+  Where a member is absent by construction, say so rather than leaving the set
+  short: nine steps install a run and three are absent — Leaf has its own test, a
+  gate wrapper cannot be invoked directly, and a compiled graph's node IDs cannot
+  collide because the compiler refuses both that and an opaque node body that
+  could hide one. `TestEveryContextDerivationNamesItsGuard` is the shape to prefer
+  when the set is mechanically knowable: it walks every derivation in the module
+  against a table naming its test, so the next one arrives with a guard or with an
+  argument.
 - State the consequence, not only the mechanism. Every finding in this round came
   from reading a documented mechanism and asking what it means for whoever uses
   it. `Iteration` explained that an indexed scope frame per element is what lets a
