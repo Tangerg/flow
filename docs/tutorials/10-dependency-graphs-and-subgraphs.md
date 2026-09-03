@@ -148,18 +148,13 @@ func (r repeatStep) Validate() error {
 }
 
 for index := range count {
-	if err := context.Cause(ctx); err != nil {
-		return current, err
-	}
-	next, err := body.Run(
+	next, err := flow.RunChild(
 		workflow.WithScopeIndex(ctx, id, uint64(index)),
+		body,
 		current,
 	)
-	if contextErr := context.Cause(ctx); contextErr != nil {
-		return current, contextErr
-	}
 	if err != nil {
-		return next, err
+		return current, err
 	}
 	current = next
 }
@@ -171,12 +166,13 @@ contract before work. Built-in workflow composites honor the same contract on a
 caller-defined child. The custom composite's own `Run` method should still call
 `Validate`, so a direct call or an opaque caller-defined parent remains safe.
 Call the child Step directly: a nested package-level `workflow.Run` starts an
-independent root scope. Check parent cancellation before admission and after the
-child returns; if it races with completion, preserve the Store from before that
-invocation. `flow.RunChild` makes those two checks for a plain `Node` and is
-what a composite in `flow` or `flowx` uses, but it rolls a cancelled child back
-to a zero output — for a Step that is an empty Store, discarding what already
-completed — which is why the loop above is written out here. `WithScopeIndex`
+independent root scope. Parent cancellation has to be checked before admission
+and after the child returns, and `flow.RunChild` is that rule: it is what a
+composite in `flow` or `flowx` uses, so a caller-defined one inherits it instead
+of restating it. What it cannot decide is the rollback, because it returns a zero
+output — for a Step that is an empty Store, which is not what already completed.
+A composite accumulating a Store therefore supplies its own, as the loop above
+does by keeping the Store it handed the child. `WithScopeIndex`
 isolates Journal, event, chunk, and suspension identity; it does not isolate
 Store cells. Wrap the body in `Subgraph` when each
 invocation also needs a sealed Store.

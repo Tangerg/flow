@@ -33,18 +33,17 @@ func (r repeatStep) Run(
 	}
 	current := store
 	for index := range r.count {
-		if err := context.Cause(ctx); err != nil {
-			return current, err
-		}
-		next, err := r.body.Run(
+		// RunChild applies the cancellation contract a composite owes its
+		// children, so this loop states the rollback instead of the rule: a
+		// workflow composite keeps the Store it handed the child, because that
+		// Store is what already completed.
+		next, err := flow.RunChild(
 			workflow.WithScopeIndex(ctx, r.id, uint64(index)),
+			r.body,
 			current,
 		)
-		if contextErr := context.Cause(ctx); contextErr != nil {
-			return current, contextErr
-		}
 		if err != nil {
-			return next, err
+			return current, err
 		}
 		current = next
 	}
@@ -52,8 +51,9 @@ func (r repeatStep) Run(
 }
 
 // A caller-defined repeated composite uses WithScopeIndex to give each body
-// invocation a stable identity. Prefer Loop or Iteration when either built-in
-// expresses the required control flow.
+// invocation a stable identity, and flow.RunChild to invoke that body under the
+// same cancellation contract a built-in composite applies. Prefer Loop or
+// Iteration when either built-in expresses the required control flow.
 func Example_customRepeatedComposite() {
 	runs := 0
 	body := workflow.LeafFunc(
