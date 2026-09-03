@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1012,5 +1013,75 @@ func TestRunConfig_eitherHalfAlone(t *testing.T) {
 	}
 	if journal.Len() != 1 {
 		t.Fatalf("journal recorded %d steps with no observer attached; want 1", journal.Len())
+	}
+}
+
+// TestAStepInvokedFromACallbackDoesNotJoinTheRun pins what callbackContext is
+// for, in the three ways it matters. An Observer or Emitter holds a context whose
+// engine identity has been removed, so a Step it invokes directly cannot claim an
+// ID the run is already using, records no checkpoint in the run's Journal, and
+// publishes nothing back into the callback that invoked it — which is the one
+// that would otherwise recur without bound. The inner step deliberately reuses
+// the outer step's ID, since a claim that leaked would fail there first.
+func TestAStepInvokedFromACallbackDoesNotJoinTheRun(t *testing.T) {
+	var innerRuns atomic.Int64
+	inner := workflow.LeafFunc("leaf", workflow.Output("seed"),
+		func(context.Context, int) (int, error) {
+			innerRuns.Add(1)
+			return 99, nil
+		})
+	outer := workflow.LeafFunc("leaf", workflow.Output("seed"),
+		func(_ context.Context, value int) (int, error) { return value + 1, nil })
+
+	journal := workflow.NewJournal()
+	var events []workflow.Event
+	out, err := workflow.Run(
+		t.Context(),
+		outer,
+		workflow.NewStore().WithOutput("seed", 1),
+		workflow.RunConfig{
+			Journal: journal,
+			Observer: workflow.ObserverFunc(func(ctx context.Context, event workflow.Event) {
+				events = append(events, event)
+				// Bounded on purpose: an identity that leaked would make this
+				// recur, and a test that hangs reports nothing.
+				if event.Kind != workflow.EventCompleted || innerRuns.Load() > 0 {
+					return
+				}
+				if _, runErr := inner.Run(ctx, workflow.NewStore().WithOutput("seed", 5)); runErr != nil {
+					t.Errorf("Step invoked from a callback: %v", runErr)
+				}
+			}),
+		},
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if innerRuns.Load() != 1 {
+		t.Fatalf("inner step ran %d times; want once, from the callback", innerRuns.Load())
+	}
+	if got, getErr := out.Get[int](workflow.Output("leaf")); getErr != nil || got != 2 {
+		t.Fatalf("output = %d, %v; want the outer step's 2", got, getErr)
+	}
+	if len(events) != 2 ||
+		events[0].Kind != workflow.EventStarted ||
+		events[1].Kind != workflow.EventCompleted {
+		t.Fatalf("events = %+v; want only the outer step's start and completion", events)
+	}
+	keys := journal.Keys()
+	if len(keys) != 1 || keys[0].ID != "leaf" {
+		t.Fatalf("journal keys = %+v; want only the outer step's checkpoint", keys)
+	}
+	replayed, err := workflow.Run(
+		t.Context(),
+		outer,
+		workflow.NewStore().WithOutput("seed", 1),
+		workflow.RunConfig{Journal: journal},
+	)
+	if err != nil {
+		t.Fatalf("resumed run: %v", err)
+	}
+	if got, getErr := replayed.Get[int](workflow.Output("leaf")); getErr != nil || got != 2 {
+		t.Fatalf("replayed output = %d, %v; want the outer step's own record", got, getErr)
 	}
 }
