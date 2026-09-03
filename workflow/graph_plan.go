@@ -163,12 +163,16 @@ func (g *gateValidator) validateGate(gate Gate) error {
 
 	if previous, duplicateSource := g.sources[gate.NodeID]; duplicateSource &&
 		g.trigger == TriggerAll {
+		// The default trigger has no spelling of its own on the wire, so naming it
+		// here would name a value a caller cannot write. Say the rule instead, and
+		// name the one they can set.
 		return g.fieldError(fieldWhen, fmt.Errorf(
-			"trigger %q requires routing node %q to select both %q and %q",
-			TriggerAll,
+			"routing node %q cannot select both %q and %q; every gate must be "+
+				"satisfied unless trigger is %q",
 			gate.NodeID,
 			previous,
 			gate.Outlet,
+			TriggerAny,
 		))
 	}
 	g.sources[gate.NodeID] = gate.Outlet

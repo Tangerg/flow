@@ -1130,3 +1130,40 @@ func TestCompiledGraph_bypassBelongsToOneScopedInvocation(t *testing.T) {
 		t.Fatalf("target output = %d, %v; want the value from the iteration that ran it", got, readErr)
 	}
 }
+
+// TestGateSetThatCannotBeSatisfiedNamesTheRepair pins a diagnostic that used to
+// quote the trigger it was about. For the default trigger that is the empty
+// string, which the wire has no spelling for, so `trigger ""` left a reader
+// unable to tell whether they had omitted it or set something wrong -- and "all",
+// the name the renderer uses, is not a value they could write either. The message
+// states the rule and names the one trigger they can set.
+func TestGateSetThatCannotBeSatisfiedNamesTheRepair(t *testing.T) {
+	registry := workflow.NewRegistry().
+		MustRegisterNode("route", routingFactory(func(int) string { return "yes" })).
+		MustRegisterSchema("route", routingSchema("yes", "no")).
+		MustRegisterNode("target", workflow.Factory(
+			func(struct{}) (flow.Node[int, int], error) {
+				return flow.NodeFunc[int, int](
+					func(_ context.Context, value int) (int, error) { return value, nil },
+				), nil
+			}))
+
+	seed := workflow.Inputs{workflow.DefaultPort: workflow.Output("seed")}
+	err := registry.ValidateGraph(workflow.Graph{Nodes: []workflow.GraphNode{
+		{ID: "route", Type: "route", Inputs: seed},
+		{
+			ID: "target", Type: "target", Inputs: seed,
+			When: []workflow.Gate{workflow.When("route", "yes"), workflow.When("route", "no")},
+		},
+	}})
+	if !errors.Is(err, workflow.ErrInvalidGraph) {
+		t.Fatalf("ValidateGraph = %v; want an invalid graph", err)
+	}
+	message := err.Error()
+	if !strings.Contains(message, `unless trigger is "any"`) {
+		t.Fatalf("message = %q; want it to name the trigger a caller can set", message)
+	}
+	if strings.Contains(message, `trigger ""`) {
+		t.Fatalf("message = %q; want no quoted empty trigger", message)
+	}
+}

@@ -826,6 +826,18 @@ go test ./example -run Example -v
   exists to provide, so the behavior stays and the documentation names it.
   `TestStoreGet_bytesAndTextShareOneJSONKind` pins what actually has to hold:
   live and restored answer alike.
+- Do not quote a value the wire has no spelling for. The gate validator proves a
+  set of gates unsatisfiable — `TriggerAll` with two outlets of one source can
+  never hold — and reported it as `trigger "" requires routing node "route" to
+  select both "yes" and "no"`. The default trigger is the empty string, so a
+  reader could not tell an omitted field from a wrong one, and "all", the name
+  the renderer gives it, is not a value they could write either. The message
+  states the rule and names the trigger a caller can set:
+  `every gate must be satisfied unless trigger is "any"`.
+  `TestGateSetThatCannotBeSatisfiedNamesTheRepair` refuses both the empty
+  quotation and the loss of the repair. `Trigger` is the only enumerated type
+  here with an empty member that a diagnostic could reach; `ValueType`'s empty
+  member is valid, so no message prints it.
 - Prefer standard Go contracts, explicit context propagation, and errors that
   work with `errors.Is` and `errors.As`.
 - Keep distributed scheduling, durable timers, and exactly-once execution out
