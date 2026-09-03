@@ -26,9 +26,12 @@ jobs:
       # reports 100.0%, and an uncovered statement is treated as evidence that
       # either the statement or a guard is missing. A floor below that passes on
       # a coverage loss nobody chose.
+      # Shuffled because the suite claims independence: nothing here is meant to
+      # depend on another test's order or leftovers, and a failure prints the
+      # seed to replay it with.
       - name: Test with race detection and complete statement coverage
         run: |
-          go test -race -coverprofile=coverage.out ./...
+          go test -race -shuffle=on -coverprofile=coverage.out ./...
           coverage="$(go tool cover -func=coverage.out | awk '/^total:/ { print $3 }')"
           awk -v coverage="${coverage%\%}" 'BEGIN { exit coverage < 100.0 }'
       - run: go vet ./...
