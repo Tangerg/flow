@@ -488,3 +488,61 @@ func walkRepository(t *testing.T, extension string, visit func(name string, data
 		t.Fatalf("walk repository: %v", err)
 	}
 }
+
+// markdownLinkPattern matches an inline Markdown link's target. Code spans are
+// stripped before it runs, because Go generics read as one: Get[string](ref)
+// matches [string](ref) and would send this looking for a file called ref.
+var markdownLinkPattern = regexp.MustCompile(`\[[^\]]*\]\(([^)]+)\)`)
+
+var markdownCodeSpanPattern = regexp.MustCompile("`[^`]*`")
+
+// TestMarkdownLinksResolve is TestGoDocLinksResolve's other half. The prose in
+// this repository navigates by relative link — a tutorial to the example that
+// runs it, the guidance file to the boundaries it cites, the changelog to a
+// document explaining a change — and a target that has moved reads exactly like
+// one that has not. Go doc links are checked because they point at API; these
+// point at files, which rename far more often.
+//
+// Anchors are deliberately not resolved: the heading slug is the renderer's
+// convention, not this repository's, and guessing it would fail on prose that is
+// correct.
+func TestMarkdownLinksResolve(t *testing.T) {
+	repository := os.DirFS(".")
+	unresolved := make(map[string][]string)
+	checked := 0
+	walkRepository(t, ".md", func(name string, data []byte) {
+		fenced := false
+		for index, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "```") {
+				fenced = !fenced
+				continue
+			}
+			if fenced {
+				continue
+			}
+			line = markdownCodeSpanPattern.ReplaceAllString(line, "")
+			for _, match := range markdownLinkPattern.FindAllStringSubmatch(line, -1) {
+				target, _, _ := strings.Cut(match[1], "#")
+				if target == "" || strings.Contains(match[1], "://") ||
+					strings.HasPrefix(match[1], "mailto:") {
+					continue
+				}
+				checked++
+				resolved := path.Join(path.Dir(name), target)
+				if _, err := fs.Stat(repository, resolved); err != nil {
+					unresolved[match[1]] = append(
+						unresolved[match[1]],
+						fmt.Sprintf("%s:%d", name, index+1),
+					)
+				}
+			}
+		}
+	})
+	if checked == 0 {
+		t.Fatal("no relative Markdown links found; the walk stopped seeing the repository")
+	}
+	for _, target := range slices.Sorted(maps.Keys(unresolved)) {
+		t.Errorf("Markdown link %q resolves to nothing, cited at %s",
+			target, strings.Join(unresolved[target], ", "))
+	}
+}

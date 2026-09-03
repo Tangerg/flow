@@ -395,6 +395,14 @@ go test ./example -run Example -v
   capital, and a lowercase name below a declared type — because a comment writing
   `scope[index]` is the same shape as a link to an unexported name, and only the
   type in front of the dot distinguishes them.
+  The prose has the same problem one level up: it navigates by relative link — a
+  tutorial to the example that runs it, this file to the boundary it cites — and a
+  target that moved reads exactly like one that did not, with no rendering to give
+  it away. `TestMarkdownLinksResolve` resolves all 133 of them. Code spans have to
+  be stripped first, because a Go generic reads as a link: `Get[string](ref)`
+  matches, and the check would go looking for a file named `ref`. Anchors stay
+  unresolved on purpose — the heading slug is the renderer's convention, not this
+  repository's.
 - Publish one ordered walk, and pin the order where a diagnostic spends it.
   `Inputs` is a map, so name order is the only reason a check reports the same
   first offending binding twice — and it published that one order three times: as
