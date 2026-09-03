@@ -392,6 +392,43 @@ func TestEveryIdentityBearingTypeRefusesToRenameItself(t *testing.T) {
 			{ID: "a", Type: "t", Inputs: workflow.Inputs{"in": bad}},
 		}},
 		"Store key": workflow.NewStore().WithCell(notUTF8, "k", 1),
+		// Every other text a definition matches on after persistence: a port
+		// name against a schema's declared ports, a node type against the
+		// registry, a dependency and a gate against another node's identity, a
+		// resolver against a registered name, and a case name against what the
+		// resolver returns. Replacement in any of them re-wires a definition
+		// without changing what a reader sees.
+		"Graph port name": workflow.Graph{Nodes: []workflow.GraphNode{
+			{ID: "a", Type: "t", Inputs: workflow.Inputs{notUTF8: workflow.Output("seed")}},
+		}},
+		"Spec port name": workflow.Spec{
+			Kind: workflow.KindLeaf, ID: "a", Type: "t",
+			Inputs: workflow.Inputs{notUTF8: workflow.Output("seed")},
+		},
+		"Graph node type": workflow.Graph{Nodes: []workflow.GraphNode{
+			{ID: "a", Type: notUTF8},
+		}},
+		"Graph dependency": workflow.Graph{Nodes: []workflow.GraphNode{
+			{ID: "a", Type: "t", DependsOn: []string{notUTF8}},
+		}},
+		"Gate source": workflow.Graph{Nodes: []workflow.GraphNode{
+			{ID: "a", Type: "t", When: []workflow.Gate{{NodeID: notUTF8, Outlet: "x"}}},
+		}},
+		"Gate outlet": workflow.Graph{Nodes: []workflow.GraphNode{
+			{ID: "a", Type: "t", When: []workflow.Gate{{NodeID: "b", Outlet: notUTF8}}},
+		}},
+		"Spec resolver": workflow.Spec{
+			Kind: workflow.KindBranch, ID: "b", Resolver: notUTF8,
+			Cases: map[string]workflow.Spec{
+				"only": {Kind: workflow.KindLeaf, ID: "l", Type: "t"},
+			},
+		},
+		"Spec case name": workflow.Spec{
+			Kind: workflow.KindBranch, ID: "b", Resolver: "r",
+			Cases: map[string]workflow.Spec{
+				notUTF8: {Kind: workflow.KindLeaf, ID: "l", Type: "t"},
+			},
+		},
 	}
 
 	for name, value := range values {
