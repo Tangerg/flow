@@ -57,7 +57,12 @@
 // a custom marshaler to change its kind across the persistence boundary.
 // Integer arithmetic stays exact and wraps on overflow as Go's does; arithmetic
 // involving a fractional float uses float64. Division or remainder by zero is
-// [ErrDivideByZero] rather than an infinity.
+// [ErrDivideByZero] rather than an infinity. Staying exact is also why mixed
+// signedness has a limit Go never has to state: arithmetic between a negative
+// value and a uint64 is performed when both fit int64, and is [ErrType] when the
+// uint64 does not, because no integer domain holds both operands and converting
+// one would answer a question neither asked. Comparison has no such limit — it
+// remains exact over the whole integer range.
 //
 // len accepts strings, arrays, slices, and maps of any concrete Go type. It
 // measures the value currently held by the Store; its result survives a Store

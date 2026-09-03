@@ -1185,3 +1185,103 @@ func TestUncompiledExprAccessorsAnswerLikeTheZeroValue(t *testing.T) {
 		})
 	}
 }
+
+// TestEval_integerArithmeticWrapsLikeGo pins the half of the arithmetic contract
+// that only shows at the edges. "Stays exact and wraps on overflow as Go's does"
+// is a promise about what a rule computes when a counter reaches the end of its
+// type, and every arithmetic test until now stayed in the middle of the range.
+func TestEval_integerArithmeticWrapsLikeGo(t *testing.T) {
+	s := store(
+		"big.output", int64(math.MaxInt64),
+		"small.output", int64(math.MinInt64),
+		"ubig.output", uint64(math.MaxUint64),
+	)
+	tests := map[string]any{
+		"big.output + 1":   int64(math.MinInt64),
+		"small.output - 1": int64(math.MaxInt64),
+		"big.output * 2":   int64(-2),
+		"ubig.output + 1":  uint64(0),
+	}
+	for src, want := range tests {
+		t.Run(src, func(t *testing.T) {
+			got, err := expr.MustParse(src).Eval[any](s)
+			if err != nil || got != want {
+				t.Fatalf("Eval = %#v, %v; want %#v", got, err, want)
+			}
+		})
+	}
+}
+
+// TestEval_mixedSignednessArithmeticNeedsOneExactDomain pins the rule that makes
+// "stays exact" true across signedness: an operation is performed whenever both
+// operands fit one integer domain, and refused when they cannot, rather than
+// converting one of them and returning a number neither operand meant.
+// Comparison has no such limit — it stays exact over the whole integer range,
+// which is why the last two cases answer instead of failing.
+func TestEval_mixedSignednessArithmeticNeedsOneExactDomain(t *testing.T) {
+	s := store(
+		"neg.output", int64(-1),
+		"fits.output", uint64(math.MaxInt64),
+		"beyond.output", uint64(math.MaxInt64)+1,
+	)
+	if got, err := expr.MustParse("neg.output + fits.output").Eval[int64](s); err != nil ||
+		got != math.MaxInt64-1 {
+		t.Fatalf("Eval = %d, %v; want %d", got, err, int64(math.MaxInt64-1))
+	}
+	for _, src := range []string{
+		"neg.output + beyond.output",
+		"neg.output * beyond.output",
+		"beyond.output - neg.output",
+	} {
+		t.Run(src, func(t *testing.T) {
+			_, err := expr.MustParse(src).Eval[any](s)
+			if !errors.Is(err, expr.ErrType) {
+				t.Fatalf("Eval error = %v; want ErrType", err)
+			}
+			if !strings.Contains(err.Error(), "cannot mix") {
+				t.Fatalf("Eval error = %v; want the operands it cannot mix", err)
+			}
+		})
+	}
+	for src, want := range map[string]bool{
+		"neg.output < beyond.output":  true,
+		"neg.output == beyond.output": false,
+	} {
+		t.Run(src, func(t *testing.T) {
+			got, err := expr.MustParse(src).Eval[bool](s)
+			if err != nil || got != want {
+				t.Fatalf("Eval = %v, %v; want %v", got, err, want)
+			}
+		})
+	}
+}
+
+// TestEval_lenMeasuresTheStoredKind pins the trap the documentation warns about
+// with []byte, which is the one value whose JSON representation changes kind: a
+// five-element slice in memory is an eight-character base64 string afterward, so
+// a rule written against len over bytes answers differently before and after
+// persistence. Every other len test uses a value whose kind survives.
+func TestEval_lenMeasuresTheStoredKind(t *testing.T) {
+	original := store("bytes.output", []byte("hello"))
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var restored workflow.Store
+	if err = json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got := string(data); got != `{"bytes":{"output":"aGVsbG8="}}` {
+		t.Fatalf("encoded %s; want the base64 form that changes len", got)
+	}
+
+	length := expr.MustParse("len(bytes.output)")
+	before, err := length.Eval[int64](original)
+	if err != nil || before != 5 {
+		t.Fatalf("len before = %d, %v; want the slice length 5", before, err)
+	}
+	after, err := length.Eval[int64](restored)
+	if err != nil || after != 8 {
+		t.Fatalf("len after = %d, %v; want the encoded string length 8", after, err)
+	}
+}
