@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -239,6 +240,26 @@ func TestRegisterSchema_rejectsInvalidPortsAndTypes(t *testing.T) {
 				t.Fatalf("err = %v; want ErrInvalidRegistration", err)
 			}
 		})
+	}
+}
+
+// TestRegisterSchema_namesTheConfigSchemaItCouldNotCompile pins the one place a
+// schema resource URL reaches a caller. A document that decodes and declares the
+// right dialect can still be no schema at all, and the backend reports that
+// against the resource it was registered under — which is how a caller learns
+// the metaschema complaint is about their node config rather than this package's
+// own Spec or Graph schema.
+func TestRegisterSchema_namesTheConfigSchemaItCouldNotCompile(t *testing.T) {
+	err := workflow.NewRegistry().RegisterSchema("bad", workflow.NodeSchema{
+		Output:       workflow.TypeAny,
+		ConfigSchema: json.RawMessage(`{"type": 5}`),
+	})
+	if !errors.Is(err, workflow.ErrInvalidRegistration) {
+		t.Fatalf("err = %v; want ErrInvalidRegistration", err)
+	}
+	if !strings.Contains(err.Error(), "node-config.json") ||
+		!strings.Contains(err.Error(), "not valid against metaschema") {
+		t.Fatalf("err = %v; want the config schema resource and what the backend said", err)
 	}
 }
 
