@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"maps"
 	"path"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -328,4 +329,62 @@ func decodesThroughSharedBoundary(body *ast.BlockStmt) bool {
 		return !found
 	})
 	return found
+}
+
+// contextDerivations names every place in this module that derives a
+// cancellable context, mapped to the test that proves the boundary ends what it
+// derived. Ownership is structural: a derived context that outlives its boundary
+// leaks cancellation into a caller's, and one that is never ended keeps its
+// parent's timer alive.
+//
+// The map is the second statement of that rule and the walk below is the first,
+// so a new derivation cannot arrive without either a test or an argument for why
+// it needs none. errgroup counts: it derives on the caller's behalf, and Map
+// still owns the result.
+var contextDerivations = map[string]string{
+	"map.go":                "TestMap_closesTheContextItDerived",
+	"race.go":               "TestRace_closesTheContextItDerived",
+	"workflow/run.go":       "TestEveryBoundaryClosesTheContextItDerived",
+	"workflow/graph_run.go": "TestEveryBoundaryClosesTheContextItDerived",
+	"workflow/stream.go":    "TestEveryBoundaryClosesTheContextItDerived",
+}
+
+// contextDerivationPattern matches the calls that produce a context whose
+// lifetime someone has to own. WithValue is deliberately absent: it derives no
+// cancellation and needs no ending.
+var contextDerivationPattern = regexp.MustCompile(
+	`(context\.With(Cancel|CancelCause|Timeout|TimeoutCause|Deadline|DeadlineCause)|errgroup\.WithContext)\(`,
+)
+
+func TestEveryContextDerivationNamesItsGuard(t *testing.T) {
+	defined := definedTestNames(t)
+	found := make(map[string]struct{})
+	walkRepository(t, ".go", func(name string, data []byte) {
+		if strings.HasSuffix(name, "_test.go") || path.Dir(name) == "example" {
+			return
+		}
+		for index, line := range strings.Split(string(data), "\n") {
+			if !contextDerivationPattern.MatchString(line) {
+				continue
+			}
+			found[name] = struct{}{}
+			if _, ok := contextDerivations[name]; !ok {
+				t.Errorf(
+					"%s:%d derives a context; contextDerivations must name the test that proves it ends",
+					name, index+1,
+				)
+			}
+		}
+	})
+	if len(found) == 0 {
+		t.Fatal("no context derivation found; the walk stopped seeing the repository")
+	}
+	for _, file := range slices.Sorted(maps.Keys(contextDerivations)) {
+		if _, ok := found[file]; !ok {
+			t.Errorf("contextDerivations names %s, which derives no context", file)
+		}
+		if _, ok := defined[contextDerivations[file]]; !ok {
+			t.Errorf("%s names test %s, which does not exist", file, contextDerivations[file])
+		}
+	}
 }

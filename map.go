@@ -42,7 +42,13 @@ func nonNegativeCount(name string, value int) error {
 // deliberately: propagating a panic delays it, reduces its stack to a value, and
 // can hide it entirely if the panic leaves the join unreachable. A single
 // element runs on the calling goroutine and therefore unwinds to the caller
-// instead, which is the one difference between the two paths.
+// instead.
+//
+// That is the only difference a call can observe. The paths also differ in what
+// the element receives: the concurrent one derives a context and ends it before
+// returning, while a single element is given the caller's own, so only a node
+// that keeps its context past its own return can tell them apart — see
+// TestMap_closesTheContextItDerived.
 //
 // Map is the concurrency primitive — fan-out, collecting a result per item, and
 // heterogeneous fan-in are derivable from it and live in higher-level packages

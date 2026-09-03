@@ -450,3 +450,54 @@ func TestMap_waitsForEveryElementToReturn(t *testing.T) {
 		t.Fatalf("%d elements were still running when Map returned", running)
 	}
 }
+
+// TestMap_closesTheContextItDerived is the Map half of what
+// TestRace_closesTheContextItDerived pins for Race: a boundary ends the context
+// it derived before returning. Map derives one through errgroup, which cancels
+// it on Wait, and nothing here had checked that.
+//
+// The second subtest is the reason the doc no longer calls the panic the one
+// difference between the two paths. A single element runs on the caller's
+// goroutine and receives the caller's own context, so it is still live after Map
+// returns — observable only by a node that keeps its context past its own
+// return, which is exactly what the concurrent path forbids.
+func TestMap_closesTheContextItDerived(t *testing.T) {
+	t.Run("concurrent", func(t *testing.T) {
+		seen := make(chan context.Context, 2)
+		node := flow.NodeFunc[int, int](func(ctx context.Context, value int) (int, error) {
+			seen <- ctx
+			return value, nil
+		})
+		if _, err := flow.Map(node, flow.MapConfig{}).Run(t.Context(), []int{1, 2}); err != nil {
+			t.Fatalf("Map: %v", err)
+		}
+		close(seen)
+		for ctx := range seen {
+			select {
+			case <-ctx.Done():
+				if !errors.Is(context.Cause(ctx), context.Canceled) {
+					t.Fatalf("derived context cause = %v; want context.Canceled", context.Cause(ctx))
+				}
+			default:
+				t.Fatal("an element's context remains live after Map returned")
+			}
+		}
+	})
+
+	t.Run("single element", func(t *testing.T) {
+		seen := make(chan context.Context, 1)
+		node := flow.NodeFunc[int, int](func(ctx context.Context, value int) (int, error) {
+			seen <- ctx
+			return value, nil
+		})
+		parent := t.Context()
+		if _, err := flow.Map(node, flow.MapConfig{}).Run(parent, []int{1}); err != nil {
+			t.Fatalf("Map: %v", err)
+		}
+		select {
+		case <-(<-seen).Done():
+			t.Fatal("the sequential path cancelled a context Map did not derive")
+		default:
+		}
+	})
+}
