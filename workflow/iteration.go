@@ -59,6 +59,13 @@ type IterationConfig struct {
 // tell the elements' steps apart. That frame is also what lets a [Journal]
 // resume an iteration element by element.
 //
+// Element identity is therefore positional. A resumed run replays the record
+// made for index i whatever value occupies i now, so an input that can change
+// between attempts mixes a fresh element's result with one computed for the item
+// that used to be in its place. Resume over the collection the records were made
+// for, and start a new logical run with a fresh Journal when the input is read
+// again.
+//
 // A suspended element does not cancel the others: they run to completion, their
 // journaled inner boundaries are recorded, and the suspensions are returned
 // together. The collected output is written only once every element has

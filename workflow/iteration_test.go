@@ -388,3 +388,71 @@ func mustSlice(t *testing.T, s workflow.Store, nodeID string) []any {
 	}
 	return raw.([]any)
 }
+
+// TestIteration_replaysByPositionNotByValue pins what resuming element by
+// element costs, which the documentation now warns about: a record belongs to
+// the index, not to the item that produced it. A resumed run over a changed
+// collection therefore answers for one element with a value computed from the
+// item that used to occupy that position.
+//
+// This is inherent to checkpoint-and-restart — recognizing the change would mean
+// keeping the inputs a record was made from, which no Journal record carries —
+// so what a test can do is make the consequence explicit rather than let a host
+// discover it against real data.
+func TestIteration_replaysByPositionNotByValue(t *testing.T) {
+	boom := errors.New("boom")
+	var ran []int
+	each := workflow.Iteration(workflow.IterationConfig{
+		ID:          "each",
+		Input:       workflow.Output("items"),
+		Concurrency: 1,
+		Body: workflow.LeafFunc("body", workflow.Item("each"),
+			func(_ context.Context, value int) (int, error) {
+				ran = append(ran, value)
+				if value == 99 {
+					return 0, boom
+				}
+				return value * 10, nil
+			}),
+		BodyOutput: workflow.Output("body"),
+	})
+	journal := workflow.NewJournal()
+
+	// The first attempt records index 0 and fails at index 1.
+	_, err := workflow.Run(
+		t.Context(),
+		each,
+		workflow.NewStore().WithOutput("items", []any{1, 99}),
+		workflow.RunConfig{Journal: journal},
+	)
+	if !errors.Is(err, boom) {
+		t.Fatalf("first run error = %v; want the element failure", err)
+	}
+	if !slices.Equal(ran, []int{1, 99}) {
+		t.Fatalf("first run visited %v; want both elements", ran)
+	}
+
+	// The second attempt reads a different collection of the same length.
+	ran = nil
+	out, err := workflow.Run(
+		t.Context(),
+		each,
+		workflow.NewStore().WithOutput("items", []any{7, 8}),
+		workflow.RunConfig{Journal: journal},
+	)
+	if err != nil {
+		t.Fatalf("resumed run: %v", err)
+	}
+	if !slices.Equal(ran, []int{8}) {
+		t.Fatalf("resumed run visited %v; want only the element with no record", ran)
+	}
+	collected, err := out.Get[[]any](workflow.Output("each"))
+	if err != nil {
+		t.Fatalf("collected output: %v", err)
+	}
+	// 10 was computed from the 1 that used to occupy index 0, not from the 7
+	// there now; 80 is the fresh element beside it.
+	if len(collected) != 2 || collected[0] != 10 || collected[1] != 80 {
+		t.Fatalf("collected = %v; want the replayed 10 beside the fresh 80", collected)
+	}
+}
