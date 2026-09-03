@@ -885,6 +885,23 @@ go test ./example -run Example -v
   sentinel through `RunChild` — so only `Validate` can tell the positions apart.
   Only `gatedStep.satisfied`'s second cancellation check is an equivalence, and it
   says so where it sits.
+- Build a corpus of defects and ask every one the same question. "Reject the
+  operation with a precise error that names the field a caller can repair" is a
+  rule about all refusals, so it is checkable in bulk: fifteen graph defects and
+  seventeen spec defects, each asked whether its error carries a field.
+  Fourteen graph defects named one; the fifteenth, a cycle, named nothing at all
+  — no path, no node, no field, just "graph cycle" for a document a caller then
+  searches by hand. Kahn's algorithm already knows which nodes it could not
+  reach, so the diagnostic names them, and says they cannot be ordered rather
+  than that they form the cycle: that set is the cycle plus whatever waits behind
+  it, and calling a mere waiter a member would be false.
+  The spec corpus turned up the opposite shape — one defect *admitted*. That one
+  was correct: validation learns what a leaf produces from its registered schema,
+  and without one the set is unknowable without running the factory. The gap was
+  that the deferral's safety net was untested, so
+  `TestValidateSpec_defersAnUnknowableProjectionToCompilation` now pins the pair,
+  including that compilation reports the wire field rather than leaving the
+  step-located message the whole-definition check would produce.
 - A test named for a set is a claim about that set, so check the set. Auditing
   every "Every…" test here against the thing it says it covers found five gaps
   and four clean bills, which is a good enough ratio to keep doing it.
