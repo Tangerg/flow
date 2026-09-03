@@ -414,56 +414,34 @@ func TestPanicReachesTheCallerOnlyFromItsOwnGoroutine(t *testing.T) {
 	}
 }
 
-// TestConcurrentCombinatorsLeaveNoChildRunning pins the promise both of these
-// combinators state in prose and nothing checked: Race waits for every losing
-// call to stop, Map for every element, so no child is still executing when Run
-// returns. The counter is read at the moment of return rather than after a
-// settling wait, which is what makes the check exact in both directions — a
-// child that outlived the operation is caught, and a child that finished is
-// never mistaken for one.
-func TestConcurrentCombinatorsLeaveNoChildRunning(t *testing.T) {
+// TestMap_waitsForEveryElementToReturn strengthens what
+// TestMap_failFastCancelsSiblings can show. That test reads a flag its siblings
+// set before returning, so it proves they observed the cancellation and cannot
+// prove Map waited for them: if Map abandoned them, the flag would merely be
+// read too early. Counting live calls and reading the count at the moment Map
+// returns is exact in both directions. Race states the same promise and is
+// already held to it by TestRace_waitsForLosingNodesToStop.
+func TestMap_waitsForEveryElementToReturn(t *testing.T) {
 	boom := errors.New("boom")
-
-	t.Run("race", func(t *testing.T) {
-		var live atomic.Int64
-		waiting := flow.NodeFunc[int, int](func(ctx context.Context, _ int) (int, error) {
-			live.Add(1)
-			defer live.Add(-1)
-			<-ctx.Done()
-			return 0, context.Cause(ctx)
-		})
-		winner := flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
-			return value, nil
-		})
-		got, err := flow.Race(waiting, winner, waiting).Run(t.Context(), 7)
-		if err != nil || got != 7 {
-			t.Fatalf("Race = %d, %v; want 7, nil", got, err)
+	var live atomic.Int64
+	// Element 0 fails, which cancels the rest; every other element holds the
+	// input until it observes that, so all of them are in flight when the
+	// failure lands.
+	element := flow.NodeFunc[int, int](func(ctx context.Context, value int) (int, error) {
+		if value == 0 {
+			return 0, boom
 		}
-		if running := live.Load(); running != 0 {
-			t.Fatalf("%d losing calls were still running when Race returned", running)
-		}
+		live.Add(1)
+		defer live.Add(-1)
+		<-ctx.Done()
+		return 0, context.Cause(ctx)
 	})
 
-	t.Run("map", func(t *testing.T) {
-		var live atomic.Int64
-		// Element 0 fails, which cancels the rest; every other element is holding
-		// the input until it observes that, so all of them are in flight when the
-		// failure lands.
-		element := flow.NodeFunc[int, int](func(ctx context.Context, value int) (int, error) {
-			if value == 0 {
-				return 0, boom
-			}
-			live.Add(1)
-			defer live.Add(-1)
-			<-ctx.Done()
-			return 0, context.Cause(ctx)
-		})
-		_, err := flow.Map(element, flow.MapConfig{}).Run(t.Context(), []int{0, 1, 2, 3})
-		if !errors.Is(err, boom) {
-			t.Fatalf("Map error = %v; want the element failure", err)
-		}
-		if running := live.Load(); running != 0 {
-			t.Fatalf("%d elements were still running when Map returned", running)
-		}
-	})
+	_, err := flow.Map(element, flow.MapConfig{}).Run(t.Context(), []int{0, 1, 2, 3})
+	if !errors.Is(err, boom) {
+		t.Fatalf("Map error = %v; want the element failure", err)
+	}
+	if running := live.Load(); running != 0 {
+		t.Fatalf("%d elements were still running when Map returned", running)
+	}
 }

@@ -948,15 +948,19 @@ func TestCompileGraph_gateCancellationStopsLaterGates(t *testing.T) {
 	}
 }
 
-// TestConcurrentCompositesLeaveNoBranchRunning pins for this layer what
-// TestConcurrentCombinatorsLeaveNoChildRunning pins for flow: a composite waits
-// for every branch it admitted, so none is still executing when Run returns.
-// Each composite says so in prose and nothing asked. The shape is the same
-// everywhere — one sibling fails, the rest hold their input until they observe
-// the cancellation that failure causes, so every one of them is in flight at the
-// moment the outcome is decided — and the counter is read at the moment of
-// return, never after a wait, so a branch that outlived its composite cannot be
-// mistaken for one that finished.
+// TestConcurrentCompositesLeaveNoBranchRunning pins what each of these three
+// composites promises in prose and no test in this package asked: it waits for
+// every branch it admitted, so none is still executing when Run returns. flow's
+// own combinators are held to the same rule — Race by
+// TestRace_waitsForLosingNodesToStop, Map by TestMap_waitsForEveryElementToReturn
+// — and this layer had nothing equivalent for a Parallel, an Iteration, or a
+// compiled Graph.
+//
+// The shape is the same everywhere: one sibling fails, the rest hold their input
+// until they observe the cancellation that failure causes, so every one of them
+// is in flight at the moment the outcome is decided. The counter is read at the
+// moment of return, never after a wait, so a branch that outlived its composite
+// cannot be mistaken for one that finished.
 func TestConcurrentCompositesLeaveNoBranchRunning(t *testing.T) {
 	boom := errors.New("boom")
 	var live atomic.Int64
