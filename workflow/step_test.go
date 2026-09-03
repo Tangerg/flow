@@ -1103,6 +1103,15 @@ func TestGet_nilValue(t *testing.T) {
 // a second workflow composite would install a run of its own and answer in place
 // of the one under test, and two visible children with one ID are rejected by
 // definition validation before anything runs, which is a different check.
+//
+// Three of the nine steps that install a run are absent, each for its own
+// reason. Leaf has its own case in the test below. A gate wrapper cannot be
+// invoked directly at all, and under the graph that built it the run is already
+// installed. A compiled graph installs one whose effect is elsewhere: its node
+// IDs cannot collide, since the compiler refuses that and refuses an opaque node
+// body that could hide a duplicate — what its run carries instead is the bypass
+// set its gates read, which TestCompileGraph_propagatesBypassThroughConditionalRegions
+// exercises by running a graph directly.
 func TestEveryCompositeRunDirectlyStillFormsOneRun(t *testing.T) {
 	twice := func() workflow.Step {
 		leaf := passthrough("same")
