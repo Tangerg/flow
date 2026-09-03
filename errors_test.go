@@ -175,17 +175,21 @@ func TestErrorsNameThePackageAtMostOnce(t *testing.T) {
 	var missing flow.Node[int, int]
 
 	failures := map[string]error{
-		"nil node":            flow.Validate(missing),
-		"race case":           flow.Validate(flow.Race(ok, missing)),
-		"race caller case":    flow.Validate(flow.Race[int, int](ok, failingNode{caller})),
-		"map element":         runIndexed(t, flow.Map[int, int](failingNode{caller}, flow.MapConfig{}), 2),
-		"map node":            flow.Validate(flow.Map(missing, flow.MapConfig{})),
-		"switch case":         flow.Validate(caseSet(map[string]flow.Node[int, int]{"a": nil})),
-		"switch nested case":  flow.Validate(caseSet(map[string]flow.Node[int, int]{"a": caseSet(map[string]flow.Node[int, int]{"z": nil})})),
-		"switch caller case":  flow.Validate(caseSet(map[string]flow.Node[int, int]{"a": failingNode{caller}})),
-		"switch no case":      runOne(t, caseSet(map[string]flow.Node[int, int]{"b": ok})),
-		"switch empty":        flow.Validate(caseSet(nil)),
-		"then nested":         flow.Validate(flow.Then[int, int, int](ok, flow.Then[int, int, int](ok, missing))),
+		"nil node":           flow.Validate(missing),
+		"race case":          flow.Validate(flow.Race(ok, missing)),
+		"race caller case":   flow.Validate(flow.Race[int, int](ok, failingNode{caller})),
+		"map element":        runIndexed(t, flow.Map[int, int](failingNode{caller}, flow.MapConfig{}), 2),
+		"map node":           flow.Validate(flow.Map(missing, flow.MapConfig{})),
+		"switch case":        flow.Validate(caseSet(map[string]flow.Node[int, int]{"a": nil})),
+		"switch nested case": flow.Validate(caseSet(map[string]flow.Node[int, int]{"a": caseSet(map[string]flow.Node[int, int]{"z": nil})})),
+		"switch caller case": flow.Validate(caseSet(map[string]flow.Node[int, int]{"a": failingNode{caller}})),
+		"switch no case":     runOne(t, caseSet(map[string]flow.Node[int, int]{"b": ok})),
+		"switch empty":       flow.Validate(caseSet(nil)),
+		"then nested":        flow.Validate(flow.Then[int, int, int](ok, flow.Then[int, int, int](ok, missing))),
+		// Then validates two children in two statements, and every case here used
+		// to name the second one. Run reaches the same sentinel through RunChild,
+		// so only Validate can tell the positions apart.
+		"then first":          flow.Validate(flow.Then[int, int, int](missing, ok)),
 		"loop config":         flow.Validate(flow.Loop(doneAtOnce, flow.LoopConfig{MaxIterations: -1})),
 		"map config":          flow.Validate(flow.Map(ok, flow.MapConfig{Concurrency: -1})),
 		"race without nodes":  flow.Validate(flow.Race[int, int]()),

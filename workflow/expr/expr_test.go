@@ -723,9 +723,19 @@ func TestParse_quotedNodeID(t *testing.T) {
 	if refs := e.Refs(); !slices.Equal(refs, want) {
 		t.Fatalf("Refs = %v; want %v", refs, want)
 	}
-	for _, src := range []string{`node[""].output`, `node[1].output`, `node[id].output`} {
-		if _, parseErr := expr.Parse(src); !errors.Is(parseErr, expr.ErrUnsupported) {
-			t.Fatalf("Parse(%q) err = %v; want ErrUnsupported", src, parseErr)
+	// The message matters as much as the sentinel here: an index this package
+	// refuses flattens to an empty node ID, which the reference rule below would
+	// refuse too, under the same sentinel and a diagnostic naming the wrong
+	// defect. A caller who wrote node[1] has to be told about the literal.
+	for src, want := range map[string]string{
+		`node[""].output`: "invalid reference: node ID is empty",
+		`node[1].output`:  "node ID must be a non-empty string literal",
+		`node[id].output`: "node ID must be a non-empty string literal",
+	} {
+		_, parseErr := expr.Parse(src)
+		if !errors.Is(parseErr, expr.ErrUnsupported) ||
+			!strings.Contains(parseErr.Error(), want) {
+			t.Fatalf("Parse(%q) err = %v; want ErrUnsupported containing %q", src, parseErr, want)
 		}
 	}
 }

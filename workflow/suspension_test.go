@@ -1035,6 +1035,17 @@ func TestSuspension_JSONBoundaryIsStrictAndAtomic(t *testing.T) {
 	if err := json.Unmarshal(tooDeep, new(workflow.Suspension)); !errors.Is(err, workflow.ErrMaxDepth) {
 		t.Fatalf("depth error = %v; want ErrMaxDepth", err)
 	}
+
+	// A scope that long is breadth, not nesting: the document is three levels
+	// deep whatever its length, so the decoder's own limit never sees it and the
+	// only thing standing between a persisted wait and an unrecordable identity
+	// is the scope check. Every other invalid scope here is refused one layer
+	// lower, by the frame's own decoder, which left that check unasked.
+	frames := strings.Repeat(`{"id":"f"},`, workflow.MaxNestingDepth+1)
+	tooMany := []byte(`{"id":"wait","scope":[` + strings.TrimSuffix(frames, ",") + `]}`)
+	if err := json.Unmarshal(tooMany, new(workflow.Suspension)); !errors.Is(err, workflow.ErrMaxDepth) {
+		t.Fatalf("scope length error = %v; want ErrMaxDepth", err)
+	}
 }
 
 // Suspend returns an anonymous wait: no ID, and therefore no scope, since a

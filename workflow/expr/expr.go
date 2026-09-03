@@ -395,9 +395,9 @@ func (c *compiler) nodeID(index ast.Expr) (string, error) {
 	if err != nil {
 		return "", c.errorAt(lit, fmt.Errorf("%w: node ID %s: %w", ErrSyntax, lit.Value, err))
 	}
-	if id == "" {
-		return "", c.errorAt(lit, fmt.Errorf("%w: node ID must not be empty", ErrUnsupported))
-	}
+	// What makes a node ID usable is a Ref rule, and every root this returns
+	// becomes one in compiler.reference, which reports it with this package's
+	// vocabulary. Restating the rule here only reworded the same rejection.
 	return id, nil
 }
 

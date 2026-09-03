@@ -855,6 +855,28 @@ go test ./example -run Example -v
   `TestSurfacedMessagesRenderEveryPrivateLocation` reads all five boundaries that
   build one, which took finding the reachable route to each: a `Journal` holding a
   number for a routing node is how a gate's own read fails.
+- Swallow the error, not the statement. Deleting statements had gone quiet, so the
+  next operator asked the axiom directly: every `return` whose function reports an
+  `error` — 945 of them — rewritten to return `nil`, which is what an error
+  disappearing accidentally looks like. Run exhaustively outside `workflow` and
+  sampled inside it, 432 mutants killed 232, left 194 that no longer compiled, and
+  survived 6. One was a real gap and one a real redundancy; the other four all say
+  the same thing, which is the rule worth keeping:
+  **a wrapper exists for its location, so a test that asks only whether an error
+  occurred does not test it.** A strict encoder refuses an invalid document
+  whatever `Bindings.validateJSONText` says about which binding carried it; the
+  reference rule refuses an empty node ID whatever the compiler says about the
+  index that produced it. Both diagnostics were free to name nothing, or the wrong
+  defect: a caller who wrote `node[1]` would have been told the node ID was empty.
+  `TestBindings_MarshalJSONRejectsInvalidUTF8` now expects all eight locations, and
+  `TestParse_quotedNodeID` the message per index form. The redundancy went the
+  other way: the compiler's own empty-node-ID check only reworded a rejection
+  `workflow.Ref` already owns, so it is gone — `expr` adds vocabulary, not a second
+  copy. The gap was `Then`, which validates two children in two statements while
+  every case in this repository named the second, and `Run` reaches the same
+  sentinel through `RunChild` — so only `Validate` can tell the positions apart.
+  Only `gatedStep.satisfied`'s second cancellation check is an equivalence, and it
+  says so where it sits.
 - A warning in the documentation is a claim about behavior, so it needs a guard
   like any other. `workflow/doc.go` tells callers that the generic combinators
   know nothing about a Store, so a first-success or error-recovery one may hide a

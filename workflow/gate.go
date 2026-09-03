@@ -144,6 +144,12 @@ func (g gatedStep) satisfied(ctx context.Context, store Store) (bool, error) {
 			return false, err
 		}
 		match, err := evaluation.match(ctx, store, gate)
+		// Cancellation outranks a gate's answer, because "not satisfied" is not a
+		// neutral result here: it publishes a bypass its descendants inherit. No
+		// test can show it -- matching a gate is a Store read with nothing to
+		// schedule against, so a cancellation lands either before this loop, where
+		// the check above catches it, or after the last gate, where the step's own
+		// boundary refuses to start.
 		if contextErr := context.Cause(ctx); contextErr != nil {
 			return false, contextErr
 		}

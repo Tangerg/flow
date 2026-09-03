@@ -644,23 +644,63 @@ func TestBindings_JSONRoundTrip(t *testing.T) {
 	}
 }
 
+// TestBindings_MarshalJSONRejectsInvalidUTF8 asks for the location as well as
+// the rule. The strict encoder underneath refuses the same document, so
+// "not valid UTF-8" alone is satisfied whether or not these wrappers say which
+// binding carried it -- and the location is the whole reason they exist, since a
+// caller repairs one named entry rather than a document.
 func TestBindings_MarshalJSONRejectsInvalidUTF8(t *testing.T) {
 	bad := string([]byte{0xff})
-	tests := map[string]expr.Bindings{
-		"condition name":       {Conditions: map[string]string{bad: "true"}},
-		"condition expression": {Conditions: map[string]string{"rule": bad}},
-		"resolver name":        {Resolvers: map[string]string{bad: `"case"`}},
-		"resolver expression":  {Resolvers: map[string]string{"rule": bad}},
-		"switch name":          {Switches: map[string]expr.SwitchSpec{bad: {Cases: []expr.Case{{When: "true", Then: "case"}}}}},
-		"case expression":      {Switches: map[string]expr.SwitchSpec{"rule": {Cases: []expr.Case{{When: bad, Then: "case"}}}}},
-		"case branch":          {Switches: map[string]expr.SwitchSpec{"rule": {Cases: []expr.Case{{When: "true", Then: bad}}}}},
-		"fallback":             {Switches: map[string]expr.SwitchSpec{"rule": {Cases: []expr.Case{{When: "true", Then: "case"}}, Fallback: bad}}},
+	tests := map[string]struct {
+		bindings expr.Bindings
+		want     string
+	}{
+		"condition name": {
+			bindings: expr.Bindings{Conditions: map[string]string{bad: "true"}},
+			want:     "expr: condition name is not valid UTF-8",
+		},
+		"condition expression": {
+			bindings: expr.Bindings{Conditions: map[string]string{"rule": bad}},
+			want:     `expr: condition "rule" is not valid UTF-8`,
+		},
+		"resolver name": {
+			bindings: expr.Bindings{Resolvers: map[string]string{bad: `"case"`}},
+			want:     "expr: resolver name is not valid UTF-8",
+		},
+		"resolver expression": {
+			bindings: expr.Bindings{Resolvers: map[string]string{"rule": bad}},
+			want:     `expr: resolver "rule" is not valid UTF-8`,
+		},
+		"switch name": {
+			bindings: expr.Bindings{Switches: map[string]expr.SwitchSpec{
+				bad: {Cases: []expr.Case{{When: "true", Then: "case"}}},
+			}},
+			want: "expr: switch name is not valid UTF-8",
+		},
+		"case expression": {
+			bindings: expr.Bindings{Switches: map[string]expr.SwitchSpec{
+				"rule": {Cases: []expr.Case{{When: bad, Then: "case"}}},
+			}},
+			want: `expr: switch "rule": case 0 expression is not valid UTF-8`,
+		},
+		"case branch": {
+			bindings: expr.Bindings{Switches: map[string]expr.SwitchSpec{
+				"rule": {Cases: []expr.Case{{When: "true", Then: bad}}},
+			}},
+			want: `expr: switch "rule": case 0 branch name is not valid UTF-8`,
+		},
+		"fallback": {
+			bindings: expr.Bindings{Switches: map[string]expr.SwitchSpec{
+				"rule": {Cases: []expr.Case{{When: "true", Then: "case"}}, Fallback: bad},
+			}},
+			want: `expr: switch "rule": fallback branch name is not valid UTF-8`,
+		},
 	}
-	for name, bindings := range tests {
+	for name, testCase := range tests {
 		t.Run(name, func(t *testing.T) {
-			if _, err := json.Marshal(bindings); err == nil ||
-				!strings.Contains(err.Error(), "not valid UTF-8") {
-				t.Fatalf("Marshal error = %v; want invalid UTF-8", err)
+			_, err := json.Marshal(testCase.bindings)
+			if err == nil || !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("Marshal error = %v; want one containing %q", err, testCase.want)
 			}
 		})
 	}
