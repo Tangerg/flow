@@ -884,9 +884,13 @@ func TestAwait_reportsAnUnresolvableNestedValueAsFailure(t *testing.T) {
 		errors.Is(err, workflow.ErrSuspended) {
 		t.Fatalf("Run error = %v; want bind-time JSON resolution failure", err)
 	}
+	// An Observer attributes a failure by ID, and this is the only event an
+	// Await's bind failure publishes, so the identity is the half of it that
+	// nothing else can supply.
 	if len(events) != 1 || events[0].Kind != workflow.EventFailed ||
+		events[0].ID != "approval" ||
 		!errors.Is(events[0].Err, errBrokenJSON) {
-		t.Fatalf("events = %+v; want one failed event with the resolution cause", events)
+		t.Fatalf("events = %+v; want one failed event naming approval with the cause", events)
 	}
 }
 

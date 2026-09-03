@@ -29,6 +29,11 @@ type errorFormatTask struct {
 	suffix     bool
 }
 
+// errorFormatFrame answers two questions with one value: whether this package
+// renders the wrapper, and whether anything below it still has to be rendered.
+// Both send the walk to finish, which is why a typed nil location -- owned, with
+// nothing under it -- reads the same however either flag is spelled: the loop
+// would find nil next and stop there instead.
 type errorFormatFrame struct {
 	next      error
 	reference *RefError

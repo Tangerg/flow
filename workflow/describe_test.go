@@ -64,16 +64,24 @@ func (b *borrowedDescriptionStep) Describe() workflow.Description {
 	return b.description
 }
 
+// newBorrowedDescriptionStep carries a Label at every level on purpose. The
+// copy this package takes of a caller-defined description exists to own its
+// storage, and a copy that quietly dropped a field would own less than it was
+// given: only a built-in composite sets Label from a relationship it knows, so
+// nothing else in these tests puts one on the borrowed path.
 func newBorrowedDescriptionStep() *borrowedDescriptionStep {
 	return &borrowedDescriptionStep{description: workflow.Description{
-		ID:   "custom",
-		Kind: "custom",
+		ID:    "custom",
+		Label: "custom label",
+		Kind:  "custom",
 		Children: []workflow.Description{{
-			ID:   "nested",
-			Kind: "nested",
+			ID:    "nested",
+			Label: "nested label",
+			Kind:  "nested",
 			Children: []workflow.Description{{
-				ID:   "leaf",
-				Kind: "leaf-like",
+				ID:    "leaf",
+				Label: "leaf label",
+				Kind:  "leaf-like",
 			}},
 		}},
 	}}
@@ -85,6 +93,24 @@ func assertOwnedDescription(
 	describe func() workflow.Description,
 ) {
 	t.Helper()
+
+	// Ownership is not fidelity: a copy that dropped a field would pass every
+	// assertion below, all of which mutate and re-read the one field they chose.
+	for got, want := describe().Children[0], custom.description; ; {
+		if got.ID != want.ID || got.Label != want.Label || got.Kind != want.Kind {
+			t.Fatalf("copied node = %+v; want %+v", got, want)
+		}
+		if len(want.Children) == 0 {
+			if len(got.Children) != 0 {
+				t.Fatalf("copied node = %+v; want no children", got)
+			}
+			break
+		}
+		if len(got.Children) != len(want.Children) {
+			t.Fatalf("copied node = %+v; want %d children", got, len(want.Children))
+		}
+		got, want = got.Children[0], want.Children[0]
+	}
 
 	first := describe()
 	first.Children[0].ID = "changed"
@@ -154,6 +180,29 @@ func TestDescribeNormalizesCallerCyclesWithoutCollapsingSharedSubtrees(t *testin
 		got.Children[0].ID = "changed"
 		if children[0].ID != "cycle" {
 			t.Fatalf("source cycle = %+v; cloned tree retained its storage", children[0])
+		}
+	})
+
+	// A descendant whose Children is a shorter view of the same array is not the
+	// slice its ancestor is walking, and its own node is genuinely there. Keying
+	// an active slice by its first element alone would read this as the cycle it
+	// is not, and drop a level. The two cases below cannot show that: a cycle
+	// repeats the whole slice, and siblings are never inside one at the same time.
+	t.Run("overlapping prefix", func(t *testing.T) {
+		shared := make([]workflow.Description, 2)
+		shared[0] = workflow.Description{ID: "first", Kind: "first", Children: shared[:1]}
+		shared[1] = workflow.Description{ID: "second", Kind: "second"}
+		root := workflow.Description{ID: "root", Kind: "root", Children: shared[:2]}
+
+		got := workflow.Describe(&borrowedDescriptionStep{description: root})
+		if len(got.Children) != 2 ||
+			got.Children[0].ID != "first" || got.Children[1].ID != "second" {
+			t.Fatalf("Describe = %+v; want both members of the outer view", got)
+		}
+		repeated := got.Children[0].Children
+		if len(repeated) != 1 || repeated[0].ID != "first" ||
+			len(repeated[0].Children) != 0 {
+			t.Fatalf("Describe = %+v; want the shorter view walked once, then kept as a leaf", got)
 		}
 	})
 

@@ -44,6 +44,11 @@ type compiledGate struct {
 	outlets []string
 }
 
+// routingSelection is what one routing source answered. bypassed is stated
+// rather than left to an empty outlet, which no declared gate can match either:
+// a source that never ran and a source that chose the other branch are different
+// facts, and only one of them stays true if outlets ever gain a spelling for
+// "none".
 type routingSelection struct {
 	outlet   string
 	bypassed bool

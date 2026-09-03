@@ -130,7 +130,11 @@ func copiedFrame(wrapper error, cause *error, next error) errorCloneResult {
 }
 
 // ownedTerminal ends the walk at an owned value the copy cannot improve on: a
-// typed nil has no location to copy, and a Suspension copies itself.
+// typed nil has no location to copy, and a Suspension copies itself. Both flags
+// answer different questions — recognized, and nothing below to rebuild — and
+// only the pair is read, so stating recognition here changes no outcome today.
+// It is still what makes the result readable as one of three states rather than
+// two booleans with a meaningless fourth combination.
 func ownedTerminal(next error) errorCloneResult {
 	return errorCloneResult{next: next, owned: true, terminal: true}
 }
