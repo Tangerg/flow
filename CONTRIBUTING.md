@@ -885,6 +885,26 @@ go test ./example -run Example -v
   sentinel through `RunChild` — so only `Validate` can tell the positions apart.
   Only `gatedStep.satisfied`'s second cancellation check is an equivalence, and it
   says so where it sits.
+- State the consequence, not only the mechanism. Every finding in this round came
+  from reading a documented mechanism and asking what it means for whoever uses
+  it. `Iteration` explained that an indexed scope frame per element is what lets a
+  Journal resume one, and never said that the record therefore belongs to the
+  *position*: a host that re-reads its collection gets one element's result
+  computed from whatever used to be there. `Loop` documented the cap's error and
+  not what comes back with it — every completed iteration's work, because nothing
+  failed — nor that a resumed run continues from the recorded iterations, which
+  makes the cap a per-run budget a host can raise rather than a broken definition.
+  `Parallel` said "a later branch's change wins" one paragraph below "completion
+  timing decides which failure is observed first", which makes "later" read as
+  temporal when it is declaration order, and that is the whole reason a Parallel
+  merges reproducibly. `expr` promised arithmetic that "stays exact and wraps on
+  overflow as Go's does" without the limit that makes it true: a negative operand
+  and a uint64 too large for int64 have no common domain, so the operation is
+  refused rather than converted.
+  Each of those was correct code, so no mutation operator could find it — and each
+  was untested, because a test is written from what the documentation says. The
+  general form went into `Journal`: a record is keyed by identity, not by the
+  input that produced it.
 - The same question the Spec's copies raise, a Graph's raise too, and the answer
   is a corpus rather than a matrix. A Graph's constraints — minimum lengths, the
   JSON Pointer pattern, unique dependencies and gates, a trigger that requires
