@@ -3,6 +3,7 @@ package workflow_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Tangerg/flow"
@@ -945,4 +946,97 @@ func TestCompileGraph_gateCancellationStopsLaterGates(t *testing.T) {
 	if laterGateRead || targetCalled {
 		t.Fatalf("later gate read = %t, target called = %t; want false, false", laterGateRead, targetCalled)
 	}
+}
+
+// TestConcurrentCompositesLeaveNoBranchRunning pins for this layer what
+// TestConcurrentCombinatorsLeaveNoChildRunning pins for flow: a composite waits
+// for every branch it admitted, so none is still executing when Run returns.
+// Each composite says so in prose and nothing asked. The shape is the same
+// everywhere — one sibling fails, the rest hold their input until they observe
+// the cancellation that failure causes, so every one of them is in flight at the
+// moment the outcome is decided — and the counter is read at the moment of
+// return, never after a wait, so a branch that outlived its composite cannot be
+// mistaken for one that finished.
+func TestConcurrentCompositesLeaveNoBranchRunning(t *testing.T) {
+	boom := errors.New("boom")
+	var live atomic.Int64
+	hold := func(ctx context.Context) (int, error) {
+		live.Add(1)
+		defer live.Add(-1)
+		<-ctx.Done()
+		return 0, context.Cause(ctx)
+	}
+	seed := workflow.NewStore().WithOutput("seed", 1)
+
+	t.Run("parallel", func(t *testing.T) {
+		waiting := func(id string) workflow.Step {
+			return workflow.LeafFunc(id, workflow.Output("seed"),
+				func(ctx context.Context, _ int) (int, error) { return hold(ctx) })
+		}
+		step := workflow.Parallel(workflow.ParallelConfig{Steps: []workflow.Step{
+			workflow.LeafFunc("boom", workflow.Output("seed"),
+				func(context.Context, int) (int, error) { return 0, boom }),
+			waiting("first"),
+			waiting("second"),
+		}})
+		if _, err := workflow.Run(t.Context(), step, seed, workflow.RunConfig{}); !errors.Is(err, boom) {
+			t.Fatalf("Run error = %v; want the branch failure", err)
+		}
+		if running := live.Load(); running != 0 {
+			t.Fatalf("%d branches were still running when Parallel returned", running)
+		}
+	})
+
+	t.Run("iteration", func(t *testing.T) {
+		step := workflow.Iteration(workflow.IterationConfig{
+			ID:    "each",
+			Input: workflow.Output("items"),
+			Body: workflow.LeafFunc("body", workflow.Item("each"),
+				func(ctx context.Context, value int) (int, error) {
+					if value == 0 {
+						return 0, boom
+					}
+					return hold(ctx)
+				}),
+			BodyOutput: workflow.Output("body"),
+		})
+		input := workflow.NewStore().WithOutput("items", []any{0, 1, 2})
+		if _, err := workflow.Run(t.Context(), step, input, workflow.RunConfig{}); !errors.Is(err, boom) {
+			t.Fatalf("Run error = %v; want the element failure", err)
+		}
+		if running := live.Load(); running != 0 {
+			t.Fatalf("%d elements were still running when Iteration returned", running)
+		}
+	})
+
+	t.Run("graph", func(t *testing.T) {
+		registry := workflow.NewRegistry().
+			MustRegisterNode("boom", workflow.Factory(
+				func(struct{}) (flow.Node[int, int], error) {
+					return flow.NodeFunc[int, int](
+						func(context.Context, int) (int, error) { return 0, boom },
+					), nil
+				})).
+			MustRegisterNode("wait", workflow.Factory(
+				func(struct{}) (flow.Node[int, int], error) {
+					return flow.NodeFunc[int, int](
+						func(ctx context.Context, _ int) (int, error) { return hold(ctx) },
+					), nil
+				}))
+		wired := workflow.Inputs{workflow.DefaultPort: workflow.Output("seed")}
+		step, err := registry.CompileGraph(workflow.Graph{Nodes: []workflow.GraphNode{
+			{ID: "boom", Type: "boom", Inputs: wired},
+			{ID: "first", Type: "wait", Inputs: wired},
+			{ID: "second", Type: "wait", Inputs: wired},
+		}})
+		if err != nil {
+			t.Fatalf("CompileGraph: %v", err)
+		}
+		if _, err := workflow.Run(t.Context(), step, seed, workflow.RunConfig{}); !errors.Is(err, boom) {
+			t.Fatalf("Run error = %v; want the node failure", err)
+		}
+		if running := live.Load(); running != 0 {
+			t.Fatalf("%d nodes were still running when the graph returned", running)
+		}
+	})
 }
