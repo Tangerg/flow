@@ -407,6 +407,16 @@ func TestSurfacedErrorsNamePackageExactlyOnce(t *testing.T) {
 		// StepError supplies the prefix instead of Record. The two paths format
 		// separately, so both have to be checked.
 		"journal conflict during a run": recordedDuringARun(t),
+		// The schema backend and the dialect check each speak through their own
+		// private location, and a document rejected for depth is prefixed by the
+		// wire boundary rather than by a step. Neither was in this corpus.
+		"schema backend": registerSchemaError(`{"type": 5}`),
+		"schema dialect": registerSchemaError(
+			`{"$schema":"http://json-schema.org/draft-07/schema#"}`),
+		"deep spec document": workflow.ValidateSpecJSON([]byte(
+			`{"kind":"leaf","id":"a","type":"t","config":` + deeplyNestedArray() + `}`)),
+		"deep graph document": workflow.ValidateGraphJSON([]byte(
+			`{"nodes":[{"id":"a","type":"t","config":` + deeplyNestedArray() + `}]}`)),
 	}
 
 	for name, err := range errs {
@@ -746,4 +756,21 @@ func gatedRunWithAMisrecordedRouter(t *testing.T) error {
 		workflow.RunConfig{Journal: journal},
 	)
 	return runErr
+}
+
+// registerSchemaError returns what RegisterSchema says about a config schema it
+// cannot use, which is the only route by which the JSON Schema backend's own
+// words reach a caller.
+func registerSchemaError(config string) error {
+	return workflow.NewRegistry().RegisterSchema("bad", workflow.NodeSchema{
+		Output:       workflow.TypeAny,
+		ConfigSchema: json.RawMessage(config),
+	})
+}
+
+// deeplyNestedArray is a document one level past the nesting limit, which the
+// wire boundary refuses before any step is involved.
+func deeplyNestedArray() string {
+	return strings.Repeat("[", workflow.MaxNestingDepth) + "0" +
+		strings.Repeat("]", workflow.MaxNestingDepth)
 }
