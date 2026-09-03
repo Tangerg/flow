@@ -416,3 +416,178 @@ func TestAReplayedDecisionMustCarryTheTypeItsCompositeRecorded(t *testing.T) {
 		})
 	}
 }
+
+// TestEveryCompositeKindRunsTheSameFromASpec extends the route agreement from a
+// sequence of leaves to the kinds that nest. TestSpecRoundTripsEveryKind holds
+// every kind to crossing the wire unchanged, and the tests above hold three
+// routes to one run — but only for leaves, so a composite whose Spec compiled
+// into a differently configured Go value would have satisfied both. A flat Graph
+// cannot express a body, which is why this pairs Go against a Spec.
+func TestEveryCompositeKindRunsTheSameFromASpec(t *testing.T) {
+	double := func() flow.Node[int, int] {
+		return flow.NodeFunc[int, int](func(_ context.Context, value int) (int, error) {
+			return value * 2, nil
+		})
+	}
+	pick := workflow.Resolver(flow.NodeFunc[workflow.Store, string](
+		func(context.Context, workflow.Store) (string, error) { return "accept", nil },
+	))
+	stop := workflow.Condition(flow.NodeFunc[workflow.Store, bool](
+		func(context.Context, workflow.Store) (bool, error) { return true, nil },
+	))
+	registry := workflow.NewRegistry().
+		MustRegisterNode("double", workflow.Factory(
+			func(struct{}) (flow.Node[int, int], error) { return double(), nil })).
+		MustRegisterResolver("pick", pick).
+		MustRegisterCondition("stop", stop)
+
+	leafStep := func(id string, ref workflow.Ref) workflow.Step {
+		return workflow.Leaf(id, ref.Bind[int](), double())
+	}
+	leafSpec := func(id string, ref workflow.Ref) workflow.Spec {
+		return workflow.Spec{
+			Kind: workflow.KindLeaf, ID: id, Type: "double",
+			Inputs: workflow.OneInput(ref),
+		}
+	}
+	seed, item := workflow.Output("seed"), workflow.Item("each")
+	body, bodySpec := leafStep("body", seed), leafSpec("body", seed)
+
+	for name, testCase := range map[string]struct {
+		code  workflow.Step
+		spec  workflow.Spec
+		input workflow.Store
+		ids   []string
+	}{
+		"parallel": {
+			code: workflow.Parallel(workflow.ParallelConfig{
+				Steps:       []workflow.Step{leafStep("a", seed), leafStep("b", seed)},
+				Concurrency: 1,
+			}),
+			spec: workflow.Spec{
+				Kind:        workflow.KindParallel,
+				Steps:       []workflow.Spec{leafSpec("a", seed), leafSpec("b", seed)},
+				Concurrency: 1,
+			},
+			ids: []string{"a", "b"},
+		},
+		"branch": {
+			code: workflow.Branch(workflow.BranchConfig{
+				ID:       "pick",
+				Resolver: pick,
+				Cases: map[string]workflow.Step{
+					"accept": leafStep("a", seed),
+					"reject": leafStep("b", seed),
+				},
+			}),
+			spec: workflow.Spec{
+				Kind: workflow.KindBranch, ID: "pick", Resolver: "pick",
+				Cases: map[string]workflow.Spec{
+					"accept": leafSpec("a", seed),
+					"reject": leafSpec("b", seed),
+				},
+			},
+			ids: []string{"a", "b"},
+		},
+		"loop": {
+			code: workflow.Loop(workflow.LoopConfig{
+				ID: "loop", Body: body, Condition: stop, MaxIterations: 3,
+			}),
+			spec: workflow.Spec{
+				Kind: workflow.KindLoop, ID: "loop", Body: &bodySpec,
+				Condition: "stop", MaxIterations: 3,
+			},
+			ids: []string{"body"},
+		},
+		"iteration": {
+			code: workflow.Iteration(workflow.IterationConfig{
+				ID: "each", Input: workflow.Output("items"), Concurrency: 1,
+				Body: leafStep("body", item), BodyOutput: workflow.Output("body"),
+			}),
+			spec: workflow.Spec{
+				Kind: workflow.KindIteration, ID: "each",
+				Input: workflow.Output("items"), Concurrency: 1,
+				Body:       func() *workflow.Spec { s := leafSpec("body", item); return &s }(),
+				BodyOutput: workflow.Output("body"),
+			},
+			input: workflow.NewStore().WithOutput("seed", 5).WithOutput("items", []any{1, 2}),
+			// An iteration collects a slice, which no typed int read can compare;
+			// what the two forms are held to here is the journal, which carries
+			// every element's own record and value.
+			ids: nil,
+		},
+		"subgraph": {
+			code: workflow.Subgraph(workflow.SubgraphConfig{
+				ID:         "sub",
+				Inputs:     workflow.Inputs{"inner": seed},
+				Body:       leafStep("body", workflow.Output("inner")),
+				BodyOutput: workflow.Output("body"),
+			}),
+			spec: workflow.Spec{
+				Kind: workflow.KindSubgraph, ID: "sub",
+				Inputs: workflow.Inputs{"inner": seed},
+				Body: func() *workflow.Spec {
+					s := leafSpec("body", workflow.Output("inner"))
+					return &s
+				}(),
+				BodyOutput: workflow.Output("body"),
+			},
+			ids: []string{"sub", "body"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			compiled, err := registry.CompileSpec(testCase.spec)
+			if err != nil {
+				t.Fatalf("CompileSpec: %v", err)
+			}
+			input := testCase.input
+			if (input == workflow.Store{}) {
+				input = workflow.NewStore().WithOutput("seed", 5)
+			}
+			want := observeInput(t, testCase.code, input, testCase.ids)
+			got := observeInput(t, compiled, input, testCase.ids)
+			if got.err != want.err || !slices.Equal(got.values, want.values) ||
+				!slices.Equal(got.events, want.events) || got.wire != want.wire {
+				t.Fatalf("spec form = %+v; want the code form's %+v", got, want)
+			}
+		})
+	}
+}
+
+// observeInput is observeRun over a caller-supplied input, which the composite
+// kinds need: an iteration reads a collection the leaf forms never had.
+func observeInput(
+	t *testing.T,
+	step workflow.Step,
+	input workflow.Store,
+	ids []string,
+) observed {
+	t.Helper()
+	journal := workflow.NewJournal()
+	result := observed{}
+	out, err := workflow.Run(
+		t.Context(),
+		step,
+		input,
+		workflow.RunConfig{
+			Journal: journal,
+			Observer: workflow.ObserverFunc(func(_ context.Context, event workflow.Event) {
+				result.events = append(result.events, string(event.Kind)+"/"+event.ID)
+			}),
+		},
+	)
+	if err != nil {
+		result.err = err.Error()
+	}
+	for _, id := range ids {
+		value, _ := out.Get[int](workflow.Output(id))
+		result.values = append(result.values, value)
+	}
+	slices.Sort(result.events)
+	encoded, marshalErr := json.Marshal(journal)
+	if marshalErr != nil {
+		t.Fatalf("Marshal journal: %v", marshalErr)
+	}
+	result.wire = string(encoded)
+	return result
+}
