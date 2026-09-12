@@ -1,115 +1,138 @@
-# Flow repository guidance
+# AGENTS.md
 
-## Project philosophy
+## Priorities
 
-- Prefer designs that are coherent, readable, and easy to explain. Beauty here means that names,
-  responsibilities, dependency directions, and runtime behavior agree with one another.
-- Make important relationships explicit. Data edges belong in declared references, ownership belongs
-  to the boundary that derived the thing, identity belongs in the scope, and runtime choices belong
-  in ordinary parameters. Do not infer them from ambient state, call order, or hidden globals.
-- Choose the simplest model that completely expresses the requirement. Do not confuse simplicity
-  with missing semantics: irreducible complexity should remain visible instead of being hidden
-  behind magic.
-- Keep the conceptual structure as flat and orthogonal as the domain permits. Add nesting only when
-  it represents real ownership or composition, never merely to organize implementation details.
-- Keep the API sparse. Every exported concept must earn its place, have one precise responsibility,
-  and compose with the existing primitives.
-- Optimize for the reader. Prefer ordinary Go, intention-revealing names, small state machines, and
-  local reasoning over clever generics, reflection, code generation, or surprising control flow.
-- Special cases do not justify a second semantic path. Express them through composition or a higher
-  layer unless the underlying abstraction is genuinely different — an arity, an empty collection, or
-  a degenerate shape is not a different abstraction.
-- Let practicality correct theory. Use tests, benchmarks, and the runnable examples to challenge a
-  design, while preserving the invariants that make the system understandable.
-- Never let an error disappear accidentally. Propagate, join, or deliberately classify it as
-  cancellation or as a suspension; silence it only at a boundary whose behavior is documented.
-- Refuse to guess when a document, a wiring, an identity, or a stored value is ambiguous. Reject the
-  operation with a precise error that names the field a caller can repair.
-- There should be one obvious canonical way to express each semantic operation. A convenience form
-  is acceptable only when it mechanically compiles to that path and owns no second state machine:
-  `LeafFunc` builds a `Leaf`, `OneInput` builds `Inputs`, `Factory` builds a `NodeFactory`.
-- Implement a proven need now, completely. Leave speculative features unimplemented rather than
-  shipping a premature abstraction that must later be replaced.
-- Treat explainability as an architecture test. If an implementation is hard to explain in terms of
-  the public model, first assume the model or the implementation is wrong.
-- Use namespaces deliberately. Package layers, the definition-field vocabulary, and the error
-  sentinels communicate ownership; a `Store` is not a bag of globally mixed names, because every
-  cell is owned by the node that produced it.
+Preserve correctness, security, data integrity, and explicit requirements. Within those constraints, optimize
+for maintainability, readability, and testability. Add extensibility, flexibility, and reuse only when current
+needs justify them.
 
-## Flow architecture axioms
+Use design principles as judgment aids, not a checklist of patterns to implement. Resolve trade-offs in favor
+of clear behavior and lower overall complexity.
 
-- Composition is preferred over privilege. Every capability is a `flow.Node[I, O]`, a `Step` is a
-  `flow.Node[Store, Store]`, and combinators take nodes and return nodes. There are no framework
-  base types, privileged steps, or hooks that only the package itself may install.
-- The same capability at the same layer has exactly one canonical API. A composite that names itself
-  takes exactly one `Config` struct that owns every field; a step with no children takes positional
-  parameters; `Sequence` stays variadic because it has no settings. No functional options, no second
-  configuration form, no alias. A second form runs perfectly, so the pairing of a `Config` with the
-  one constructor named after it is checked directly — `TestEveryConfigStructHasOneConstructor`.
-- The three construction routes agree. Built in Go, compiled from a `Spec`, or compiled from a flat
-  `Graph`, the same workflow must produce the same run: a serialized form is a second spelling,
-  never a second execution protocol — `TestEveryConstructionFormRunsTheSameWorkflow`.
-- Keep the atoms orthogonal. `Store` is data, `Journal` is what a run may replay, `Scope` is
-  execution identity, `Event` is observation, `Suspension` is the third outcome, and `Registry` is
-  what a name resolves to. Do not make one atom secretly perform another atom's job.
-- Scope expresses execution identity only. It is not data isolation, which `Store` namespaces and
-  `Subgraph` provide, and it is not a permission boundary. A repeated boundary publishes its index
-  through the scope rather than through a parameter its children would have to thread.
-- A cell belongs to the node that produced it. A step writes its own output and never another's,
-  `Subgraph` is what hides a body's cells, and a merge can neither overwrite a sibling's work nor
-  resurrect a cell an engine boundary removed.
-- Data edges are declared, not discovered. A step reads exactly what its references name, and one
-  immutable `Registry` snapshot serves one validation or compilation, so nothing resolves a name
-  through ambient scope, a call stack, or a live proxy.
-- Only committed state is visible. A failed or cancelled step returns the Store it was given, a
-  parallel merges only the branches that finished, a suspension publishes no partial output, and a
-  run replays only the records that existed when it began.
-- Ownership is structural. A boundary that derives a context ends it before returning, and work that
-  outlived its boundary is refused rather than silently accepted — see
-  `TestEveryBoundaryClosesTheContextItDerived`. A parent's cancellation outranks whatever a child
-  reported at every boundary.
-- Package dependencies point in one direction. `flow` is the primitive layer and depends on nothing
-  here; `flowx` derives combinators from it; `workflow` adds named state, durability, and
-  serialization; `workflow/expr` and `workflow/diagram` stay optional and derived; `internal/...`
-  is not API. A higher layer may add vocabulary, never a second copy of a lower layer's rule. No
-  behavior can reveal a broken layer, so the import graph is checked directly —
-  `TestPackageDependenciesPointOneWay`.
-- A contract stated twice is pinned twice. The embedded JSON Schemas, the field matrices, and the Go
-  validators are deliberate second statements, and each has a test that fails when the copies
-  disagree — `TestSpecFieldMatricesAgreeWithTheSpecStruct`,
-  `TestTheTwoValidatorsRefuseTheSameDefects`.
-- Errors carry structure rather than prose. A sentinel gives the category, a `StepError`,
-  `GraphError`, `SpecError`, or `expr.Error` gives the location, and a surfaced message names the
-  package exactly once — `TestSurfacedErrorsNamePackageExactlyOnce`.
+## Working approach
 
-## Working rules
+- Read applicable instructions and relevant implementation, callers, and tests. Expand context as dependencies
+  or uncertainty require; load documentation and skills only when their scope matches the task.
+- Use commands verified in repository scripts, configuration, or CI. Follow sound local conventions; introduce
+  a different pattern to address a concrete limitation, not a stylistic preference.
+- For cross-cutting or risky work, identify intended behavior, affected contracts, and verification before
+  editing. Make straightforward changes directly.
+- Resolve ambiguity from contracts and repository evidence. Ask only when remaining uncertainty materially
+  affects behavior, scope, or data safety; otherwise use the simplest consistent interpretation.
+- Within the authorized scope, implement and verify the change. Run checks and fix introduced failures without
+  repeated approval in confirmed isolated environments. Before unfamiliar or potentially state-changing
+  commands, confirm the target environment and expected side effects are within the authorized scope. Changes
+  to shared or external state require explicit authorization; a command named `test` is not proof of isolation.
+- Preserve unrelated work. Production actions, destructive data operations, and destructive Git operations
+  require explicit authorization beyond permission to edit code.
 
-- Backward compatibility is not a goal during the current development stage. When a design changes,
-  remove obsolete paths instead of adding compatibility layers, fallbacks, aliases, or migrations.
-- Fix causes rather than symptoms. Do not accept a stopgap that is intended to be replaced later;
-  make architectural decisions for the long term while breaking changes are inexpensive.
-- Grow the system in complete vertical slices. Start with the smallest end-to-end version that
-  works, then add capabilities without trading a working product for unfinished infrastructure.
-- Keep components modular and responsibilities sharply separated. Introduce a pattern or an
-  abstraction only when it makes an existing responsibility clearer or a real composition point
-  possible.
-- Prefer established, maintained libraries when they reduce total complexity or improve reliability.
-  Check the dependencies, documentation, and types already present before reimplementing
-  functionality or adding a package.
-- Do not optimize from intuition alone. Measure the relevant path, make the simplest change the
-  evidence supports, and keep a benchmark or behavioral guard when the regression risk is real.
-- Tests protect semantics and architectural boundaries, not implementation trivia. For anything
-  worth protecting, confirm that the test fails when the protected behavior is removed rather than
-  assuming it would.
-- Keep documentation, exported comments, runtime behavior, and the repository's own guards
-  consistent within one change. A comment that cites a test has to resolve, a documented API name
-  has to exist, and a doc link has to point at something — `TestCitedTestsResolve`,
-  `TestDocumentedAPINamesResolve`, `TestGoDocLinksResolve`.
-- Use explicit `Config` structs for related construction settings, and give optional fields useful
-  zero meanings.
-- Treat repository-local usage as no evidence for or against a public API. This is a library: retain
-  or remove exported operations and extension points by responsibility, abstraction quality, and
-  downstream utility, never merely because code in this repository does or does not call them.
-- The cited design boundaries, the review checklist, and the full local gate live in
-  [CONTRIBUTING.md](./CONTRIBUTING.md). Read the boundaries before changing behavior or an exported
-  API, and add one when a change establishes a rule the next contributor would otherwise rediscover.
+## Design and implementation
+
+### Simplicity and abstraction
+
+- **Occam's razor / KISS:** Choose the least complex sufficient solution: fewer assumptions, concepts, states,
+  dependencies, and indirections. Reduce understanding and change costs, not line count.
+- **YAGNI:** Add only capabilities required now. Do not prebuild configuration, extension points, or
+  frameworks. Necessary safety checks and tests are not speculative work.
+- **DRY:** Give each business rule one authoritative representation. Share stable knowledge, not merely
+  similar syntax; keep independently changing concepts separate.
+- An abstraction must reduce complexity for its callers, consolidate stable knowledge, or isolate an actual
+  variation. Moving code behind another name is not enough.
+- Prefer standard-library and existing project capabilities. Add dependencies only when their benefits justify
+  their maintenance cost; use established implementations for security-sensitive primitives.
+
+### Boundaries and contracts (SOLID)
+
+- **SRP:** Group code by its reason to change; split independent responsibilities, not cohesive logic to
+  satisfy arbitrary size limits.
+- **OCP:** Extend behavior at demonstrated variation points; repair flawed abstractions instead of preserving
+  them behind extra layers.
+- **LSP:** Preserve behavioral contracts, including invariants and failure semantics. Do not strengthen
+  preconditions or weaken postconditions.
+- **ISP:** Shape small, cohesive interfaces around consumer needs, not every capability of an implementation.
+- **DIP:** Separate business policy from volatile infrastructure through explicit boundaries; do not create an
+  interface for every type.
+- **LoD:** Depend on direct collaborators' public contracts, not their internal object graphs. Avoid
+  forwarding layers that merely disguise coupling.
+
+### Readability and state (Zen of Python)
+
+- Use the host language's idioms. Prefer explicit dependencies, flat control flow, readable spacing, and
+  coherent namespaces over implicit magic or clever compression.
+- Represent necessary complexity behind clear boundaries. Keep justified exceptions local and prefer practical
+  clarity over rigid uniformity.
+- Keep mutable state minimal, ownership explicit, and each fact authoritative in one place. Separate business
+  decisions from external I/O.
+- Prefer one clear path per behavior. Simplify hard-to-explain logic without fragmenting cohesive code into
+  tiny helpers.
+- Make failures explicit; suppress only specific expected errors allowed by the contract. Never turn
+  unexpected failure into apparent success.
+
+### Data and performance (Rob Pike)
+
+1. Do not guess bottlenecks or add speculative speed hacks.
+2. Measure representative workloads before tuning; optimize significant bottlenecks and compare results
+   against the baseline.
+3. Choose algorithms for actual input sizes; consider constant costs as well as asymptotic complexity.
+4. Use simple algorithms and data structures unless requirements or measurements justify the added complexity.
+5. Design data representations and invariants first; simplify algorithms through better structure.
+
+Respect known scale and resource limits during design.
+
+### Comments
+
+- Default to no comments; use naming, types, and structure to express intent.
+- At critical data structures, non-obvious algorithms, interfaces, or pitfalls, explain **why**: constraints,
+  trade-offs, or essential contracts the types cannot express, such as ownership, lifetime, concurrency, or
+  failure semantics. Do not narrate operations or repeat signatures.
+- Keep necessary comments accurate; remove stale comments and commented-out code. Preserve licenses and tool
+  directives. Do not use TODOs in place of required work.
+
+## Fixes and evolution
+
+- Establish the root cause through reproduction, tests, or traced behavior. Fix the responsible model,
+  invariant, or boundary and check other affected paths.
+- Do not conceal defects with stacked special cases, duplicated state, blind retries, or silent fallbacks.
+  Keep validation and resilience where real contracts require them.
+- **Breaking changes are allowed** to fix faulty contracts or achieve a simplification worth the migration
+  cost. Honor explicit compatibility requirements; do not break sound contracts for style.
+- Update affected callers, types, tests, and documentation together. Address protocol, persisted-data, and
+  external-consumer migrations explicitly; disclose what remains outside the task's control.
+- Keep compatibility adapters only for real consumers or rollout needs, with a removal condition. Delete
+  superseded code and configuration when that condition is met.
+- Make the smallest complete change that fixes the cause. Refactor obstructive related code in verifiable
+  steps; distinguish behavior-preserving cleanup from intentional contract changes.
+- At iteration or milestone reviews, revisit repeatedly broken, frequently changed, or hard-to-test modules.
+  Record out-of-scope debt with its impact and a trigger for revisiting it; do not start unrelated rewrites.
+
+## Verification and completion
+
+- Use checks sufficient to demonstrate changed behavior. Broaden coverage for shared contracts, cross-module
+  changes, or build configuration. Honor required repository checks.
+- For bug fixes, add regression coverage that exposes the original failure when feasible. Test observable
+  behavior and contracts, including relevant boundaries and failures.
+- Control time, randomness, and external state where needed for reliable tests. Do not distort production
+  interfaces merely to mock them.
+- Do not disable checks, skip failing tests, or weaken valid assertions to manufacture a pass. Correct test
+  expectations only for intentional contract changes or demonstrated test errors.
+- Review the diff for concrete defects, contract violations, and maintainability problems. Remove accidental
+  edits, debug residue, and dead code; do not treat stylistic alternatives as defects.
+- Finish when requested behavior and affected integrations are complete and relevant verification passes.
+  Report genuine blockers rather than claiming completion; stop improving when acceptance criteria are met.
+- Report changes, actual verification results, and any migrations or remaining risks. Distinguish passed,
+  failed, and not-run checks; identify unrelated pre-existing failures.
+
+## Maintaining these instructions
+
+- Keep durable rules that prevent recurring mistakes or record non-obvious project decisions. Put scoped rules
+  near affected code and occasional procedures in narrowly triggered skills or linked documentation.
+- When maintaining instructions, remove stale or redundant guidance and evaluate changes on representative
+  tasks. Let observed task outcomes guide further revisions. Keep skill descriptions short and triggers
+  precise; do not rewrite policy during unrelated coding work.
+- Enforce mechanical requirements through formatters, linters, hooks, and CI rather than repeated prose. Never
+  weaken instructions or checks to excuse a noncompliant change.
+## Project-specific rules
+
+Rules that apply only to this repository live in [`PROJECT_RULES.md`](PROJECT_RULES.md).
+
+@./PROJECT_RULES.md

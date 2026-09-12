@@ -304,16 +304,6 @@ Use keyed fields for exported structs and prefer constructors such as `Output`,
 
 ## Development
 
-Run the local gate before submitting a change:
-
-```sh
-test -z "$(gofmt -l .)"
-go mod tidy -diff
-go test -race -coverprofile=coverage.out ./...
-coverage="$(go tool cover -func=coverage.out | awk '/^total:/ { print $3 }')"
-awk -v coverage="${coverage%\%}" 'BEGIN { exit coverage < 95.0 }'
-go vet ./...
-```
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for the complete checks and design
-boundaries.
+The local gate, the toolchain it pins, and what an exported change owes are in
+[CONTRIBUTING.md](./CONTRIBUTING.md). The architecture axioms those checks protect are in
+[PROJECT_RULES.md](./PROJECT_RULES.md).
